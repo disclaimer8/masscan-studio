@@ -20,7 +20,9 @@ use rmasscan_core::receive::{PortStatus, Reply};
 
 pub use formats::{Counts, FileCtx, Format, Formatter, formatter};
 pub use pipeline::{OPEN_FAILURE_PREFIX, OutputEnv, OutputOptions, Pipeline, Wall};
-pub use record::{MASSCAN_VERSION, Proto, Record, Status, proto_str, reason_string, status_str};
+pub use record::{
+    CIp, MASSCAN_VERSION, Proto, Record, Status, proto_str, reason_string, status_str,
+};
 pub use services::ServiceNames;
 
 /// Куда идут результаты. Приёмник этапа 2 реализует тот же трейт.
@@ -94,7 +96,7 @@ pub fn interactive_line(r: &Record) -> String {
                 status_str(r.status),
                 r.port,
                 proto_str(r.proto),
-                r.ip,
+                CIp(r.ip),
                 m[0],
                 m[1],
                 m[2],
@@ -109,7 +111,7 @@ pub fn interactive_line(r: &Record) -> String {
             status_str(r.status),
             r.port,
             proto_str(r.proto),
-            r.ip
+            CIp(r.ip)
         ),
     };
     format!("{head:<79}\n")
@@ -165,7 +167,32 @@ mod tests {
             ttl: 64,
             ip_proto: 6,
             mac: None,
+            ip6: None,
         }
+    }
+
+    /// R10: an IPv6 reply (`remote_ip == 0`, address in `Reply.ip6`) must never print `0.0.0.0`; the interactive
+    /// line is `Discovered open port 443/tcp on <ipv6address_fmt>` (`output.c:781-786`).
+    #[test]
+    fn ipv6_reply_prints_its_ipv6_address_not_0_0_0_0() {
+        use rmasscan_core::receive::ReplyIpv6;
+        let remote: u128 = "2a03:9060:0:400::2"
+            .parse::<std::net::Ipv6Addr>()
+            .unwrap()
+            .into();
+        let mut r = reply(Ipv4Addr::UNSPECIFIED, 443, PortStatus::Open);
+        r.ip6 = Some(ReplyIpv6 { remote, local: 1 });
+        let rec = Record::from_reply(&r, 1_700_000_000);
+        assert_eq!(rec.ip, std::net::IpAddr::V6(remote.into()));
+        let line = interactive_line(&rec);
+        assert_eq!(
+            line,
+            format!(
+                "{:<79}\n",
+                "Discovered open port 443/tcp on 2a03:9060::400:0:0:0:2"
+            )
+        );
+        assert!(!line.contains("0.0.0.0"));
     }
 
     #[test]

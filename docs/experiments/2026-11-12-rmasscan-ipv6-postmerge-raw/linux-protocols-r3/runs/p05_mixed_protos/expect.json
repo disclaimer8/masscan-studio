@@ -1,0 +1,17 @@
+{
+  "tag": "p05_mixed_protos",
+  "plan_ports": "T:80,U:53,S:2905,I:0",
+  "arp": false,
+  "steps": [
+    {
+      "name": "json",
+      "who": "rmasscan",
+      "out": "json"
+    },
+    {
+      "name": "oracle-json",
+      "who": "oracle",
+      "out": "json"
+    }
+  ]
+}

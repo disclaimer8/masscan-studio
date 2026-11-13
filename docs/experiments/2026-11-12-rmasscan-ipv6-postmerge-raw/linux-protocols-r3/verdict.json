@@ -1,0 +1,3097 @@
+{
+  "aborted": [],
+  "behaviour_fail": [],
+  "dir": "linux-protocols-r3",
+  "discarded": [],
+  "discarded_totals": {
+    "FAIL": 0,
+    "INVALID": 0,
+    "NOT RUN": 0,
+    "PASS": 0
+  },
+  "groups": [],
+  "overall": "PASS",
+  "runs": [
+    {
+      "behaviour_fail": false,
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "captures are stored uncompressed; the verifier has no decompression",
+          "name": "no compressed capture anywhere in the evidence directory",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "[]",
+          "name": "no symbolic link in the evidence directory (links are never followed)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "manifest.json names the protocols plan (linux)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[]",
+          "name": "evidence files outside the runs carry only the allowed extensions (json pcap txt log err sha256 md bin)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "8 files",
+          "name": "privacy: every text and binary file holds only allowlisted names, addresses and paths",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[]",
+          "name": "runs/ holds only the planned case directories",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "deleted [\"wl-scan-RUNID\", \"wl-peer-RUNID\"], left 0",
+          "name": "teardown.json: wire-lab.sh deleted both namespaces of the stand and none is left",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "manifest Some(\"6cd123ce-e0e7-444c-bd51-cc45c67976d6\"), teardown \"6cd123ce-e0e7-444c-bd51-cc45c67976d6\"",
+          "name": "teardown.json belongs to the lab of manifest.json (lab_id)",
+          "result": "PASS"
+        }
+      ],
+      "notes": {},
+      "safety_trip": false,
+      "tag": "manifest",
+      "verdict": "PASS"
+    },
+    {
+      "behaviour_fail": false,
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "captures are stored uncompressed; the verifier has no decompression",
+          "name": "no compressed capture in the case directory",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "16",
+          "name": "peer.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "valid true, []",
+          "name": "list/capture.json: the witness judged its capture complete",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "16 frames recorded, 16 in the file",
+          "name": "list/capture.json describes list/peer.pcap (sha256 and frame count)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3 start, 3 end markers; window 1794512534.829256 .. 1794512539.8434172",
+          "name": "list/peer.pcap: a start marker before and three end markers after every scanner frame",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "16",
+          "name": "peer.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "valid true, []",
+          "name": "oracle-list/capture.json: the witness judged its capture complete",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "16 frames recorded, 16 in the file",
+          "name": "oracle-list/capture.json describes oracle-list/peer.pcap (sha256 and frame count)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3 start, 3 end markers; window 1794512540.8343017 .. 1794512558.8793495",
+          "name": "oracle-list/peer.pcap: a start marker before and three end markers after every scanner frame",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no SYN on the list capture from outside the stand binding or to an address off the stand",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "no frame of the scanner on the list capture to an address off the stand or from another source",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0 frames: ",
+          "name": "no frame on the list capture from a MAC other than the stand's scanner and peer (markers aside)",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no SYN on the oracle-list capture from outside the stand binding or to an address off the stand",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "no frame of the scanner on the oracle-list capture to an address off the stand or from another source",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0 frames: ",
+          "name": "no frame on the oracle-list capture from a MAC other than the stand's scanner and peer (markers aside)",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "23",
+          "name": "hashes-before-copy.txt matches every file of the case directory",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[]",
+          "name": "evidence files carry only the allowed extensions (json pcap txt log err sha256 md, bin for -oB)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "{\"peer_ns\":false,\"scanner_ns\":\"via 198.18.0.2 dev veth-a\"}",
+          "name": "isolation.json: the sealed autodetect stand (capture isolation --mode autodetect)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "mode \"autodetect\", default_route {\"peer_ns\":false,\"scanner_ns\":\"via 198.18.0.2 dev veth-a\"}",
+          "name": "isolation-post.json: the stand still sealed after the run (capture isolation --mode autodetect)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "21 files",
+          "name": "privacy: every text and binary file holds only allowlisted names, addresses and paths",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "table Some(ProtoExpect { tag: \"p01_ping\", plan_ports: \"I:0\", arp: false, steps: [ExpectStep { name: \"list\", who: Rmasscan, out: List }, ExpectStep { name: \"oracle-list\", who: Oracle, out: List }] })",
+          "name": "expect.json equals the case table's entry",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[\"198.18.0.2-198.18.0.5\", \"--ping\", \"-oL\", \"output.txt\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\", \"--source-port\", \"40000\"], table [\"198.18.0.2-198.18.0.5\", \"--ping\", \"-oL\", \"output.txt\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\", \"--source-port\", \"40000\"]",
+          "name": "list/argv.json is the step's argv in the case table",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[\"198.18.0.2-198.18.0.5\", \"--ping\", \"-oL\", \"output.txt\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\", \"--source-port\", \"40000\"], table [\"198.18.0.2-198.18.0.5\", \"--ping\", \"-oL\", \"output.txt\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\", \"--source-port\", \"40000\"]",
+          "name": "oracle-list/argv.json is the step's argv in the case table",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "it still ran",
+          "name": "list/responder.json: the peer responder ran until the scanner ended",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "it still ran",
+          "name": "oracle-list/responder.json: the peer responder ran until the scanner ended",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "PeerStack { icmp_ratemask: \"0\", icmp_echo_ignore_all: \"0\", sctp_in_kernel: false, responder: [\"--ports\", \"80,8080\", \"--udp-ports\", \"53,161\", \"--udp-ips\", \"198.18.0.2,198.18.0.3,198.18.0.4,198.18.0.5\", \"--sctp-iface\", \"veth-b\", \"--sctp-open\", \"2905\"] }",
+          "name": "peer-stack.json: the peer answers the stand's way (icmp_ratemask 0, Echo answered, the stand's responder, no SCTP in the kernel for an SCTP case)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "list: the stand answered every probe exactly once, the stand's way (TCP 80/8080, UDP 53/161, SCTP 2905 open, the rest closed; Echo and ARP answered)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "list: nothing on the peer side answers anything the scan did not send",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "list: every probe and reply lies inside the witness window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0 other frames: ",
+          "name": "list: every frame of the scanner MAC is a probe of the scan or of a named class the stand makes the scanner side send (next-hop who-has, RST to a SYN-ACK, ICMP 3/3 to a UDP reply, ICMP 3/2 to an SCTP reply)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "next_hop_who_has 1 of at most 10, rst_to_syn_ack 0 of at most 0, port_unreachable_to_udp_reply 0 of at most 0, protocol_unreachable_to_sctp_reply 0 of at most 0",
+          "name": "list: the named scanner-side frames stay within their bounds (RST to a SYN-ACK: one per SYN-ACK frame of the stand, on the oracle's step plus one per distinct SYN-ACK for C's own reset after its dedup; next-hop who-has: the resolver's request count; ICMP 3/3 and 3/2: one per UDP or SCTP reply frame)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "4 records",
+          "name": "list: output.txt is a well-formed document",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "list: exit.txt is 0",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "list: stdout.txt is empty (a file format silences stdout)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[]",
+          "name": "list: stderr.txt holds only [+] lines and rmasscan's status forms",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[(\"interface\", \"veth-a (detected: route to 198.18.0.2)\"), (\"source-mac\", \"02-aa-00-00-00-01 (detected)\"), (\"source-ip\", \"198.18.0.1 (detected)\"), (\"router-ip\", \"198.18.0.2 (interface default gateway)\"), (\"router-mac\", \"02-aa-00-00-00-02 (arp: 1 requests, 0 ms)\"), (\"seed\", \"1 (given)\"), (\"source-port\", \"40000 (given)\")]",
+          "name": "list: [+] lines are the stand's: veth-a by the route, its MAC and IP, router 198.18.0.2 by ARP, seed 1 and source port 40000 given",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "Some(Fin { reason: \"Completed\", sent: 4, replies: 4, open: 4 })",
+          "name": "list: [+] finished: Completed",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "printed Some((4, 4, 4)), wire (sent, replies, open) (4, 4, 4)",
+          "name": "list: [+] finished reports sent, replies and open equal to the probes and the distinct replies on the wire",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[]",
+          "name": "list: every record's time lies within the scan on the wire (2 s either side)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "open 198.18.0.2 0/icmp; open 198.18.0.3 0/icmp; open 198.18.0.4 0/icmp; open 198.18.0.5 0/icmp",
+          "name": "list: the document holds the records of the replies on its wire, field for field, in reply order (replies captured at most 50 us apart on the peer link, rounded to the microsecond, may come in either order: REPLY_REORDER_WINDOW_US)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "4 probes, 4 planned, first difference at None",
+          "name": "list: the probes on the wire equal the plan (ReadyPlan of the case), in order, each once",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "oracle-list: the stand answered every probe exactly once, the stand's way (TCP 80/8080, UDP 53/161, SCTP 2905 open, the rest closed; Echo and ARP answered)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "oracle-list: nothing on the peer side answers anything the scan did not send",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "oracle-list: every probe and reply lies inside the witness window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0 other frames: ",
+          "name": "oracle-list: every frame of the scanner MAC is a probe of the scan or of a named class the stand makes the scanner side send (next-hop who-has, RST to a SYN-ACK, ICMP 3/3 to a UDP reply, ICMP 3/2 to an SCTP reply)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "next_hop_who_has 1 of at most 12, rst_to_syn_ack 0 of at most 0, port_unreachable_to_udp_reply 0 of at most 0, protocol_unreachable_to_sctp_reply 0 of at most 0",
+          "name": "oracle-list: the named scanner-side frames stay within their bounds (RST to a SYN-ACK: one per SYN-ACK frame of the stand, on the oracle's step plus one per distinct SYN-ACK for C's own reset after its dedup; next-hop who-has: the resolver's request count; ICMP 3/3 and 3/2: one per UDP or SCTP reply frame)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "4 records",
+          "name": "oracle-list: output.txt is a well-formed document",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "no footer",
+          "name": "oracle-list: its file lacks the footer only after masscan's forced exit (the line is on its stderr)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "oracle-list: exit.txt is 0",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "open 198.18.0.2 0/icmp; open 198.18.0.3 0/icmp; open 198.18.0.4 0/icmp; open 198.18.0.5 0/icmp",
+          "name": "oracle-list: the document holds the records of the replies on its wire, field for field, in reply order (replies captured at most 50 us apart on the peer link, rounded to the microsecond, may come in either order: REPLY_REORDER_WINDOW_US)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "4 probes, the oracle 4",
+          "name": "list: the probes equal the C oracle's (oracle-list), byte for byte and in order (udp-checksum-ffff applied)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "open 198.18.0.2 0/icmp; open 198.18.0.3 0/icmp; open 198.18.0.4 0/icmp; open 198.18.0.5 0/icmp",
+          "name": "list: the records equal the C oracle's (oracle-list) field for field but the time, in any order (each document's order is its own wire's reply order, judged above; the two wires' reply orders may differ)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "{198.18.0.2, 198.18.0.3, 198.18.0.4, 198.18.0.5}",
+          "name": "list: --ping finds every live peer 198.18.0.2-198.18.0.5 (open icmp)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0 Echo Replies with a code other than 0",
+          "name": "deviation icmp-echo-code-0: R11: rmasscan takes an Echo Reply only with code 0, C with any code; every Echo Reply on the wire must have code 0",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0 replies with a wrong sum",
+          "name": "deviation rx-checksum-verify: R11: rmasscan drops a reply whose IPv4 header checksum, ICMP, TCP or UDP checksum or SCTP CRC-32C is wrong, C reads it; every reply on the wire must carry valid sums",
+          "result": "PASS"
+        }
+      ],
+      "notes": {
+        "deviations": [
+          {
+            "name": "icmp-echo-code-0",
+            "observed": "0 Echo Replies with a code other than 0",
+            "rule": "R11: rmasscan takes an Echo Reply only with code 0, C with any code; every Echo Reply on the wire must have code 0"
+          },
+          {
+            "name": "rx-checksum-verify",
+            "observed": "0 replies with a wrong sum",
+            "rule": "R11: rmasscan drops a reply whose IPv4 header checksum, ICMP, TCP or UDP checksum or SCTP CRC-32C is wrong, C reads it; every reply on the wire must carry valid sums"
+          }
+        ],
+        "oracle": "the pinned C masscan 8e6b3b0 with the same argv, one run per document, on the same stand",
+        "record_order_vs_c": {
+          "documents": {
+            "list": "the same records in the same order"
+          },
+          "rule": "each scanner prints its records in the order the replies arrive on its own wire (judged per step: the document holds the records of the replies on its wire, in reply order, up to replies captured at most REPLY_REORDER_WINDOW_US = 50 us apart); the two runs of a document do not get the same reply order from the stand: both scanners send several probes back to back at --rate 100, and within such a burst the responder (one thread per UDP socket and for the SCTP link) and the peer kernel (ICMP at once) answer in an order that changes from run to run, as live run linux-protocols-r1 on 68ffcf3 showed (p02, p05); so rmasscan's records must equal C's field for field but the time in any order"
+        },
+        "reply_order_swaps": {
+          "list": {
+            "largest_gap_us": null,
+            "pairs": 0
+          },
+          "oracle-list": {
+            "largest_gap_us": null,
+            "pairs": 0
+          }
+        },
+        "reply_order_window": "50 us: two replies captured on the peer link at most this far apart (rounded to the microsecond; exactly 50 us is inside) may reach the scanner in the other order (two CPUs send them); reply_order_swaps gives, per step, the pairs of records written in the other order within it (pairs) and the largest gap among them in microseconds (largest_gap_us, null without such a pair)",
+        "scanner_frame_classes": {
+          "next_hop_who_has": "the scanner's next-hop resolution: an ARP who-has 198.18.0.2 from 198.18.0.1, 60 bytes zero-padded (the resolver form of C stack-arpv4.c and rmasscan), in a scan that is no ARP scan",
+          "port_unreachable_to_udp_reply": "an ICMP 3/3 from 198.18.0.1 quoting a UDP reply of the stand: the scanner namespace kernel, no socket on the source port",
+          "protocol_unreachable_to_sctp_reply": "an ICMP 3/2 from 198.18.0.1 quoting an SCTP INIT-ACK or ABORT of the stand: the scanner namespace kernel, no SCTP",
+          "rst_to_syn_ack": "a TCP RST (no other flag) from 198.18.0.1 whose sequence number is the acknowledgment of a SYN-ACK of the stand: the scanner namespace kernel resets a SYN-ACK no socket owns (198.18.0.1 is its address), and C resets each distinct SYN-ACK itself once it passed its dedup (main.c:1067-1068 then main.c:1095)"
+        },
+        "scanner_frames": {
+          "list": {
+            "at_most": {
+              "next_hop_who_has": 10,
+              "port_unreachable_to_udp_reply": 0,
+              "protocol_unreachable_to_sctp_reply": 0,
+              "rst_to_syn_ack": 0
+            },
+            "next_hop_who_has": 1,
+            "port_unreachable_to_udp_reply": 0,
+            "protocol_unreachable_to_sctp_reply": 0,
+            "rst_to_syn_ack": 0,
+            "unexplained": 0
+          },
+          "oracle-list": {
+            "at_most": {
+              "next_hop_who_has": 12,
+              "port_unreachable_to_udp_reply": 0,
+              "protocol_unreachable_to_sctp_reply": 0,
+              "rst_to_syn_ack": 0
+            },
+            "next_hop_who_has": 1,
+            "port_unreachable_to_udp_reply": 0,
+            "protocol_unreachable_to_sctp_reply": 0,
+            "rst_to_syn_ack": 0,
+            "unexplained": 0
+          }
+        }
+      },
+      "safety_trip": false,
+      "tag": "p01_ping",
+      "verdict": "PASS"
+    },
+    {
+      "behaviour_fail": false,
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "captures are stored uncompressed; the verifier has no decompression",
+          "name": "no compressed capture in the case directory",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "48",
+          "name": "peer.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "valid true, []",
+          "name": "json/capture.json: the witness judged its capture complete",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "48 frames recorded, 48 in the file",
+          "name": "json/capture.json describes json/peer.pcap (sha256 and frame count)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3 start, 3 end markers; window 1794512560.0486324 .. 1794512565.0659955",
+          "name": "json/peer.pcap: a start marker before and three end markers after every scanner frame",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "48",
+          "name": "peer.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "valid true, []",
+          "name": "oracle-json/capture.json: the witness judged its capture complete",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "48 frames recorded, 48 in the file",
+          "name": "oracle-json/capture.json describes oracle-json/peer.pcap (sha256 and frame count)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3 start, 3 end markers; window 1794512565.983737 .. 1794512584.0316882",
+          "name": "oracle-json/peer.pcap: a start marker before and three end markers after every scanner frame",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "48",
+          "name": "peer.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "valid true, []",
+          "name": "binary/capture.json: the witness judged its capture complete",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "48 frames recorded, 48 in the file",
+          "name": "binary/capture.json describes binary/peer.pcap (sha256 and frame count)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3 start, 3 end markers; window 1794512585.0351956 .. 1794512590.106907",
+          "name": "binary/peer.pcap: a start marker before and three end markers after every scanner frame",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "48",
+          "name": "peer.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "valid true, []",
+          "name": "oracle-binary/capture.json: the witness judged its capture complete",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "48 frames recorded, 48 in the file",
+          "name": "oracle-binary/capture.json describes oracle-binary/peer.pcap (sha256 and frame count)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3 start, 3 end markers; window 1794512591.1064625 .. 1794512608.9085357",
+          "name": "oracle-binary/peer.pcap: a start marker before and three end markers after every scanner frame",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no SYN on the json capture from outside the stand binding or to an address off the stand",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "no frame of the scanner on the json capture to an address off the stand or from another source",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0 frames: ",
+          "name": "no frame on the json capture from a MAC other than the stand's scanner and peer (markers aside)",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no SYN on the oracle-json capture from outside the stand binding or to an address off the stand",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "no frame of the scanner on the oracle-json capture to an address off the stand or from another source",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0 frames: ",
+          "name": "no frame on the oracle-json capture from a MAC other than the stand's scanner and peer (markers aside)",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no SYN on the binary capture from outside the stand binding or to an address off the stand",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "no frame of the scanner on the binary capture to an address off the stand or from another source",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0 frames: ",
+          "name": "no frame on the binary capture from a MAC other than the stand's scanner and peer (markers aside)",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no SYN on the oracle-binary capture from outside the stand binding or to an address off the stand",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "no frame of the scanner on the oracle-binary capture to an address off the stand or from another source",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0 frames: ",
+          "name": "no frame on the oracle-binary capture from a MAC other than the stand's scanner and peer (markers aside)",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "41",
+          "name": "hashes-before-copy.txt matches every file of the case directory",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[]",
+          "name": "evidence files carry only the allowed extensions (json pcap txt log err sha256 md, bin for -oB)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "{\"peer_ns\":false,\"scanner_ns\":\"via 198.18.0.2 dev veth-a\"}",
+          "name": "isolation.json: the sealed autodetect stand (capture isolation --mode autodetect)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "mode \"autodetect\", default_route {\"peer_ns\":false,\"scanner_ns\":\"via 198.18.0.2 dev veth-a\"}",
+          "name": "isolation-post.json: the stand still sealed after the run (capture isolation --mode autodetect)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "37 files",
+          "name": "privacy: every text and binary file holds only allowlisted names, addresses and paths",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "table Some(ProtoExpect { tag: \"p02_udp_payloads_and_closed\", plan_ports: \"U:53,161,500,59999\", arp: false, steps: [ExpectStep { name: \"json\", who: Rmasscan, out: Json }, ExpectStep { name: \"oracle-json\", who: Oracle, out: Json }, ExpectStep { name: \"binary\", who: Rmasscan, out: Binary }, ExpectStep { name: \"oracle-binary\", who: Oracle, out: Binary }] })",
+          "name": "expect.json equals the case table's entry",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[\"198.18.0.2-198.18.0.5\", \"-sU\", \"-p53,161,500,59999\", \"-oJ\", \"output.json\", \"--show\", \"open,closed\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\", \"--source-port\", \"40000\"], table [\"198.18.0.2-198.18.0.5\", \"-sU\", \"-p53,161,500,59999\", \"-oJ\", \"output.json\", \"--show\", \"open,closed\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\", \"--source-port\", \"40000\"]",
+          "name": "json/argv.json is the step's argv in the case table",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[\"198.18.0.2-198.18.0.5\", \"-sU\", \"-p53,161,500,59999\", \"-oJ\", \"output.json\", \"--show\", \"open,closed\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\", \"--source-port\", \"40000\"], table [\"198.18.0.2-198.18.0.5\", \"-sU\", \"-p53,161,500,59999\", \"-oJ\", \"output.json\", \"--show\", \"open,closed\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\", \"--source-port\", \"40000\"]",
+          "name": "oracle-json/argv.json is the step's argv in the case table",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[\"198.18.0.2-198.18.0.5\", \"-sU\", \"-p53,161,500,59999\", \"-oB\", \"output.bin\", \"--show\", \"open,closed\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\", \"--source-port\", \"40000\"], table [\"198.18.0.2-198.18.0.5\", \"-sU\", \"-p53,161,500,59999\", \"-oB\", \"output.bin\", \"--show\", \"open,closed\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\", \"--source-port\", \"40000\"]",
+          "name": "binary/argv.json is the step's argv in the case table",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[\"198.18.0.2-198.18.0.5\", \"-sU\", \"-p53,161,500,59999\", \"-oB\", \"output.bin\", \"--show\", \"open,closed\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\", \"--source-port\", \"40000\"], table [\"198.18.0.2-198.18.0.5\", \"-sU\", \"-p53,161,500,59999\", \"-oB\", \"output.bin\", \"--show\", \"open,closed\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\", \"--source-port\", \"40000\"]",
+          "name": "oracle-binary/argv.json is the step's argv in the case table",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "it still ran",
+          "name": "json/responder.json: the peer responder ran until the scanner ended",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "it still ran",
+          "name": "oracle-json/responder.json: the peer responder ran until the scanner ended",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "it still ran",
+          "name": "binary/responder.json: the peer responder ran until the scanner ended",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "it still ran",
+          "name": "oracle-binary/responder.json: the peer responder ran until the scanner ended",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "PeerStack { icmp_ratemask: \"0\", icmp_echo_ignore_all: \"0\", sctp_in_kernel: false, responder: [\"--ports\", \"80,8080\", \"--udp-ports\", \"53,161\", \"--udp-ips\", \"198.18.0.2,198.18.0.3,198.18.0.4,198.18.0.5\", \"--sctp-iface\", \"veth-b\", \"--sctp-open\", \"2905\"] }",
+          "name": "peer-stack.json: the peer answers the stand's way (icmp_ratemask 0, Echo answered, the stand's responder, no SCTP in the kernel for an SCTP case)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "json: the stand answered every probe exactly once, the stand's way (TCP 80/8080, UDP 53/161, SCTP 2905 open, the rest closed; Echo and ARP answered)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "json: nothing on the peer side answers anything the scan did not send",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "json: every probe and reply lies inside the witness window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0 other frames: ",
+          "name": "json: every frame of the scanner MAC is a probe of the scan or of a named class the stand makes the scanner side send (next-hop who-has, RST to a SYN-ACK, ICMP 3/3 to a UDP reply, ICMP 3/2 to an SCTP reply)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "next_hop_who_has 1 of at most 10, rst_to_syn_ack 0 of at most 0, port_unreachable_to_udp_reply 8 of at most 8, protocol_unreachable_to_sctp_reply 0 of at most 0",
+          "name": "json: the named scanner-side frames stay within their bounds (RST to a SYN-ACK: one per SYN-ACK frame of the stand, on the oracle's step plus one per distinct SYN-ACK for C's own reset after its dedup; next-hop who-has: the resolver's request count; ICMP 3/3 and 3/2: one per UDP or SCTP reply frame)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "16 records",
+          "name": "json: output.json is a well-formed document",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "json: exit.txt is 0",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "json: stdout.txt is empty (a file format silences stdout)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[]",
+          "name": "json: stderr.txt holds only [+] lines and rmasscan's status forms",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[(\"interface\", \"veth-a (detected: route to 198.18.0.2)\"), (\"source-mac\", \"02-aa-00-00-00-01 (detected)\"), (\"source-ip\", \"198.18.0.1 (detected)\"), (\"router-ip\", \"198.18.0.2 (interface default gateway)\"), (\"router-mac\", \"02-aa-00-00-00-02 (arp: 1 requests, 0 ms)\"), (\"seed\", \"1 (given)\"), (\"source-port\", \"40000 (given)\")]",
+          "name": "json: [+] lines are the stand's: veth-a by the route, its MAC and IP, router 198.18.0.2 by ARP, seed 1 and source port 40000 given",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "Some(Fin { reason: \"Completed\", sent: 16, replies: 16, open: 8 })",
+          "name": "json: [+] finished: Completed",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "printed Some((16, 16, 8)), wire (sent, replies, open) (16, 16, 8)",
+          "name": "json: [+] finished reports sent, replies and open equal to the probes and the distinct replies on the wire",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[]",
+          "name": "json: every record's time lies within the scan on the wire (2 s either side)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "open 198.18.0.4 161/udp reason none ttl 64; closed 198.18.0.3 59999/udp reason none ttl 64; closed 198.18.0.5 59999/udp reason none ttl 64; closed 198.18.0.5 500/udp reason none ttl 64; closed 198.18.0.4 59999/udp reason none ttl 64; closed 198.18.0.4 500/udp reason none ttl 64; closed 198.18.0.2 59999/udp reason none ttl 64; open 198.18.0.3 53/udp reason none ttl 64; open 198.18.0.2 161/udp reason none ttl 64; open 198.18.0.5 161/udp reason none ttl 64; open 198.18.0.4 53/udp reason none ttl 64; open 198.18.0.5 53/udp reason none ttl 64; open 198.18.0.2 53/udp reason none ttl 64; closed 198.18.0.2 500/udp reason none ttl 64; open 198.18.0.3 161/udp reason none ttl 64; closed 198.18.0.3 500/udp reason none ttl 64",
+          "name": "json: the document holds the records of the replies on its wire, field for field, in reply order (replies captured at most 50 us apart on the peer link, rounded to the microsecond, may come in either order: REPLY_REORDER_WINDOW_US)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "16 probes, 16 planned, first difference at None",
+          "name": "json: the probes on the wire equal the plan (ReadyPlan of the case), in order, each once",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "oracle-json: the stand answered every probe exactly once, the stand's way (TCP 80/8080, UDP 53/161, SCTP 2905 open, the rest closed; Echo and ARP answered)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "oracle-json: nothing on the peer side answers anything the scan did not send",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "oracle-json: every probe and reply lies inside the witness window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0 other frames: ",
+          "name": "oracle-json: every frame of the scanner MAC is a probe of the scan or of a named class the stand makes the scanner side send (next-hop who-has, RST to a SYN-ACK, ICMP 3/3 to a UDP reply, ICMP 3/2 to an SCTP reply)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "next_hop_who_has 1 of at most 12, rst_to_syn_ack 0 of at most 0, port_unreachable_to_udp_reply 8 of at most 8, protocol_unreachable_to_sctp_reply 0 of at most 0",
+          "name": "oracle-json: the named scanner-side frames stay within their bounds (RST to a SYN-ACK: one per SYN-ACK frame of the stand, on the oracle's step plus one per distinct SYN-ACK for C's own reset after its dedup; next-hop who-has: the resolver's request count; ICMP 3/3 and 3/2: one per UDP or SCTP reply frame)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "16 records",
+          "name": "oracle-json: output.json is a well-formed document",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "no footer",
+          "name": "oracle-json: its file lacks the footer only after masscan's forced exit (the line is on its stderr)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "oracle-json: exit.txt is 0",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "open 198.18.0.4 161/udp reason none ttl 64; closed 198.18.0.3 59999/udp reason none ttl 64; closed 198.18.0.5 59999/udp reason none ttl 64; closed 198.18.0.5 500/udp reason none ttl 64; open 198.18.0.3 53/udp reason none ttl 64; closed 198.18.0.4 59999/udp reason none ttl 64; closed 198.18.0.4 500/udp reason none ttl 64; open 198.18.0.2 161/udp reason none ttl 64; closed 198.18.0.2 59999/udp reason none ttl 64; open 198.18.0.4 53/udp reason none ttl 64; open 198.18.0.5 161/udp reason none ttl 64; open 198.18.0.5 53/udp reason none ttl 64; open 198.18.0.2 53/udp reason none ttl 64; closed 198.18.0.2 500/udp reason none ttl 64; open 198.18.0.3 161/udp reason none ttl 64; closed 198.18.0.3 500/udp reason none ttl 64",
+          "name": "oracle-json: the document holds the records of the replies on its wire, field for field, in reply order (replies captured at most 50 us apart on the peer link, rounded to the microsecond, may come in either order: REPLY_REORDER_WINDOW_US)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "binary: the stand answered every probe exactly once, the stand's way (TCP 80/8080, UDP 53/161, SCTP 2905 open, the rest closed; Echo and ARP answered)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "binary: nothing on the peer side answers anything the scan did not send",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "binary: every probe and reply lies inside the witness window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0 other frames: ",
+          "name": "binary: every frame of the scanner MAC is a probe of the scan or of a named class the stand makes the scanner side send (next-hop who-has, RST to a SYN-ACK, ICMP 3/3 to a UDP reply, ICMP 3/2 to an SCTP reply)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "next_hop_who_has 1 of at most 10, rst_to_syn_ack 0 of at most 0, port_unreachable_to_udp_reply 8 of at most 8, protocol_unreachable_to_sctp_reply 0 of at most 0",
+          "name": "binary: the named scanner-side frames stay within their bounds (RST to a SYN-ACK: one per SYN-ACK frame of the stand, on the oracle's step plus one per distinct SYN-ACK for C's own reset after its dedup; next-hop who-has: the resolver's request count; ICMP 3/3 and 3/2: one per UDP or SCTP reply frame)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "16 records",
+          "name": "binary: output.bin is a well-formed document",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "binary: exit.txt is 0",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "binary: stdout.txt is empty (a file format silences stdout)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[]",
+          "name": "binary: stderr.txt holds only [+] lines and rmasscan's status forms",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[(\"interface\", \"veth-a (detected: route to 198.18.0.2)\"), (\"source-mac\", \"02-aa-00-00-00-01 (detected)\"), (\"source-ip\", \"198.18.0.1 (detected)\"), (\"router-ip\", \"198.18.0.2 (interface default gateway)\"), (\"router-mac\", \"02-aa-00-00-00-02 (arp: 1 requests, 0 ms)\"), (\"seed\", \"1 (given)\"), (\"source-port\", \"40000 (given)\")]",
+          "name": "binary: [+] lines are the stand's: veth-a by the route, its MAC and IP, router 198.18.0.2 by ARP, seed 1 and source port 40000 given",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "Some(Fin { reason: \"Completed\", sent: 16, replies: 16, open: 8 })",
+          "name": "binary: [+] finished: Completed",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "printed Some((16, 16, 8)), wire (sent, replies, open) (16, 16, 8)",
+          "name": "binary: [+] finished reports sent, replies and open equal to the probes and the distinct replies on the wire",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[]",
+          "name": "binary: every record's time lies within the scan on the wire (2 s either side)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "open 198.18.0.4 161/udp reason none ttl 64; closed 198.18.0.3 59999/udp reason none ttl 64; closed 198.18.0.5 59999/udp reason none ttl 64; closed 198.18.0.5 500/udp reason none ttl 64; open 198.18.0.3 53/udp reason none ttl 64; closed 198.18.0.4 59999/udp reason none ttl 64; closed 198.18.0.4 500/udp reason none ttl 64; open 198.18.0.2 161/udp reason none ttl 64; closed 198.18.0.2 59999/udp reason none ttl 64; open 198.18.0.5 161/udp reason none ttl 64; open 198.18.0.4 53/udp reason none ttl 64; open 198.18.0.5 53/udp reason none ttl 64; open 198.18.0.2 53/udp reason none ttl 64; closed 198.18.0.2 500/udp reason none ttl 64; open 198.18.0.3 161/udp reason none ttl 64; closed 198.18.0.3 500/udp reason none ttl 64",
+          "name": "binary: the document holds the records of the replies on its wire, field for field, in reply order (replies captured at most 50 us apart on the peer link, rounded to the microsecond, may come in either order: REPLY_REORDER_WINDOW_US)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "16 probes, 16 planned, first difference at None",
+          "name": "binary: the probes on the wire equal the plan (ReadyPlan of the case), in order, each once",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "oracle-binary: the stand answered every probe exactly once, the stand's way (TCP 80/8080, UDP 53/161, SCTP 2905 open, the rest closed; Echo and ARP answered)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "oracle-binary: nothing on the peer side answers anything the scan did not send",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "oracle-binary: every probe and reply lies inside the witness window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0 other frames: ",
+          "name": "oracle-binary: every frame of the scanner MAC is a probe of the scan or of a named class the stand makes the scanner side send (next-hop who-has, RST to a SYN-ACK, ICMP 3/3 to a UDP reply, ICMP 3/2 to an SCTP reply)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "next_hop_who_has 1 of at most 12, rst_to_syn_ack 0 of at most 0, port_unreachable_to_udp_reply 8 of at most 8, protocol_unreachable_to_sctp_reply 0 of at most 0",
+          "name": "oracle-binary: the named scanner-side frames stay within their bounds (RST to a SYN-ACK: one per SYN-ACK frame of the stand, on the oracle's step plus one per distinct SYN-ACK for C's own reset after its dedup; next-hop who-has: the resolver's request count; ICMP 3/3 and 3/2: one per UDP or SCTP reply frame)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "16 records",
+          "name": "oracle-binary: output.bin is a well-formed document",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "no footer",
+          "name": "oracle-binary: its file lacks the footer only after masscan's forced exit (the line is on its stderr)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "oracle-binary: exit.txt is 0",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "open 198.18.0.4 161/udp reason none ttl 64; closed 198.18.0.3 59999/udp reason none ttl 64; closed 198.18.0.5 59999/udp reason none ttl 64; closed 198.18.0.5 500/udp reason none ttl 64; open 198.18.0.2 161/udp reason none ttl 64; open 198.18.0.3 53/udp reason none ttl 64; closed 198.18.0.4 59999/udp reason none ttl 64; open 198.18.0.5 161/udp reason none ttl 64; closed 198.18.0.4 500/udp reason none ttl 64; closed 198.18.0.2 59999/udp reason none ttl 64; open 198.18.0.4 53/udp reason none ttl 64; open 198.18.0.5 53/udp reason none ttl 64; open 198.18.0.2 53/udp reason none ttl 64; closed 198.18.0.2 500/udp reason none ttl 64; open 198.18.0.3 161/udp reason none ttl 64; closed 198.18.0.3 500/udp reason none ttl 64",
+          "name": "oracle-binary: the document holds the records of the replies on its wire, field for field, in reply order (replies captured at most 50 us apart on the peer link, rounded to the microsecond, may come in either order: REPLY_REORDER_WINDOW_US)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "16 probes, the oracle 16",
+          "name": "json: the probes equal the C oracle's (oracle-json), byte for byte and in order (udp-checksum-ffff applied)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "open 198.18.0.4 161/udp reason none ttl 64; closed 198.18.0.3 59999/udp reason none ttl 64; closed 198.18.0.5 59999/udp reason none ttl 64; closed 198.18.0.5 500/udp reason none ttl 64; closed 198.18.0.4 59999/udp reason none ttl 64; closed 198.18.0.4 500/udp reason none ttl 64; closed 198.18.0.2 59999/udp reason none ttl 64; open 198.18.0.3 53/udp reason none ttl 64; open 198.18.0.2 161/udp reason none ttl 64; open 198.18.0.5 161/udp reason none ttl 64; open 198.18.0.4 53/udp reason none ttl 64; open 198.18.0.5 53/udp reason none ttl 64; open 198.18.0.2 53/udp reason none ttl 64; closed 198.18.0.2 500/udp reason none ttl 64; open 198.18.0.3 161/udp reason none ttl 64; closed 198.18.0.3 500/udp reason none ttl 64",
+          "name": "json: the records equal the C oracle's (oracle-json) field for field but the time, in any order (each document's order is its own wire's reply order, judged above; the two wires' reply orders may differ) (non-tcp-dedup applied)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "16 probes, the oracle 16",
+          "name": "binary: the probes equal the C oracle's (oracle-binary), byte for byte and in order (udp-checksum-ffff applied)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "open 198.18.0.4 161/udp reason none ttl 64; closed 198.18.0.3 59999/udp reason none ttl 64; closed 198.18.0.5 59999/udp reason none ttl 64; closed 198.18.0.5 500/udp reason none ttl 64; open 198.18.0.3 53/udp reason none ttl 64; closed 198.18.0.4 59999/udp reason none ttl 64; closed 198.18.0.4 500/udp reason none ttl 64; open 198.18.0.2 161/udp reason none ttl 64; closed 198.18.0.2 59999/udp reason none ttl 64; open 198.18.0.5 161/udp reason none ttl 64; open 198.18.0.4 53/udp reason none ttl 64; open 198.18.0.5 53/udp reason none ttl 64; open 198.18.0.2 53/udp reason none ttl 64; closed 198.18.0.2 500/udp reason none ttl 64; open 198.18.0.3 161/udp reason none ttl 64; closed 198.18.0.3 500/udp reason none ttl 64",
+          "name": "binary: the records equal the C oracle's (oracle-binary) field for field but the time, in any order (each document's order is its own wire's reply order, judged above; the two wires' reply orders may differ) (non-tcp-dedup applied)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "payload bytes: 53 {31}, 161 {59}, 500 {352}, 59999 {0}",
+          "name": "json: the probes carry the built-in DNS, SNMP and ISAKMP payloads on 53, 161 and 500 and a 0-byte payload on 59999",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "payload bytes: 53 {31}, 161 {59}, 500 {352}, 59999 {0}",
+          "name": "binary: the probes carry the built-in DNS, SNMP and ISAKMP payloads on 53, 161 and 500 and a 0-byte payload on 59999",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0 probe pairs equal by this rule",
+          "name": "deviation udp-checksum-ffff: R12: a UDP checksum that computes to 0 goes out as 0xFFFF from rmasscan (RFC 768) and as 0x0000 from C; two probes that differ only there are the same probe",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0 replies with a wrong sum",
+          "name": "deviation rx-checksum-verify: R11: rmasscan drops a reply whose IPv4 header checksum, ICMP, TCP or UDP checksum or SCTP CRC-32C is wrong, C reads it; every reply on the wire must carry valid sums",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0 repeated UDP and SCTP records of C collapsed",
+          "name": "deviation non-tcp-dedup: rmasscan reports a UDP, ICMP 3/3 or SCTP reply once per (protocol, address, port, status), C prints every one (main.c:917-922); C's repeated UDP and SCTP records are collapsed before the documents are compared (never a TCP, Echo or ARP record)",
+          "result": "PASS"
+        }
+      ],
+      "notes": {
+        "deviations": [
+          {
+            "name": "udp-checksum-ffff",
+            "observed": "0 probe pairs equal by this rule",
+            "rule": "R12: a UDP checksum that computes to 0 goes out as 0xFFFF from rmasscan (RFC 768) and as 0x0000 from C; two probes that differ only there are the same probe"
+          },
+          {
+            "name": "rx-checksum-verify",
+            "observed": "0 replies with a wrong sum",
+            "rule": "R11: rmasscan drops a reply whose IPv4 header checksum, ICMP, TCP or UDP checksum or SCTP CRC-32C is wrong, C reads it; every reply on the wire must carry valid sums"
+          },
+          {
+            "name": "non-tcp-dedup",
+            "observed": "0 repeated UDP and SCTP records of C collapsed",
+            "rule": "rmasscan reports a UDP, ICMP 3/3 or SCTP reply once per (protocol, address, port, status), C prints every one (main.c:917-922); C's repeated UDP and SCTP records are collapsed before the documents are compared (never a TCP, Echo or ARP record)"
+          }
+        ],
+        "oracle": "the pinned C masscan 8e6b3b0 with the same argv, one run per document, on the same stand",
+        "record_order_vs_c": {
+          "documents": {
+            "binary": "the same records, in another order",
+            "json": "the same records, in another order"
+          },
+          "rule": "each scanner prints its records in the order the replies arrive on its own wire (judged per step: the document holds the records of the replies on its wire, in reply order, up to replies captured at most REPLY_REORDER_WINDOW_US = 50 us apart); the two runs of a document do not get the same reply order from the stand: both scanners send several probes back to back at --rate 100, and within such a burst the responder (one thread per UDP socket and for the SCTP link) and the peer kernel (ICMP at once) answer in an order that changes from run to run, as live run linux-protocols-r1 on 68ffcf3 showed (p02, p05); so rmasscan's records must equal C's field for field but the time in any order"
+        },
+        "reply_order_swaps": {
+          "binary": {
+            "largest_gap_us": null,
+            "pairs": 0
+          },
+          "json": {
+            "largest_gap_us": null,
+            "pairs": 0
+          },
+          "oracle-binary": {
+            "largest_gap_us": 10,
+            "pairs": 1
+          },
+          "oracle-json": {
+            "largest_gap_us": 2,
+            "pairs": 1
+          }
+        },
+        "reply_order_window": "50 us: two replies captured on the peer link at most this far apart (rounded to the microsecond; exactly 50 us is inside) may reach the scanner in the other order (two CPUs send them); reply_order_swaps gives, per step, the pairs of records written in the other order within it (pairs) and the largest gap among them in microseconds (largest_gap_us, null without such a pair)",
+        "scanner_frame_classes": {
+          "next_hop_who_has": "the scanner's next-hop resolution: an ARP who-has 198.18.0.2 from 198.18.0.1, 60 bytes zero-padded (the resolver form of C stack-arpv4.c and rmasscan), in a scan that is no ARP scan",
+          "port_unreachable_to_udp_reply": "an ICMP 3/3 from 198.18.0.1 quoting a UDP reply of the stand: the scanner namespace kernel, no socket on the source port",
+          "protocol_unreachable_to_sctp_reply": "an ICMP 3/2 from 198.18.0.1 quoting an SCTP INIT-ACK or ABORT of the stand: the scanner namespace kernel, no SCTP",
+          "rst_to_syn_ack": "a TCP RST (no other flag) from 198.18.0.1 whose sequence number is the acknowledgment of a SYN-ACK of the stand: the scanner namespace kernel resets a SYN-ACK no socket owns (198.18.0.1 is its address), and C resets each distinct SYN-ACK itself once it passed its dedup (main.c:1067-1068 then main.c:1095)"
+        },
+        "scanner_frames": {
+          "binary": {
+            "at_most": {
+              "next_hop_who_has": 10,
+              "port_unreachable_to_udp_reply": 8,
+              "protocol_unreachable_to_sctp_reply": 0,
+              "rst_to_syn_ack": 0
+            },
+            "next_hop_who_has": 1,
+            "port_unreachable_to_udp_reply": 8,
+            "protocol_unreachable_to_sctp_reply": 0,
+            "rst_to_syn_ack": 0,
+            "unexplained": 0
+          },
+          "json": {
+            "at_most": {
+              "next_hop_who_has": 10,
+              "port_unreachable_to_udp_reply": 8,
+              "protocol_unreachable_to_sctp_reply": 0,
+              "rst_to_syn_ack": 0
+            },
+            "next_hop_who_has": 1,
+            "port_unreachable_to_udp_reply": 8,
+            "protocol_unreachable_to_sctp_reply": 0,
+            "rst_to_syn_ack": 0,
+            "unexplained": 0
+          },
+          "oracle-binary": {
+            "at_most": {
+              "next_hop_who_has": 12,
+              "port_unreachable_to_udp_reply": 8,
+              "protocol_unreachable_to_sctp_reply": 0,
+              "rst_to_syn_ack": 0
+            },
+            "next_hop_who_has": 1,
+            "port_unreachable_to_udp_reply": 8,
+            "protocol_unreachable_to_sctp_reply": 0,
+            "rst_to_syn_ack": 0,
+            "unexplained": 0
+          },
+          "oracle-json": {
+            "at_most": {
+              "next_hop_who_has": 12,
+              "port_unreachable_to_udp_reply": 8,
+              "protocol_unreachable_to_sctp_reply": 0,
+              "rst_to_syn_ack": 0
+            },
+            "next_hop_who_has": 1,
+            "port_unreachable_to_udp_reply": 8,
+            "protocol_unreachable_to_sctp_reply": 0,
+            "rst_to_syn_ack": 0,
+            "unexplained": 0
+          }
+        }
+      },
+      "safety_trip": false,
+      "tag": "p02_udp_payloads_and_closed",
+      "verdict": "PASS"
+    },
+    {
+      "behaviour_fail": false,
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "captures are stored uncompressed; the verifier has no decompression",
+          "name": "no compressed capture in the case directory",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "40",
+          "name": "peer.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "valid true, []",
+          "name": "binary/capture.json: the witness judged its capture complete",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "40 frames recorded, 40 in the file",
+          "name": "binary/capture.json describes binary/peer.pcap (sha256 and frame count)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3 start, 3 end markers; window 1794512610.0542488 .. 1794512615.0820374",
+          "name": "binary/peer.pcap: a start marker before and three end markers after every scanner frame",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "40",
+          "name": "peer.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "valid true, []",
+          "name": "oracle-binary/capture.json: the witness judged its capture complete",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "40 frames recorded, 40 in the file",
+          "name": "oracle-binary/capture.json describes oracle-binary/peer.pcap (sha256 and frame count)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3 start, 3 end markers; window 1794512616.029424 .. 1794512633.8407545",
+          "name": "oracle-binary/peer.pcap: a start marker before and three end markers after every scanner frame",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "40",
+          "name": "peer.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "valid true, []",
+          "name": "list/capture.json: the witness judged its capture complete",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "40 frames recorded, 40 in the file",
+          "name": "list/capture.json describes list/peer.pcap (sha256 and frame count)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3 start, 3 end markers; window 1794512634.789842 .. 1794512639.8083827",
+          "name": "list/peer.pcap: a start marker before and three end markers after every scanner frame",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "40",
+          "name": "peer.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "valid true, []",
+          "name": "oracle-list/capture.json: the witness judged its capture complete",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "40 frames recorded, 40 in the file",
+          "name": "oracle-list/capture.json describes oracle-list/peer.pcap (sha256 and frame count)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3 start, 3 end markers; window 1794512640.7620184 .. 1794512659.0720286",
+          "name": "oracle-list/peer.pcap: a start marker before and three end markers after every scanner frame",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no SYN on the binary capture from outside the stand binding or to an address off the stand",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "no frame of the scanner on the binary capture to an address off the stand or from another source",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0 frames: ",
+          "name": "no frame on the binary capture from a MAC other than the stand's scanner and peer (markers aside)",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no SYN on the oracle-binary capture from outside the stand binding or to an address off the stand",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "no frame of the scanner on the oracle-binary capture to an address off the stand or from another source",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0 frames: ",
+          "name": "no frame on the oracle-binary capture from a MAC other than the stand's scanner and peer (markers aside)",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no SYN on the list capture from outside the stand binding or to an address off the stand",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "no frame of the scanner on the list capture to an address off the stand or from another source",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0 frames: ",
+          "name": "no frame on the list capture from a MAC other than the stand's scanner and peer (markers aside)",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no SYN on the oracle-list capture from outside the stand binding or to an address off the stand",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "no frame of the scanner on the oracle-list capture to an address off the stand or from another source",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0 frames: ",
+          "name": "no frame on the oracle-list capture from a MAC other than the stand's scanner and peer (markers aside)",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "41",
+          "name": "hashes-before-copy.txt matches every file of the case directory",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[]",
+          "name": "evidence files carry only the allowed extensions (json pcap txt log err sha256 md, bin for -oB)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "{\"peer_ns\":false,\"scanner_ns\":\"via 198.18.0.2 dev veth-a\"}",
+          "name": "isolation.json: the sealed autodetect stand (capture isolation --mode autodetect)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "mode \"autodetect\", default_route {\"peer_ns\":false,\"scanner_ns\":\"via 198.18.0.2 dev veth-a\"}",
+          "name": "isolation-post.json: the stand still sealed after the run (capture isolation --mode autodetect)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "37 files",
+          "name": "privacy: every text and binary file holds only allowlisted names, addresses and paths",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "table Some(ProtoExpect { tag: \"p03_sctp_init_ack_abort\", plan_ports: \"S:2905,2906\", arp: false, steps: [ExpectStep { name: \"binary\", who: Rmasscan, out: Binary }, ExpectStep { name: \"oracle-binary\", who: Oracle, out: Binary }, ExpectStep { name: \"list\", who: Rmasscan, out: List }, ExpectStep { name: \"oracle-list\", who: Oracle, out: List }] })",
+          "name": "expect.json equals the case table's entry",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[\"198.18.0.2-198.18.0.5\", \"-sZ\", \"-p2905,2906\", \"-oB\", \"output.bin\", \"--show\", \"open,closed\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\", \"--source-port\", \"40000\"], table [\"198.18.0.2-198.18.0.5\", \"-sZ\", \"-p2905,2906\", \"-oB\", \"output.bin\", \"--show\", \"open,closed\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\", \"--source-port\", \"40000\"]",
+          "name": "binary/argv.json is the step's argv in the case table",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[\"198.18.0.2-198.18.0.5\", \"-sZ\", \"-p2905,2906\", \"-oB\", \"output.bin\", \"--show\", \"open,closed\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\", \"--source-port\", \"40000\"], table [\"198.18.0.2-198.18.0.5\", \"-sZ\", \"-p2905,2906\", \"-oB\", \"output.bin\", \"--show\", \"open,closed\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\", \"--source-port\", \"40000\"]",
+          "name": "oracle-binary/argv.json is the step's argv in the case table",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[\"198.18.0.2-198.18.0.5\", \"-sZ\", \"-p2905,2906\", \"-oL\", \"output.txt\", \"--show\", \"open,closed\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\", \"--source-port\", \"40000\"], table [\"198.18.0.2-198.18.0.5\", \"-sZ\", \"-p2905,2906\", \"-oL\", \"output.txt\", \"--show\", \"open,closed\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\", \"--source-port\", \"40000\"]",
+          "name": "list/argv.json is the step's argv in the case table",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[\"198.18.0.2-198.18.0.5\", \"-sZ\", \"-p2905,2906\", \"-oL\", \"output.txt\", \"--show\", \"open,closed\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\", \"--source-port\", \"40000\"], table [\"198.18.0.2-198.18.0.5\", \"-sZ\", \"-p2905,2906\", \"-oL\", \"output.txt\", \"--show\", \"open,closed\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\", \"--source-port\", \"40000\"]",
+          "name": "oracle-list/argv.json is the step's argv in the case table",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "it still ran",
+          "name": "binary/responder.json: the peer responder ran until the scanner ended",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "it still ran",
+          "name": "oracle-binary/responder.json: the peer responder ran until the scanner ended",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "it still ran",
+          "name": "list/responder.json: the peer responder ran until the scanner ended",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "it still ran",
+          "name": "oracle-list/responder.json: the peer responder ran until the scanner ended",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "PeerStack { icmp_ratemask: \"0\", icmp_echo_ignore_all: \"0\", sctp_in_kernel: false, responder: [\"--ports\", \"80,8080\", \"--udp-ports\", \"53,161\", \"--udp-ips\", \"198.18.0.2,198.18.0.3,198.18.0.4,198.18.0.5\", \"--sctp-iface\", \"veth-b\", \"--sctp-open\", \"2905\"] }",
+          "name": "peer-stack.json: the peer answers the stand's way (icmp_ratemask 0, Echo answered, the stand's responder, no SCTP in the kernel for an SCTP case)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "binary: the stand answered every probe exactly once, the stand's way (TCP 80/8080, UDP 53/161, SCTP 2905 open, the rest closed; Echo and ARP answered)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "binary: nothing on the peer side answers anything the scan did not send",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "binary: every probe and reply lies inside the witness window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0 other frames: ",
+          "name": "binary: every frame of the scanner MAC is a probe of the scan or of a named class the stand makes the scanner side send (next-hop who-has, RST to a SYN-ACK, ICMP 3/3 to a UDP reply, ICMP 3/2 to an SCTP reply)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "next_hop_who_has 1 of at most 10, rst_to_syn_ack 0 of at most 0, port_unreachable_to_udp_reply 0 of at most 0, protocol_unreachable_to_sctp_reply 8 of at most 8",
+          "name": "binary: the named scanner-side frames stay within their bounds (RST to a SYN-ACK: one per SYN-ACK frame of the stand, on the oracle's step plus one per distinct SYN-ACK for C's own reset after its dedup; next-hop who-has: the resolver's request count; ICMP 3/3 and 3/2: one per UDP or SCTP reply frame)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "8 records",
+          "name": "binary: output.bin is a well-formed document",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "binary: exit.txt is 0",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "binary: stdout.txt is empty (a file format silences stdout)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[]",
+          "name": "binary: stderr.txt holds only [+] lines and rmasscan's status forms",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[(\"interface\", \"veth-a (detected: route to 198.18.0.2)\"), (\"source-mac\", \"02-aa-00-00-00-01 (detected)\"), (\"source-ip\", \"198.18.0.1 (detected)\"), (\"router-ip\", \"198.18.0.2 (interface default gateway)\"), (\"router-mac\", \"02-aa-00-00-00-02 (arp: 1 requests, 0 ms)\"), (\"seed\", \"1 (given)\"), (\"source-port\", \"40000 (given)\")]",
+          "name": "binary: [+] lines are the stand's: veth-a by the route, its MAC and IP, router 198.18.0.2 by ARP, seed 1 and source port 40000 given",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "Some(Fin { reason: \"Completed\", sent: 8, replies: 8, open: 4 })",
+          "name": "binary: [+] finished: Completed",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "printed Some((8, 8, 4)), wire (sent, replies, open) (8, 8, 4)",
+          "name": "binary: [+] finished reports sent, replies and open equal to the probes and the distinct replies on the wire",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[]",
+          "name": "binary: every record's time lies within the scan on the wire (2 s either side)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "open 198.18.0.2 2905/sctp reason none ttl 64; closed 198.18.0.5 2906/sctp reason none ttl 64; closed 198.18.0.2 2906/sctp reason none ttl 64; closed 198.18.0.3 2906/sctp reason none ttl 64; open 198.18.0.3 2905/sctp reason none ttl 64; open 198.18.0.4 2905/sctp reason none ttl 64; open 198.18.0.5 2905/sctp reason none ttl 64; closed 198.18.0.4 2906/sctp reason none ttl 64",
+          "name": "binary: the document holds the records of the replies on its wire, field for field, in reply order (replies captured at most 50 us apart on the peer link, rounded to the microsecond, may come in either order: REPLY_REORDER_WINDOW_US)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "8 probes, 8 planned, first difference at None",
+          "name": "binary: the probes on the wire equal the plan (ReadyPlan of the case), in order, each once",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "oracle-binary: the stand answered every probe exactly once, the stand's way (TCP 80/8080, UDP 53/161, SCTP 2905 open, the rest closed; Echo and ARP answered)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "oracle-binary: nothing on the peer side answers anything the scan did not send",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "oracle-binary: every probe and reply lies inside the witness window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0 other frames: ",
+          "name": "oracle-binary: every frame of the scanner MAC is a probe of the scan or of a named class the stand makes the scanner side send (next-hop who-has, RST to a SYN-ACK, ICMP 3/3 to a UDP reply, ICMP 3/2 to an SCTP reply)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "next_hop_who_has 1 of at most 12, rst_to_syn_ack 0 of at most 0, port_unreachable_to_udp_reply 0 of at most 0, protocol_unreachable_to_sctp_reply 8 of at most 8",
+          "name": "oracle-binary: the named scanner-side frames stay within their bounds (RST to a SYN-ACK: one per SYN-ACK frame of the stand, on the oracle's step plus one per distinct SYN-ACK for C's own reset after its dedup; next-hop who-has: the resolver's request count; ICMP 3/3 and 3/2: one per UDP or SCTP reply frame)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "8 records",
+          "name": "oracle-binary: output.bin is a well-formed document",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "no footer",
+          "name": "oracle-binary: its file lacks the footer only after masscan's forced exit (the line is on its stderr)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "oracle-binary: exit.txt is 0",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "open 198.18.0.2 2905/sctp reason none ttl 64; closed 198.18.0.5 2906/sctp reason none ttl 64; closed 198.18.0.2 2906/sctp reason none ttl 64; closed 198.18.0.3 2906/sctp reason none ttl 64; open 198.18.0.3 2905/sctp reason none ttl 64; open 198.18.0.4 2905/sctp reason none ttl 64; open 198.18.0.5 2905/sctp reason none ttl 64; closed 198.18.0.4 2906/sctp reason none ttl 64",
+          "name": "oracle-binary: the document holds the records of the replies on its wire, field for field, in reply order (replies captured at most 50 us apart on the peer link, rounded to the microsecond, may come in either order: REPLY_REORDER_WINDOW_US)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "list: the stand answered every probe exactly once, the stand's way (TCP 80/8080, UDP 53/161, SCTP 2905 open, the rest closed; Echo and ARP answered)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "list: nothing on the peer side answers anything the scan did not send",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "list: every probe and reply lies inside the witness window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0 other frames: ",
+          "name": "list: every frame of the scanner MAC is a probe of the scan or of a named class the stand makes the scanner side send (next-hop who-has, RST to a SYN-ACK, ICMP 3/3 to a UDP reply, ICMP 3/2 to an SCTP reply)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "next_hop_who_has 1 of at most 10, rst_to_syn_ack 0 of at most 0, port_unreachable_to_udp_reply 0 of at most 0, protocol_unreachable_to_sctp_reply 8 of at most 8",
+          "name": "list: the named scanner-side frames stay within their bounds (RST to a SYN-ACK: one per SYN-ACK frame of the stand, on the oracle's step plus one per distinct SYN-ACK for C's own reset after its dedup; next-hop who-has: the resolver's request count; ICMP 3/3 and 3/2: one per UDP or SCTP reply frame)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "8 records",
+          "name": "list: output.txt is a well-formed document",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "list: exit.txt is 0",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "list: stdout.txt is empty (a file format silences stdout)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[]",
+          "name": "list: stderr.txt holds only [+] lines and rmasscan's status forms",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[(\"interface\", \"veth-a (detected: route to 198.18.0.2)\"), (\"source-mac\", \"02-aa-00-00-00-01 (detected)\"), (\"source-ip\", \"198.18.0.1 (detected)\"), (\"router-ip\", \"198.18.0.2 (interface default gateway)\"), (\"router-mac\", \"02-aa-00-00-00-02 (arp: 1 requests, 0 ms)\"), (\"seed\", \"1 (given)\"), (\"source-port\", \"40000 (given)\")]",
+          "name": "list: [+] lines are the stand's: veth-a by the route, its MAC and IP, router 198.18.0.2 by ARP, seed 1 and source port 40000 given",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "Some(Fin { reason: \"Completed\", sent: 8, replies: 8, open: 4 })",
+          "name": "list: [+] finished: Completed",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "printed Some((8, 8, 4)), wire (sent, replies, open) (8, 8, 4)",
+          "name": "list: [+] finished reports sent, replies and open equal to the probes and the distinct replies on the wire",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[]",
+          "name": "list: every record's time lies within the scan on the wire (2 s either side)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "open 198.18.0.2 2905/sctp; closed 198.18.0.5 2906/sctp; closed 198.18.0.2 2906/sctp; closed 198.18.0.3 2906/sctp; open 198.18.0.3 2905/sctp; open 198.18.0.4 2905/sctp; open 198.18.0.5 2905/sctp; closed 198.18.0.4 2906/sctp",
+          "name": "list: the document holds the records of the replies on its wire, field for field, in reply order (replies captured at most 50 us apart on the peer link, rounded to the microsecond, may come in either order: REPLY_REORDER_WINDOW_US)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "8 probes, 8 planned, first difference at None",
+          "name": "list: the probes on the wire equal the plan (ReadyPlan of the case), in order, each once",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "oracle-list: the stand answered every probe exactly once, the stand's way (TCP 80/8080, UDP 53/161, SCTP 2905 open, the rest closed; Echo and ARP answered)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "oracle-list: nothing on the peer side answers anything the scan did not send",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "oracle-list: every probe and reply lies inside the witness window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0 other frames: ",
+          "name": "oracle-list: every frame of the scanner MAC is a probe of the scan or of a named class the stand makes the scanner side send (next-hop who-has, RST to a SYN-ACK, ICMP 3/3 to a UDP reply, ICMP 3/2 to an SCTP reply)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "next_hop_who_has 1 of at most 12, rst_to_syn_ack 0 of at most 0, port_unreachable_to_udp_reply 0 of at most 0, protocol_unreachable_to_sctp_reply 8 of at most 8",
+          "name": "oracle-list: the named scanner-side frames stay within their bounds (RST to a SYN-ACK: one per SYN-ACK frame of the stand, on the oracle's step plus one per distinct SYN-ACK for C's own reset after its dedup; next-hop who-has: the resolver's request count; ICMP 3/3 and 3/2: one per UDP or SCTP reply frame)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "8 records",
+          "name": "oracle-list: output.txt is a well-formed document",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "no footer",
+          "name": "oracle-list: its file lacks the footer only after masscan's forced exit (the line is on its stderr)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "oracle-list: exit.txt is 0",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "open 198.18.0.2 2905/sctp; closed 198.18.0.5 2906/sctp; closed 198.18.0.2 2906/sctp; closed 198.18.0.3 2906/sctp; open 198.18.0.3 2905/sctp; open 198.18.0.4 2905/sctp; open 198.18.0.5 2905/sctp; closed 198.18.0.4 2906/sctp",
+          "name": "oracle-list: the document holds the records of the replies on its wire, field for field, in reply order (replies captured at most 50 us apart on the peer link, rounded to the microsecond, may come in either order: REPLY_REORDER_WINDOW_US)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "8 probes, the oracle 8",
+          "name": "binary: the probes equal the C oracle's (oracle-binary), byte for byte and in order (udp-checksum-ffff applied)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "open 198.18.0.2 2905/sctp reason none ttl 64; closed 198.18.0.5 2906/sctp reason none ttl 64; closed 198.18.0.2 2906/sctp reason none ttl 64; closed 198.18.0.3 2906/sctp reason none ttl 64; open 198.18.0.3 2905/sctp reason none ttl 64; open 198.18.0.4 2905/sctp reason none ttl 64; open 198.18.0.5 2905/sctp reason none ttl 64; closed 198.18.0.4 2906/sctp reason none ttl 64",
+          "name": "binary: the records equal the C oracle's (oracle-binary) field for field but the time, in any order (each document's order is its own wire's reply order, judged above; the two wires' reply orders may differ) (non-tcp-dedup applied)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "8 probes, the oracle 8",
+          "name": "list: the probes equal the C oracle's (oracle-list), byte for byte and in order (udp-checksum-ffff applied)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "open 198.18.0.2 2905/sctp; closed 198.18.0.5 2906/sctp; closed 198.18.0.2 2906/sctp; closed 198.18.0.3 2906/sctp; open 198.18.0.3 2905/sctp; open 198.18.0.4 2905/sctp; open 198.18.0.5 2905/sctp; closed 198.18.0.4 2906/sctp",
+          "name": "list: the records equal the C oracle's (oracle-list) field for field but the time, in any order (each document's order is its own wire's reply order, judged above; the two wires' reply orders may differ) (non-tcp-dedup applied)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0 replies with a wrong sum",
+          "name": "deviation rx-checksum-verify: R11: rmasscan drops a reply whose IPv4 header checksum, ICMP, TCP or UDP checksum or SCTP CRC-32C is wrong, C reads it; every reply on the wire must carry valid sums",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0 repeated UDP and SCTP records of C collapsed",
+          "name": "deviation non-tcp-dedup: rmasscan reports a UDP, ICMP 3/3 or SCTP reply once per (protocol, address, port, status), C prints every one (main.c:917-922); C's repeated UDP and SCTP records are collapsed before the documents are compared (never a TCP, Echo or ARP record)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0 SCTP replies whose chunk flags read as SYN-ACK or RST",
+          "name": "deviation sctp-tcp-fallthrough: C main.c:920-922 goes on to read an SCTP reply as TCP (its first chunk's flags as TCP flags), rmasscan does not; every SCTP reply's chunk flags must be neither SYN-ACK nor RST, so C prints nothing more",
+          "result": "PASS"
+        }
+      ],
+      "notes": {
+        "deviations": [
+          {
+            "name": "rx-checksum-verify",
+            "observed": "0 replies with a wrong sum",
+            "rule": "R11: rmasscan drops a reply whose IPv4 header checksum, ICMP, TCP or UDP checksum or SCTP CRC-32C is wrong, C reads it; every reply on the wire must carry valid sums"
+          },
+          {
+            "name": "non-tcp-dedup",
+            "observed": "0 repeated UDP and SCTP records of C collapsed",
+            "rule": "rmasscan reports a UDP, ICMP 3/3 or SCTP reply once per (protocol, address, port, status), C prints every one (main.c:917-922); C's repeated UDP and SCTP records are collapsed before the documents are compared (never a TCP, Echo or ARP record)"
+          },
+          {
+            "name": "sctp-tcp-fallthrough",
+            "observed": "0 SCTP replies whose chunk flags read as SYN-ACK or RST",
+            "rule": "C main.c:920-922 goes on to read an SCTP reply as TCP (its first chunk's flags as TCP flags), rmasscan does not; every SCTP reply's chunk flags must be neither SYN-ACK nor RST, so C prints nothing more"
+          }
+        ],
+        "oracle": "the pinned C masscan 8e6b3b0 with the same argv, one run per document, on the same stand",
+        "record_order_vs_c": {
+          "documents": {
+            "binary": "the same records in the same order",
+            "list": "the same records in the same order"
+          },
+          "rule": "each scanner prints its records in the order the replies arrive on its own wire (judged per step: the document holds the records of the replies on its wire, in reply order, up to replies captured at most REPLY_REORDER_WINDOW_US = 50 us apart); the two runs of a document do not get the same reply order from the stand: both scanners send several probes back to back at --rate 100, and within such a burst the responder (one thread per UDP socket and for the SCTP link) and the peer kernel (ICMP at once) answer in an order that changes from run to run, as live run linux-protocols-r1 on 68ffcf3 showed (p02, p05); so rmasscan's records must equal C's field for field but the time in any order"
+        },
+        "reply_order_swaps": {
+          "binary": {
+            "largest_gap_us": null,
+            "pairs": 0
+          },
+          "list": {
+            "largest_gap_us": null,
+            "pairs": 0
+          },
+          "oracle-binary": {
+            "largest_gap_us": null,
+            "pairs": 0
+          },
+          "oracle-list": {
+            "largest_gap_us": null,
+            "pairs": 0
+          }
+        },
+        "reply_order_window": "50 us: two replies captured on the peer link at most this far apart (rounded to the microsecond; exactly 50 us is inside) may reach the scanner in the other order (two CPUs send them); reply_order_swaps gives, per step, the pairs of records written in the other order within it (pairs) and the largest gap among them in microseconds (largest_gap_us, null without such a pair)",
+        "scanner_frame_classes": {
+          "next_hop_who_has": "the scanner's next-hop resolution: an ARP who-has 198.18.0.2 from 198.18.0.1, 60 bytes zero-padded (the resolver form of C stack-arpv4.c and rmasscan), in a scan that is no ARP scan",
+          "port_unreachable_to_udp_reply": "an ICMP 3/3 from 198.18.0.1 quoting a UDP reply of the stand: the scanner namespace kernel, no socket on the source port",
+          "protocol_unreachable_to_sctp_reply": "an ICMP 3/2 from 198.18.0.1 quoting an SCTP INIT-ACK or ABORT of the stand: the scanner namespace kernel, no SCTP",
+          "rst_to_syn_ack": "a TCP RST (no other flag) from 198.18.0.1 whose sequence number is the acknowledgment of a SYN-ACK of the stand: the scanner namespace kernel resets a SYN-ACK no socket owns (198.18.0.1 is its address), and C resets each distinct SYN-ACK itself once it passed its dedup (main.c:1067-1068 then main.c:1095)"
+        },
+        "scanner_frames": {
+          "binary": {
+            "at_most": {
+              "next_hop_who_has": 10,
+              "port_unreachable_to_udp_reply": 0,
+              "protocol_unreachable_to_sctp_reply": 8,
+              "rst_to_syn_ack": 0
+            },
+            "next_hop_who_has": 1,
+            "port_unreachable_to_udp_reply": 0,
+            "protocol_unreachable_to_sctp_reply": 8,
+            "rst_to_syn_ack": 0,
+            "unexplained": 0
+          },
+          "list": {
+            "at_most": {
+              "next_hop_who_has": 10,
+              "port_unreachable_to_udp_reply": 0,
+              "protocol_unreachable_to_sctp_reply": 8,
+              "rst_to_syn_ack": 0
+            },
+            "next_hop_who_has": 1,
+            "port_unreachable_to_udp_reply": 0,
+            "protocol_unreachable_to_sctp_reply": 8,
+            "rst_to_syn_ack": 0,
+            "unexplained": 0
+          },
+          "oracle-binary": {
+            "at_most": {
+              "next_hop_who_has": 12,
+              "port_unreachable_to_udp_reply": 0,
+              "protocol_unreachable_to_sctp_reply": 8,
+              "rst_to_syn_ack": 0
+            },
+            "next_hop_who_has": 1,
+            "port_unreachable_to_udp_reply": 0,
+            "protocol_unreachable_to_sctp_reply": 8,
+            "rst_to_syn_ack": 0,
+            "unexplained": 0
+          },
+          "oracle-list": {
+            "at_most": {
+              "next_hop_who_has": 12,
+              "port_unreachable_to_udp_reply": 0,
+              "protocol_unreachable_to_sctp_reply": 8,
+              "rst_to_syn_ack": 0
+            },
+            "next_hop_who_has": 1,
+            "port_unreachable_to_udp_reply": 0,
+            "protocol_unreachable_to_sctp_reply": 8,
+            "rst_to_syn_ack": 0,
+            "unexplained": 0
+          }
+        }
+      },
+      "safety_trip": false,
+      "tag": "p03_sctp_init_ack_abort",
+      "verdict": "PASS"
+    },
+    {
+      "behaviour_fail": false,
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "captures are stored uncompressed; the verifier has no decompression",
+          "name": "no compressed capture in the case directory",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "14",
+          "name": "peer.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "valid true, []",
+          "name": "stdout/capture.json: the witness judged its capture complete",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "14 frames recorded, 14 in the file",
+          "name": "stdout/capture.json describes stdout/peer.pcap (sha256 and frame count)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3 start, 3 end markers; window 1794512660.2949939 .. 1794512665.3147507",
+          "name": "stdout/peer.pcap: a start marker before and three end markers after every scanner frame",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "14",
+          "name": "peer.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "valid true, []",
+          "name": "oracle-stdout/capture.json: the witness judged its capture complete",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "14 frames recorded, 14 in the file",
+          "name": "oracle-stdout/capture.json describes oracle-stdout/peer.pcap (sha256 and frame count)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3 start, 3 end markers; window 1794512666.2638233 .. 1794512684.0846345",
+          "name": "oracle-stdout/peer.pcap: a start marker before and three end markers after every scanner frame",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "14",
+          "name": "peer.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "valid true, []",
+          "name": "binary/capture.json: the witness judged its capture complete",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "14 frames recorded, 14 in the file",
+          "name": "binary/capture.json describes binary/peer.pcap (sha256 and frame count)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3 start, 3 end markers; window 1794512685.0263343 .. 1794512690.046244",
+          "name": "binary/peer.pcap: a start marker before and three end markers after every scanner frame",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "14",
+          "name": "peer.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "valid true, []",
+          "name": "oracle-binary/capture.json: the witness judged its capture complete",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "14 frames recorded, 14 in the file",
+          "name": "oracle-binary/capture.json describes oracle-binary/peer.pcap (sha256 and frame count)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3 start, 3 end markers; window 1794512690.9866543 .. 1794512709.0583048",
+          "name": "oracle-binary/peer.pcap: a start marker before and three end markers after every scanner frame",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no SYN on the stdout capture from outside the stand binding or to an address off the stand",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "no frame of the scanner on the stdout capture to an address off the stand or from another source",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0 frames: ",
+          "name": "no frame on the stdout capture from a MAC other than the stand's scanner and peer (markers aside)",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no SYN on the oracle-stdout capture from outside the stand binding or to an address off the stand",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "no frame of the scanner on the oracle-stdout capture to an address off the stand or from another source",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0 frames: ",
+          "name": "no frame on the oracle-stdout capture from a MAC other than the stand's scanner and peer (markers aside)",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no SYN on the binary capture from outside the stand binding or to an address off the stand",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "no frame of the scanner on the binary capture to an address off the stand or from another source",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0 frames: ",
+          "name": "no frame on the binary capture from a MAC other than the stand's scanner and peer (markers aside)",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no SYN on the oracle-binary capture from outside the stand binding or to an address off the stand",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "no frame of the scanner on the oracle-binary capture to an address off the stand or from another source",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0 frames: ",
+          "name": "no frame on the oracle-binary capture from a MAC other than the stand's scanner and peer (markers aside)",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "39",
+          "name": "hashes-before-copy.txt matches every file of the case directory",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[]",
+          "name": "evidence files carry only the allowed extensions (json pcap txt log err sha256 md, bin for -oB)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "{\"peer_ns\":false,\"scanner_ns\":\"via 198.18.0.2 dev veth-a\"}",
+          "name": "isolation.json: the sealed autodetect stand (capture isolation --mode autodetect)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "mode \"autodetect\", default_route {\"peer_ns\":false,\"scanner_ns\":\"via 198.18.0.2 dev veth-a\"}",
+          "name": "isolation-post.json: the stand still sealed after the run (capture isolation --mode autodetect)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "35 files",
+          "name": "privacy: every text and binary file holds only allowlisted names, addresses and paths",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "table Some(ProtoExpect { tag: \"p04_arp_scan\", plan_ports: \"I:2\", arp: true, steps: [ExpectStep { name: \"stdout\", who: Rmasscan, out: Stdout }, ExpectStep { name: \"oracle-stdout\", who: Oracle, out: Stdout }, ExpectStep { name: \"binary\", who: Rmasscan, out: Binary }, ExpectStep { name: \"oracle-binary\", who: Oracle, out: Binary }] })",
+          "name": "expect.json equals the case table's entry",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[\"198.18.0.2-198.18.0.5\", \"--arp\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\", \"--source-port\", \"40000\"], table [\"198.18.0.2-198.18.0.5\", \"--arp\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\", \"--source-port\", \"40000\"]",
+          "name": "stdout/argv.json is the step's argv in the case table",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[\"198.18.0.2-198.18.0.5\", \"--arp\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\", \"--source-port\", \"40000\"], table [\"198.18.0.2-198.18.0.5\", \"--arp\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\", \"--source-port\", \"40000\"]",
+          "name": "oracle-stdout/argv.json is the step's argv in the case table",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[\"198.18.0.2-198.18.0.5\", \"--arp\", \"-oB\", \"output.bin\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\", \"--source-port\", \"40000\"], table [\"198.18.0.2-198.18.0.5\", \"--arp\", \"-oB\", \"output.bin\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\", \"--source-port\", \"40000\"]",
+          "name": "binary/argv.json is the step's argv in the case table",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[\"198.18.0.2-198.18.0.5\", \"--arp\", \"-oB\", \"output.bin\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\", \"--source-port\", \"40000\"], table [\"198.18.0.2-198.18.0.5\", \"--arp\", \"-oB\", \"output.bin\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\", \"--source-port\", \"40000\"]",
+          "name": "oracle-binary/argv.json is the step's argv in the case table",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "it still ran",
+          "name": "stdout/responder.json: the peer responder ran until the scanner ended",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "it still ran",
+          "name": "oracle-stdout/responder.json: the peer responder ran until the scanner ended",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "it still ran",
+          "name": "binary/responder.json: the peer responder ran until the scanner ended",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "it still ran",
+          "name": "oracle-binary/responder.json: the peer responder ran until the scanner ended",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "PeerStack { icmp_ratemask: \"0\", icmp_echo_ignore_all: \"0\", sctp_in_kernel: false, responder: [\"--ports\", \"80,8080\", \"--udp-ports\", \"53,161\", \"--udp-ips\", \"198.18.0.2,198.18.0.3,198.18.0.4,198.18.0.5\", \"--sctp-iface\", \"veth-b\", \"--sctp-open\", \"2905\"] }",
+          "name": "peer-stack.json: the peer answers the stand's way (icmp_ratemask 0, Echo answered, the stand's responder, no SCTP in the kernel for an SCTP case)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "stdout: the stand answered every probe exactly once, the stand's way (TCP 80/8080, UDP 53/161, SCTP 2905 open, the rest closed; Echo and ARP answered)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "stdout: nothing on the peer side answers anything the scan did not send",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "stdout: every probe and reply lies inside the witness window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0 other frames: ",
+          "name": "stdout: every frame of the scanner MAC is a probe of the scan or of a named class the stand makes the scanner side send (next-hop who-has, RST to a SYN-ACK, ICMP 3/3 to a UDP reply, ICMP 3/2 to an SCTP reply)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "next_hop_who_has 0 of at most 10, rst_to_syn_ack 0 of at most 0, port_unreachable_to_udp_reply 0 of at most 0, protocol_unreachable_to_sctp_reply 0 of at most 0",
+          "name": "stdout: the named scanner-side frames stay within their bounds (RST to a SYN-ACK: one per SYN-ACK frame of the stand, on the oracle's step plus one per distinct SYN-ACK for C's own reset after its dedup; next-hop who-has: the resolver's request count; ICMP 3/3 and 3/2: one per UDP or SCTP reply frame)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "4 records",
+          "name": "stdout: stdout.txt is a well-formed document",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "stdout: exit.txt is 0",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[]",
+          "name": "stdout: stderr.txt holds only [+] lines and rmasscan's status forms",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[(\"interface\", \"veth-a (detected: route to 198.18.0.2)\"), (\"source-mac\", \"02-aa-00-00-00-01 (detected)\"), (\"source-ip\", \"198.18.0.1 (detected)\"), (\"router-mac\", \"ff-ff-ff-ff-ff-ff (given)\"), (\"seed\", \"1 (given)\"), (\"source-port\", \"40000 (given)\")]",
+          "name": "stdout: [+] lines are the stand's: veth-a by the route, its MAC and IP, router-mac ff-ff-ff-ff-ff-ff given (no next-hop ARP), seed 1 and source port 40000 given",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "Some(Fin { reason: \"Completed\", sent: 4, replies: 4, open: 0 })",
+          "name": "stdout: [+] finished: Completed",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "printed Some((4, 4, 0)), wire (sent, replies, open) (4, 4, 0)",
+          "name": "stdout: [+] finished reports sent, replies and open equal to the probes and the distinct replies on the wire",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[]",
+          "name": "stdout: every record's time lies within the scan on the wire (2 s either side)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "up 198.18.0.2 0/arp mac 02:aa:00:00:00:02; up 198.18.0.3 0/arp mac 02:aa:00:00:00:02; up 198.18.0.4 0/arp mac 02:aa:00:00:00:02; up 198.18.0.5 0/arp mac 02:aa:00:00:00:02",
+          "name": "stdout: the document holds the records of the replies on its wire, field for field, in reply order (replies captured at most 50 us apart on the peer link, rounded to the microsecond, may come in either order: REPLY_REORDER_WINDOW_US)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "4 probes, 4 planned, first difference at None",
+          "name": "stdout: the probes on the wire equal the plan (ReadyPlan of the case), in order, each once",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "oracle-stdout: the stand answered every probe exactly once, the stand's way (TCP 80/8080, UDP 53/161, SCTP 2905 open, the rest closed; Echo and ARP answered)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "oracle-stdout: nothing on the peer side answers anything the scan did not send",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "oracle-stdout: every probe and reply lies inside the witness window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0 other frames: ",
+          "name": "oracle-stdout: every frame of the scanner MAC is a probe of the scan or of a named class the stand makes the scanner side send (next-hop who-has, RST to a SYN-ACK, ICMP 3/3 to a UDP reply, ICMP 3/2 to an SCTP reply)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "next_hop_who_has 0 of at most 12, rst_to_syn_ack 0 of at most 0, port_unreachable_to_udp_reply 0 of at most 0, protocol_unreachable_to_sctp_reply 0 of at most 0",
+          "name": "oracle-stdout: the named scanner-side frames stay within their bounds (RST to a SYN-ACK: one per SYN-ACK frame of the stand, on the oracle's step plus one per distinct SYN-ACK for C's own reset after its dedup; next-hop who-has: the resolver's request count; ICMP 3/3 and 3/2: one per UDP or SCTP reply frame)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "4 records",
+          "name": "oracle-stdout: stdout.txt is a well-formed document",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "oracle-stdout: exit.txt is 0",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "up 198.18.0.2 0/arp mac 02:aa:00:00:00:02; up 198.18.0.3 0/arp mac 02:aa:00:00:00:02; up 198.18.0.4 0/arp mac 02:aa:00:00:00:02; up 198.18.0.5 0/arp mac 02:aa:00:00:00:02",
+          "name": "oracle-stdout: the document holds the records of the replies on its wire, field for field, in reply order (replies captured at most 50 us apart on the peer link, rounded to the microsecond, may come in either order: REPLY_REORDER_WINDOW_US)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "binary: the stand answered every probe exactly once, the stand's way (TCP 80/8080, UDP 53/161, SCTP 2905 open, the rest closed; Echo and ARP answered)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "binary: nothing on the peer side answers anything the scan did not send",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "binary: every probe and reply lies inside the witness window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0 other frames: ",
+          "name": "binary: every frame of the scanner MAC is a probe of the scan or of a named class the stand makes the scanner side send (next-hop who-has, RST to a SYN-ACK, ICMP 3/3 to a UDP reply, ICMP 3/2 to an SCTP reply)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "next_hop_who_has 0 of at most 10, rst_to_syn_ack 0 of at most 0, port_unreachable_to_udp_reply 0 of at most 0, protocol_unreachable_to_sctp_reply 0 of at most 0",
+          "name": "binary: the named scanner-side frames stay within their bounds (RST to a SYN-ACK: one per SYN-ACK frame of the stand, on the oracle's step plus one per distinct SYN-ACK for C's own reset after its dedup; next-hop who-has: the resolver's request count; ICMP 3/3 and 3/2: one per UDP or SCTP reply frame)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "4 records",
+          "name": "binary: output.bin is a well-formed document",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "binary: exit.txt is 0",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "binary: stdout.txt is empty (a file format silences stdout)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[]",
+          "name": "binary: stderr.txt holds only [+] lines and rmasscan's status forms",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[(\"interface\", \"veth-a (detected: route to 198.18.0.2)\"), (\"source-mac\", \"02-aa-00-00-00-01 (detected)\"), (\"source-ip\", \"198.18.0.1 (detected)\"), (\"router-mac\", \"ff-ff-ff-ff-ff-ff (given)\"), (\"seed\", \"1 (given)\"), (\"source-port\", \"40000 (given)\")]",
+          "name": "binary: [+] lines are the stand's: veth-a by the route, its MAC and IP, router-mac ff-ff-ff-ff-ff-ff given (no next-hop ARP), seed 1 and source port 40000 given",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "Some(Fin { reason: \"Completed\", sent: 4, replies: 4, open: 0 })",
+          "name": "binary: [+] finished: Completed",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "printed Some((4, 4, 0)), wire (sent, replies, open) (4, 4, 0)",
+          "name": "binary: [+] finished reports sent, replies and open equal to the probes and the distinct replies on the wire",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[]",
+          "name": "binary: every record's time lies within the scan on the wire (2 s either side)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "up 198.18.0.2 0/arp reason none ttl 0; up 198.18.0.3 0/arp reason none ttl 0; up 198.18.0.4 0/arp reason none ttl 0; up 198.18.0.5 0/arp reason none ttl 0",
+          "name": "binary: the document holds the records of the replies on its wire, field for field, in reply order (replies captured at most 50 us apart on the peer link, rounded to the microsecond, may come in either order: REPLY_REORDER_WINDOW_US)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "4 probes, 4 planned, first difference at None",
+          "name": "binary: the probes on the wire equal the plan (ReadyPlan of the case), in order, each once",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "oracle-binary: the stand answered every probe exactly once, the stand's way (TCP 80/8080, UDP 53/161, SCTP 2905 open, the rest closed; Echo and ARP answered)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "oracle-binary: nothing on the peer side answers anything the scan did not send",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "oracle-binary: every probe and reply lies inside the witness window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0 other frames: ",
+          "name": "oracle-binary: every frame of the scanner MAC is a probe of the scan or of a named class the stand makes the scanner side send (next-hop who-has, RST to a SYN-ACK, ICMP 3/3 to a UDP reply, ICMP 3/2 to an SCTP reply)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "next_hop_who_has 0 of at most 12, rst_to_syn_ack 0 of at most 0, port_unreachable_to_udp_reply 0 of at most 0, protocol_unreachable_to_sctp_reply 0 of at most 0",
+          "name": "oracle-binary: the named scanner-side frames stay within their bounds (RST to a SYN-ACK: one per SYN-ACK frame of the stand, on the oracle's step plus one per distinct SYN-ACK for C's own reset after its dedup; next-hop who-has: the resolver's request count; ICMP 3/3 and 3/2: one per UDP or SCTP reply frame)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "4 records",
+          "name": "oracle-binary: output.bin is a well-formed document",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "no footer",
+          "name": "oracle-binary: its file lacks the footer only after masscan's forced exit (the line is on its stderr)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "oracle-binary: exit.txt is 0",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "up 198.18.0.2 0/arp reason none ttl 0; up 198.18.0.3 0/arp reason none ttl 0; up 198.18.0.4 0/arp reason none ttl 0; up 198.18.0.5 0/arp reason none ttl 0",
+          "name": "oracle-binary: the document holds the records of the replies on its wire, field for field, in reply order (replies captured at most 50 us apart on the peer link, rounded to the microsecond, may come in either order: REPLY_REORDER_WINDOW_US)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "4 probes, the oracle 4",
+          "name": "stdout: the probes equal the C oracle's (oracle-stdout), byte for byte and in order (udp-checksum-ffff applied)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "up 198.18.0.2 0/arp mac 02:aa:00:00:00:02; up 198.18.0.3 0/arp mac 02:aa:00:00:00:02; up 198.18.0.4 0/arp mac 02:aa:00:00:00:02; up 198.18.0.5 0/arp mac 02:aa:00:00:00:02",
+          "name": "stdout: the records equal the C oracle's (oracle-stdout) field for field but the time, in any order (each document's order is its own wire's reply order, judged above; the two wires' reply orders may differ)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "4 probes, the oracle 4",
+          "name": "binary: the probes equal the C oracle's (oracle-binary), byte for byte and in order (udp-checksum-ffff applied)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "up 198.18.0.2 0/arp reason none ttl 0; up 198.18.0.3 0/arp reason none ttl 0; up 198.18.0.4 0/arp reason none ttl 0; up 198.18.0.5 0/arp reason none ttl 0",
+          "name": "binary: the records equal the C oracle's (oracle-binary) field for field but the time, in any order (each document's order is its own wire's reply order, judged above; the two wires' reply orders may differ)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "4 ARP requests, 1 for 198.18.0.2, 0 who-has that are no probe",
+          "name": "stdout: no ARP request to the default gateway: the scanner's ARP requests are the four who-has probes, 198.18.0.2 asked once",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "{198.18.0.2, 198.18.0.3, 198.18.0.4, 198.18.0.5} {Some([2, 170, 0, 0, 0, 2])}",
+          "name": "stdout: --arp finds every neighbour 198.18.0.2-198.18.0.5 with the peer's MAC 02:aa:00:00:00:02",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "4 ARP requests, 1 for 198.18.0.2, 0 who-has that are no probe",
+          "name": "binary: no ARP request to the default gateway: the scanner's ARP requests are the four who-has probes, 198.18.0.2 asked once",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0 ARP replies whose Ethernet source differs from the sender hardware address",
+          "name": "deviation arp-mac-ethernet-source: the MAC of an ARP record is the Ethernet source (C proto-arp.c:39), not the sender hardware address of the design text; every ARP reply must carry the same MAC in both",
+          "result": "PASS"
+        }
+      ],
+      "notes": {
+        "deviations": [
+          {
+            "name": "arp-mac-ethernet-source",
+            "observed": "0 ARP replies whose Ethernet source differs from the sender hardware address",
+            "rule": "the MAC of an ARP record is the Ethernet source (C proto-arp.c:39), not the sender hardware address of the design text; every ARP reply must carry the same MAC in both"
+          }
+        ],
+        "oracle": "the pinned C masscan 8e6b3b0 with the same argv, one run per document, on the same stand",
+        "record_order_vs_c": {
+          "documents": {
+            "binary": "the same records in the same order",
+            "stdout": "the same records in the same order"
+          },
+          "rule": "each scanner prints its records in the order the replies arrive on its own wire (judged per step: the document holds the records of the replies on its wire, in reply order, up to replies captured at most REPLY_REORDER_WINDOW_US = 50 us apart); the two runs of a document do not get the same reply order from the stand: both scanners send several probes back to back at --rate 100, and within such a burst the responder (one thread per UDP socket and for the SCTP link) and the peer kernel (ICMP at once) answer in an order that changes from run to run, as live run linux-protocols-r1 on 68ffcf3 showed (p02, p05); so rmasscan's records must equal C's field for field but the time in any order"
+        },
+        "reply_order_swaps": {
+          "binary": {
+            "largest_gap_us": null,
+            "pairs": 0
+          },
+          "oracle-binary": {
+            "largest_gap_us": null,
+            "pairs": 0
+          },
+          "oracle-stdout": {
+            "largest_gap_us": null,
+            "pairs": 0
+          },
+          "stdout": {
+            "largest_gap_us": null,
+            "pairs": 0
+          }
+        },
+        "reply_order_window": "50 us: two replies captured on the peer link at most this far apart (rounded to the microsecond; exactly 50 us is inside) may reach the scanner in the other order (two CPUs send them); reply_order_swaps gives, per step, the pairs of records written in the other order within it (pairs) and the largest gap among them in microseconds (largest_gap_us, null without such a pair)",
+        "scanner_frame_classes": {
+          "next_hop_who_has": "the scanner's next-hop resolution: an ARP who-has 198.18.0.2 from 198.18.0.1, 60 bytes zero-padded (the resolver form of C stack-arpv4.c and rmasscan), in a scan that is no ARP scan",
+          "port_unreachable_to_udp_reply": "an ICMP 3/3 from 198.18.0.1 quoting a UDP reply of the stand: the scanner namespace kernel, no socket on the source port",
+          "protocol_unreachable_to_sctp_reply": "an ICMP 3/2 from 198.18.0.1 quoting an SCTP INIT-ACK or ABORT of the stand: the scanner namespace kernel, no SCTP",
+          "rst_to_syn_ack": "a TCP RST (no other flag) from 198.18.0.1 whose sequence number is the acknowledgment of a SYN-ACK of the stand: the scanner namespace kernel resets a SYN-ACK no socket owns (198.18.0.1 is its address), and C resets each distinct SYN-ACK itself once it passed its dedup (main.c:1067-1068 then main.c:1095)"
+        },
+        "scanner_frames": {
+          "binary": {
+            "at_most": {
+              "next_hop_who_has": 10,
+              "port_unreachable_to_udp_reply": 0,
+              "protocol_unreachable_to_sctp_reply": 0,
+              "rst_to_syn_ack": 0
+            },
+            "next_hop_who_has": 0,
+            "port_unreachable_to_udp_reply": 0,
+            "protocol_unreachable_to_sctp_reply": 0,
+            "rst_to_syn_ack": 0,
+            "unexplained": 0
+          },
+          "oracle-binary": {
+            "at_most": {
+              "next_hop_who_has": 12,
+              "port_unreachable_to_udp_reply": 0,
+              "protocol_unreachable_to_sctp_reply": 0,
+              "rst_to_syn_ack": 0
+            },
+            "next_hop_who_has": 0,
+            "port_unreachable_to_udp_reply": 0,
+            "protocol_unreachable_to_sctp_reply": 0,
+            "rst_to_syn_ack": 0,
+            "unexplained": 0
+          },
+          "oracle-stdout": {
+            "at_most": {
+              "next_hop_who_has": 12,
+              "port_unreachable_to_udp_reply": 0,
+              "protocol_unreachable_to_sctp_reply": 0,
+              "rst_to_syn_ack": 0
+            },
+            "next_hop_who_has": 0,
+            "port_unreachable_to_udp_reply": 0,
+            "protocol_unreachable_to_sctp_reply": 0,
+            "rst_to_syn_ack": 0,
+            "unexplained": 0
+          },
+          "stdout": {
+            "at_most": {
+              "next_hop_who_has": 10,
+              "port_unreachable_to_udp_reply": 0,
+              "protocol_unreachable_to_sctp_reply": 0,
+              "rst_to_syn_ack": 0
+            },
+            "next_hop_who_has": 0,
+            "port_unreachable_to_udp_reply": 0,
+            "protocol_unreachable_to_sctp_reply": 0,
+            "rst_to_syn_ack": 0,
+            "unexplained": 0
+          }
+        }
+      },
+      "safety_trip": false,
+      "tag": "p04_arp_scan",
+      "verdict": "PASS"
+    },
+    {
+      "behaviour_fail": false,
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "captures are stored uncompressed; the verifier has no decompression",
+          "name": "no compressed capture in the case directory",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "56",
+          "name": "peer.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "valid true, []",
+          "name": "json/capture.json: the witness judged its capture complete",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "56 frames recorded, 56 in the file",
+          "name": "json/capture.json describes json/peer.pcap (sha256 and frame count)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3 start, 3 end markers; window 1794512710.1718354 .. 1794512715.2403252",
+          "name": "json/peer.pcap: a start marker before and three end markers after every scanner frame",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "60",
+          "name": "peer.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "valid true, []",
+          "name": "oracle-json/capture.json: the witness judged its capture complete",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "60 frames recorded, 60 in the file",
+          "name": "oracle-json/capture.json describes oracle-json/peer.pcap (sha256 and frame count)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3 start, 3 end markers; window 1794512716.1337092 .. 1794512733.9090939",
+          "name": "oracle-json/peer.pcap: a start marker before and three end markers after every scanner frame",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no SYN on the json capture from outside the stand binding or to an address off the stand",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "no frame of the scanner on the json capture to an address off the stand or from another source",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0 frames: ",
+          "name": "no frame on the json capture from a MAC other than the stand's scanner and peer (markers aside)",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no SYN on the oracle-json capture from outside the stand binding or to an address off the stand",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "no frame of the scanner on the oracle-json capture to an address off the stand or from another source",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0 frames: ",
+          "name": "no frame on the oracle-json capture from a MAC other than the stand's scanner and peer (markers aside)",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "23",
+          "name": "hashes-before-copy.txt matches every file of the case directory",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[]",
+          "name": "evidence files carry only the allowed extensions (json pcap txt log err sha256 md, bin for -oB)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "{\"peer_ns\":false,\"scanner_ns\":\"via 198.18.0.2 dev veth-a\"}",
+          "name": "isolation.json: the sealed autodetect stand (capture isolation --mode autodetect)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "mode \"autodetect\", default_route {\"peer_ns\":false,\"scanner_ns\":\"via 198.18.0.2 dev veth-a\"}",
+          "name": "isolation-post.json: the stand still sealed after the run (capture isolation --mode autodetect)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "21 files",
+          "name": "privacy: every text and binary file holds only allowlisted names, addresses and paths",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "table Some(ProtoExpect { tag: \"p05_mixed_protos\", plan_ports: \"T:80,U:53,S:2905,I:0\", arp: false, steps: [ExpectStep { name: \"json\", who: Rmasscan, out: Json }, ExpectStep { name: \"oracle-json\", who: Oracle, out: Json }] })",
+          "name": "expect.json equals the case table's entry",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[\"198.18.0.2-198.18.0.5\", \"-pT:80,U:53,S:2905,I:0\", \"-oJ\", \"output.json\", \"--show\", \"open,closed\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\", \"--source-port\", \"40000\"], table [\"198.18.0.2-198.18.0.5\", \"-pT:80,U:53,S:2905,I:0\", \"-oJ\", \"output.json\", \"--show\", \"open,closed\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\", \"--source-port\", \"40000\"]",
+          "name": "json/argv.json is the step's argv in the case table",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[\"198.18.0.2-198.18.0.5\", \"-pT:80,U:53,S:2905,I:0\", \"-oJ\", \"output.json\", \"--show\", \"open,closed\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\", \"--source-port\", \"40000\"], table [\"198.18.0.2-198.18.0.5\", \"-pT:80,U:53,S:2905,I:0\", \"-oJ\", \"output.json\", \"--show\", \"open,closed\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\", \"--source-port\", \"40000\"]",
+          "name": "oracle-json/argv.json is the step's argv in the case table",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "it still ran",
+          "name": "json/responder.json: the peer responder ran until the scanner ended",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "it still ran",
+          "name": "oracle-json/responder.json: the peer responder ran until the scanner ended",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "PeerStack { icmp_ratemask: \"0\", icmp_echo_ignore_all: \"0\", sctp_in_kernel: false, responder: [\"--ports\", \"80,8080\", \"--udp-ports\", \"53,161\", \"--udp-ips\", \"198.18.0.2,198.18.0.3,198.18.0.4,198.18.0.5\", \"--sctp-iface\", \"veth-b\", \"--sctp-open\", \"2905\"] }",
+          "name": "peer-stack.json: the peer answers the stand's way (icmp_ratemask 0, Echo answered, the stand's responder, no SCTP in the kernel for an SCTP case)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "json: the stand answered every probe exactly once, the stand's way (TCP 80/8080, UDP 53/161, SCTP 2905 open, the rest closed; Echo and ARP answered)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "json: nothing on the peer side answers anything the scan did not send",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "json: every probe and reply lies inside the witness window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0 other frames: ",
+          "name": "json: every frame of the scanner MAC is a probe of the scan or of a named class the stand makes the scanner side send (next-hop who-has, RST to a SYN-ACK, ICMP 3/3 to a UDP reply, ICMP 3/2 to an SCTP reply)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "next_hop_who_has 1 of at most 10, rst_to_syn_ack 4 of at most 4, port_unreachable_to_udp_reply 4 of at most 4, protocol_unreachable_to_sctp_reply 4 of at most 4",
+          "name": "json: the named scanner-side frames stay within their bounds (RST to a SYN-ACK: one per SYN-ACK frame of the stand, on the oracle's step plus one per distinct SYN-ACK for C's own reset after its dedup; next-hop who-has: the resolver's request count; ICMP 3/3 and 3/2: one per UDP or SCTP reply frame)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "16 records",
+          "name": "json: output.json is a well-formed document",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "json: exit.txt is 0",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "json: stdout.txt is empty (a file format silences stdout)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[]",
+          "name": "json: stderr.txt holds only [+] lines and rmasscan's status forms",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[(\"interface\", \"veth-a (detected: route to 198.18.0.2)\"), (\"source-mac\", \"02-aa-00-00-00-01 (detected)\"), (\"source-ip\", \"198.18.0.1 (detected)\"), (\"router-ip\", \"198.18.0.2 (interface default gateway)\"), (\"router-mac\", \"02-aa-00-00-00-02 (arp: 1 requests, 0 ms)\"), (\"seed\", \"1 (given)\"), (\"source-port\", \"40000 (given)\")]",
+          "name": "json: [+] lines are the stand's: veth-a by the route, its MAC and IP, router 198.18.0.2 by ARP, seed 1 and source port 40000 given",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "Some(Fin { reason: \"Completed\", sent: 16, replies: 16, open: 16 })",
+          "name": "json: [+] finished: Completed",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "printed Some((16, 16, 16)), wire (sent, replies, open) (16, 16, 16)",
+          "name": "json: [+] finished reports sent, replies and open equal to the probes and the distinct replies on the wire",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[]",
+          "name": "json: every record's time lies within the scan on the wire (2 s either side)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "open 198.18.0.4 53/udp reason none ttl 64; open 198.18.0.3 0/icmp reason none ttl 64; open 198.18.0.5 0/icmp reason none ttl 64; open 198.18.0.5 2905/sctp reason none ttl 64; open 198.18.0.3 80/tcp reason syn-ack ttl 64; open 198.18.0.5 53/udp reason none ttl 64; open 198.18.0.2 53/udp reason none ttl 64; open 198.18.0.4 0/icmp reason none ttl 64; open 198.18.0.2 0/icmp reason none ttl 64; open 198.18.0.4 2905/sctp reason none ttl 64; open 198.18.0.4 80/tcp reason syn-ack ttl 64; open 198.18.0.5 80/tcp reason syn-ack ttl 64; open 198.18.0.2 80/tcp reason syn-ack ttl 64; open 198.18.0.2 2905/sctp reason none ttl 64; open 198.18.0.3 53/udp reason none ttl 64; open 198.18.0.3 2905/sctp reason none ttl 64",
+          "name": "json: the document holds the records of the replies on its wire, field for field, in reply order (replies captured at most 50 us apart on the peer link, rounded to the microsecond, may come in either order: REPLY_REORDER_WINDOW_US)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "16 probes, 16 planned, first difference at None",
+          "name": "json: the probes on the wire equal the plan (ReadyPlan of the case), in order, each once",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "oracle-json: the stand answered every probe exactly once, the stand's way (TCP 80/8080, UDP 53/161, SCTP 2905 open, the rest closed; Echo and ARP answered)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "oracle-json: nothing on the peer side answers anything the scan did not send",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "oracle-json: every probe and reply lies inside the witness window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0 other frames: ",
+          "name": "oracle-json: every frame of the scanner MAC is a probe of the scan or of a named class the stand makes the scanner side send (next-hop who-has, RST to a SYN-ACK, ICMP 3/3 to a UDP reply, ICMP 3/2 to an SCTP reply)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "next_hop_who_has 1 of at most 12, rst_to_syn_ack 8 of at most 8, port_unreachable_to_udp_reply 4 of at most 4, protocol_unreachable_to_sctp_reply 4 of at most 4",
+          "name": "oracle-json: the named scanner-side frames stay within their bounds (RST to a SYN-ACK: one per SYN-ACK frame of the stand, on the oracle's step plus one per distinct SYN-ACK for C's own reset after its dedup; next-hop who-has: the resolver's request count; ICMP 3/3 and 3/2: one per UDP or SCTP reply frame)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "16 records",
+          "name": "oracle-json: output.json is a well-formed document",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "no footer",
+          "name": "oracle-json: its file lacks the footer only after masscan's forced exit (the line is on its stderr)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "oracle-json: exit.txt is 0",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "open 198.18.0.4 53/udp reason none ttl 64; open 198.18.0.3 0/icmp reason none ttl 64; open 198.18.0.5 0/icmp reason none ttl 64; open 198.18.0.3 80/tcp reason syn-ack ttl 64; open 198.18.0.5 2905/sctp reason none ttl 64; open 198.18.0.2 53/udp reason none ttl 64; open 198.18.0.5 53/udp reason none ttl 64; open 198.18.0.4 0/icmp reason none ttl 64; open 198.18.0.4 2905/sctp reason none ttl 64; open 198.18.0.2 0/icmp reason none ttl 64; open 198.18.0.4 80/tcp reason syn-ack ttl 64; open 198.18.0.5 80/tcp reason syn-ack ttl 64; open 198.18.0.2 80/tcp reason syn-ack ttl 64; open 198.18.0.2 2905/sctp reason none ttl 64; open 198.18.0.3 53/udp reason none ttl 64; open 198.18.0.3 2905/sctp reason none ttl 64",
+          "name": "oracle-json: the document holds the records of the replies on its wire, field for field, in reply order (replies captured at most 50 us apart on the peer link, rounded to the microsecond, may come in either order: REPLY_REORDER_WINDOW_US)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "16 probes, the oracle 16",
+          "name": "json: the probes equal the C oracle's (oracle-json), byte for byte and in order (udp-checksum-ffff applied)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "open 198.18.0.4 53/udp reason none ttl 64; open 198.18.0.3 0/icmp reason none ttl 64; open 198.18.0.5 0/icmp reason none ttl 64; open 198.18.0.5 2905/sctp reason none ttl 64; open 198.18.0.3 80/tcp reason syn-ack ttl 64; open 198.18.0.5 53/udp reason none ttl 64; open 198.18.0.2 53/udp reason none ttl 64; open 198.18.0.4 0/icmp reason none ttl 64; open 198.18.0.2 0/icmp reason none ttl 64; open 198.18.0.4 2905/sctp reason none ttl 64; open 198.18.0.4 80/tcp reason syn-ack ttl 64; open 198.18.0.5 80/tcp reason syn-ack ttl 64; open 198.18.0.2 80/tcp reason syn-ack ttl 64; open 198.18.0.2 2905/sctp reason none ttl 64; open 198.18.0.3 53/udp reason none ttl 64; open 198.18.0.3 2905/sctp reason none ttl 64",
+          "name": "json: the records equal the C oracle's (oracle-json) field for field but the time, in any order (each document's order is its own wire's reply order, judged above; the two wires' reply orders may differ) (non-tcp-dedup applied)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "{Icmp, Tcp, Udp, Sctp}",
+          "name": "json: the one document holds records of tcp, udp, sctp and icmp",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0 probe pairs equal by this rule",
+          "name": "deviation udp-checksum-ffff: R12: a UDP checksum that computes to 0 goes out as 0xFFFF from rmasscan (RFC 768) and as 0x0000 from C; two probes that differ only there are the same probe",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0 Echo Replies with a code other than 0",
+          "name": "deviation icmp-echo-code-0: R11: rmasscan takes an Echo Reply only with code 0, C with any code; every Echo Reply on the wire must have code 0",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0 replies with a wrong sum",
+          "name": "deviation rx-checksum-verify: R11: rmasscan drops a reply whose IPv4 header checksum, ICMP, TCP or UDP checksum or SCTP CRC-32C is wrong, C reads it; every reply on the wire must carry valid sums",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0 repeated UDP and SCTP records of C collapsed",
+          "name": "deviation non-tcp-dedup: rmasscan reports a UDP, ICMP 3/3 or SCTP reply once per (protocol, address, port, status), C prints every one (main.c:917-922); C's repeated UDP and SCTP records are collapsed before the documents are compared (never a TCP, Echo or ARP record)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0 SCTP replies whose chunk flags read as SYN-ACK or RST",
+          "name": "deviation sctp-tcp-fallthrough: C main.c:920-922 goes on to read an SCTP reply as TCP (its first chunk's flags as TCP flags), rmasscan does not; every SCTP reply's chunk flags must be neither SYN-ACK nor RST, so C prints nothing more",
+          "result": "PASS"
+        }
+      ],
+      "notes": {
+        "deviations": [
+          {
+            "name": "udp-checksum-ffff",
+            "observed": "0 probe pairs equal by this rule",
+            "rule": "R12: a UDP checksum that computes to 0 goes out as 0xFFFF from rmasscan (RFC 768) and as 0x0000 from C; two probes that differ only there are the same probe"
+          },
+          {
+            "name": "icmp-echo-code-0",
+            "observed": "0 Echo Replies with a code other than 0",
+            "rule": "R11: rmasscan takes an Echo Reply only with code 0, C with any code; every Echo Reply on the wire must have code 0"
+          },
+          {
+            "name": "rx-checksum-verify",
+            "observed": "0 replies with a wrong sum",
+            "rule": "R11: rmasscan drops a reply whose IPv4 header checksum, ICMP, TCP or UDP checksum or SCTP CRC-32C is wrong, C reads it; every reply on the wire must carry valid sums"
+          },
+          {
+            "name": "non-tcp-dedup",
+            "observed": "0 repeated UDP and SCTP records of C collapsed",
+            "rule": "rmasscan reports a UDP, ICMP 3/3 or SCTP reply once per (protocol, address, port, status), C prints every one (main.c:917-922); C's repeated UDP and SCTP records are collapsed before the documents are compared (never a TCP, Echo or ARP record)"
+          },
+          {
+            "name": "sctp-tcp-fallthrough",
+            "observed": "0 SCTP replies whose chunk flags read as SYN-ACK or RST",
+            "rule": "C main.c:920-922 goes on to read an SCTP reply as TCP (its first chunk's flags as TCP flags), rmasscan does not; every SCTP reply's chunk flags must be neither SYN-ACK nor RST, so C prints nothing more"
+          }
+        ],
+        "oracle": "the pinned C masscan 8e6b3b0 with the same argv, one run per document, on the same stand",
+        "record_order_vs_c": {
+          "documents": {
+            "json": "the same records, in another order"
+          },
+          "rule": "each scanner prints its records in the order the replies arrive on its own wire (judged per step: the document holds the records of the replies on its wire, in reply order, up to replies captured at most REPLY_REORDER_WINDOW_US = 50 us apart); the two runs of a document do not get the same reply order from the stand: both scanners send several probes back to back at --rate 100, and within such a burst the responder (one thread per UDP socket and for the SCTP link) and the peer kernel (ICMP at once) answer in an order that changes from run to run, as live run linux-protocols-r1 on 68ffcf3 showed (p02, p05); so rmasscan's records must equal C's field for field but the time in any order"
+        },
+        "reply_order_swaps": {
+          "json": {
+            "largest_gap_us": null,
+            "pairs": 0
+          },
+          "oracle-json": {
+            "largest_gap_us": null,
+            "pairs": 0
+          }
+        },
+        "reply_order_window": "50 us: two replies captured on the peer link at most this far apart (rounded to the microsecond; exactly 50 us is inside) may reach the scanner in the other order (two CPUs send them); reply_order_swaps gives, per step, the pairs of records written in the other order within it (pairs) and the largest gap among them in microseconds (largest_gap_us, null without such a pair)",
+        "scanner_frame_classes": {
+          "next_hop_who_has": "the scanner's next-hop resolution: an ARP who-has 198.18.0.2 from 198.18.0.1, 60 bytes zero-padded (the resolver form of C stack-arpv4.c and rmasscan), in a scan that is no ARP scan",
+          "port_unreachable_to_udp_reply": "an ICMP 3/3 from 198.18.0.1 quoting a UDP reply of the stand: the scanner namespace kernel, no socket on the source port",
+          "protocol_unreachable_to_sctp_reply": "an ICMP 3/2 from 198.18.0.1 quoting an SCTP INIT-ACK or ABORT of the stand: the scanner namespace kernel, no SCTP",
+          "rst_to_syn_ack": "a TCP RST (no other flag) from 198.18.0.1 whose sequence number is the acknowledgment of a SYN-ACK of the stand: the scanner namespace kernel resets a SYN-ACK no socket owns (198.18.0.1 is its address), and C resets each distinct SYN-ACK itself once it passed its dedup (main.c:1067-1068 then main.c:1095)"
+        },
+        "scanner_frames": {
+          "json": {
+            "at_most": {
+              "next_hop_who_has": 10,
+              "port_unreachable_to_udp_reply": 4,
+              "protocol_unreachable_to_sctp_reply": 4,
+              "rst_to_syn_ack": 4
+            },
+            "next_hop_who_has": 1,
+            "port_unreachable_to_udp_reply": 4,
+            "protocol_unreachable_to_sctp_reply": 4,
+            "rst_to_syn_ack": 4,
+            "unexplained": 0
+          },
+          "oracle-json": {
+            "at_most": {
+              "next_hop_who_has": 12,
+              "port_unreachable_to_udp_reply": 4,
+              "protocol_unreachable_to_sctp_reply": 4,
+              "rst_to_syn_ack": 8
+            },
+            "next_hop_who_has": 1,
+            "port_unreachable_to_udp_reply": 4,
+            "protocol_unreachable_to_sctp_reply": 4,
+            "rst_to_syn_ack": 8,
+            "unexplained": 0
+          }
+        }
+      },
+      "safety_trip": false,
+      "tag": "p05_mixed_protos",
+      "verdict": "PASS"
+    }
+  ],
+  "safety_scan": [],
+  "safety_trips": [],
+  "schema": 1,
+  "totals": {
+    "FAIL": 0,
+    "INVALID": 0,
+    "NOT RUN": 0,
+    "PASS": 6
+  }
+}

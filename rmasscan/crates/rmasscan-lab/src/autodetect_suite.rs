@@ -727,7 +727,8 @@ impl Linux<'_> {
     pub(crate) fn isolation(&self, path: &Path) -> Result<(), String> {
         self.isolation_mode(path, "autodetect")
     }
-    /// [`Self::isolation`] for `mode` `autodetect` or `scan-control` (the autodetect stand plus the second veth pair).
+    /// [`Self::isolation`] for `mode` `autodetect`, `scan-control` (the autodetect stand plus the second veth pair) or
+    /// `ipv6` (the autodetect stand with IPv6 on the lab veth pair, [`capture::isolation_permits_ipv6`]).
     pub(crate) fn isolation_mode(&self, path: &Path, mode: &str) -> Result<(), String> {
         let links = self.work.join("host-links-before.txt");
         let o = self.host.exec(
@@ -755,7 +756,13 @@ impl Linux<'_> {
             ));
         }
         let mut v = read_json(path)?;
-        if v["mode"] != mode || !isolation_permits(&v, IsolationMode::Autodetect) {
+        // The IPv6 stand's record has IPv6 on the lab veth, which the autodetect rule refuses.
+        let permits = if mode == "ipv6" {
+            capture::isolation_permits_ipv6(&v)
+        } else {
+            isolation_permits(&v, IsolationMode::Autodetect)
+        };
+        if v["mode"] != mode || !permits {
             return Err(format!(
                 "the record does not permit a {mode} run (default_route {})",
                 v["default_route"]

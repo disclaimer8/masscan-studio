@@ -3,13 +3,14 @@
 use super::ifinfo;
 use crate::network_plan::{InterfaceObservation, check_observation};
 use crate::route_parse::{
-    RtReply, defaults_from_rt, lookup_from_rt, parse_rt_reply, rt_get_request,
+    LO0, RtReply, defaults_from_rt, defaults6_from_rt, lookup_from_rt, lookup6_from_rt,
+    parse_rt_reply, rt_get_request, rt_get_request6,
 };
 use crate::{
     NetError,
-    discover::{Iface, Interfaces, Route, RouteTable},
+    discover::{Iface, Interfaces, Route, RouteTable, RouteV6},
 };
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, Ipv6Addr};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::time::{Duration, Instant};
@@ -23,9 +24,10 @@ fn last_errno() -> i32 {
 fn sys(op: &str, e: i32) -> NetError {
     NetError::System(format!("{op}: {}", std::io::Error::from_raw_os_error(e)))
 }
-fn route_socket() -> Result<OwnedFd, NetError> {
+/// Сокет `PF_ROUTE` с фильтром семейства `family` (`AF_INET` или `AF_INET6`).
+fn route_socket(family: libc::c_int) -> Result<OwnedFd, NetError> {
     // SAFETY: scalar socket arguments; the result is checked before ownership transfer.
-    let raw = unsafe { libc::socket(libc::PF_ROUTE, libc::SOCK_RAW, libc::AF_INET) };
+    let raw = unsafe { libc::socket(libc::PF_ROUTE, libc::SOCK_RAW, family) };
     if raw < 0 {
         return Err(sys("socket(PF_ROUTE)", last_errno()));
     }
@@ -95,12 +97,35 @@ fn rt_get(
     deadline: Instant,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<Option<RtReply>, NetError> {
+    exchange(
+        libc::AF_INET,
+        |seq, pid| rt_get_request(seq, pid, dst),
+        deadline,
+        cancelled,
+    )
+}
+/// `RTM_GET` для IPv6 `dst` (`sockaddr_in6`); `None`, если маршрута нет. Тот же предел 1 с, что у IPv4.
+fn rt_get6(dst: Ipv6Addr) -> Result<Option<RtReply>, NetError> {
+    exchange(
+        libc::AF_INET6,
+        |seq, pid| rt_get_request6(seq, pid, dst),
+        Instant::now() + Duration::from_secs(1),
+        &|| false,
+    )
+}
+/// Запрос `request(seq, pid)` в новый `PF_ROUTE`-сокет семейства `family` и ответ с этими `seq`/`pid`.
+fn exchange(
+    family: libc::c_int,
+    request: impl FnOnce(i32, i32) -> Vec<u8>,
+    deadline: Instant,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Option<RtReply>, NetError> {
     let deadline = deadline.min(Instant::now() + Duration::from_secs(1));
     check_observation(deadline, cancelled)?;
-    let fd = route_socket()?;
+    let fd = route_socket(family)?;
     let seq = SEQ.fetch_add(1, Ordering::Relaxed);
     let pid = std::process::id() as i32;
-    let req = rt_get_request(seq, pid, dst);
+    let req = request(seq, pid);
     let sent = retry_until(deadline, cancelled, Instant::now, |wait| {
         if !ready(&fd, libc::POLLOUT, wait)? {
             return Ok(None);
@@ -173,6 +198,23 @@ impl RouteTable for OsRoutes {
             .as_ref(),
         ))
     }
+
+    /// `RTM_GET` к IPv6 `dst` (шлюз link-local без KAME-зоны); адрес любого интерфейса это адрес хоста через `lo0`.
+    fn lookup_v6(&self, dst: Ipv6Addr) -> Result<Option<RouteV6>, NetError> {
+        let reply = rt_get6(dst)?;
+        let own = ifinfo::all_ipv6_addrs().map_err(|e| sys("getifaddrs", e))?;
+        let lo0 = OsIfaces
+            .list()?
+            .iter()
+            .find(|i| i.name == LO0)
+            .map_or(0, |i| i.index);
+        Ok(lookup6_from_rt(reply.as_ref(), dst, &own, lo0))
+    }
+
+    /// Один маршрут IPv6 по умолчанию: `RTM_GET ::`.
+    fn default_routes_v6(&self) -> Result<Vec<RouteV6>, NetError> {
+        Ok(defaults6_from_rt(rt_get6(Ipv6Addr::UNSPECIFIED)?.as_ref()))
+    }
 }
 pub(crate) struct OsIfaces;
 impl Interfaces for OsIfaces {
@@ -185,6 +227,10 @@ impl Interfaces for OsIfaces {
         cancelled: &dyn Fn() -> bool,
     ) -> Result<Vec<InterfaceObservation>, NetError> {
         ifinfo::observe(deadline, cancelled)
+    }
+
+    fn ipv6_addrs(&self, iface: &Iface) -> Result<Vec<Ipv6Addr>, NetError> {
+        ifinfo::ipv6_addrs(&iface.name).map_err(|e| sys("getifaddrs", e))
     }
 }
 #[cfg(test)]

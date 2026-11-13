@@ -1,0 +1,10 @@
+{
+  "tag": "o09_json_default_show",
+  "kind": "scan",
+  "format": "json",
+  "target": "file",
+  "show_closed": false,
+  "stdout": "silent",
+  "status": "text",
+  "oracle": true
+}

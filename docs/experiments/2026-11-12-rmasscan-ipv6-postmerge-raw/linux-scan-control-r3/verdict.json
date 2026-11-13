@@ -1,0 +1,2296 @@
+{
+  "aborted": [],
+  "behaviour_fail": [],
+  "dir": "linux-scan-control-r3",
+  "discarded": [],
+  "discarded_totals": {
+    "FAIL": 0,
+    "INVALID": 0,
+    "NOT RUN": 0,
+    "PASS": 0
+  },
+  "groups": [],
+  "overall": "PASS",
+  "runs": [
+    {
+      "behaviour_fail": false,
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "captures are stored uncompressed; the verifier has no decompression",
+          "name": "no compressed capture anywhere in the evidence directory",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "[]",
+          "name": "no symbolic link in the evidence directory (links are never followed)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "manifest.json names the scan-control plan (linux)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[]",
+          "name": "evidence files outside the runs carry only the allowed extensions (json pcap txt log err sha256 md)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "8 files",
+          "name": "privacy: every text file holds only allowlisted names, addresses and paths",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[]",
+          "name": "runs/ holds only the planned case directories",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "deleted [\"wl-scan-RUNID\", \"wl-peer-RUNID\"], left 0",
+          "name": "teardown.json: wire-lab.sh deleted both namespaces of the stand and none is left",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "manifest Some(\"f3380c5e-fbc0-48e9-9229-c76ab04e41e2\"), teardown \"f3380c5e-fbc0-48e9-9229-c76ab04e41e2\"",
+          "name": "teardown.json belongs to the lab of manifest.json (lab_id)",
+          "result": "PASS"
+        }
+      ],
+      "notes": {},
+      "safety_trip": false,
+      "tag": "manifest",
+      "verdict": "PASS"
+    },
+    {
+      "behaviour_fail": false,
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "captures are stored uncompressed; the verifier has no decompression",
+          "name": "no compressed capture in the case directory",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "24",
+          "name": "peer.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "valid true, []",
+          "name": "shard1/capture.json: the witness judged its capture complete",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "24 frames recorded, 24 in the file",
+          "name": "shard1/capture.json describes shard1/peer.pcap (sha256 and frame count)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3 start, 3 end markers; window 1794512754.6168637 .. 1794512759.6409187",
+          "name": "shard1/peer.pcap: a start marker before and three end markers after every scanner frame",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "24",
+          "name": "peer.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "valid true, []",
+          "name": "shard2/capture.json: the witness judged its capture complete",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "24 frames recorded, 24 in the file",
+          "name": "shard2/capture.json describes shard2/peer.pcap (sha256 and frame count)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3 start, 3 end markers; window 1794512760.5388663 .. 1794512765.563908",
+          "name": "shard2/peer.pcap: a start marker before and three end markers after every scanner frame",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "52",
+          "name": "peer.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "valid true, []",
+          "name": "oracle/capture.json: the witness judged its capture complete",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "52 frames recorded, 52 in the file",
+          "name": "oracle/capture.json describes oracle/peer.pcap (sha256 and frame count)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3 start, 3 end markers; window 1794512766.5050452 .. 1794512784.0854983",
+          "name": "oracle/peer.pcap: a start marker before and three end markers after every scanner frame",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no SYN on the shard1/link 0 capture from outside the stand binding or to an address off the stand",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0 frames: ",
+          "name": "no frame on the shard1/link 0 capture from a MAC other than the stand's scanner and peer (markers aside)",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no SYN on the shard2/link 0 capture from outside the stand binding or to an address off the stand",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0 frames: ",
+          "name": "no frame on the shard2/link 0 capture from a MAC other than the stand's scanner and peer (markers aside)",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no SYN on the oracle/link 0 capture from outside the stand binding or to an address off the stand",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0 frames: ",
+          "name": "no frame on the oracle/link 0 capture from a MAC other than the stand's scanner and peer (markers aside)",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "28",
+          "name": "hashes-before-copy.txt matches every file of the case directory",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[]",
+          "name": "evidence files carry only the allowed extensions (json pcap txt log err sha256 md)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "mode \"scan-control\", default_route {\"peer_ns\":false,\"scanner_ns\":\"via 198.18.0.2 dev veth-a\"}",
+          "name": "isolation.json: the sealed scan-control stand (capture isolation --mode scan-control)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "mode \"scan-control\", default_route {\"peer_ns\":false,\"scanner_ns\":\"via 198.18.0.2 dev veth-a\"}",
+          "name": "isolation-post.json: the stand still sealed after the case (capture isolation --mode scan-control)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "25 files",
+          "name": "privacy: every text file holds only allowlisted names, addresses and paths",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "table Some(ScExpect { tag: \"sc01_shards_union\", steps: [ExpectStep { name: \"shard1\", who: Rmasscan, links: 1, interrupt: false, netem: false }, ExpectStep { name: \"shard2\", who: Rmasscan, links: 1, interrupt: false, netem: false }, ExpectStep { name: \"oracle\", who: Oracle, links: 1, interrupt: false, netem: false }] })",
+          "name": "expect.json equals the case table's entry",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[\"198.18.0.2-198.18.0.5\", \"-p80,443,8080\", \"-oL\", \"output.txt\", \"--show\", \"open,closed\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\", \"--shard\", \"1/2\"], table [\"198.18.0.2-198.18.0.5\", \"-p80,443,8080\", \"-oL\", \"output.txt\", \"--show\", \"open,closed\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\", \"--shard\", \"1/2\"]",
+          "name": "shard1/argv.json is the step's argv in the case table",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[\"198.18.0.2-198.18.0.5\", \"-p80,443,8080\", \"-oL\", \"output.txt\", \"--show\", \"open,closed\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\", \"--shard\", \"2/2\"], table [\"198.18.0.2-198.18.0.5\", \"-p80,443,8080\", \"-oL\", \"output.txt\", \"--show\", \"open,closed\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\", \"--shard\", \"2/2\"]",
+          "name": "shard2/argv.json is the step's argv in the case table",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[\"198.18.0.2-198.18.0.5\", \"-p80,443,8080\", \"-oL\", \"output.txt\", \"--show\", \"open,closed\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\"], table [\"198.18.0.2-198.18.0.5\", \"-p80,443,8080\", \"-oL\", \"output.txt\", \"--show\", \"open,closed\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\"]",
+          "name": "oracle/argv.json is the step's argv in the case table",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "shard1: exit.txt is 0",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "shard1: stdout.txt is empty (a file format silences stdout)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[]",
+          "name": "shard1: stderr.txt holds only [+] lines and rmasscan's status forms",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "Some(Fin { reason: \"Completed\", sent: 6, replies: 6, open: 4 })",
+          "name": "shard1: [+] finished: Completed",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "printed Some(6), wire 6",
+          "name": "shard1: [+] finished reports sent equal to the scanner SYNs on the wire",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[(\"interface\", \"veth-a (detected: route to 198.18.0.2)\"), (\"source-mac\", \"02-aa-00-00-00-01 (detected)\"), (\"source-ip\", \"198.18.0.1 (detected)\"), (\"router-ip\", \"198.18.0.2 (interface default gateway)\"), (\"router-mac\", \"02-aa-00-00-00-02 (arp: 1 requests, 0 ms)\"), (\"seed\", \"1 (given)\"), (\"source-port\", \"52754 (time)\")]",
+          "name": "shard1: [+] lines are the stand's: veth-a by the route, its MAC and IP, router 198.18.0.2 by ARP, seed 1 given, one source port",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "6 records",
+          "name": "shard1: output.txt is a well-formed document",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "",
+          "name": "shard1: the output is complete (its footer written)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "shard1: the output holds no record twice",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "6 SYNs",
+          "name": "shard1: link 0: the scanner SYNs equal the plan of --shard 1/2, in order, each once",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "6",
+          "name": "shard1: the shard sends half of the 12 probes",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "shard2: exit.txt is 0",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "shard2: stdout.txt is empty (a file format silences stdout)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[]",
+          "name": "shard2: stderr.txt holds only [+] lines and rmasscan's status forms",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "Some(Fin { reason: \"Completed\", sent: 6, replies: 6, open: 4 })",
+          "name": "shard2: [+] finished: Completed",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "printed Some(6), wire 6",
+          "name": "shard2: [+] finished reports sent equal to the scanner SYNs on the wire",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[(\"interface\", \"veth-a (detected: route to 198.18.0.2)\"), (\"source-mac\", \"02-aa-00-00-00-01 (detected)\"), (\"source-ip\", \"198.18.0.1 (detected)\"), (\"router-ip\", \"198.18.0.2 (interface default gateway)\"), (\"router-mac\", \"02-aa-00-00-00-02 (arp: 1 requests, 0 ms)\"), (\"seed\", \"1 (given)\"), (\"source-port\", \"52760 (time)\")]",
+          "name": "shard2: [+] lines are the stand's: veth-a by the route, its MAC and IP, router 198.18.0.2 by ARP, seed 1 given, one source port",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "6 records",
+          "name": "shard2: output.txt is a well-formed document",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "",
+          "name": "shard2: the output is complete (its footer written)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "shard2: the output holds no record twice",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "6 SYNs",
+          "name": "shard2: link 0: the scanner SYNs equal the plan of --shard 2/2, in order, each once",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "6",
+          "name": "shard2: the shard sends half of the 12 probes",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "6 and 6 probes, 0 shared",
+          "name": "shard 1/2 and 2/2 send no probe twice and share none",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "12 of 12",
+          "name": "the shards' probes together are all 12 probes of the scan",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "12",
+          "name": "oracle: the single run sends each of the 12 probes once",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "12 probes, interleaved 12",
+          "name": "the oracle's probes in send order are shard 1/2 and 2/2 interleaved (C: start (one-1), increment of)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "oracle: exit.txt is 0",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "oracle: stdout.txt is empty (a file format silences stdout)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "12 records",
+          "name": "oracle: output.txt is a well-formed document",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "no footer, and no forced exit on the oracle's stderr",
+          "name": "oracle: its file lacks the footer only after masscan's forced exit (the line is on its stderr)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0 shared",
+          "name": "the shards' findings are disjoint",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "12 findings",
+          "name": "the shards' findings together are the stand's replies (80 and 8080 open, 443 closed on every peer)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "rmasscan 12, oracle 12",
+          "name": "the shards' findings together are the oracle's findings",
+          "result": "PASS"
+        }
+      ],
+      "notes": {
+        "oracle": "oracle: the pinned C masscan, same argv",
+        "oracle_forced_exit": true
+      },
+      "safety_trip": false,
+      "tag": "sc01_shards_union",
+      "verdict": "PASS"
+    },
+    {
+      "behaviour_fail": false,
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "captures are stored uncompressed; the verifier has no decompression",
+          "name": "no compressed capture in the case directory",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "51",
+          "name": "peer.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "valid true, []",
+          "name": "pause/capture.json: the witness judged its capture complete",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "51 frames recorded, 51 in the file",
+          "name": "pause/capture.json describes pause/peer.pcap (sha256 and frame count)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3 start, 3 end markers; window 1794512785.1736248 .. 1794512793.1568058",
+          "name": "pause/peer.pcap: a start marker before and three end markers after every scanner frame",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "129",
+          "name": "peer.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "valid true, []",
+          "name": "resume/capture.json: the witness judged its capture complete",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "129 frames recorded, 129 in the file",
+          "name": "resume/capture.json describes resume/peer.pcap (sha256 and frame count)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3 start, 3 end markers; window 1794512794.0826237 .. 1794512804.8227148",
+          "name": "resume/peer.pcap: a start marker before and three end markers after every scanner frame",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no SYN on the pause/link 0 capture from outside the stand binding or to an address off the stand",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0 frames: ",
+          "name": "no frame on the pause/link 0 capture from a MAC other than the stand's scanner and peer (markers aside)",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no SYN on the resume/link 0 capture from outside the stand binding or to an address off the stand",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0 frames: ",
+          "name": "no frame on the resume/link 0 capture from a MAC other than the stand's scanner and peer (markers aside)",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "23",
+          "name": "hashes-before-copy.txt matches every file of the case directory",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[]",
+          "name": "evidence files carry only the allowed extensions (json pcap txt log err sha256 md)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "mode \"scan-control\", default_route {\"peer_ns\":false,\"scanner_ns\":\"via 198.18.0.2 dev veth-a\"}",
+          "name": "isolation.json: the sealed scan-control stand (capture isolation --mode scan-control)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "mode \"scan-control\", default_route {\"peer_ns\":false,\"scanner_ns\":\"via 198.18.0.2 dev veth-a\"}",
+          "name": "isolation-post.json: the stand still sealed after the case (capture isolation --mode scan-control)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "21 files",
+          "name": "privacy: every text file holds only allowlisted names, addresses and paths",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "table Some(ScExpect { tag: \"sc02_pause_wait_resume\", steps: [ExpectStep { name: \"pause\", who: Rmasscan, links: 1, interrupt: true, netem: true }, ExpectStep { name: \"resume\", who: Rmasscan, links: 1, interrupt: false, netem: false }] })",
+          "name": "expect.json equals the case table's entry",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[\"198.18.0.2-198.18.0.5\", \"-p76-95\", \"-oJ\", \"output.json\", \"--show\", \"open,closed\", \"--seed\", \"1\", \"--rate\", \"10\", \"--wait\", \"2\"], table [\"198.18.0.2-198.18.0.5\", \"-p76-95\", \"-oJ\", \"output.json\", \"--show\", \"open,closed\", \"--seed\", \"1\", \"--rate\", \"10\", \"--wait\", \"2\"]",
+          "name": "pause/argv.json is the step's argv in the case table",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[\"--resume\", \"paused.conf\", \"--show\", \"open,closed\", \"--wait\", \"3\"], table [\"--resume\", \"paused.conf\", \"--show\", \"open,closed\", \"--wait\", \"3\"]",
+          "name": "resume/argv.json is the step's argv in the case table",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "pause: exit.txt is 0",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "pause: stdout.txt is empty (a file format silences stdout)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[]",
+          "name": "pause: stderr.txt holds only [+] lines and rmasscan's status forms",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "Some(Fin { reason: \"Paused\", sent: 21, replies: 21, open: 1 })",
+          "name": "pause: [+] finished: Paused",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "printed Some(21), wire 21",
+          "name": "pause: [+] finished reports sent equal to the scanner SYNs on the wire",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[(\"interface\", \"veth-a (detected: route to 198.18.0.2)\"), (\"source-mac\", \"02-aa-00-00-00-01 (detected)\"), (\"source-ip\", \"198.18.0.1 (detected)\"), (\"router-ip\", \"198.18.0.2 (interface default gateway)\"), (\"router-mac\", \"02-aa-00-00-00-02 (arp: 1 requests, 1000 ms)\"), (\"seed\", \"1 (given)\"), (\"source-port\", \"52785 (time)\")]",
+          "name": "pause: [+] lines are the stand's: veth-a by the route, its MAC and IP, router 198.18.0.2 by ARP, seed 1 given, one source port",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "1",
+          "name": "pause: stderr.txt carries the Ctrl-C line once",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "1",
+          "name": "pause: stderr.txt carries `saving resume file to: paused.conf` once",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "interrupt Some(10), saving Some(11), first wait tick Some(12)",
+          "name": "pause: paused.conf is saved after the Ctrl-C line and before the first `waiting N-secs` tick",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[2, 2, 2, 2, 1, 1, 1, 1]",
+          "name": "pause: the wait phase ran: `waiting N-secs` ticks, counting down from --wait",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "1",
+          "name": "pause: no status line is left after the end of the wait but the erase",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "ScInterrupt { signal: \"INT\", after_s: 3.0, signal_unix: Some(1794512788.2648797), exit_within_s: 30.0, killed: false, paused_seen_unix: Some(1794512788.469344), paused_conf_present: true }, window Some((1794512785.1736248, 1794512793.1568058))",
+          "name": "pause: interrupt.json: SIGINT about 3 s after the start, inside the capture window, a 30 s exit timeout",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "Some(1794512788.2648797)",
+          "name": "pause: rmasscan was still scanning when SIGINT came",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "false",
+          "name": "pause: rmasscan exited within 30 s of SIGINT (no SIGKILL)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "pause: no SYN later than 1 s after SIGINT",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "NetemRecord { iface: \"veth-b\", delay_ms: 1000, applied: true, removed: true }",
+          "name": "netem.json: the peer's replies were delayed on veth-b, by less than --wait, and the delay was taken off again",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "21 records",
+          "name": "pause: output.json is a well-formed document",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "",
+          "name": "pause: the output is complete after the pause (the `]` footer written)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "pause: the output holds no record twice",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "10 late replies, 0 not in the output",
+          "name": "pause: a reply that came on the wire after SIGINT (inside the wait) is in the output",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "21 records, 21 replies",
+          "name": "pause: the output holds every reply to the SYNs sent before the pause (none lost)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "signal Some(1794512788.2648797), seen Some(1794512788.469344)",
+          "name": "pause: paused.conf was on disk within 1 s of SIGINT, before the 2 s wait ended",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "pause/paused.txt is the scanner's paused.conf",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "21 of 80",
+          "name": "pause: paused.conf: resume-index is where the scan stopped, inside the scan",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "21, 21 SYNs on the wire",
+          "name": "pause: paused.conf: resume-index equals the SYNs sent (one adapter: exact)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[(\"resume-index\", \"21\"), (\"seed\", \"1\"), (\"rate\", \"10\"), (\"shard\", \"1/1\"), (\"nocapture\", \"servername\"), (\"nocapture\", \"servername\"), (\"output-filename\", \"output.json\"), (\"output-format\", \"json\"), (\"adapter-port\", \"52785\"), (\"ports\", \"76-95\"), (\"range\", \"198.18.0.2-198.18.0.5\")]",
+          "name": "pause: paused.conf: seed, rate and the source port of the run",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "",
+          "name": "pause: paused.conf carries the output file and format",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "resume: exit.txt is 0",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "resume: stdout.txt is empty (a file format silences stdout)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[]",
+          "name": "resume: stderr.txt holds only [+] lines and rmasscan's status forms",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "Some(Fin { reason: \"Completed\", sent: 59, replies: 59, open: 3 })",
+          "name": "resume: [+] finished: Completed",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "printed Some(59), wire 59",
+          "name": "resume: [+] finished reports sent equal to the scanner SYNs on the wire",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[(\"interface\", \"veth-a (detected: route to 198.18.0.2)\"), (\"source-mac\", \"02-aa-00-00-00-01 (detected)\"), (\"source-ip\", \"198.18.0.1 (detected)\"), (\"router-ip\", \"198.18.0.2 (interface default gateway)\"), (\"router-mac\", \"02-aa-00-00-00-02 (arp: 1 requests, 0 ms)\"), (\"seed\", \"1 (given)\"), (\"source-port\", \"52785 (given)\")]",
+          "name": "resume: [+] lines are the stand's: veth-a by the route, its MAC and IP, router 198.18.0.2 by ARP, seed 1 given, one source port",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "Some(52785) and Some(52785)",
+          "name": "resume: the resume keeps the run's source port and seed",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "21 SYNs",
+          "name": "pause: the SYNs before the pause are the plan's first ones, in order",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "59 SYNs, 59 remain",
+          "name": "resume: --resume sends exactly the rest of the plan, in order, from resume-index on",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "80 of 80",
+          "name": "resume: the SYNs of both runs are the multiset of the continuous scan (one adapter: exact, none lost, none twice)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "3171 and 12076 bytes",
+          "name": "resume: output-append: the file begins with the paused run's file, byte for byte",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "59 records",
+          "name": "resume: the appended part is one well-formed, complete document",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "resume: the output holds no record twice",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0 shared",
+          "name": "the two documents share no record (one adapter: nothing is sent twice)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "80 of 80",
+          "name": "the two documents together are the stand's replies to all 80 probes",
+          "result": "PASS"
+        }
+      ],
+      "notes": {
+        "oracle": "rmasscan-only: the late reply needs the lab's netem delay, and C never ends a live scan on this stand"
+      },
+      "safety_trip": false,
+      "tag": "sc02_pause_wait_resume",
+      "verdict": "PASS"
+    },
+    {
+      "behaviour_fail": false,
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "captures are stored uncompressed; the verifier has no decompression",
+          "name": "no compressed capture in the case directory",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "296",
+          "name": "peer.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "valid true, []",
+          "name": "retries/capture.json: the witness judged its capture complete",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "296 frames recorded, 296 in the file",
+          "name": "retries/capture.json describes retries/peer.pcap (sha256 and frame count)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3 start, 3 end markers; window 1794512805.965206 .. 1794512811.997209",
+          "name": "retries/peer.pcap: a start marker before and three end markers after every scanner frame",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "319",
+          "name": "peer.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "valid true, []",
+          "name": "oracle/capture.json: the witness judged its capture complete",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "319 frames recorded, 319 in the file",
+          "name": "oracle/capture.json describes oracle/peer.pcap (sha256 and frame count)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3 start, 3 end markers; window 1794512812.9460657 .. 1794512832.015722",
+          "name": "oracle/peer.pcap: a start marker before and three end markers after every scanner frame",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no SYN on the retries/link 0 capture from outside the stand binding or to an address off the stand",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0 frames: ",
+          "name": "no frame on the retries/link 0 capture from a MAC other than the stand's scanner and peer (markers aside)",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no SYN on the oracle/link 0 capture from outside the stand binding or to an address off the stand",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0 frames: ",
+          "name": "no frame on the oracle/link 0 capture from a MAC other than the stand's scanner and peer (markers aside)",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "20",
+          "name": "hashes-before-copy.txt matches every file of the case directory",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[]",
+          "name": "evidence files carry only the allowed extensions (json pcap txt log err sha256 md)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "mode \"scan-control\", default_route {\"peer_ns\":false,\"scanner_ns\":\"via 198.18.0.2 dev veth-a\"}",
+          "name": "isolation.json: the sealed scan-control stand (capture isolation --mode scan-control)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "mode \"scan-control\", default_route {\"peer_ns\":false,\"scanner_ns\":\"via 198.18.0.2 dev veth-a\"}",
+          "name": "isolation-post.json: the stand still sealed after the case (capture isolation --mode scan-control)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "18 files",
+          "name": "privacy: every text file holds only allowlisted names, addresses and paths",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "table Some(ScExpect { tag: \"sc03_retries\", steps: [ExpectStep { name: \"retries\", who: Rmasscan, links: 1, interrupt: false, netem: false }, ExpectStep { name: \"oracle\", who: Oracle, links: 1, interrupt: false, netem: false }] })",
+          "name": "expect.json equals the case table's entry",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[\"198.18.0.2-198.18.0.5\", \"-p80,443,8080\", \"-oL\", \"output.txt\", \"--show\", \"open,closed\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\", \"--retries\", \"2\"], table [\"198.18.0.2-198.18.0.5\", \"-p80,443,8080\", \"-oL\", \"output.txt\", \"--show\", \"open,closed\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\", \"--retries\", \"2\"]",
+          "name": "retries/argv.json is the step's argv in the case table",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[\"198.18.0.2-198.18.0.5\", \"-p80,443,8080\", \"-oL\", \"output.txt\", \"--show\", \"open,closed\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\", \"--retries\", \"2\"], table [\"198.18.0.2-198.18.0.5\", \"-p80,443,8080\", \"-oL\", \"output.txt\", \"--show\", \"open,closed\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\", \"--retries\", \"2\"]",
+          "name": "oracle/argv.json is the step's argv in the case table",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "retries: exit.txt is 0",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "retries: stdout.txt is empty (a file format silences stdout)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[]",
+          "name": "retries: stderr.txt holds only [+] lines and rmasscan's status forms",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "Some(Fin { reason: \"Completed\", sent: 108, replies: 12, open: 8 })",
+          "name": "retries: [+] finished: Completed",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "printed Some(108), wire 108",
+          "name": "retries: [+] finished reports sent equal to the scanner SYNs on the wire",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[(\"interface\", \"veth-a (detected: route to 198.18.0.2)\"), (\"source-mac\", \"02-aa-00-00-00-01 (detected)\"), (\"source-ip\", \"198.18.0.1 (detected)\"), (\"router-ip\", \"198.18.0.2 (interface default gateway)\"), (\"router-mac\", \"02-aa-00-00-00-02 (arp: 1 requests, 0 ms)\"), (\"seed\", \"1 (given)\"), (\"source-port\", \"52806 (time)\")]",
+          "name": "retries: [+] lines are the stand's: veth-a by the route, its MAC and IP, router 198.18.0.2 by ARP, seed 1 given, one source port",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "12 records",
+          "name": "retries: output.txt is a well-formed document",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "",
+          "name": "retries: the output is complete (its footer written)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "retries: the output holds no record twice",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "12 records",
+          "name": "retries: the output holds the stand's replies, each once (the repeated replies are deduplicated)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "12 probes, counts {9}",
+          "name": "retries: --retries 2 puts every probe on the wire (2+1)^2 = 9 times (main.c:421-431: three passes of the index, three sends each)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "12 probes, counts {9}",
+          "name": "oracle: --retries 2 puts every probe on the wire (2+1)^2 = 9 times (main.c:421-431: three passes of the index, three sends each)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "108 SYNs",
+          "name": "retries: link 0: the scanner SYNs equal the plan of --retries 2, in order, each once",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "108 and 108 SYNs",
+          "name": "retries: the multiset of probes on the wire equals the oracle's",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "oracle: exit.txt is 0",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "oracle: stdout.txt is empty (a file format silences stdout)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "23 records",
+          "name": "oracle: output.txt is a well-formed document",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "no footer, and no forced exit on the oracle's stderr",
+          "name": "oracle: its file lacks the footer only after masscan's forced exit (the line is on its stderr)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "23 records",
+          "name": "oracle: the oracle's findings are the stand's replies",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "12 and 23 records",
+          "name": "rmasscan's findings equal the oracle's",
+          "result": "PASS"
+        }
+      ],
+      "notes": {
+        "oracle": "oracle: the pinned C masscan, same argv",
+        "oracle_forced_exit": true
+      },
+      "safety_trip": false,
+      "tag": "sc03_retries",
+      "verdict": "PASS"
+    },
+    {
+      "behaviour_fail": false,
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "captures are stored uncompressed; the verifier has no decompression",
+          "name": "no compressed capture in the case directory",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "40",
+          "name": "peer.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "valid true, []",
+          "name": "mods/capture.json: the witness judged its capture complete",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "40 frames recorded, 40 in the file",
+          "name": "mods/capture.json describes mods/peer.pcap (sha256 and frame count)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3 start, 3 end markers; window 1794512833.086313 .. 1794512838.1135774",
+          "name": "mods/peer.pcap: a start marker before and three end markers after every scanner frame",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "20",
+          "name": "peer.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "valid true, []",
+          "name": "badsum/capture.json: the witness judged its capture complete",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "20 frames recorded, 20 in the file",
+          "name": "badsum/capture.json describes badsum/peer.pcap (sha256 and frame count)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3 start, 3 end markers; window 1794512839.0087576 .. 1794512844.0864666",
+          "name": "badsum/peer.pcap: a start marker before and three end markers after every scanner frame",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no SYN on the mods/link 0 capture from outside the stand binding or to an address off the stand",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0 frames: ",
+          "name": "no frame on the mods/link 0 capture from a MAC other than the stand's scanner and peer (markers aside)",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no SYN on the badsum/link 0 capture from outside the stand binding or to an address off the stand",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0 frames: ",
+          "name": "no frame on the badsum/link 0 capture from a MAC other than the stand's scanner and peer (markers aside)",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "21",
+          "name": "hashes-before-copy.txt matches every file of the case directory",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[]",
+          "name": "evidence files carry only the allowed extensions (json pcap txt log err sha256 md)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "mode \"scan-control\", default_route {\"peer_ns\":false,\"scanner_ns\":\"via 198.18.0.2 dev veth-a\"}",
+          "name": "isolation.json: the sealed scan-control stand (capture isolation --mode scan-control)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "mode \"scan-control\", default_route {\"peer_ns\":false,\"scanner_ns\":\"via 198.18.0.2 dev veth-a\"}",
+          "name": "isolation-post.json: the stand still sealed after the case (capture isolation --mode scan-control)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "18 files",
+          "name": "privacy: every text file holds only allowlisted names, addresses and paths",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "table Some(ScExpect { tag: \"sc04_packet_mods_and_pcap\", steps: [ExpectStep { name: \"mods\", who: Rmasscan, links: 1, interrupt: false, netem: false }, ExpectStep { name: \"badsum\", who: Rmasscan, links: 1, interrupt: false, netem: false }] })",
+          "name": "expect.json equals the case table's entry",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[\"198.18.0.2-198.18.0.5\", \"-p80,443,8080\", \"-oL\", \"output.txt\", \"--show\", \"open,closed\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\", \"--ttl\", \"42\", \"--tcp-sackok\", \"--tcp-wscale\", \"7\", \"--pcap\", \"scanner.pcap\"], table [\"198.18.0.2-198.18.0.5\", \"-p80,443,8080\", \"-oL\", \"output.txt\", \"--show\", \"open,closed\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\", \"--ttl\", \"42\", \"--tcp-sackok\", \"--tcp-wscale\", \"7\", \"--pcap\", \"scanner.pcap\"]",
+          "name": "mods/argv.json is the step's argv in the case table",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[\"198.18.0.2-198.18.0.5\", \"-p80,443,8080\", \"-oL\", \"output.txt\", \"--show\", \"open,closed\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\", \"--badsum\"], table [\"198.18.0.2-198.18.0.5\", \"-p80,443,8080\", \"-oL\", \"output.txt\", \"--show\", \"open,closed\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\", \"--badsum\"]",
+          "name": "badsum/argv.json is the step's argv in the case table",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "mods: exit.txt is 0",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "mods: stdout.txt is empty (a file format silences stdout)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[]",
+          "name": "mods: stderr.txt holds only [+] lines and rmasscan's status forms",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "Some(Fin { reason: \"Completed\", sent: 12, replies: 12, open: 8 })",
+          "name": "mods: [+] finished: Completed",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "printed Some(12), wire 12",
+          "name": "mods: [+] finished reports sent equal to the scanner SYNs on the wire",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[(\"interface\", \"veth-a (detected: route to 198.18.0.2)\"), (\"source-mac\", \"02-aa-00-00-00-01 (detected)\"), (\"source-ip\", \"198.18.0.1 (detected)\"), (\"router-ip\", \"198.18.0.2 (interface default gateway)\"), (\"router-mac\", \"02-aa-00-00-00-02 (arp: 1 requests, 0 ms)\"), (\"seed\", \"1 (given)\"), (\"source-port\", \"52833 (time)\")]",
+          "name": "mods: [+] lines are the stand's: veth-a by the route, its MAC and IP, router 198.18.0.2 by ARP, seed 1 given, one source port",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "12 records",
+          "name": "mods: output.txt is a well-formed document",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "12 records",
+          "name": "mods: the output is complete and holds the stand's replies (the peer answered the modified SYNs)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "12",
+          "name": "mods: 12 SYNs on the wire",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "",
+          "name": "mods: every SYN has TTL 42 (--ttl 42)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "Some(Some(Ok([Mss(1460), SackOk, WScale(7)])))",
+          "name": "mods: every SYN carries MSS 1460, SACK-permitted and window scale 7 in that order, zero-padded (--tcp-sackok --tcp-wscale 7)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "",
+          "name": "mods: every SYN's IPv4 header checksum, TCP checksum and total length are valid",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "12 SYNs",
+          "name": "mods: link 0: the scanner SYNs equal the plan with --ttl 42 --tcp-sackok --tcp-wscale 7, in order, each once",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "12 frames",
+          "name": "mods: scanner.pcap is a classic pcap with equal record lengths up to 1514 bytes",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0 of 12 frames",
+          "name": "mods: scanner.pcap holds only frames to the scanner's ip:port from the stand's peers (no ARP, no SYN out, no foreign frame)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0 of 12 not on the peer capture",
+          "name": "mods: every frame of scanner.pcap is a frame the peer sent, byte for byte",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "12 of 12 replies",
+          "name": "mods: scanner.pcap holds a SYN-ACK or RST from every peer address and port that answered",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "badsum: exit.txt is 0",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "badsum: stdout.txt is empty (a file format silences stdout)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[]",
+          "name": "badsum: stderr.txt holds only [+] lines and rmasscan's status forms",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "Some(Fin { reason: \"Completed\", sent: 12, replies: 0, open: 0 })",
+          "name": "badsum: [+] finished: Completed",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "printed Some(12), wire 12",
+          "name": "badsum: [+] finished reports sent equal to the scanner SYNs on the wire",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[(\"interface\", \"veth-a (detected: route to 198.18.0.2)\"), (\"source-mac\", \"02-aa-00-00-00-01 (detected)\"), (\"source-ip\", \"198.18.0.1 (detected)\"), (\"router-ip\", \"198.18.0.2 (interface default gateway)\"), (\"router-mac\", \"02-aa-00-00-00-02 (arp: 1 requests, 0 ms)\"), (\"seed\", \"1 (given)\"), (\"source-port\", \"52839 (time)\")]",
+          "name": "badsum: [+] lines are the stand's: veth-a by the route, its MAC and IP, router 198.18.0.2 by ARP, seed 1 given, one source port",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "12",
+          "name": "badsum: 12 SYNs on the wire",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "",
+          "name": "badsum: every SYN's TCP checksum is invalid while its IPv4 header checksum is valid (--badsum)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "",
+          "name": "badsum: every SYN has the default TTL 255",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "badsum: the peer answered none of them (a segment with a bad checksum is dropped)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "12 SYNs",
+          "name": "badsum: link 0: the scanner SYNs equal the plan with --badsum, in order, each once",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0 records",
+          "name": "badsum: output.txt is a well-formed document",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "badsum: the output holds no record",
+          "result": "PASS"
+        }
+      ],
+      "notes": {
+        "oracle": "rmasscan-only: --badsum is a stub in C; the TCP options are proven against C by the offline vectors"
+      },
+      "safety_trip": false,
+      "tag": "sc04_packet_mods_and_pcap",
+      "verdict": "PASS"
+    },
+    {
+      "behaviour_fail": false,
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "captures are stored uncompressed; the verifier has no decompression",
+          "name": "no compressed capture in the case directory",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "556",
+          "name": "peer.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "valid true, []",
+          "name": "run/capture.json: the witness judged its capture complete",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "556 frames recorded, 556 in the file",
+          "name": "run/capture.json describes run/peer.pcap (sha256 and frame count)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3 start, 3 end markers; window 1794512845.2528896 .. 1794512852.2789369",
+          "name": "run/peer.pcap: a start marker before and three end markers after every scanner frame",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no SYN on the run/link 0 capture from outside the stand binding or to an address off the stand",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0 frames: ",
+          "name": "no frame on the run/link 0 capture from a MAC other than the stand's scanner and peer (markers aside)",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "13",
+          "name": "hashes-before-copy.txt matches every file of the case directory",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[]",
+          "name": "evidence files carry only the allowed extensions (json pcap txt log err sha256 md)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "mode \"scan-control\", default_route {\"peer_ns\":false,\"scanner_ns\":\"via 198.18.0.2 dev veth-a\"}",
+          "name": "isolation.json: the sealed scan-control stand (capture isolation --mode scan-control)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "mode \"scan-control\", default_route {\"peer_ns\":false,\"scanner_ns\":\"via 198.18.0.2 dev veth-a\"}",
+          "name": "isolation-post.json: the stand still sealed after the case (capture isolation --mode scan-control)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "12 files",
+          "name": "privacy: every text file holds only allowlisted names, addresses and paths",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "table Some(ScExpect { tag: \"sc05_infinite_interrupt\", steps: [ExpectStep { name: \"run\", who: Rmasscan, links: 1, interrupt: true, netem: false }] })",
+          "name": "expect.json equals the case table's entry",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[\"198.18.0.2-198.18.0.5\", \"-p80,443,8080\", \"-oL\", \"output.txt\", \"--show\", \"open,closed\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\", \"--infinite\"], table [\"198.18.0.2-198.18.0.5\", \"-p80,443,8080\", \"-oL\", \"output.txt\", \"--show\", \"open,closed\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\", \"--infinite\"]",
+          "name": "run/argv.json is the step's argv in the case table",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "run: exit.txt is 0",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "run: stdout.txt is empty (a file format silences stdout)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[]",
+          "name": "run: stderr.txt holds only [+] lines and rmasscan's status forms",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "Some(Fin { reason: \"Paused\", sent: 206, replies: 12, open: 8 })",
+          "name": "run: [+] finished: Paused or Stopped",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "printed Some(206), wire 206",
+          "name": "run: [+] finished reports sent equal to the scanner SYNs on the wire",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[(\"interface\", \"veth-a (detected: route to 198.18.0.2)\"), (\"source-mac\", \"02-aa-00-00-00-01 (detected)\"), (\"source-ip\", \"198.18.0.1 (detected)\"), (\"router-ip\", \"198.18.0.2 (interface default gateway)\"), (\"router-mac\", \"02-aa-00-00-00-02 (arp: 1 requests, 0 ms)\"), (\"seed\", \"1 (given)\"), (\"source-port\", \"52845 (time)\")]",
+          "name": "run: [+] lines are the stand's: veth-a by the route, its MAC and IP, router 198.18.0.2 by ARP, seed 1 given, one source port",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "1",
+          "name": "run: stderr.txt carries the Ctrl-C line once",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "15 infinite ticks, 0 percentage ticks",
+          "name": "run: the status line is the infinite form (syn/s ack/s tcb-rate), never a percentage",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "run: no `saving resume file` (an infinite scan has nothing to resume)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "ScInterrupt { signal: \"INT\", after_s: 2.0, signal_unix: Some(1794512847.3351994), exit_within_s: 30.0, killed: false, paused_seen_unix: None, paused_conf_present: false }, window Some((1794512845.2528896, 1794512852.2789369))",
+          "name": "run: interrupt.json: SIGINT about 2 s after the start, inside the capture window, a 30 s exit timeout",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "Some(1794512847.3351994)",
+          "name": "run: rmasscan was still scanning when SIGINT came",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "false",
+          "name": "run: rmasscan exited within 30 s of SIGINT (no SIGKILL)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "run: no SYN later than 1 s after SIGINT",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "false",
+          "name": "run: no paused.conf was left in the scanner's directory",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "12 records",
+          "name": "run: output.txt is a well-formed document",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "",
+          "name": "run: the output is complete after the interrupt (its footer written)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "12 records",
+          "name": "run: the output holds every one of the stand's replies",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "206 SYNs for 12 probes",
+          "name": "run: more than one full pass: every probe was sent at least twice",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "17 passes",
+          "name": "run: every full pass of the SYN stream is a permutation of the 12 probes",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "12 SYNs",
+          "name": "run: the first pass is the plan's, byte for byte",
+          "result": "PASS"
+        }
+      ],
+      "notes": {
+        "oracle": "rmasscan-only: C never ends a live scan on this stand"
+      },
+      "safety_trip": false,
+      "tag": "sc05_infinite_interrupt",
+      "verdict": "PASS"
+    },
+    {
+      "behaviour_fail": false,
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "captures are stored uncompressed; the verifier has no decompression",
+          "name": "no compressed capture in the case directory",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "22",
+          "name": "peer.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "valid true, []",
+          "name": "dual/capture.json: the witness judged its capture complete",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "22 frames recorded, 22 in the file",
+          "name": "dual/capture.json describes dual/peer.pcap (sha256 and frame count)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3 start, 3 end markers; window 1794512853.3833463 .. 1794512859.1605713",
+          "name": "dual/peer.pcap: a start marker before and three end markers after every scanner frame",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "27",
+          "name": "peer2.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "valid true, []",
+          "name": "dual/capture2.json: the witness judged its capture complete",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "27 frames recorded, 27 in the file",
+          "name": "dual/capture2.json describes dual/peer2.pcap (sha256 and frame count)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3 start, 3 end markers; window 1794512854.0654736 .. 1794512861.1491625",
+          "name": "dual/peer2.pcap: a start marker before and three end markers after every scanner frame",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "39",
+          "name": "peer.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "valid true, []",
+          "name": "dual_pause/capture.json: the witness judged its capture complete",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "39 frames recorded, 39 in the file",
+          "name": "dual_pause/capture.json describes dual_pause/peer.pcap (sha256 and frame count)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3 start, 3 end markers; window 1794512862.0506666 .. 1794512869.6877866",
+          "name": "dual_pause/peer.pcap: a start marker before and three end markers after every scanner frame",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "42",
+          "name": "peer2.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "valid true, []",
+          "name": "dual_pause/capture2.json: the witness judged its capture complete",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "42 frames recorded, 42 in the file",
+          "name": "dual_pause/capture2.json describes dual_pause/peer2.pcap (sha256 and frame count)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3 start, 3 end markers; window 1794512862.6899288 .. 1794512871.686925",
+          "name": "dual_pause/peer2.pcap: a start marker before and three end markers after every scanner frame",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "56",
+          "name": "peer.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "valid true, []",
+          "name": "dual_resume/capture.json: the witness judged its capture complete",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "56 frames recorded, 56 in the file",
+          "name": "dual_resume/capture.json describes dual_resume/peer.pcap (sha256 and frame count)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3 start, 3 end markers; window 1794512872.6312466 .. 1794512882.8199587",
+          "name": "dual_resume/peer.pcap: a start marker before and three end markers after every scanner frame",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "54",
+          "name": "peer2.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "valid true, []",
+          "name": "dual_resume/capture2.json: the witness judged its capture complete",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "54 frames recorded, 54 in the file",
+          "name": "dual_resume/capture2.json describes dual_resume/peer2.pcap (sha256 and frame count)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3 start, 3 end markers; window 1794512873.2675264 .. 1794512884.8151557",
+          "name": "dual_resume/peer2.pcap: a start marker before and three end markers after every scanner frame",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no SYN on the dual/link 0 capture from outside the stand binding or to an address off the stand",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0 frames: ",
+          "name": "no frame on the dual/link 0 capture from a MAC other than the stand's scanner and peer (markers aside)",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no SYN on the dual/link 1 capture from outside the stand binding or to an address off the stand",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0 frames: ",
+          "name": "no frame on the dual/link 1 capture from a MAC other than the stand's scanner and peer (markers aside)",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no SYN on the dual_pause/link 0 capture from outside the stand binding or to an address off the stand",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0 frames: ",
+          "name": "no frame on the dual_pause/link 0 capture from a MAC other than the stand's scanner and peer (markers aside)",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no SYN on the dual_pause/link 1 capture from outside the stand binding or to an address off the stand",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0 frames: ",
+          "name": "no frame on the dual_pause/link 1 capture from a MAC other than the stand's scanner and peer (markers aside)",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no SYN on the dual_resume/link 0 capture from outside the stand binding or to an address off the stand",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0 frames: ",
+          "name": "no frame on the dual_resume/link 0 capture from a MAC other than the stand's scanner and peer (markers aside)",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no SYN on the dual_resume/link 1 capture from outside the stand binding or to an address off the stand",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0 frames: ",
+          "name": "no frame on the dual_resume/link 1 capture from a MAC other than the stand's scanner and peer (markers aside)",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "39",
+          "name": "hashes-before-copy.txt matches every file of the case directory",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[]",
+          "name": "evidence files carry only the allowed extensions (json pcap txt log err sha256 md)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "mode \"scan-control\", default_route {\"peer_ns\":false,\"scanner_ns\":\"via 198.18.0.2 dev veth-a\"}",
+          "name": "isolation.json: the sealed scan-control stand (capture isolation --mode scan-control)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "mode \"scan-control\", default_route {\"peer_ns\":false,\"scanner_ns\":\"via 198.18.0.2 dev veth-a\"}",
+          "name": "isolation-post.json: the stand still sealed after the case (capture isolation --mode scan-control)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "33 files",
+          "name": "privacy: every text file holds only allowlisted names, addresses and paths",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "table Some(ScExpect { tag: \"sc06_dual_veth\", steps: [ExpectStep { name: \"dual\", who: Rmasscan, links: 2, interrupt: false, netem: false }, ExpectStep { name: \"dual_pause\", who: Rmasscan, links: 2, interrupt: true, netem: false }, ExpectStep { name: \"dual_resume\", who: Rmasscan, links: 2, interrupt: false, netem: false }] })",
+          "name": "expect.json equals the case table's entry",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[\"198.18.0.2-198.18.0.5\", \"-p80,443,8080\", \"-oL\", \"output.txt\", \"--show\", \"open,closed\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\", \"--adapter[0]\", \"veth-a\", \"--adapter[1]\", \"veth-a2\", \"--adapter-ip[1]\", \"198.18.0.6\", \"--adapter-mac[1]\", \"02-aa-00-00-00-03\", \"--router-mac[0]\", \"02-aa-00-00-00-02\", \"--router-mac[1]\", \"02-aa-00-00-00-04\"], table [\"198.18.0.2-198.18.0.5\", \"-p80,443,8080\", \"-oL\", \"output.txt\", \"--show\", \"open,closed\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\", \"--adapter[0]\", \"veth-a\", \"--adapter[1]\", \"veth-a2\", \"--adapter-ip[1]\", \"198.18.0.6\", \"--adapter-mac[1]\", \"02-aa-00-00-00-03\", \"--router-mac[0]\", \"02-aa-00-00-00-02\", \"--router-mac[1]\", \"02-aa-00-00-00-04\"]",
+          "name": "dual/argv.json is the step's argv in the case table",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[\"198.18.0.2-198.18.0.5\", \"-p76-95\", \"-oJ\", \"output.json\", \"--show\", \"open,closed\", \"--seed\", \"1\", \"--rate\", \"10\", \"--wait\", \"2\", \"--adapter[0]\", \"veth-a\", \"--adapter[1]\", \"veth-a2\", \"--adapter-ip[1]\", \"198.18.0.6\", \"--adapter-mac[1]\", \"02-aa-00-00-00-03\", \"--router-mac[0]\", \"02-aa-00-00-00-02\", \"--router-mac[1]\", \"02-aa-00-00-00-04\"], table [\"198.18.0.2-198.18.0.5\", \"-p76-95\", \"-oJ\", \"output.json\", \"--show\", \"open,closed\", \"--seed\", \"1\", \"--rate\", \"10\", \"--wait\", \"2\", \"--adapter[0]\", \"veth-a\", \"--adapter[1]\", \"veth-a2\", \"--adapter-ip[1]\", \"198.18.0.6\", \"--adapter-mac[1]\", \"02-aa-00-00-00-03\", \"--router-mac[0]\", \"02-aa-00-00-00-02\", \"--router-mac[1]\", \"02-aa-00-00-00-04\"]",
+          "name": "dual_pause/argv.json is the step's argv in the case table",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[\"--resume\", \"paused.conf\", \"--show\", \"open,closed\", \"--wait\", \"3\"], table [\"--resume\", \"paused.conf\", \"--show\", \"open,closed\", \"--wait\", \"3\"]",
+          "name": "dual_resume/argv.json is the step's argv in the case table",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "dual: exit.txt is 0",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "dual: stdout.txt is empty (a file format silences stdout)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[]",
+          "name": "dual: stderr.txt holds only [+] lines and rmasscan's status forms",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "Some(Fin { reason: \"Completed\", sent: 12, replies: 12, open: 8 })",
+          "name": "dual: [+] finished: Completed",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "printed Some(12), wire 12",
+          "name": "dual: [+] finished reports sent equal to the scanner SYNs on the wire",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[(\"interface\", \"veth-a (given)\"), (\"source-mac\", \"02-aa-00-00-00-01 (detected)\"), (\"source-ip\", \"198.18.0.1 (detected)\"), (\"router-mac\", \"02-aa-00-00-00-02 (given)\"), (\"interface[1]\", \"veth-a2 (given)\"), (\"source-mac[1]\", \"02-aa-00-00-00-03 (given)\"), (\"source-ip[1]\", \"198.18.0.6 (given)\"), (\"router-mac[1]\", \"02-aa-00-00-00-04 (given)\"), (\"seed\", \"1 (given)\"), (\"source-port\", \"52854 (time)\"), (\"source-port[1]\", \"52854 (time)\")]",
+          "name": "dual: [+] lines are the stand's: veth-a and veth-a2 given with their MACs, IPs and routers, seed 1 given, a source port each",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "6 SYNs",
+          "name": "dual: link 0: the scanner SYNs equal the plan of --adapter[0] (outer indices 0, 2, 4, ...), in order, each once",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "6 SYNs",
+          "name": "dual: link 1: the scanner SYNs equal the plan of --adapter[1] (outer indices 1, 3, 5, ...), in order, each once",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "6 and 6",
+          "name": "dual: both adapters carried probes",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "12 probes, 12 SYNs",
+          "name": "dual: the two links together carry all 12 probes exactly once (no loss, no duplicate)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "6 distinct replies for 6 SYNs",
+          "name": "dual: the replies to the second adapter's SYNs came back on the second link (one distinct reply per SYN; the peer's SYN-ACK retransmissions to an address on no interface are the same reply)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "6 distinct replies for 6 SYNs",
+          "name": "dual: the first adapter's replies came back on the first link, one distinct reply per SYN",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "unsolicited on link 0 and 1: (0, 0)",
+          "name": "dual: no peer frame on either link answers a SYN of the other link or of no probe",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "12 records",
+          "name": "dual: output.txt is a well-formed document",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "12 records",
+          "name": "dual: the output is complete and holds the stand's replies, each once",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "dual_pause: exit.txt is 0",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "dual_pause: stdout.txt is empty (a file format silences stdout)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[]",
+          "name": "dual_pause: stderr.txt holds only [+] lines and rmasscan's status forms",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "Some(Fin { reason: \"Paused\", sent: 33, replies: 33, open: 2 })",
+          "name": "dual_pause: [+] finished: Paused",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "printed Some(33), wire 33",
+          "name": "dual_pause: [+] finished reports sent equal to the scanner SYNs on the wire",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[(\"interface\", \"veth-a (given)\"), (\"source-mac\", \"02-aa-00-00-00-01 (detected)\"), (\"source-ip\", \"198.18.0.1 (detected)\"), (\"router-mac\", \"02-aa-00-00-00-02 (given)\"), (\"interface[1]\", \"veth-a2 (given)\"), (\"source-mac[1]\", \"02-aa-00-00-00-03 (given)\"), (\"source-ip[1]\", \"198.18.0.6 (given)\"), (\"router-mac[1]\", \"02-aa-00-00-00-04 (given)\"), (\"seed\", \"1 (given)\"), (\"source-port\", \"52862 (time)\"), (\"source-port[1]\", \"52862 (time)\")]",
+          "name": "dual_pause: [+] lines are the stand's: veth-a and veth-a2 given with their MACs, IPs and routers, seed 1 given, a source port each",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "1",
+          "name": "dual_pause: stderr.txt carries the Ctrl-C line once",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "1",
+          "name": "dual_pause: stderr.txt carries `saving resume file to: paused.conf` once",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "interrupt Some(15), saving Some(16), first wait tick Some(17)",
+          "name": "dual_pause: paused.conf is saved after the Ctrl-C line and before the first `waiting N-secs` tick",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[2, 2, 2, 2, 1, 1, 1, 1]",
+          "name": "dual_pause: the wait phase ran: `waiting N-secs` ticks, counting down from --wait",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "1",
+          "name": "dual_pause: no status line is left after the end of the wait but the erase",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "ScInterrupt { signal: \"INT\", after_s: 3.0, signal_unix: Some(1794512865.774938), exit_within_s: 30.0, killed: false, paused_seen_unix: Some(1794512865.9282627), paused_conf_present: true }, window Some((1794512862.0506666, 1794512869.6877866))",
+          "name": "dual_pause: interrupt.json: SIGINT about 3 s after the start, inside the capture window, a 30 s exit timeout",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "Some(1794512865.774938)",
+          "name": "dual_pause: rmasscan was still scanning when SIGINT came",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "false",
+          "name": "dual_pause: rmasscan exited within 30 s of SIGINT (no SIGKILL)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "dual_pause: no SYN later than 1 s after SIGINT",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "Some(1794512865.774938), window 1794512862.6899288 .. 1794512871.686925",
+          "name": "dual_pause: link 1: SIGINT is inside the capture window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "dual_pause: link 1: no SYN later than 1 s after SIGINT",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "33 records",
+          "name": "dual_pause: output.json is a well-formed document",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "",
+          "name": "dual_pause: the output is complete after the pause (the `]` footer written)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "33 records, 33 replies",
+          "name": "dual_pause: the output holds every reply on both links to the SYNs sent before the pause",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "dual_pause/paused.txt is the scanner's paused.conf",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "32, links sent 16 and 17",
+          "name": "dual_pause: paused.conf: resume-index is the minimum of the adapters' bases (2 x SYNs sent per link), inside the scan",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[(\"resume-index\", \"32\"), (\"seed\", \"1\"), (\"rate\", \"10\"), (\"shard\", \"1/1\"), (\"nocapture\", \"servername\"), (\"nocapture\", \"servername\"), (\"output-filename\", \"output.json\"), (\"output-format\", \"json\"), (\"adapter[0]\", \"veth-a\"), (\"router-mac-ipv4[0]\", \"02-aa-00-00-00-02\"), (\"router-mac-ipv6[0]\", \"02-aa-00-00-00-02\"), (\"adapter[1]\", \"veth-a2\"), (\"adapter-ip[1]\", \"198.18.0.6\"), (\"adapter-mac[1]\", \"02-aa-00-00-00-03\"), (\"router-mac-ipv4[1]\", \"02-aa-00-00-00-04\"), (\"router-mac-ipv6[1]\", \"02-aa-00-00-00-04\"), (\"adapter-port\", \"52862\"), (\"ports\", \"76-95\"), (\"range\", \"198.18.0.2-198.18.0.5\")]",
+          "name": "dual_pause: paused.conf names both adapters",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "dual_resume: exit.txt is 0",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "dual_resume: stdout.txt is empty (a file format silences stdout)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[]",
+          "name": "dual_resume: stderr.txt holds only [+] lines and rmasscan's status forms",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "Some(Fin { reason: \"Completed\", sent: 48, replies: 48, open: 2 })",
+          "name": "dual_resume: [+] finished: Completed",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "printed Some(48), wire 48",
+          "name": "dual_resume: [+] finished reports sent equal to the scanner SYNs on the wire",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[(\"interface\", \"veth-a (given)\"), (\"source-mac\", \"02-aa-00-00-00-01 (detected)\"), (\"source-ip\", \"198.18.0.1 (detected)\"), (\"router-mac\", \"02-aa-00-00-00-02 (given)\"), (\"interface[1]\", \"veth-a2 (given)\"), (\"source-mac[1]\", \"02-aa-00-00-00-03 (given)\"), (\"source-ip[1]\", \"198.18.0.6 (given)\"), (\"router-mac[1]\", \"02-aa-00-00-00-04 (given)\"), (\"seed\", \"1 (given)\"), (\"source-port\", \"52862 (given)\"), (\"source-port[1]\", \"52862 (given)\")]",
+          "name": "dual_resume: [+] lines are the stand's: veth-a and veth-a2 given with their MACs, IPs and routers, seed 1 given, a source port each",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "16 SYNs",
+          "name": "dual_pause: link 0: the SYNs before the pause are the plan's first ones, in order",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "24 SYNs",
+          "name": "dual_resume: link 0: the scanner SYNs equal the plan of the resume from resume-index 32, adapter 0, in order, each once",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "17 SYNs",
+          "name": "dual_pause: link 1: the SYNs before the pause are the plan's first ones, in order",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "24 SYNs",
+          "name": "dual_resume: link 1: the scanner SYNs equal the plan of the resume from resume-index 32, adapter 1, in order, each once",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "80 of 80 probes",
+          "name": "no loss: every probe of the scan was sent by one of the two runs",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[]",
+          "name": "a resent probe comes from the adapter's own stream: on the link of its first send, at the same outer index",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "most sent Some(2) times",
+          "name": "bounded duplicates: no probe was sent more than twice (the adapter ahead of the minimum resends its own probes once)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "4981 and 12227 bytes",
+          "name": "dual_resume: output-append: the file begins with the paused run's file, byte for byte",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "48 records",
+          "name": "dual_resume: the appended part is one well-formed, complete document",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "80 of 80",
+          "name": "no loss: the two documents together hold the stand's replies to all 80 probes",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "Some(2)",
+          "name": "bounded duplicates: no record is in the two documents more than twice",
+          "result": "PASS"
+        }
+      ],
+      "notes": {
+        "oracle": "rmasscan-only: the C oracle is not run on the second link",
+        "resent_probes": 1
+      },
+      "safety_trip": false,
+      "tag": "sc06_dual_veth",
+      "verdict": "PASS"
+    }
+  ],
+  "safety_scan": [],
+  "safety_trips": [],
+  "schema": 1,
+  "totals": {
+    "FAIL": 0,
+    "INVALID": 0,
+    "NOT RUN": 0,
+    "PASS": 7
+  }
+}

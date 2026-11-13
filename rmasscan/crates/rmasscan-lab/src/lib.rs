@@ -6,6 +6,8 @@ pub mod autodetect_verify;
 pub mod capture;
 pub mod deploy;
 pub mod dump;
+pub mod ipv6_suite;
+pub mod ipv6_verify;
 pub mod link;
 #[cfg(target_os = "macos")]
 pub mod macos_lab;
@@ -16,6 +18,7 @@ pub mod oracle;
 pub mod oracle_util;
 pub mod output_suite;
 pub mod output_verify;
+pub mod pair_verify;
 pub mod pcap;
 pub mod peer;
 pub mod privacy_scan;

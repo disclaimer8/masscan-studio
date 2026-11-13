@@ -1,0 +1,16 @@
+
+# resume information
+resume-index = 21
+seed = 1
+rate = 10        
+shard = 1/1
+nocapture = servername
+nocapture = servername
+
+output-filename = output.json
+output-format = json
+
+adapter-port = 52785
+# TARGET SELECTION (IP, PORTS, EXCLUDES)
+ports = 76-95
+range = 198.18.0.2-198.18.0.5

@@ -548,6 +548,7 @@ fn rt_reply_sockaddrs_are_rounded_to_four_bytes() {
                 ifp: Some("en12".into()),
                 ifindex: 7,
                 gateway_in: Some(ip(192, 0, 2, 1)),
+                gateway_in6: None,
                 gateway_is_link: false,
             }
         );

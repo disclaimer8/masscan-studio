@@ -22,14 +22,17 @@ use std::sync::Arc;
 
 use crate::blackrock::BlackRock;
 use crate::config::{EffectiveConfig, Operation};
-use crate::cookie::syn_cookie_ipv4;
+use crate::cookie::{syn_cookie_ipv4, syn_cookie_ipv6};
+pub use crate::massip::TargetIp;
 use crate::packet::{
-    ArpTemplate, IcmpEchoTemplate, LinkType, PacketModifiers, SctpTemplate, TcpSynTemplate,
-    UdpTemplate,
+    ArpTemplate, IcmpEchoTemplate, LinkType, PacketModifiers, SctpTemplate, Tcp6SynTemplate,
+    TcpSynTemplate, UdpTemplate,
 };
 use crate::payloads::PayloadTable;
 use crate::ranges::RangeList;
-use crate::scan::{ScanError, Shard, transmit_bounds, transmit_index_stream, transmit_scan_flow};
+use crate::scan::{
+    ScanError, Shard, transmit_bounds, transmit_index_stream, transmit_scan_flow_v46,
+};
 use crate::targets::{
     TEMPL_ARP, TEMPL_ICMP_ECHO, TEMPL_OPROTO_FIRST, TEMPL_OPROTO_LAST, TEMPL_SCTP, TEMPL_SCTP_LAST,
     TEMPL_UDP, TEMPL_UDP_LAST,
@@ -82,6 +85,35 @@ pub enum PlanError {
     TooManyRetries(u32),
     #[error("blackrock rounds must be at least 1, got {0}")]
     ZeroRounds(u32),
+    /// Цели IPv6 в плане Студии (`ReadyPlan::new`, контракт TCP/IPv4) или в поточном оракуле над `AdapterBinding`:
+    /// отказ до первого кадра, а не молчаливый пропуск. План CLI (`new_cli`) их принимает (R7 снят в T5).
+    #[error(
+        "IPv6 targets are not supported by this plan (the Studio plan is TCP over IPv4); use the CLI plan"
+    )]
+    Ipv6TargetsNotSupported,
+    /// R3: цель IPv6 вместе с портом не TCP (`U:`, `S:`, `I:`, ARP). C шлёт их и по IPv6; здесь отложено, поэтому
+    /// отказ до первого кадра. Индекс это наименьший такой порт.
+    #[error(
+        "IPv6 targets support only TCP ports: port index {0} (U:, S:, I: or --arp) cannot be scanned over IPv6"
+    )]
+    Ipv6PortNotTcp(u32),
+    /// IPv6-зонд без адреса источника IPv6 у адаптера (`NicBinding::source_ipv6`): C берёт `src.ipv6`
+    /// (main.c:345), нулевой адрес ушёл бы в провод молча.
+    #[error("the adapter has no IPv6 source address (source_ipv6), so no IPv6 probe can be built")]
+    NoSourceIpv6,
+    /// IPv6-зонд без MAC следующего хопа IPv6 (`NicBinding::next_hop_mac_ipv6`): C держит `router_mac_ipv6` отдельно
+    /// и без него отказывает (main-initadapter.c:235-256); кадр на MAC IPv4-роутера не уходит.
+    #[error(
+        "the adapter has no IPv6 next-hop MAC (next_hop_mac_ipv6), so no IPv6 probe can be built\n    [hint] try \"--router-mac-ipv6 66-55-44-33-22-11\" instead to bypass NDP"
+    )]
+    NoNextHopMacIpv6,
+    /// `next_hop_mac_ipv6` равен MAC источника: собственные кадры нельзя отличить от ответов (фильтр
+    /// `not ether src <source_mac>` на macOS и Windows отбросил бы каждый ответ IPv6). Та же проверка у IPv4
+    /// живёт в адаптерах macOS и Windows (`check_binding`), у IPv6 она на уровне плана, общем для всех ОС.
+    #[error(
+        "the IPv6 next-hop MAC equals the adapter source MAC: own transmitted frames could not be told from replies\n    [hint] use a --router-mac-ipv6 that is not this adapter's own MAC"
+    )]
+    Ipv6NextHopIsSourceMac,
     #[error("need 1..=8 adapters, got {0}")]
     BadNicCount(usize),
     #[error("adapter index {index} is out of range for {count} adapters")]
@@ -128,6 +160,16 @@ pub struct NicBinding {
     /// `last - first == 16` (спека Р6), маска остаётся `last - first`
     /// (main.c:186). Флаг у каждого адаптера свой.
     pub legacy_c_17_port_mask: bool,
+    /// Адрес источника IPv6 (`adapter_get_source_addresses`, main.c:188: `src->ipv6 = ifsrc->ipv6.first`, "TODO:
+    /// currently supports only a single address", :190-192). Один адрес, без диапазона и без ротации; порт
+    /// источника IPv6 всегда `source_ports.0` (main.c:346). `None` у плана IPv4 и у Студии. Приёмник считает кадр
+    /// IPv6 своим, только если адрес назначения равен этому (`is_my_ip`, stack-src.c:13-14).
+    pub source_ipv6: Option<u128>,
+    /// MAC следующего хопа для кадров IPv6 (шлюз или сосед, найденный NDP Neighbor Solicitation). `None`: IPv6-зонд
+    /// отказывает (`PlanError::NoNextHopMacIpv6`, без подмены на `next_hop_mac`). Отдельное поле нужно потому, что IPv4-хоп разрешает ARP, а IPv6-хоп NDP, и
+    /// это могут быть разные устройства; шаблон `Tcp6SynTemplate` читает только это поле (templ-pkt.c:1110-1202,
+    /// `router_mac_ipv6`). На кадры IPv4 не влияет и в `canonical_job_bytes` не входит.
+    pub next_hop_mac_ipv6: Option<[u8; 6]>,
 }
 
 impl From<AdapterBinding> for NicBinding {
@@ -135,6 +177,8 @@ impl From<AdapterBinding> for NicBinding {
         NicBinding {
             source_ipv4_last: binding.source_ipv4,
             legacy_c_17_port_mask: false,
+            source_ipv6: None,
+            next_hop_mac_ipv6: None,
             binding,
         }
     }
@@ -149,6 +193,10 @@ pub struct Probe {
     pub ip_me: u32,
     pub port_me: u16,
     pub ip_them: u32,
+    /// Цель как `TargetIp` (R2): рядом с IPv4-полями `ip_them` и `port_them`, которые остаются
+    /// прежними и дают те же байты кадра. У зонда IPv6 (`V6`) поля `ip_me`/`ip_them` нулевые, адреса в `target` и в
+    /// кадре.
+    pub target: TargetIp,
     pub port_them: u16,
     /// Порт цели с протокольным смещением, как `port_them` в `transmit_thread` (main.c:389): порт TCP как есть,
     /// `65536 + порт` для UDP, `196608` для ICMP Echo. Этот индекс (а не 16-битный `port_them`) входит в cookie.
@@ -173,6 +221,13 @@ fn check_source_ports(first: u16, last: u16, legacy_c_17: bool) -> Result<(), Pl
 #[derive(Debug, Clone)]
 struct Builder {
     tmpl: TcpSynTemplate,
+    /// Шаблон TCP SYN поверх IPv6 (78 байт, templ-pkt.c:1110-1202), `router_mac_ipv6` это `next_hop_mac_ipv6` адаптера (без него зонд отказывает).
+    tmpl6: Tcp6SynTemplate,
+    /// `src.ipv6` (main.c:188); `None`: IPv6-зонд отказывает ([`PlanError::NoSourceIpv6`]).
+    source_ipv6: Option<u128>,
+    /// `router_mac_ipv6` задан; иначе IPv6-зонд отказывает ([`PlanError::NoNextHopMacIpv6`]), `tmpl6` нулевой и
+    /// не используется.
+    has_next_hop_mac_ipv6: bool,
     /// Шаблон ICMP Echo (`I:0`, templ-pkt.c:105): тот же путь адаптера, что у TCP.
     icmp: IcmpEchoTemplate,
     /// Шаблон UDP (`U:`, templ-pkt.c:56): тот же путь адаптера и та же таблица нагрузок на все адаптеры.
@@ -218,6 +273,14 @@ impl Builder {
                 binding.link_type,
                 mods,
             ),
+            tmpl6: Tcp6SynTemplate::new_with_options(
+                binding.source_mac,
+                nic.next_hop_mac_ipv6.unwrap_or([0; 6]),
+                binding.link_type,
+                mods,
+            ),
+            source_ipv6: nic.source_ipv6,
+            has_next_hop_mac_ipv6: nic.next_hop_mac_ipv6.is_some(),
             icmp: IcmpEchoTemplate::new(
                 binding.source_mac,
                 binding.next_hop_mac,
@@ -256,6 +319,7 @@ impl Builder {
         ip_them: u32,
         port_them: u32,
     ) -> Result<(), PlanError> {
+        p.target = TargetIp::V4(ip_them);
         let ipv4_mask = self.ipv4_mask;
         let (ip_me, port_me) = if ipv4_mask != 0 || self.port_mask != 0 {
             let n = i.wrapping_add(repeats);
@@ -369,6 +433,41 @@ impl Builder {
     }
 }
 
+impl Builder {
+    /// Ветка IPv6 передающего цикла (main.c:336-353): `ip_me = src.ipv6`, `port_me = src.port` (первый порт
+    /// диапазона, ротации нет), `cookie = syn_cookie_ipv6(ip_them, port_them, ip_me, port_me, entropy)`,
+    /// `seqno = (unsigned)cookie` (:355). Только TCP (R3): порт с протокольным смещением (`U:`, `S:`, `I:`) это
+    /// отказ, а не кадр.
+    fn fill_v6(
+        &self,
+        p: &mut Probe,
+        i: u64,
+        ip_them: u128,
+        port_them: u32,
+    ) -> Result<(), PlanError> {
+        let ip_me = self.source_ipv6.ok_or(PlanError::NoSourceIpv6)?;
+        if !self.has_next_hop_mac_ipv6 {
+            return Err(PlanError::NoNextHopMacIpv6);
+        }
+        let port_them16 = u16::try_from(port_them).map_err(|_| PlanError::PortNotTcp(port_them))?;
+        let port_me = self.first;
+        let seqno =
+            syn_cookie_ipv6(ip_them, port_them, ip_me, u32::from(port_me), self.entropy) as u32;
+        self.tmpl6
+            .build_syn(ip_them, port_them16, ip_me, port_me, seqno, &mut p.frame);
+        p.target = TargetIp::V6(ip_them);
+        p.index = i;
+        // Поля IPv4 у зонда IPv6 нулевые: адреса лежат в `target` и в кадре.
+        p.ip_me = 0;
+        p.ip_them = 0;
+        p.port_me = port_me;
+        p.port_them = port_them16;
+        p.port_index = port_them;
+        p.seqno = seqno;
+        Ok(())
+    }
+}
+
 /// Поток probe этапа 1 без сети: те же индексы, что в C (`transmit_scan`),
 /// SYN-cookie и порт источника как main.c:373-393. Сохраняет retries и shard
 /// из `eff`. Резюме-поля `eff` применяются как в C.
@@ -380,6 +479,10 @@ pub fn for_each_probe<B>(
     binding: &AdapterBinding,
     f: impl FnMut(&Probe) -> ControlFlow<B>,
 ) -> Result<ControlFlow<B>, PlanError> {
+    // `AdapterBinding` (Студия) не несёт источника IPv6: цели IPv6 отказ до первого кадра, как `ReadyPlan::new`.
+    if eff.massip().has_ipv6_targets() {
+        return Err(ScanError::Ipv6Targets.into());
+    }
     for_each_probe_nic(eff, &NicBinding::from(binding.clone()), f)
 }
 
@@ -407,7 +510,9 @@ pub fn for_each_probe_nic_with_payloads<B>(
         &Arc::new(payloads.clone()),
     )?;
     let mut probe = Probe::default();
-    let flow = transmit_scan_flow(
+    // main.c:336-373: цели IPv6 на нижних индексах (`Builder::fill_v6`), IPv4 после них; без целей IPv6
+    // `range_ipv6 == 0` и поток побайтно прежний.
+    let flow = transmit_scan_flow_v46(
         eff.massip(),
         eff.seed(),
         eff.blackrock_rounds(),
@@ -418,8 +523,14 @@ pub fn for_each_probe_nic_with_payloads<B>(
         eff.resume_count(),
         eff.retries(),
         eff.max_rate(),
-        |i, repeats, xxx, ip_them, port_them| {
-            if let Err(e) = builder.fill(&mut probe, i, repeats, xxx, ip_them, port_them) {
+        |i, repeats, xxx, target, port_them| {
+            let built = match target {
+                TargetIp::V4(ip_them) => {
+                    builder.fill(&mut probe, i, repeats, xxx, ip_them, port_them)
+                }
+                TargetIp::V6(ip_them) => builder.fill_v6(&mut probe, i, ip_them, port_them),
+            };
+            if let Err(e) = built {
                 return ControlFlow::Break(Err(e));
             }
             match f(&probe) {
@@ -568,6 +679,7 @@ impl ReadyPlan {
             effective,
             vec![NicBinding::from(binding)],
             true,
+            false,
             Arc::new(PayloadTable::builtin()),
             destinations,
         )
@@ -628,19 +740,46 @@ impl ReadyPlan {
         // Р1: O:*, I:n и смесь ARP с другими портами отклоняются навсегда.
         if check_ports {
             check_cli_ports(effective.massip().ports())?;
+            // R3: поверх IPv6 только TCP (порт с протокольным смещением это не кадр IPv6, а отказ до первого кадра).
+            if effective.massip().has_ipv6_targets()
+                && let Some(r) = effective
+                    .massip()
+                    .ports()
+                    .as_slice()
+                    .iter()
+                    .find(|r| r.end > u32::from(u16::MAX))
+            {
+                return Err(PlanError::Ipv6PortNotTcp(
+                    r.begin.max(u32::from(u16::MAX) + 1),
+                ));
+            }
         }
-        ReadyPlan::build(effective, nics, false, payloads, None)
+        // MAC следующего хопа IPv6 не равен MAC источника (у IPv4 это проверяют адаптеры macOS и Windows).
+        if nics
+            .iter()
+            .any(|n| n.next_hop_mac_ipv6 == Some(n.binding.source_mac))
+        {
+            return Err(PlanError::Ipv6NextHopIsSourceMac);
+        }
+        // План CLI принимает цели IPv6 (R7 снят в T5): передающий цикл строит их зонды (`Builder::fill_v6`).
+        // Карты доставки по целям у плана CLI нет: она только у Студии (`with_destinations`).
+        ReadyPlan::build(effective, nics, false, true, payloads, None)
     }
 
     fn build(
         effective: EffectiveConfig,
         nics: Vec<NicBinding>,
         tcp_only: bool,
+        allow_ipv6: bool,
         payloads: Arc<PayloadTable>,
         destinations: Option<BTreeMap<u32, [u8; 6]>>,
     ) -> Result<ReadyPlan, PlanError> {
         if nics.is_empty() || nics.len() > 8 {
             return Err(PlanError::BadNicCount(nics.len()));
+        }
+        // План Студии (`new`) это TCP поверх IPv4: цель IPv6 не принимается ни молча, ни пропуском.
+        if !allow_ipv6 && effective.massip().has_ipv6_targets() {
+            return Err(PlanError::Ipv6TargetsNotSupported);
         }
         let builders = nics
             .iter()
@@ -711,6 +850,29 @@ impl ReadyPlan {
     /// Frozen per-target Ethernet delivery; `None` preserves single-MAC plans.
     pub fn destinations(&self) -> Option<&BTreeMap<u32, [u8; 6]>> {
         self.inner.destinations.as_ref()
+    }
+
+    /// Зонд SYN для одной цели IPv6 адаптера `nic_index` (ветка main.c:336-353, `seqno` из `syn_cookie_ipv6`).
+    /// Порт цели это индекс порта: вне 16 бит (`U:`, `S:`, `I:`) отказ [`PlanError::PortNotTcp`] (R3), без
+    /// `source_ipv6` у адаптера отказ [`PlanError::NoSourceIpv6`]. Тот же построитель зовёт передающий цикл.
+    pub fn probe_v6(
+        &self,
+        nic_index: usize,
+        i: u64,
+        ip_them: u128,
+        port_them: u32,
+    ) -> Result<Probe, PlanError> {
+        let builder = self
+            .inner
+            .builders
+            .get(nic_index)
+            .ok_or(PlanError::NicIndexOutOfRange {
+                index: nic_index as u32,
+                count: self.inner.builders.len(),
+            })?;
+        let mut p = Probe::default();
+        builder.fill_v6(&mut p, i, ip_them, port_them)?;
+        Ok(p)
     }
 
     /// Число probe плана (комбинации IP/порт).
@@ -882,14 +1044,21 @@ impl ProbeCursor {
         let inner = &*self.plan.inner;
         let builder = &inner.builders[self.nic_index];
         let xxx = self.blackrock.shuffle(x);
-        let (ip, port) = inner.effective.massip().pick(xxx);
+        // main.c:336-373: индексы `< range_ipv6` это цели IPv6 (`Builder::fill_v6`), остальные IPv4.
+        let (target, port, xxx) = inner.effective.massip().pick_transmit(xxx);
         let mut p = Probe::default();
         // `ReadyPlan::new` и `new_cli` отклоняют порты без построителя заранее, поэтому отказ здесь это
-        // нарушение инварианта. Он не паникует и не выдаётся за конец скана: курсор останавливается и хранит
-        // причину, а движок завершает запуск отказом.
-        match builder.fill(&mut p, i, self.repeats, xxx, ip, port) {
+        // нарушение инварианта или адаптер без `source_ipv6`/`next_hop_mac_ipv6` у цели IPv6. Он не паникует и не
+        // выдаётся за конец скана: курсор останавливается и хранит причину, а движок завершает запуск отказом.
+        let built = match target {
+            TargetIp::V4(ip) => builder.fill(&mut p, i, self.repeats, xxx, ip, port),
+            TargetIp::V6(ip) => builder.fill_v6(&mut p, i, ip, port),
+        };
+        match built {
             Ok(()) => {
-                if let Some(destinations) = &inner.destinations {
+                // The map is keyed by IPv4 and applies to IPv4 frames only; an IPv6 frame keeps the
+                // `next_hop_mac_ipv6` its template wrote (a plan with a map refuses IPv6 targets anyway).
+                if let (Some(destinations), TargetIp::V4(ip)) = (&inner.destinations, target) {
                     // Constructor guarantees complete immutable coverage and Ethernet framing.
                     // Only L2 destination bytes change; cookies and IP/TCP checksums stay intact.
                     p.frame[..6].copy_from_slice(&destinations[&ip]);
@@ -1381,6 +1550,8 @@ mod tests {
             binding: b,
             source_ipv4_last: last,
             legacy_c_17_port_mask: legacy,
+            source_ipv6: None,
+            next_hop_mac_ipv6: None,
         }
     }
 
@@ -1868,5 +2039,515 @@ mod tests {
             oracle_frames,
             all.iter().map(|p| p.frame.clone()).collect::<Vec<_>>()
         );
+    }
+
+    // ---- IPv6 stage, Task 2: the IPv4 order must not move --------------------------------------
+
+    /// FNV-1a 64, the hash the vector below was captured with.
+    fn fnv1a(h: &mut u64, bytes: &[u8]) {
+        for b in bytes {
+            *h ^= u64::from(*b);
+            *h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+
+    /// Review Focus 2. The constants below were captured from the code at the
+    /// Task 2 BASE (68c0e2e, before any change of this task) with the same
+    /// scenario: `198.18.0.0/28`, ports `80,443`, `seed = 42`, default rounds (14)
+    /// and rate (100), adapter `10.255.0.1` / `00:11:22:33:44:55` -> `66:55:44:33:22:11`,
+    /// source ports 40000-40003. `PROBES` is `(index, ip_them, port_them)` of
+    /// `for_each_probe`; `FRAME_HASH` is FNV-1a 64 over, per probe, little-endian
+    /// u64 of `index, ip_me, port_me, ip_them, port_them, port_index, seqno` then
+    /// the frame bytes; `TRANSMIT` is `(i, repeats, xXx, ip, port)` of
+    /// `transmit_scan`; `LIST` is `(ip, port)` of `list_scan`. With no IPv6 target
+    /// every index, probe and frame stays byte-identical (main.c:258-260: range_ipv6 == 0).
+    #[test]
+    fn pure_ipv4_sequence_unchanged_with_ipv6_support() {
+        const PROBES: [(u64, u32, u16); 32] = [
+            (0, 0xc612000d, 443),
+            (1, 0xc612000f, 80),
+            (2, 0xc6120000, 80),
+            (3, 0xc6120007, 80),
+            (4, 0xc6120008, 80),
+            (5, 0xc612000b, 80),
+            (6, 0xc6120005, 80),
+            (7, 0xc6120006, 80),
+            (8, 0xc612000e, 80),
+            (9, 0xc6120007, 443),
+            (10, 0xc6120009, 80),
+            (11, 0xc6120001, 80),
+            (12, 0xc6120009, 443),
+            (13, 0xc6120006, 443),
+            (14, 0xc6120008, 443),
+            (15, 0xc612000f, 443),
+            (16, 0xc6120002, 80),
+            (17, 0xc612000c, 443),
+            (18, 0xc6120001, 443),
+            (19, 0xc612000e, 443),
+            (20, 0xc6120000, 443),
+            (21, 0xc612000a, 80),
+            (22, 0xc6120002, 443),
+            (23, 0xc6120003, 80),
+            (24, 0xc612000c, 80),
+            (25, 0xc612000d, 80),
+            (26, 0xc6120004, 443),
+            (27, 0xc6120003, 443),
+            (28, 0xc612000a, 443),
+            (29, 0xc612000b, 443),
+            (30, 0xc6120005, 443),
+            (31, 0xc6120004, 80),
+        ];
+        const FRAME_HASH: u64 = 0x205e28f8c5c6f857;
+        const TRANSMIT: [(u64, u64, u64, u32, u32); 32] = [
+            (0, 0, 29, 0xc612000d, 443),
+            (1, 0, 15, 0xc612000f, 80),
+            (2, 0, 0, 0xc6120000, 80),
+            (3, 0, 7, 0xc6120007, 80),
+            (4, 0, 8, 0xc6120008, 80),
+            (5, 0, 11, 0xc612000b, 80),
+            (6, 0, 5, 0xc6120005, 80),
+            (7, 0, 6, 0xc6120006, 80),
+            (8, 0, 14, 0xc612000e, 80),
+            (9, 0, 23, 0xc6120007, 443),
+            (10, 0, 9, 0xc6120009, 80),
+            (11, 0, 1, 0xc6120001, 80),
+            (12, 0, 25, 0xc6120009, 443),
+            (13, 0, 22, 0xc6120006, 443),
+            (14, 0, 24, 0xc6120008, 443),
+            (15, 0, 31, 0xc612000f, 443),
+            (16, 0, 2, 0xc6120002, 80),
+            (17, 0, 28, 0xc612000c, 443),
+            (18, 0, 17, 0xc6120001, 443),
+            (19, 0, 30, 0xc612000e, 443),
+            (20, 0, 16, 0xc6120000, 443),
+            (21, 0, 10, 0xc612000a, 80),
+            (22, 0, 18, 0xc6120002, 443),
+            (23, 0, 3, 0xc6120003, 80),
+            (24, 0, 12, 0xc612000c, 80),
+            (25, 0, 13, 0xc612000d, 80),
+            (26, 0, 20, 0xc6120004, 443),
+            (27, 0, 19, 0xc6120003, 443),
+            (28, 0, 26, 0xc612000a, 443),
+            (29, 0, 27, 0xc612000b, 443),
+            (30, 0, 21, 0xc6120005, 443),
+            (31, 0, 4, 0xc6120004, 80),
+        ];
+        const LIST: [(u32, u32); 32] = [
+            (0xc612000a, 443),
+            (0xc612000b, 443),
+            (0xc6120005, 443),
+            (0xc6120004, 80),
+            (0xc612000d, 443),
+            (0xc612000f, 80),
+            (0xc6120000, 80),
+            (0xc6120007, 80),
+            (0xc6120008, 80),
+            (0xc612000b, 80),
+            (0xc6120005, 80),
+            (0xc6120006, 80),
+            (0xc612000e, 80),
+            (0xc6120007, 443),
+            (0xc6120009, 80),
+            (0xc6120001, 80),
+            (0xc6120009, 443),
+            (0xc6120006, 443),
+            (0xc6120008, 443),
+            (0xc612000f, 443),
+            (0xc6120002, 80),
+            (0xc612000c, 443),
+            (0xc6120001, 443),
+            (0xc612000e, 443),
+            (0xc6120000, 443),
+            (0xc612000a, 80),
+            (0xc6120002, 443),
+            (0xc6120003, 80),
+            (0xc612000c, 80),
+            (0xc612000d, 80),
+            (0xc6120004, 443),
+            (0xc6120003, 443),
+        ];
+        let mut m = MassIp::new();
+        add_target_string(m.ipv4_mut(), "198.18.0.0/28").unwrap();
+        parse_ports(m.ports_mut(), "80,443").unwrap();
+        let cfg = ScanConfig {
+            targets: m,
+            seed: 42,
+            ..ScanConfig::default()
+        };
+        let e = validate(&cfg, Operation::Scan).unwrap();
+        assert!(!e.massip().has_ipv6_targets());
+        let (mut h, mut got) = (0xcbf2_9ce4_8422_2325u64, Vec::new());
+        let flow = for_each_probe(&e, &binding(), |p| {
+            assert_eq!(p.target, TargetIp::V4(p.ip_them));
+            for v in [
+                p.index,
+                u64::from(p.ip_me),
+                u64::from(p.port_me),
+                u64::from(p.ip_them),
+                u64::from(p.port_them),
+                u64::from(p.port_index),
+                u64::from(p.seqno),
+            ] {
+                fnv1a(&mut h, &v.to_le_bytes());
+            }
+            fnv1a(&mut h, &p.frame);
+            got.push((p.index, p.ip_them, p.port_them));
+            ControlFlow::<()>::Continue(())
+        })
+        .unwrap();
+        assert_eq!(flow, ControlFlow::Continue(()));
+        assert_eq!(got, PROBES);
+        assert_eq!(h, FRAME_HASH);
+        // the runtime cursor yields the same probes, frame for frame
+        let plan = ReadyPlan::new_cli(e.clone(), nics(1)).unwrap();
+        let from_cursor = drain(&mut plan.cursor_for_nic(0, None).unwrap());
+        assert_eq!(from_cursor, oracle(&e));
+        let mut hc = 0xcbf2_9ce4_8422_2325u64;
+        for p in &from_cursor {
+            for v in [
+                p.index,
+                u64::from(p.ip_me),
+                u64::from(p.port_me),
+                u64::from(p.ip_them),
+                u64::from(p.port_them),
+                u64::from(p.port_index),
+                u64::from(p.seqno),
+            ] {
+                fnv1a(&mut hc, &v.to_le_bytes());
+            }
+            fnv1a(&mut hc, &p.frame);
+        }
+        assert_eq!(hc, FRAME_HASH);
+        // the index streams the probes come from
+        let mut tr = Vec::new();
+        crate::scan::transmit_scan(
+            e.massip(),
+            e.seed(),
+            e.blackrock_rounds(),
+            e.shard(),
+            1,
+            0,
+            e.resume_index(),
+            e.resume_count(),
+            e.retries(),
+            e.max_rate(),
+            |i, rep, x, ip, port| tr.push((i, rep, x, ip, port)),
+        )
+        .unwrap();
+        assert_eq!(tr, TRANSMIT);
+        let mut ls = Vec::new();
+        crate::scan::list_scan(
+            e.massip(),
+            e.seed(),
+            e.blackrock_rounds(),
+            e.shard(),
+            0,
+            None,
+            0,
+            e.max_rate(),
+            |ip, port| ls.push((ip, port)),
+        )
+        .unwrap();
+        assert_eq!(ls, LIST);
+    }
+
+    fn eff_v46(targets: &str, ports: &str) -> EffectiveConfig {
+        eff_v46_seed(targets, ports, 42)
+    }
+
+    fn eff_v46_seed(targets: &str, ports: &str, seed: u64) -> EffectiveConfig {
+        let mut m = MassIp::new();
+        m.add_target_string(targets).unwrap();
+        parse_ports(m.ports_mut(), ports).unwrap();
+        let cfg = ScanConfig {
+            targets: m,
+            seed,
+            ..ScanConfig::default()
+        };
+        validate(&cfg, Operation::Scan).unwrap()
+    }
+
+    /// R7 (снят в T5): CLI-план принимает цели IPv6, а Студия (`ReadyPlan::new`, контракт TCP/IPv4) и поточный
+    /// оракул `for_each_probe` над `AdapterBinding` по-прежнему отказывают до первого кадра: IPv4-цели того же плана
+    /// не спасают его, иначе половина IPv6 пропала бы молча.
+    #[test]
+    fn studio_plan_and_oracle_refuse_ipv6_targets_the_cli_plan_takes_them() {
+        for t in ["2001:db8::10", "2001:db8::10,198.18.0.1"] {
+            let e = eff_v46(t, "80");
+            assert_eq!(
+                ReadyPlan::new(e.clone(), binding()).unwrap_err(),
+                PlanError::Ipv6TargetsNotSupported,
+                "{t}"
+            );
+            let mut sent = 0;
+            let r = for_each_probe(&e, &binding(), |_| {
+                sent += 1;
+                ControlFlow::<()>::Continue(())
+            });
+            assert_eq!(r.unwrap_err(), PlanError::Scan(ScanError::Ipv6Targets));
+            assert_eq!(sent, 0);
+            assert!(ReadyPlan::new_cli(e, nics(1)).is_ok(), "{t}");
+        }
+    }
+
+    /// Слияние с Студией: карта доставки `with_destinations` ключуется IPv4 и живёт только в плане Студии, а он
+    /// отказывает целям IPv6 до первого кадра, даже когда IPv4-часть карты полна. У плана CLI карты нет
+    /// (`destinations() == None`), и его кадры IPv6 берут MAC из `next_hop_mac_ipv6`, а кадры IPv4 из `next_hop_mac`.
+    #[test]
+    fn mapped_studio_plan_refuses_ipv6_targets_and_the_cli_plan_has_no_map() {
+        const MAPPED: [u8; 6] = [0x02, 0x00, 0x00, 0x00, 0x00, 0x01];
+        for (t, map) in [
+            ("2001:db8::10", BTreeMap::new()),
+            (
+                "2001:db8::10,198.18.0.1",
+                BTreeMap::from([(0xc612_0001, MAPPED)]),
+            ),
+        ] {
+            let e = eff_v46(t, "80");
+            assert_eq!(
+                ReadyPlan::with_destinations(e.clone(), binding(), map).unwrap_err(),
+                PlanError::Ipv6TargetsNotSupported,
+                "{t}"
+            );
+            let nic = v6_nic();
+            let plan = ReadyPlan::new_cli(e, vec![nic.clone()]).unwrap();
+            assert_eq!(plan.destinations(), None, "{t}");
+            let mut cursor = plan.cursor_for_nic(0, None).unwrap();
+            let mut v6s = 0;
+            while let Some(p) = cursor.current() {
+                let want = match p.target {
+                    TargetIp::V6(_) => {
+                        v6s += 1;
+                        nic.next_hop_mac_ipv6.unwrap()
+                    }
+                    TargetIp::V4(_) => nic.binding.next_hop_mac,
+                };
+                assert_eq!(&p.frame[..6], &want, "{t}");
+                assert_ne!(&p.frame[..6], &MAPPED, "{t}");
+                cursor.advance_sent();
+            }
+            assert_eq!(cursor.build_error(), None, "{t}");
+            assert_eq!(v6s, 1, "{t}");
+        }
+        // The same IPv4-only job with a complete map stays accepted, and its frames carry the mapped MAC.
+        let e = eff_v46("198.18.0.1", "80");
+        let plan =
+            ReadyPlan::with_destinations(e, binding(), BTreeMap::from([(0xc612_0001, MAPPED)]))
+                .unwrap();
+        let mut cursor = ProbeCursor::new(&plan, 0).unwrap();
+        let p = cursor.current().unwrap();
+        assert_eq!(p.target, TargetIp::V4(0xc612_0001));
+        assert_eq!(&p.frame[..6], &MAPPED);
+    }
+
+    /// R3: цели IPv6 только с портами TCP. `U:`, `S:`, `I:` (и ARP `I:2`) вместе с целью IPv6 это отказ плана CLI до
+    /// первого кадра (C шлёт их и по IPv6; здесь отложено).
+    #[test]
+    fn cli_plan_refuses_non_tcp_ports_with_ipv6_targets() {
+        for (ports, idx) in [
+            ("80,U:53", TEMPL_UDP + 53),
+            ("S:2905", TEMPL_SCTP + 2905),
+            ("I:0", TEMPL_ICMP_ECHO),
+            ("I:2", TEMPL_ARP),
+        ] {
+            let e = eff_v46("2001:db8::1,198.18.0.1", ports);
+            assert_eq!(
+                ReadyPlan::new_cli(e, nics(1)).unwrap_err(),
+                PlanError::Ipv6PortNotTcp(idx),
+                "{ports}"
+            );
+        }
+        // Без целей IPv6 те же порты допустимы, как раньше.
+        assert!(ReadyPlan::new_cli(eff_v46("198.18.0.1", "80,U:53"), nics(1)).is_ok());
+    }
+
+    fn v6_nic() -> NicBinding {
+        let mut b = binding();
+        b.link_type = LinkType::Ethernet;
+        b.source_mac = [0x02, 0x11, 0x22, 0x33, 0x44, 0x55];
+        b.next_hop_mac = [0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x02];
+        b.source_ports = (40000, 40000);
+        let mut nic = NicBinding::from(b);
+        nic.source_ipv6 = Some(0xfd00_0000_0000_0000_0000_0000_0000_0002);
+        nic.next_hop_mac_ipv6 = Some([0x02, 0x00, 0x5e, 0x10, 0x00, 0x09]);
+        nic
+    }
+
+    /// An IPv6 next-hop MAC equal to the adapter's own MAC would make the own-frame filter drop every reply; the plan
+    /// refuses it for every OS (the IPv4 twin lives in the macOS and Windows `check_binding`).
+    #[test]
+    fn cli_plan_refuses_an_ipv6_next_hop_mac_equal_to_the_source_mac() {
+        let e = eff_v46("2001:db8::1", "80");
+        let mut nic = v6_nic();
+        nic.next_hop_mac_ipv6 = Some(nic.binding.source_mac);
+        assert_eq!(
+            ReadyPlan::new_cli(e.clone(), vec![nic]).unwrap_err(),
+            PlanError::Ipv6NextHopIsSourceMac
+        );
+        // a second adapter is checked too
+        let mut bad = v6_nic();
+        bad.next_hop_mac_ipv6 = Some(bad.binding.source_mac);
+        assert_eq!(
+            ReadyPlan::new_cli(e.clone(), vec![v6_nic(), bad]).unwrap_err(),
+            PlanError::Ipv6NextHopIsSourceMac
+        );
+        // a different MAC and an unresolved next hop (None) stay accepted
+        assert!(ReadyPlan::new_cli(e.clone(), vec![v6_nic()]).is_ok());
+        let mut none = v6_nic();
+        none.next_hop_mac_ipv6 = None;
+        assert!(ReadyPlan::new_cli(e, vec![none]).is_ok());
+    }
+
+    /// T5: передающий цикл плана CLI шлёт цели IPv6 (main.c:336-353): индексы `< range_ipv6` дают зонд
+    /// [`ReadyPlan::probe_v6`] с тем же `i`, остальные IPv4 как раньше; курсор движка и поток `--packet-trace`
+    /// (`for_each_probe_nic`) дают одни и те же кадры в одном порядке.
+    #[test]
+    fn cli_plan_streams_ipv6_probes_in_transmit_order() {
+        let e = eff_v46("2001:db8::1-2001:db8::2,198.18.0.2", "80,443");
+        let nic = v6_nic();
+        let plan = ReadyPlan::new_cli(e.clone(), vec![nic.clone()]).unwrap();
+        let mut cursor = plan.cursor_for_nic(0, None).unwrap();
+        let mut from_cursor = Vec::new();
+        while let Some(p) = cursor.current() {
+            from_cursor.push(p.clone());
+            cursor.advance_sent();
+        }
+        assert_eq!(cursor.build_error(), None);
+        assert_eq!(from_cursor.len(), 6);
+        let (mut v6s, mut v4s) = (0, 0);
+        for p in &from_cursor {
+            match p.target {
+                TargetIp::V6(ip) => {
+                    v6s += 1;
+                    assert_eq!(&p.frame[12..14], &[0x86, 0xdd]);
+                    assert_eq!(&p.frame[0..6], &[0x02, 0x00, 0x5e, 0x10, 0x00, 0x09]);
+                    let want = plan.probe_v6(0, p.index, ip, p.port_index).unwrap();
+                    assert_eq!(p, &want);
+                }
+                TargetIp::V4(ip) => {
+                    v4s += 1;
+                    assert_eq!(ip, 0xc612_0002);
+                    assert_eq!(&p.frame[12..14], &[0x08, 0x00]);
+                    assert_eq!(&p.frame[0..6], &[0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x02]);
+                }
+            }
+        }
+        assert_eq!((v6s, v4s), (4, 2));
+        let mut from_flow = Vec::new();
+        let flow = for_each_probe_nic(&e, &nic, |p| {
+            from_flow.push(p.clone());
+            ControlFlow::<()>::Continue(())
+        });
+        assert_eq!(flow, Ok(ControlFlow::Continue(())));
+        assert_eq!(from_flow, from_cursor);
+    }
+
+    /// Адаптер без `source_ipv6` в плане с целями IPv6: первый же зонд IPv6 это отказ скана (`ProbeBuild`), а не
+    /// пропуск цели или кадр с нулевым источником.
+    #[test]
+    fn ipv6_probe_without_a_source_fails_the_scan_never_skips() {
+        let e = eff_v46("2001:db8::1", "80");
+        let mut nic = v6_nic();
+        nic.source_ipv6 = None;
+        let plan = ReadyPlan::new_cli(e.clone(), vec![nic.clone()]).unwrap();
+        let mut cursor = plan.cursor_for_nic(0, None).unwrap();
+        assert!(cursor.current().is_none());
+        assert_eq!(
+            cursor.build_error(),
+            Some(PlanError::ProbeBuild(Box::new(PlanError::NoSourceIpv6)))
+        );
+        let r = for_each_probe_nic(&e, &nic, |_| ControlFlow::<()>::Continue(()));
+        assert_eq!(r.unwrap_err(), PlanError::NoSourceIpv6);
+    }
+
+    /// IPv6 stage, Task 3 (main.c:336-353): цель IPv6 берёт `ip_me = src.ipv6` и `port_me = src.port` (первый
+    /// порт, без ротации), `cookie = syn_cookie_ipv6`, `seqno = (unsigned)cookie`. Кадр и cookie напечатаны
+    /// настоящим C (`syn_cookie_ipv6` + `template_set_target_ipv6`, seqno 0x824e4617 это младшие 32 бита
+    /// 0x8edac6d1824e4617). Передающий цикл зовёт тот же построитель (T5, `cli_plan_streams_ipv6_probes_in_transmit_order`).
+    #[test]
+    fn probe_v6_frame_and_seqno_match_c() {
+        const THEM: u128 = 0x2001_0db8_0000_0000_0000_0000_0000_0001;
+        const ME: u128 = 0xfd00_0000_0000_0000_0000_0000_0000_0002;
+        let mut b = binding();
+        b.link_type = LinkType::Ethernet;
+        b.source_mac = [0x02, 0x11, 0x22, 0x33, 0x44, 0x55];
+        b.next_hop_mac = [0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x02];
+        b.source_ports = (40000, 40015);
+        let nic = NicBinding {
+            binding: b,
+            source_ipv4_last: 0,
+            legacy_c_17_port_mask: false,
+            source_ipv6: Some(ME),
+            // Явный MAC IPv6-хопа: без него кадра IPv6 нет (`NoNextHopMacIpv6`).
+            next_hop_mac_ipv6: Some([0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x02]),
+        };
+        let nic = NicBinding {
+            source_ipv4_last: nic.binding.source_ipv4,
+            ..nic
+        };
+        let e = eff_v46_seed("2001:db8::1", "80", 0x0123_4567_89ab_cdef);
+        let plan = ReadyPlan::new_cli(e, vec![nic.clone()]).unwrap();
+        let p = plan.probe_v6(0, 7, THEM, 80).unwrap();
+        assert_eq!(p.seqno, 0x824e_4617);
+        assert_eq!((p.port_me, p.port_them, p.port_index), (40000, 80, 80));
+        assert_eq!(p.target, TargetIp::V6(THEM));
+        assert_eq!((p.ip_me, p.ip_them), (0, 0));
+        assert_eq!(p.index, 7);
+        let c = "aabbccddee02 021122334455 86dd 60000000 0018 06 ff fd00000000000000 0000000000000002 \
+                 20010db800000000 0000000000000001 9c40 0050 824e4617 00000000 6002 0401 0473 0000 020405b4";
+        let want: Vec<u8> = {
+            let h: String = c.split_whitespace().collect();
+            (0..h.len())
+                .step_by(2)
+                .map(|i| u8::from_str_radix(&h[i..i + 2], 16).unwrap())
+                .collect()
+        };
+        assert_eq!(p.frame, want);
+        // Не TCP-порт поверх IPv6 это R3, а не молчаливый кадр.
+        assert_eq!(
+            plan.probe_v6(0, 0, THEM, TEMPL_UDP + 53).unwrap_err(),
+            PlanError::PortNotTcp(TEMPL_UDP + 53)
+        );
+        // Нет source_ipv6: отказ, а не кадр с нулевым источником.
+        let mut none = nic;
+        none.source_ipv6 = None;
+        let plan_none = ReadyPlan::new_cli(eff_v46("2001:db8::1", "80"), vec![none]).unwrap();
+        assert_eq!(
+            plan_none.probe_v6(0, 0, THEM, 80).unwrap_err(),
+            PlanError::NoSourceIpv6
+        );
+        // Индекс адаптера вне плана.
+        assert_eq!(
+            plan.probe_v6(1, 0, THEM, 80).unwrap_err(),
+            PlanError::NicIndexOutOfRange { index: 1, count: 1 }
+        );
+    }
+
+    /// T4: MAC следующего хопа IPv6 (результат NDP) живёт отдельно от IPv4-хопа (ARP). C хранит
+    /// `router_mac_ipv6` отдельно и без него отказывает (main-initadapter.c:235-256): кадр IPv6 никогда не уходит
+    /// на MAC IPv4-роутера. Кадры IPv4 всегда на `next_hop_mac`.
+    #[test]
+    fn ipv6_probe_requires_its_own_next_hop_mac() {
+        const THEM: u128 = 0x2001_0db8_0000_0000_0000_0000_0000_0001;
+        const ME: u128 = 0xfd00_0000_0000_0000_0000_0000_0000_0002;
+        const V4_HOP: [u8; 6] = [0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0x02];
+        const V6_HOP: [u8; 6] = [0x02, 0x00, 0x5e, 0x10, 0x00, 0x09];
+        let mut b = binding();
+        b.link_type = LinkType::Ethernet;
+        b.source_mac = [0x02, 0x11, 0x22, 0x33, 0x44, 0x55];
+        b.next_hop_mac = V4_HOP;
+        b.source_ports = (40000, 40015);
+        let mut nic = NicBinding::from(b);
+        nic.source_ipv6 = Some(ME);
+        let e = eff_v46("2001:db8::1", "80");
+        let plain = ReadyPlan::new_cli(e.clone(), vec![nic.clone()]).unwrap();
+        assert_eq!(
+            plain.probe_v6(0, 0, THEM, 80).unwrap_err(),
+            PlanError::NoNextHopMacIpv6
+        );
+        nic.next_hop_mac_ipv6 = Some(V6_HOP);
+        let plan = ReadyPlan::new_cli(e, vec![nic]).unwrap();
+        let f = plan.probe_v6(0, 0, THEM, 80).unwrap().frame;
+        assert_eq!(&f[0..6], &V6_HOP);
     }
 }

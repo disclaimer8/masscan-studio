@@ -1,0 +1,22 @@
+<?xml version="1.0"?>
+<!-- masscan v1.0 scan -->
+<?xml-stylesheet href="http://nmap.org/svn/docs/nmap.xsl" type="text/xsl"?>
+<nmaprun scanner="masscan" start="1794397918" version="1.0-BETA"  xmloutputversion="1.03">
+<scaninfo type="syn" protocol="tcp" />
+<host endtime="1700014400"><address addr="2001:db8::1" addrtype="ipv6"/><ports><port protocol="tcp" portid="80"><state state="open" reason="syn-ack" reason_ttl="64"/></port></ports></host>
+<host endtime="1700014400"><address addr="192.0.2.1" addrtype="ipv4"/><ports><port protocol="tcp" portid="80"><state state="open" reason="syn-ack" reason_ttl="64"/></port></ports></host>
+<host endtime="1700014401"><address addr="2001:db8::1:0:0:1" addrtype="ipv6"/><ports><port protocol="tcp" portid="22"><state state="open" reason="syn-ack" reason_ttl="128"/></port></ports></host>
+<host endtime="1700014401"><address addr="::" addrtype="ipv6"/><ports><port protocol="tcp" portid="0"><state state="open" reason="syn-ack" reason_ttl="0"/></port></ports></host>
+<host endtime="1700014403"><address addr="fe80::1" addrtype="ipv6"/><ports><port protocol="tcp" portid="8080"><state state="open" reason="none" reason_ttl="64"/></port></ports></host>
+<host endtime="1700014403"><address addr="ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff" addrtype="ipv6"/><ports><port protocol="tcp" portid="47001"><state state="open" reason="fin-syn-rst-psh-ack-urg-ece-cwr" reason_ttl="1"/></port></ports></host>
+<host endtime="1700014404"><address addr="2001:db8::" addrtype="ipv6"/><ports><port protocol="tcp" portid="53"><state state="open" reason="syn-ack" reason_ttl="60"/></port></ports></host>
+<host endtime="1700014405"><address addr="2001:db8::53" addrtype="ipv6"/><ports><port protocol="udp" portid="53"><state state="open" reason="none" reason_ttl="64"/></port></ports></host>
+<host endtime="1700014406"><address addr="2001:db8:2::2905" addrtype="ipv6"/><ports><port protocol="sctp" portid="2905"><state state="open" reason="none" reason_ttl="64"/></port></ports></host>
+<host endtime="1700014407"><address addr="2001:db8:3::1" addrtype="ipv6"/><ports><port protocol="icmp" portid="0"><state state="open" reason="none" reason_ttl="128"/></port></ports></host>
+<host endtime="1700014407"><address addr="192.0.2.3" addrtype="ipv4"/><ports><port protocol="tcp" portid="22"><state state="open" reason="syn-ack" reason_ttl="57"/></port></ports></host>
+<host endtime="1700014408"><address addr="2a03:9060::400:0:0:0:2" addrtype="ipv6"/><ports><port protocol="tcp" portid="443"><state state="open" reason="syn-ack" reason_ttl="57"/></port></ports></host>
+<runstats>
+<finished time="1794397918" timestr="2026-11-11 11:51:58" elapsed="0" />
+<hosts up="9" down="0" total="9" />
+</runstats>
+</nmaprun>

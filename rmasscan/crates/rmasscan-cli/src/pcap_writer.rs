@@ -29,6 +29,8 @@ pub const FILE_HEADER: [u8; 24] = [
 pub struct PcapTarget {
     pub ip_first: u32,
     pub ip_last: u32,
+    /// Адрес источника IPv6 адаптера (`src.ipv6`, один адрес, `stack-src.c:13-14`); `None` у скана без целей IPv6.
+    pub ipv6: Option<u128>,
     pub port_first: u16,
     pub port_last: u16,
 }
@@ -71,8 +73,12 @@ impl PcapWriter {
     }
 
     /// Адресован ли кадр одному из наших адаптеров: Ethernet/IPv4, не фрагмент, TCP, адрес назначения в диапазоне
-    /// `adapter-ip` и порт назначения в `source_ports` (`main.c:829, 935`).
+    /// `adapter-ip` и порт назначения в `source_ports` (`main.c:829, 935`); либо Ethernet/IPv6 (после необязательного
+    /// Hop-by-Hop, как приёмник), TCP, адрес назначения это `source_ipv6` адаптера.
     pub fn is_ours(&self, frame: &[u8]) -> bool {
+        if frame.len() <= MAX_FRAME && frame.get(12..14) == Some(&[0x86, 0xdd][..]) {
+            return self.is_ours_v6(frame);
+        }
         if frame.len() > MAX_FRAME || frame.len() < 14 + 20 + 4 || frame[12..14] != [0x08, 0x00] {
             return false;
         }
@@ -88,6 +94,37 @@ impl PcapWriter {
         self.targets.iter().any(|t| {
             (t.ip_first..=t.ip_last).contains(&dst) && (t.port_first..=t.port_last).contains(&port)
         })
+    }
+
+    /// IPv6: `next_header` TCP (6) сразу или после одного Hop-by-Hop (0, длина `(len + 1) * 8`, RFC 8200, как
+    /// `receive.rs`), адрес назначения это `source_ipv6` адаптера, порт назначения в `source_ports`.
+    fn is_ours_v6(&self, frame: &[u8]) -> bool {
+        const IP: usize = 14;
+        let Some(ip) = frame.get(IP..IP + 40) else {
+            return false;
+        };
+        if ip[0] >> 4 != 6 {
+            return false;
+        }
+        let (mut next, mut l4) = (ip[6], IP + 40);
+        if next == 0 {
+            let Some(ext) = frame.get(l4..l4 + 2) else {
+                return false;
+            };
+            next = ext[0];
+            l4 += (usize::from(ext[1]) + 1) * 8;
+        }
+        let Some(port) = frame.get(l4 + 2..l4 + 4) else {
+            return false;
+        };
+        if next != 6 {
+            return false;
+        }
+        let dst = u128::from_be_bytes(ip[24..40].try_into().expect("16 bytes"));
+        let port = u16::from_be_bytes([port[0], port[1]]);
+        self.targets
+            .iter()
+            .any(|t| t.ipv6 == Some(dst) && (t.port_first..=t.port_last).contains(&port))
     }
 
     /// Записывает кадр, если он наш: 16 байт LE `[ts_sec, ts_usec, incl_len, orig_len]` и сам кадр
@@ -173,6 +210,7 @@ mod tests {
 
     fn one(ip_last: u32) -> Vec<PcapTarget> {
         vec![PcapTarget {
+            ipv6: None,
             ip_first: ME,
             ip_last,
             port_first: 40000,
@@ -246,11 +284,50 @@ mod tests {
         );
     }
 
+    /// IPv6 (T5): кадр на `source_ipv6` адаптера и порт `source_ports`, TCP сразу или после Hop-by-Hop (как
+    /// приёмник), попадает в захват; чужой адрес, чужой порт, не TCP и адаптер без IPv6 нет; IPv4 как раньше.
+    #[test]
+    fn ipv6_frames_to_our_source_ipv6_and_port_are_recorded() {
+        const ME6: u128 = 0x2001_0db8_0001_0000_0000_0000_0000_0005;
+        let frame6 = |dst: u128, port: u16, hbh: bool| {
+            let mut f = vec![0u8; 14 + 40];
+            f[12..14].copy_from_slice(&[0x86, 0xdd]);
+            f[14] = 0x60;
+            f[14 + 24..14 + 40].copy_from_slice(&dst.to_be_bytes());
+            if hbh {
+                f[14 + 6] = 0;
+                f.extend_from_slice(&[6, 0, 0, 0, 0, 0, 0, 0]);
+            } else {
+                f[14 + 6] = 6;
+            }
+            let mut tcp = [0u8; 20];
+            tcp[2..4].copy_from_slice(&port.to_be_bytes());
+            f.extend_from_slice(&tcp);
+            f
+        };
+        let mem = Mem::default();
+        let mut t = one(ME);
+        t[0].ipv6 = Some(ME6);
+        let w = writer(&mem, t);
+        assert!(w.is_ours(&frame6(ME6, 40000, false)));
+        assert!(w.is_ours(&frame6(ME6, 40015, true)));
+        assert!(!w.is_ours(&frame6(ME6 + 1, 40000, false)));
+        assert!(!w.is_ours(&frame6(ME6, 40016, false)));
+        let mut udp = frame6(ME6, 40000, false);
+        udp[14 + 6] = 17;
+        assert!(!w.is_ours(&udp));
+        assert!(!w.is_ours(&frame6(ME6, 40000, false)[..57]), "port cut off");
+        assert!(w.is_ours(&frame(ME, 40000, 60)));
+        let v4_only = writer(&Mem::default(), one(ME));
+        assert!(!v4_only.is_ours(&frame6(ME6, 40000, false)));
+    }
+
     /// Несколько адаптеров: кадр нужен, если он адресован любому из них.
     #[test]
     fn several_adapters_share_one_writer() {
         let mem = Mem::default();
         let other = PcapTarget {
+            ipv6: None,
             ip_first: ME + 100,
             ip_last: ME + 100,
             port_first: 50000,

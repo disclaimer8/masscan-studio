@@ -799,6 +799,82 @@ RMASSCAN_LAB_BIN=$PWD/target/release/rmasscan-lab bash scripts/wire-lab.sh --sui
 target/release/rmasscan-lab protocols-verify --dir "$OUT" --out "$OUT/verdict.json"
 ```
 
+## IPv6 suite
+
+TCP SYN поверх IPv6 (только TCP, П1 спеки) на стенде autodetect; принято живьём 2026-11-12 на коде `e9eaebeb`: `linux-ipv6-r2`
+**PASS 4/4** (три кейса и манифест, 286 проверок), вердикт и повторы в
+`docs/experiments/2026-11-08-rmasscan-ipv6-acceptance.md`. Повторено после слияния с main: `linux-ipv6-r3` **PASS 4/4** на
+`0ce2a9e8` (те же 286 проверок, раздел 11 отчёта).
+`wire-lab.sh --suite ipv6` сначала выключает IPv6 везде, как для прочих наборов (строки `disable_ipv6=1` общие и не
+менялись), затем только для этого набора включает его на `veth-a`, `veth-b` и `lo` двух netns: без DAD, без RS/RA,
+без форвардинга, link-local по EUI-64 (`IPV6_SETTINGS` = `capture::IPV6_SYSCTLS`). Сканер `fd00:198:18::1/64`, пиры
+`fd00:198:18::2`-`::5/64`, IPv6-маршрут сканера по умолчанию через link-local пира `fe80::aa:ff:fe00:2` (NS rmasscan
+идёт с глобального адреса на link-local роутера), затем ожидание 3 с.
+
+**Постоянные соседи IPv6 с обеих сторон, включая link-local (`1abae2aa`).** У сканера постоянными записаны четыре адреса
+пиров и link-local пира `fe80::aa:ff:fe00:2` (он же роутер), у пира адрес сканера и link-local сканера
+`fe80::aa:ff:fe00:1`. Печать `capture isolation --mode ipv6` (`check_ipv6_side`) теперь ТРЕБУЕТ обе link-local записи, и
+стенд без них отказывает до первого кадра. Причина найдена живьём (r1): без них ядро сканера выучивало роутера, когда
+`ip -6 route get` пробовал маршрут, и NUD позже слал unicast NS внутри шагов `v03` (то же с ядром пира для link-local
+сканера); постоянные записи убирают любой NS ядер из шага. Резолвер rmasscan таблицу соседей ядра не читает, поэтому NDP
+rmasscan остаётся на проводе (NS видна в каждом шаге v01 и v02, её число равно числу в строке `ndp:`). Ответчик слушает 80 и 8080 и на IPv6 (`capture responder --tcp6-ips`); suite
+читает IPv6 сторон перед стартом и перед каждым кейсом (`ipv6-stack.json`), адрес tentative это NOT RUN.
+
+**Что показал живой прогон (`linux-ipv6-r2`, `e9eaebeb`).** Ожидания 7a подтверждены, кроме одного места, исправленного по
+ходу (r1 на `cbcffe72` остановлен на первом же окне, INVALID 3 из 3, причины и три правки в отчёте приёмки):
+- sysctl стенда (`disable_ipv6=0`, `accept_dad=0`, `accept_ra=0`, `router_solicitations=0`, `forwarding=0`, `addr_gen_mode=0`),
+  адреса без tentative и постоянные соседи: подтверждено; link-local соседи исправлены (`1abae2aa`, выше);
+- ядра сторон не шлют NS, отчёты MLD о новых группах кончаются за 3 с ожидания: ни одного кадра класса `STAND_NOISE` (граница
+  0) ни в одном из 10 шагов; в r1 именно здесь были кадры NUD;
+- вывод iproute2 JSON настоящий, лишних маршрутов main-таблицы ядра 7.0 нет: у сканера ровно `default via
+  fe80::aa:ff:fe00:2`, `fd00:198:18::/64`, `fe80::/64`, у пира два последних, печать прошла (iproute2 6.19.0);
+- `--tcp6-ips`: слушатели ответчика работают на пире, все 10 `responder.json` чистые (`exited_with`, `killed_by_signal`,
+  `state_unknown` null), TCP 80 и 8080 открыты, остальное закрыто ядром пира, записи open IPv6 в документах есть;
+- пир отвечает на NS ровно одной NA формы Linux (S|O, TLLA, 86 байт), так судит `is_stand_na`;
+- C-оракул принимает `--adapter-ip fd00:198:18::1` и шлёт те же SYN; RS у него ни разу не ушёл (RS это `STAND_NOISE`,
+  граница 0, `{}` и на шагах оракула) при заданном `--router-mac-ipv6`;
+- NS rmasscan: с `fd00:198:18::1` на `ff02::1:ff00:2` для `fe80::aa:ff:fe00:2` (86 байт), число равно `ndp: N requests`,
+  не больше `NEXT_HOP_NS_MAX` (10);
+- инвариант v4 (П14 спеки) в кейсе `v02`: на обоих шагах rmasscan проверки «v4-order invariant, bytes» и «…, order: IPv6 takes the
+  low shuffled indices (`shuffle(i) < range_ipv6`, `main.c:258–260`)» присутствуют и прошли.
+
+| Кейс | Документы | Что доказывает (живые числа r2) |
+|---|---|---|
+| `v01_ndp_and_tcp6_syn` | `-oJ`, `-oB` | 1-10 NS резолвера (столько, сколько в `(ndp: N requests`) для `fe80::aa:ff:fe00:2`, SYN равны плану и C; вживую 1 NS и одна NA на неё |
+| `v02_mixed_v4_v6` | `-oB` (6, 7, 10, 11), `-oL` | ARP и NDP; инвариант v4: байты IPv4-зондов равны плану только IPv4, IPv6 в нижних перемешанных индексах; вживую 1 ARP who-has и 1 NS |
+| `v03_explicit_router_mac_ipv6` | `-oJ` | `--router-mac-ipv6`: ни одного NS, зонды на заданный MAC; вживую 0 NS |
+
+Argv оракула это argv rmasscan плюс `--adapter-ip fd00:198:18::1` (C не берёт ULA источником, `rawsock-getip6.c:68-71`) и
+`--router-mac-ipv6 02-aa-00-00-00-02` (C ищет роутер RS/RA, Linux-пир RA не шлёт); цели IPv6 в скобках (`[a]-[b]`, обе
+программы принимают); ожидание `--wait 3`.
+`ipv6-verify --dir DIR` (0 PASS, 1 FAIL, 2 INVALID или NOT RUN) судит по правилам протоколов общим кодом
+`pair_verify.rs`: классы кадров сканера с границами (`SCANNER_CLASSES`), шум ядер `STAND_NOISE` с границей 0 (INVALID,
+даже с MAC сканера), отклонения по имени (`ndp-ns-not-rs`, `oracle-source-given`, `ipv6-ttl-not-compared`,
+`families-one-interface`, их условие проверяется на стороне оракула), TTL записей IPv6 с C не сравнивается.
+
+**Класс `rst_to_rst` (`f346a66b`).** C сбрасывает каждый различный ответ, прошедший cookie и дедупликацию, и RST стенда
+тоже, и SYN-ACK (`main.c:1048-1101`: `TCP_IS_SYNACK || TCP_IS_RST`, затем `tcp_send_RST`). Класс допускает кадр с адреса
+сканера с флагами TCP ровно `0x04` и seq, равным ack RST стенда (78 байт по IPv6, окно 1200, опция MSS шаблона; на IPv4 в
+`v02` виден тоже). Граница: не больше одного на различный RST стенда на шаге оракула (вживую 4 из 4, в `v02` 8 из 8); у
+rmasscan 0 из 0, там тот же кадр это FAIL. Только оракул; верификатор протоколов не менялся (на его стенде нет закрытого порта TCP). Формулировка
+«Кадры стороны сканера» раздела Protocols suite отдельная и не менялась.
+
+**32-битный TTL записи IPv6 в `-oJ` C (`e9eaebeb`, `IPV6_DOC_RULE`).** C печатает `"ttl": %u` от `ip_ttl`, который он
+задаёт только для IPv4 (`proto-preprocess.c:127`), поэтому у записи IPv6 стоит устаревшее 32-битное число (вживую 320995840 и
+2497958912); `-oB` хранит младший байт. Документы оракула разбираются с TTL до `u32` для записей IPv6 (в имени проверки
+«an IPv6 record's ttl may be any 32-bit value … ipv6-ttl-not-compared» и в `notes.deviations`); TTL в документе rmasscan
+остаётся байтом (большее значение это его FAIL), значение с C не сравнивается.
+
+Не запускалось: macOS и link-local цели на macOS, Windows IPv6 (на lab-NIC гостя IPv6 выключен исправлением стенда, П14 спеки), физические NIC, Studio `cargo xtask build` и живые окна Studio (офлайн-шаг `cargo xtask test` прогнан в r3, раздел 11 отчёта приёмки).
+
+```sh
+cargo build --locked --release -p rmasscan-lab -p rmasscan-cli
+OUT=$(mktemp -d /tmp/rmasscan-out.XXXXXX)/ipv6-out/linux-ipv6-r1
+RMASSCAN_LAB_BIN=$PWD/target/release/rmasscan-lab bash scripts/wire-lab.sh --suite ipv6 \
+  --oracle "$HOME/rmasscan-oracle/masscan/bin/masscan" --rmasscan target/release/rmasscan --out "$OUT"
+target/release/rmasscan-lab ipv6-verify --dir "$OUT" --out "$OUT/verdict.json"
+```
+
 ## Privacy scan before committing evidence
 
 `rmasscan-lab privacy-scan --dir DIR [--forbid TOKEN]...` is a **mandatory step before any evidence directory is copied into
@@ -806,7 +882,7 @@ the repository**. It stands outside every verdict, so the verifiers' rules and t
 parses every `.pcap` and `.pcapng` under DIR and reports any mDNS (UDP 5353), LLMNR (5355) or NBNS (137) frame: a guest
 OS announces its own host name on the lab NIC with them, and the pcap rules of `autodetect-verify` allow OS frames.
 The names are decoded from DNS wire form (length-prefixed labels, compression pointers, names inside PTR/CNAME/NS/SRV
-data, NetBIOS names) and printed masked (first three characters and an ellipsis) with the file and the frame number; a
+data, NetBIOS names, and, since the IPv6 stage, names carried by ICMPv6: RA DNSSL and Node Information) and printed masked (first three characters and an ellipsis) with the file and the frame number; a
 text search for `_tcp.local` cannot find them. Every other file is searched as text, and every capture as raw bytes,
 for the tokens given with `--forbid` (repeatable; the operator passes the real host names and accounts on the command
 line, so no real name lives in the repository). A `--forbid` token shorter than 4 bytes is refused with exit 2 and a

@@ -4,7 +4,7 @@
 use std::io::{self, Write};
 
 use super::formats::{FileCtx, Formatter};
-use super::record::{MASSCAN_VERSION, Proto, Record, civil, proto_str, status_str};
+use super::record::{CIp, MASSCAN_VERSION, Proto, Record, civil, proto_str, status_str};
 use rmasscan_core::targets::{
     TEMPL_OPROTO_FIRST, TEMPL_OPROTO_LAST, TEMPL_SCTP, TEMPL_SCTP_LAST, TEMPL_TCP, TEMPL_TCP_LAST,
     TEMPL_UDP, TEMPL_UDP_LAST,
@@ -88,7 +88,7 @@ impl Formatter for Grepable {
             w,
             "Timestamp: {}\tHost: {} ()\tPorts: {}/{}/{}//{}//",
             r.timestamp,
-            r.ip,
+            CIp(r.ip),
             r.port,
             status_str(r.status),
             proto_str(r.proto),
@@ -115,7 +115,7 @@ impl Formatter for Unicornscan {
             return writeln!(
                 w,
                 "Host: {} ()\tPorts: {}/{}/{}////",
-                r.ip,
+                CIp(r.ip),
                 r.port,
                 status_str(r.status),
                 proto_str(r.proto)
@@ -127,7 +127,7 @@ impl Formatter for Unicornscan {
             status_str(r.status),
             cx.services.tcp(r.port),
             r.port,
-            r.ip,
+            CIp(r.ip),
             r.ttl
         )
     }
@@ -148,7 +148,7 @@ mod tests {
     fn rec(port: u16, ttl: u8) -> Record {
         Record {
             timestamp: 1_700_000_000,
-            ip: Ipv4Addr::new(1, 2, 3, 4),
+            ip: Ipv4Addr::new(1, 2, 3, 4).into(),
             port,
             proto: Proto::Tcp,
             status: Status::Open,

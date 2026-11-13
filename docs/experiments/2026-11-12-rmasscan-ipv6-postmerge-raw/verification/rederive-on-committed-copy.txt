@@ -1,0 +1,15 @@
+# re-derivation on the committed copy (docs/experiments/2026-11-12-rmasscan-ipv6-postmerge-raw), 2026-11-12T20:32:14Z
+# verifier: the Mac rmasscan-lab of C (sha256 218ac96bc0c4a54740d300b6106079523a21b2dc394fdc4553cd184c64dcc44d)
+linux-ipv6-r3: hashes-before-copy.txt ok 3, mismatch 0
+linux-protocols-r3: hashes-before-copy.txt ok 5, mismatch 0
+linux-scan-control-r3: hashes-before-copy.txt ok 6, mismatch 0
+linux-output-r3: hashes-before-copy.txt ok 17, mismatch 0
+linux-autodetect-r3: hashes-before-copy.txt ok 12, mismatch 0
+windows-autodetect-r3: hashes-before-copy.txt ok 9, mismatch 0
+linux-ipv6-r3: ipv6-verify rc=0, overall: PASS {"FAIL":0,"INVALID":0,"NOT RUN":0,"PASS":4}; re-derived verdict.json byte-identical (sha256 87902aa705879cb29bf5873bf4751b3e5b0178215e4adf1912637fd53c0a325e, committed 87902aa705879cb29bf5873bf4751b3e5b0178215e4adf1912637fd53c0a325e)
+linux-protocols-r3: protocols-verify rc=0, overall: PASS {"FAIL":0,"INVALID":0,"NOT RUN":0,"PASS":6}; re-derived verdict.json byte-identical (sha256 abe525f1bab736145bdd79061cd38025ed9efc3c5b5bfe12a660e185a35b950b, committed abe525f1bab736145bdd79061cd38025ed9efc3c5b5bfe12a660e185a35b950b)
+linux-scan-control-r3: scan-control-verify rc=0, overall: PASS {"FAIL":0,"INVALID":0,"NOT RUN":0,"PASS":7}; re-derived verdict.json byte-identical (sha256 39746e75fc0aba49902390c9ff78f43eb518eb3c46619e165259d9936ff9a2c4, committed 39746e75fc0aba49902390c9ff78f43eb518eb3c46619e165259d9936ff9a2c4)
+linux-output-r3: output-verify rc=0, overall: PASS {"FAIL":0,"INVALID":0,"NOT RUN":0,"PASS":18}; re-derived verdict.json byte-identical (sha256 d93f60540b44e94862da8ff8b9f96188879af6b2f528a8a6cd14a124c59e1565, committed d93f60540b44e94862da8ff8b9f96188879af6b2f528a8a6cd14a124c59e1565)
+linux-autodetect-r3: autodetect-verify rc=0, overall: PASS {"FAIL":0,"INVALID":0,"NOT RUN":0,"PASS":13}; re-derived verdict.json byte-identical (sha256 9e45233481687cc34344e55615e953a568590ea2035f6a048edf7a4b48fff0a5, committed 9e45233481687cc34344e55615e953a568590ea2035f6a048edf7a4b48fff0a5)
+windows-autodetect-r3: windows-verify rc=0, overall: PASS {"FAIL":0,"INVALID":0,"NOT RUN":0,"PASS":10}; re-derived verdict.json byte-identical (sha256 1f7aa5d9eecb7d3557b31bcd68523cfe5bb3b497a419ceedc20c562e9bbb2866, committed 1f7aa5d9eecb7d3557b31bcd68523cfe5bb3b497a419ceedc20c562e9bbb2866)
+# every run directory's hashes-before-copy.txt was also checked on the pulled and on the staged copy on the Mac (all matching); the five Linux verdicts re-derived on the Mac equal the minipc verdicts byte for byte

@@ -2421,6 +2421,7 @@ fn open_replies(b: &FakeBackend) -> Vec<Reply> {
             ttl: 64,
             ip_proto: 6,
             mac: None,
+            ip6: None,
         })
         .collect()
 }

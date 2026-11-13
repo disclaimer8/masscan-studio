@@ -14,7 +14,7 @@
 //!   wpcap.dll, и сохраняем пути, версии и SHA-256 обеих DLL.
 
 use std::ffi::{CStr, c_void};
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, Ipv6Addr};
 use std::os::windows::ffi::OsStrExt;
 use std::sync::Arc;
 
@@ -35,7 +35,7 @@ use super::loader::{
     ApiSlot, DllInfo, LoadFailure, Loader, Module, NpcapApi, npcap_dll_path, sha256_hex,
 };
 use crate::NetError;
-use crate::route_parse::{Fwd, WinAdapter};
+use crate::route_parse::{Fwd, Fwd6, WinAdapter};
 
 mod observation;
 pub(crate) use observation::{adapters_until, interfaces_until};
@@ -421,6 +421,148 @@ pub(crate) fn best_route_until(
     result
 }
 
+/// Адреса IPv6 списка `FirstUnicastAddress` по порядку с их `DadState` (`NL_DAD_STATE`).
+fn unicast_v6(
+    mut p: *mut windows_sys::Win32::NetworkManagement::IpHelper::IP_ADAPTER_UNICAST_ADDRESS_LH,
+) -> Vec<(Ipv6Addr, i32)> {
+    use windows_sys::Win32::Networking::WinSock::{AF_INET6, SOCKADDR_IN6};
+
+    let mut out = Vec::new();
+    while !p.is_null() {
+        // SAFETY: p это узел списка unicast внутри живого буфера адаптеров; Next ведёт в тот же буфер или NULL; в
+        // узле только целые, объединения целых и указатели.
+        let u = unsafe { &*p };
+        let sa = u.Address.lpSockaddr;
+        if !sa.is_null()
+            && usize::try_from(u.Address.iSockaddrLength)
+                .is_ok_and(|len| len >= std::mem::size_of::<SOCKADDR_IN6>())
+        {
+            // SAFETY: sa не null и указывает на iSockaddrLength >= sizeof(SOCKADDR_IN6) байт (длина неотрицательна)
+            // внутри буфера; read_unaligned не предполагает выравнивания.
+            let sin6 = unsafe { sa.cast::<SOCKADDR_IN6>().read_unaligned() };
+            if sin6.sin6_family == AF_INET6 {
+                // SAFETY: IN6_ADDR это объединение целых представлений одних 16 байт.
+                let bytes = unsafe { sin6.sin6_addr.u.Byte };
+                out.push((Ipv6Addr::from(bytes), u.DadState));
+            }
+        }
+        p = u.Next;
+    }
+    out
+}
+
+/// Адаптер `GetAdaptersAddresses(AF_INET6)`: `AdapterName` (`{GUID}`) и его адреса IPv6 с `DadState` по порядку.
+pub(crate) struct Adapter6 {
+    pub name: String,
+    pub addrs: Vec<(Ipv6Addr, i32)>,
+}
+
+/// Адреса IPv6 адаптеров (`GetAdaptersAddresses(AF_INET6)`, как C `rawsock-getip6.c:114-119`). Только чтение;
+/// адаптеров без IPv6 нет в списке.
+pub(crate) fn adapters6() -> Result<Vec<Adapter6>, NetError> {
+    use windows_sys::Win32::Networking::WinSock::AF_INET6;
+
+    let Some(buf) = adapters_buffer(u32::from(AF_INET6))
+        .map_err(|e| NetError::System(format!("GetAdaptersAddresses(AF_INET6) error {e}")))?
+    else {
+        return Ok(Vec::new());
+    };
+    Ok(adapter_nodes(&buf)
+        .into_iter()
+        .map(|a| Adapter6 {
+            name: ansi_string(a.AdapterName).unwrap_or_default(),
+            addrs: unicast_v6(a.FirstUnicastAddress),
+        })
+        .collect())
+}
+
+/// Строка `MIB_IPFORWARD_ROW2` IPv6 → [`Fwd6`] (как [`fwd_from_row`]).
+///
+/// # Safety
+/// `p` указывает на строку, заполненную IP Helper и живую на время вызова.
+unsafe fn fwd6_from_row(
+    p: *const windows_sys::Win32::NetworkManagement::IpHelper::MIB_IPFORWARD_ROW2,
+) -> Fwd6 {
+    use windows_sys::Win32::Networking::WinSock::AF_INET6;
+
+    // SAFETY: по контракту функции p валиден. Поля читаются по месту: целые как есть; объединение NextHop сначала по
+    // общему полю si_family, затем как IPv6 (байты адреса); BOOLEAN Loopback как u8.
+    unsafe {
+        let next_hop = &raw const (*p).NextHop;
+        let gateway = if (*next_hop).si_family == AF_INET6 {
+            Ipv6Addr::from((*next_hop).Ipv6.sin6_addr.u.Byte)
+        } else {
+            Ipv6Addr::UNSPECIFIED
+        };
+        Fwd6 {
+            ifindex: (*p).InterfaceIndex,
+            prefix_len: (*p).DestinationPrefix.PrefixLength,
+            next_hop: gateway,
+            metric: (*p).Metric,
+            mib_loopback: (&raw const (*p).Loopback).cast::<u8>().read() != 0,
+            loopback_if: false,
+        }
+    }
+}
+
+/// Лучший маршрут IPv6 к `dst` (`GetBestRoute2` `AF_INET6`) и `BestSourceAddress`; `None`, если маршрута нет. Только
+/// чтение.
+pub(crate) fn best_route6(dst: Ipv6Addr) -> Result<Option<(Fwd6, Option<Ipv6Addr>)>, NetError> {
+    use windows_sys::Win32::Foundation::{
+        ERROR_HOST_UNREACHABLE, ERROR_NETWORK_UNREACHABLE, ERROR_NOT_FOUND, NO_ERROR,
+    };
+    use windows_sys::Win32::NetworkManagement::IpHelper::{GetBestRoute2, MIB_IPFORWARD_ROW2};
+    use windows_sys::Win32::Networking::WinSock::{
+        AF_INET6, IN6_ADDR, IN6_ADDR_0, SOCKADDR_IN6, SOCKADDR_INET,
+    };
+
+    let sin6 = SOCKADDR_IN6 {
+        sin6_family: AF_INET6,
+        sin6_addr: IN6_ADDR {
+            u: IN6_ADDR_0 { Byte: dst.octets() },
+        },
+        ..Default::default()
+    };
+    // Как у `best_route` (IPv4): объединение пишется полем, остальные байты нулевые.
+    let mut to = SOCKADDR_INET::default();
+    to.Ipv6 = sin6;
+    let mut row = std::mem::MaybeUninit::<MIB_IPFORWARD_ROW2>::zeroed();
+    let mut source = SOCKADDR_INET::default();
+    // SAFETY: `to` и `source` живые локальные объекты; `row` это обнулённый буфер ровно этого типа; NULL
+    // InterfaceLuid и SourceAddress (индекс 0) документированы как необязательные.
+    let rc = unsafe {
+        GetBestRoute2(
+            std::ptr::null(),
+            0,
+            std::ptr::null(),
+            &to,
+            0,
+            row.as_mut_ptr(),
+            &mut source,
+        )
+    };
+    match rc {
+        NO_ERROR => {}
+        ERROR_NOT_FOUND | ERROR_NETWORK_UNREACHABLE | ERROR_HOST_UNREACHABLE => return Ok(None),
+        e => {
+            return Err(NetError::System(format!(
+                "GetBestRoute2(AF_INET6) error {e}"
+            )));
+        }
+    }
+    // SAFETY: SOCKADDR_INET это объединение с общим полем si_family; вариант Ipv6 читается только при AF_INET6, его
+    // адрес это 16 байт целых.
+    let best_source = unsafe {
+        if source.si_family == AF_INET6 {
+            Some(Ipv6Addr::from(source.Ipv6.sin6_addr.u.Byte))
+        } else {
+            None
+        }
+    };
+    // SAFETY: при NO_ERROR API заполнил `row`, который жив до конца функции.
+    Ok(Some((unsafe { fwd6_from_row(row.as_ptr()) }, best_source)))
+}
+
 /// Таблица IP Helper, освобождаемая `FreeMibTable` ровно один раз.
 struct MibTable(*mut windows_sys::Win32::NetworkManagement::IpHelper::MIB_IPFORWARD_TABLE2);
 
@@ -465,6 +607,47 @@ pub(crate) fn forward_table() -> Result<Vec<Fwd>, NetError> {
     for i in 0..n {
         // SAFETY: i < NumEntries, строка лежит внутри живого выделения таблицы.
         out.push(unsafe { fwd_from_row(base.add(i)) });
+    }
+    Ok(out)
+}
+
+/// Все маршруты IPv6 (`GetIpForwardTable2(AF_INET6)`). Только чтение.
+pub(crate) fn forward_table6() -> Result<Vec<Fwd6>, NetError> {
+    use windows_sys::Win32::Foundation::{ERROR_NOT_FOUND, NO_ERROR};
+    use windows_sys::Win32::NetworkManagement::IpHelper::{
+        GetIpForwardTable2, MIB_IPFORWARD_ROW2, MIB_IPFORWARD_TABLE2,
+    };
+    use windows_sys::Win32::Networking::WinSock::AF_INET6;
+
+    let mut t: *mut MIB_IPFORWARD_TABLE2 = std::ptr::null_mut();
+    // SAFETY: выходной указатель на живой локальный объект; при успехе API выделяет таблицу, которую освобождает
+    // `MibTable`.
+    let rc = unsafe { GetIpForwardTable2(AF_INET6, &mut t) };
+    match rc {
+        NO_ERROR => {}
+        ERROR_NOT_FOUND => return Ok(Vec::new()),
+        e => {
+            return Err(NetError::System(format!(
+                "GetIpForwardTable2(AF_INET6) error {e}"
+            )));
+        }
+    }
+    if t.is_null() {
+        return Ok(Vec::new());
+    }
+    let table = MibTable(t);
+    // SAFETY: table.0 это таблица, выделенная API и живая до конца `table`; NumEntries строк лежат подряд с
+    // `Table[0]` в том же выделении.
+    let (n, base) = unsafe {
+        (
+            (*table.0).NumEntries as usize,
+            (&raw const (*table.0).Table).cast::<MIB_IPFORWARD_ROW2>(),
+        )
+    };
+    let mut out = Vec::with_capacity(n);
+    for i in 0..n {
+        // SAFETY: i < NumEntries, строка лежит внутри живого выделения таблицы.
+        out.push(unsafe { fwd6_from_row(base.add(i)) });
     }
     Ok(out)
 }

@@ -547,6 +547,40 @@ pub fn reply_to_syn(syn: &[u8], flags: u8) -> Option<Vec<u8>> {
     Some(f)
 }
 
+/// [`reply_to_syn`] для нашего SYN поверх IPv6 (Ethernet `86dd`, без заголовков расширения): адреса и порты
+/// меняются местами, ack = seqno + 1, hop limit 64, сумма TCP по RFC 8200. `None`, если вход не наш IPv6 SYN.
+pub fn reply_to_syn6(syn: &[u8], flags: u8) -> Option<Vec<u8>> {
+    if syn.len() < 14 + 40 + 20 || syn[12..14] != [0x86, 0xdd] || syn[14 + 6] != 6 {
+        return None;
+    }
+    let ip = &syn[14..54];
+    let tcp = &syn[54..74];
+    let src = u128::from_be_bytes(ip[8..24].try_into().ok()?);
+    let dst = u128::from_be_bytes(ip[24..40].try_into().ok()?);
+    let seq = u32::from_be_bytes(tcp[4..8].try_into().ok()?);
+    let mut t = vec![0u8; 20];
+    t[0..2].copy_from_slice(&tcp[2..4]);
+    t[2..4].copy_from_slice(&tcp[0..2]);
+    t[4..8].copy_from_slice(&0x0bad_f00du32.to_be_bytes());
+    t[8..12].copy_from_slice(&seq.wrapping_add(1).to_be_bytes());
+    t[12] = 5 << 4;
+    t[13] = flags;
+    t[14..16].copy_from_slice(&1024u16.to_be_bytes());
+    let c = rmasscan_core::checksum::checksum_ipv6(dst, src, 6, &t);
+    t[16..18].copy_from_slice(&c.to_be_bytes());
+    let mut f = Vec::with_capacity(74);
+    f.extend_from_slice(&syn[6..12]);
+    f.extend_from_slice(&syn[0..6]);
+    f.extend_from_slice(&[0x86, 0xdd]);
+    f.extend_from_slice(&[0x60, 0, 0, 0]);
+    f.extend_from_slice(&20u16.to_be_bytes());
+    f.extend_from_slice(&[6, 64]);
+    f.extend_from_slice(&dst.to_be_bytes()); // от цели к нам
+    f.extend_from_slice(&src.to_be_bytes());
+    f.extend_from_slice(&t);
+    Some(f)
+}
+
 /// Строит Echo Reply (type 0, Ethernet/IPv4/ICMP, верные суммы) на наш Echo Request: адреса и MAC меняются
 /// местами, `[id|seq]` и паттерн копируются (как делает настоящий хост). `id_seq_xor` портит cookie
 /// (0 оставляет верный). `None`, если вход не Ethernet/IPv4/ICMP Echo Request.

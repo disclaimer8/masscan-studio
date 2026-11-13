@@ -1,0 +1,10 @@
+{
+  "tag": "o10_list_stdout",
+  "kind": "scan",
+  "format": "list",
+  "target": "stdout",
+  "show_closed": false,
+  "stdout": "document",
+  "status": "text",
+  "oracle": true
+}

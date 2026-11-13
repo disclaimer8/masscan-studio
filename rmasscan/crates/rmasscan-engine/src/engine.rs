@@ -24,9 +24,10 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
+use rmasscan_core::ndp::NDP_FRAME_LEN;
 use rmasscan_core::packet::LinkType;
 use rmasscan_core::probe::{NicBinding, PlanError, ProbeCursor, ReadyPlan};
-use rmasscan_core::receive::{PortStatus, Reply, parse_reply};
+use rmasscan_core::receive::{PortStatus, Reply, ndp_reply_for, parse_reply};
 use rmasscan_core::throttle::{Clock, SystemClock, Throttler};
 
 use crate::checkpoint::{CHECKPOINT_FORMAT_VERSION, Checkpoint, CheckpointError};
@@ -127,8 +128,11 @@ pub enum EngineError {
 
 // ---------------------------------------------------------------- dedup ---
 
-/// `(remote ip, remote port, local ip, local port, ip_proto, status_bucket)`.
-type DedupKey = (u32, u16, u32, u16, u8, u8);
+/// `(remote ip, remote port, local ip, local port, ip_proto, status_bucket, ipv6 remote+local)`. Последний элемент
+/// `None` у каждого IPv4-ответа, поэтому ключи IPv4 различаются ровно так же, как раньше; у IPv6-ответа
+/// (`remote_ip = local_ip = 0`) он несёт оба адреса целиком (`dedup_is_duplicate` в C принимает `ipaddress`,
+/// main.c:1067, и сравнивает версию и все 128 бит).
+type DedupKey = (u32, u16, u32, u16, u8, u8, Option<(u128, u128)>);
 
 /// Ограниченный dedup по кортежу (remote ip/port, local ip/port, протокол, корзина статуса). Протокол в ключе нужен,
 /// чтобы `80/tcp` и `80/udp` одного хоста не глушили друг друга. Корзина статуса разделяет для не-TCP ответ-датаграмму
@@ -188,6 +192,7 @@ impl DedupCache {
             r.local_port,
             r.ip_proto,
             bucket,
+            r.ip6.map(|a| (a.remote, a.local)),
         );
         if self.set.contains(&key) {
             return false;
@@ -358,6 +363,12 @@ struct Shared {
     /// Число рабочих потоков (TX + RX).
     threads: usize,
     queue: Queue,
+    /// Кадры Neighbor Advertisement от RX к TX своего адаптера (`stack_transmit_packetbuffer`, stack-queue.h:36:
+    /// RX форматирует ответ, отправляет TX). Пишет RX-поток адаптера, читает его TX-поток. Пусто и не читается у
+    /// адаптера без `source_ipv6`, поэтому путь IPv4 не меняется.
+    ndp_out: Vec<Mutex<VecDeque<[u8; NDP_FRAME_LEN]>>>,
+    /// `plan.nics()[k].source_ipv6.is_some()`: отвечает ли адаптер `k` на Neighbor Solicitation.
+    ndp_enabled: Vec<bool>,
     clock: Arc<dyn Clock + Send + Sync>,
     io_timeout: Duration,
     wait_micros: u64,
@@ -580,6 +591,33 @@ impl Drop for ExitGuard {
 /// be022ac). Значение можно пересмотреть после замеров на реальном адаптере.
 const WOULD_BLOCK_BACKOFF_MICROS: u64 = 1_000;
 
+/// Потолок очереди Neighbor Advertisement на адаптер: сосед, заваливший нас NS, не растит память без предела
+/// (лишний ответ отбрасывается, сосед переспросит).
+const NDP_OUT_CAP: usize = 64;
+
+/// Отправляет накопленные Neighbor Advertisement своего адаптера. Ответ необязательный: сосед переспросит, поэтому
+/// `WouldBlockUnsent`, `Uncertain` и ошибка адаптера скан не валят (ошибку отправки увидит следующий кадр
+/// скана) и кадр не повторяется.
+///
+/// Работа ограничена: вызов берёт снимок очереди один раз (RX, который кладёт дальше, не удерживает TX) и перед
+/// каждой отправкой спрашивает `keep_going`. Иначе заполненная очередь (`NDP_OUT_CAP`) на блокирующемся адаптере
+/// (до `timeout` на кадр) держала бы TX-поток секунды и нарушала контракт Stop/Pause <= 1 с и окно `TxStalled`.
+/// Остаток снимка при остановке отбрасывается. C ограничивает это пачкой throttle (main.c:478-486).
+fn flush_ndp(
+    queue: &Mutex<VecDeque<[u8; NDP_FRAME_LEN]>>,
+    keep_going: &dyn Fn() -> bool,
+    tx: &mut dyn Tx,
+    timeout: Duration,
+) {
+    let batch = std::mem::take(&mut *lock(queue));
+    for frame in batch {
+        if !keep_going() {
+            return;
+        }
+        let _ = tx.send(&frame, timeout);
+    }
+}
+
 fn run_tx(
     shared: Arc<Shared>,
     idx: usize,
@@ -618,7 +656,17 @@ fn run_tx(
     // между кадрами в него не входит, потому что к нему окно уже закрыто.
     let mut stall_since: Option<u64> = None;
 
+    // Только адаптер с адресом IPv6 отвечает на NS; у остальных (весь IPv4) путь не меняется.
+    let ndp = shared.ndp_enabled[idx];
     let end = 'run: loop {
+        if ndp {
+            flush_ndp(
+                &shared.ndp_out[idx],
+                &|| shared.halted() == RUN,
+                &mut *tx,
+                shared.io_timeout,
+            );
+        }
         // Конец последовательности сильнее паузы: next_index == range это
         // завершение, а не checkpoint с пустым остатком.
         // `--infinite` (`main.c:445-449`): конец прохода запускает следующий, пока не придёт команда остановки.
@@ -752,6 +800,25 @@ fn run_tx(
         }
     };
     shared.tx_ends[idx].store(end, Ordering::Release);
+    // Окно ожидания ответов после конца передачи: RX ещё принимает, и NS соседа, пришедший теперь, тоже должен
+    // получить NA (иначе роутер не вернёт нам ответы на последние зонды). TX живёт, пока RX не закончил.
+    if ndp {
+        loop {
+            let done = shared.rx_end() != END_RUNNING || shared.halted() >= STOP;
+            flush_ndp(
+                &shared.ndp_out[idx],
+                // Linger шлёт NA и после Pause: RX принимает до конца окна ожидания (main.c:470-493 сбрасывает
+                // очередь до `is_rx_done`); не шлёт только после Stop/Fail.
+                &|| shared.halted() < STOP,
+                &mut *tx,
+                shared.io_timeout,
+            );
+            if done {
+                break;
+            }
+            clock.sleep_micros(WOULD_BLOCK_BACKOFF_MICROS);
+        }
+    }
 }
 
 fn stall_fail(shared: &Shared, idle_micros: u64) {
@@ -813,24 +880,38 @@ fn run_rx(
                 {
                     sink(frame, clock.now_micros());
                 }
-                match parse_reply(frame, link, &plan) {
-                    Ok(Some(reply)) => {
-                        let fresh = lock(&dedup).insert(&reply);
-                        if !fresh {
-                            shared.duplicates.fetch_add(1, Ordering::Relaxed);
-                        } else if shared.queue.push_result(reply) {
-                            shared.received.fetch_add(1, Ordering::Relaxed);
-                        } else {
-                            // Ответ потерян, молча не теряем: останавливаем TX
-                            // и завершаемся Failed; принятое остаётся в очереди.
-                            shared.fail(FailReason::ConsumerTooSlow);
-                            break END_HALTED;
-                        }
+                // Neighbor Solicitation для нашего `source_ipv6` (main.c:829-840, :859): ответ идёт в TX, кадр не
+                // зонд и дальше не разбирается.
+                let na = if shared.ndp_enabled[idx] {
+                    ndp_reply_for(frame, link, &plan)
+                } else {
+                    None
+                };
+                if let Some(na) = na {
+                    let mut q = lock(&shared.ndp_out[idx]);
+                    if q.len() < NDP_OUT_CAP {
+                        q.push_back(na);
                     }
-                    // Не наш пакет, либо ЛЮБАЯ ошибка разбора: выбросить и
-                    // продолжать (см. контракт выше).
-                    Ok(None) | Err(_) => {
-                        shared.discarded.fetch_add(1, Ordering::Relaxed);
+                } else {
+                    match parse_reply(frame, link, &plan) {
+                        Ok(Some(reply)) => {
+                            let fresh = lock(&dedup).insert(&reply);
+                            if !fresh {
+                                shared.duplicates.fetch_add(1, Ordering::Relaxed);
+                            } else if shared.queue.push_result(reply) {
+                                shared.received.fetch_add(1, Ordering::Relaxed);
+                            } else {
+                                // Ответ потерян, молча не теряем: останавливаем TX
+                                // и завершаемся Failed; принятое остаётся в очереди.
+                                shared.fail(FailReason::ConsumerTooSlow);
+                                break END_HALTED;
+                            }
+                        }
+                        // Не наш пакет, либо ЛЮБАЯ ошибка разбора: выбросить и
+                        // продолжать (см. контракт выше).
+                        Ok(None) | Err(_) => {
+                            shared.discarded.fetch_add(1, Ordering::Relaxed);
+                        }
                     }
                 }
             }
@@ -1042,6 +1123,12 @@ impl Engine {
             exited: AtomicUsize::new(0),
             threads: 2 * count,
             queue,
+            ndp_out: (0..count).map(|_| Mutex::new(VecDeque::new())).collect(),
+            ndp_enabled: plan
+                .nics()
+                .iter()
+                .map(|n| n.source_ipv6.is_some())
+                .collect(),
             clock,
             io_timeout,
             wait_micros: u64::from(plan.effective().wait_secs()) * 1_000_000,
@@ -1655,6 +1742,99 @@ mod tests {
         }
     }
 
+    /// T5: R7 снят на всех входах, в том числе в плане RX адаптера `k > 0` (`rx_plan` перестраивает план через
+    /// `new_cli_with_payloads`). Два адаптера сканируют цели IPv6: каждый шлёт свои зонды IPv6 со своего источника,
+    /// и ответ на SYN адаптера B принимает только RX адаптера B.
+    #[test]
+    fn ipv6_targets_scan_on_every_adapter_including_rx_plans_for_k_above_zero() {
+        const ME: [u128; 2] = [
+            0xfd00_0000_0000_0000_0000_0000_0000_0063,
+            0xfd00_0000_0000_0000_0000_0000_0000_0064,
+        ];
+        let mut m = MassIp::new();
+        m.add_target_string("2001:db8::1-2001:db8::2").unwrap();
+        parse_ports(m.ports_mut(), "80,443").unwrap();
+        let cfg = ScanConfig {
+            targets: m,
+            seed: SEED,
+            max_rate: 1_000_000.0,
+            wait_secs: 1,
+            ..ScanConfig::default()
+        };
+        let eff = validate(&cfg, Operation::Scan).unwrap();
+        let nic = |k: usize| {
+            let mut n = NicBinding::from(AdapterBinding {
+                interface_id: format!("fake{k}"),
+                link_type: LinkType::Ethernet,
+                source_ipv4: 0,
+                source_mac: [0x02, 0, 0, 0, 0, 0x10 + k as u8],
+                next_hop_mac: [0; 6],
+                source_ports: (40000 + k as u16, 40000 + k as u16),
+            });
+            n.source_ipv6 = Some(ME[k]);
+            n.next_hop_mac_ipv6 = Some([0x02, 0, 0, 0, 0, 0x20]);
+            n
+        };
+        let plan = ReadyPlan::new_cli(eff, vec![nic(0), nic(1)]).unwrap();
+        let (rx_a, rx_b) = (rx_plan(&plan, 0).unwrap(), rx_plan(&plan, 1).unwrap());
+        let clock = ManualClock::new();
+        let fakes: Vec<FakeAdapter> = (0..2)
+            .map(|_| {
+                let f = FakeAdapter::new().with_clock(clock.clone());
+                f.set_responder(|syn| crate::fake::reply_to_syn6(syn, 0x12).into_iter().collect());
+                f
+            })
+            .collect();
+        let c: Arc<dyn Clock + Send + Sync> = clock.clone();
+        let h = Engine::start_cli_with_clock(
+            plan.clone(),
+            fakes.iter().map(FakeAdapter::pair).collect(),
+            EngineOptions::new([1; 16], [2; 16]),
+            c,
+            None,
+        )
+        .unwrap();
+        let mut replies = Vec::new();
+        let t = Instant::now();
+        loop {
+            match h.recv_event_timeout(Duration::from_millis(50)) {
+                Ok(Event::Results { replies: r }) => replies.extend(r),
+                Ok(Event::Finished { .. }) | Err(TryRecvError::Disconnected) => break,
+                Ok(_) => {}
+                Err(TryRecvError::Empty) => assert!(t.elapsed() < Duration::from_secs(10)),
+            }
+        }
+        h.join().unwrap();
+        let sent = |k: usize| fakes[k].sent_frames();
+        assert_eq!((sent(0).len(), sent(1).len()), (2, 2));
+        for (k, me) in ME.iter().enumerate() {
+            for f in sent(k) {
+                assert_eq!(&f[12..14], &[0x86, 0xdd], "adapter {k} sends IPv6");
+                assert_eq!(u128::from_be_bytes(f[22..38].try_into().unwrap()), *me);
+            }
+        }
+        assert_eq!(replies.len(), 4);
+        for (k, me) in ME.iter().enumerate() {
+            assert_eq!(
+                replies
+                    .iter()
+                    .filter(|r| r.ip6.map(|i| i.local) == Some(*me))
+                    .count(),
+                2,
+                "adapter {k}"
+            );
+        }
+        let link = LinkType::Ethernet;
+        for k in 0..2 {
+            for syn in sent(k) {
+                let reply = crate::fake::reply_to_syn6(&syn, 0x12).unwrap();
+                let accepted = |p: &ReadyPlan| matches!(parse_reply(&reply, link, p), Ok(Some(_)));
+                assert_eq!(accepted(&rx_a), k == 0, "RX A, reply to adapter {k}");
+                assert_eq!(accepted(&rx_b), k == 1, "RX B, reply to adapter {k}");
+            }
+        }
+    }
+
     /// T7 I-2: исчерпанный адаптер не тянет `resume-index` вниз. `--shard 1/2`, 3 адаптера, range 13: поток шарда 1
     /// это индексы {0,1,2,6,7,8,12}; адаптеры 1 ({1,7}) и 2 ({2,8}) заканчивают, адаптер 0 ({0,6,12}) встаёт после
     /// отправки 0 и 6. Сырой минимум дал бы `resume-index = 11` (индекс шарда 2), правильная база 12.
@@ -1767,5 +1947,250 @@ mod tests {
         }
         assert_eq!(stream0.len(), 3);
         assert_eq!(all[0], stream0[2], "the leftover probe is nic 0's index 12");
+    }
+
+    // ---- NDP: ответчик на входящий Neighbor Solicitation (IPv6, задача 4) ----
+
+    const NDP_ME: u128 = 0xfd00_0000_0000_0000_0000_0000_0000_0002;
+    const NDP_ME_MAC: [u8; 6] = [0, 0x11, 0x22, 0x33, 0x44, 0x55];
+    const NDP_ROUTER_MAC: [u8; 6] = [0x0a, 0xbb, 0xcc, 0xdd, 0xee, 0x01];
+    const NDP_ROUTER_IP: u128 = 0xfe80_0000_0000_0000_0000_0000_0000_abcd;
+
+    /// Скан IPv4 (порядок кадров замороженный) с `source_ipv6` адаптера: приёмник и ответчик NS от целей не
+    /// зависят (CLI ставит `source_ipv6` только при целях IPv6; здесь он задан нарочно).
+    fn ndp_plan(source_ipv6: Option<u128>) -> ReadyPlan {
+        let plan = plan12(0, Shard { one: 1, of: 1 }, 0);
+        let mut nic = plan.nics()[0].clone();
+        nic.source_ipv6 = source_ipv6;
+        ReadyPlan::new_cli(plan.effective().clone(), vec![nic]).unwrap()
+    }
+
+    fn run_with_rx(plan: &ReadyPlan, rx: Vec<Vec<u8>>) -> Vec<Vec<u8>> {
+        let clock = ManualClock::new();
+        let fake = FakeAdapter::new().with_clock(clock.clone());
+        for f in rx {
+            fake.push_frame(f);
+        }
+        let c: Arc<dyn Clock + Send + Sync> = clock.clone();
+        let h = Engine::start_cli_with_clock(
+            plan.clone(),
+            vec![fake.pair()],
+            EngineOptions::new([1; 16], [2; 16]),
+            c,
+            None,
+        )
+        .unwrap();
+        let t = Instant::now();
+        loop {
+            match h.recv_event_timeout(Duration::from_millis(50)) {
+                Ok(Event::Finished { .. }) | Err(TryRecvError::Disconnected) => break,
+                Ok(_) => {}
+                Err(TryRecvError::Empty) => assert!(t.elapsed() < Duration::from_secs(10)),
+            }
+        }
+        h.join().unwrap();
+        fake.sent_frames()
+    }
+
+    /// `stack-ndpv6.c:95-182`, `main.c:829-840`: NS на наш `source_ipv6` во время скана порождает NA 86 байт с
+    /// `payload_length` 32 (адаптерный TX, не результат скана); SYN IPv4 идут как прежде.
+    #[test]
+    fn incoming_ns_during_scan_replies_with_32_byte_na() {
+        use rmasscan_core::ndp::{
+            decode_neighbor_advertisement, encode_neighbor_advertisement,
+            encode_neighbor_solicitation,
+        };
+        let ns = encode_neighbor_solicitation(NDP_ROUTER_MAC, NDP_ROUTER_IP, NDP_ME);
+        let sent = run_with_rx(&ndp_plan(Some(NDP_ME)), vec![ns.to_vec()]);
+        let nas: Vec<&Vec<u8>> = sent.iter().filter(|f| f.len() == 86).collect();
+        assert_eq!(nas.len(), 1, "{} frames", sent.len());
+        let na = nas[0];
+        assert_eq!(
+            *na,
+            encode_neighbor_advertisement(NDP_ME_MAC, NDP_ME, NDP_ROUTER_MAC, NDP_ROUTER_IP)
+                .to_vec()
+        );
+        assert_eq!(&na[18..20], &[0, 32]);
+        let p = decode_neighbor_advertisement(na).unwrap();
+        assert_eq!((p.target, p.target_lla), (NDP_ME, NDP_ME_MAC));
+        // 12 SYN IPv4 остались как были.
+        assert_eq!(sent.len(), 13);
+        assert_eq!(sent.iter().filter(|f| f.len() == 58).count(), 12);
+    }
+
+    /// Ответчик отвечает только на NS своего адреса и только у плана с `source_ipv6`: план IPv4 (в том числе
+    /// Студия) не шлёт ни одного лишнего кадра.
+    #[test]
+    fn ns_for_other_address_or_on_ipv4_plan_sends_nothing() {
+        use rmasscan_core::ndp::encode_neighbor_solicitation;
+        let other = encode_neighbor_solicitation(NDP_ROUTER_MAC, NDP_ROUTER_IP, NDP_ME + 1);
+        let mine = encode_neighbor_solicitation(NDP_ROUTER_MAC, NDP_ROUTER_IP, NDP_ME);
+        let sent = run_with_rx(&ndp_plan(Some(NDP_ME)), vec![other.to_vec()]);
+        assert_eq!(sent.len(), 12);
+        let sent = run_with_rx(&ndp_plan(None), vec![mine.to_vec()]);
+        assert_eq!(sent.len(), 12);
+    }
+
+    // ---- NDP: ограниченность и остановка (fix round 1) ----
+
+    fn na_frames(n: usize) -> VecDeque<[u8; NDP_FRAME_LEN]> {
+        (0..n).map(|i| [i as u8; NDP_FRAME_LEN]).collect()
+    }
+
+    /// Один вызов `flush_ndp` берёт снимок очереди и не гонится за RX, который продолжает класть кадры: поздний
+    /// кадр ждёт следующего вызова (C ограничивает это окном throttle, main.c:478-486).
+    #[test]
+    fn flush_ndp_sends_only_the_snapshot_it_took() {
+        let clock = ManualClock::new();
+        let fake = FakeAdapter::new().with_clock(clock);
+        let q = Arc::new(Mutex::new(na_frames(5)));
+        let q2 = q.clone();
+        fake.set_send_hook(move |_| lock(&q2).push_back([0xee; NDP_FRAME_LEN]));
+        let mut io = fake.pair();
+        flush_ndp(&q, &|| true, &mut *io.tx, Duration::from_millis(50));
+        assert_eq!(fake.sent_count(), 5);
+        assert_eq!(
+            lock(&q).len(),
+            5,
+            "frames pushed during the flush stay queued"
+        );
+    }
+
+    /// Блокирующийся адаптер (каждая отправка 50 мс по часам) и полная очередь (64): после Stop уходит не больше
+    /// одного кадра, а не 64 x 50 мс = 3,2 с (контракт Stop <= 1 с, engine.rs: комментарий у `WOULD_BLOCK_BACKOFF`).
+    #[test]
+    fn flush_ndp_stops_promptly_on_halt_with_a_blocked_adapter() {
+        let clock = ManualClock::new();
+        let fake = FakeAdapter::new().with_clock(clock.clone());
+        fake.script_tx((0..64).map(|_| crate::fake::TxStep::DelayThenSent(50_000)));
+        let q = Arc::new(Mutex::new(na_frames(NDP_OUT_CAP)));
+        let mut io = fake.pair();
+        let f2 = fake.clone();
+        let t0 = clock.now_micros();
+        // Stop приходит после второго кадра.
+        flush_ndp(
+            &q,
+            &|| f2.sent_count() < 2,
+            &mut *io.tx,
+            Duration::from_millis(50),
+        );
+        assert_eq!(fake.sent_count(), 2);
+        assert!(
+            clock.now_micros() - t0 <= 100_000,
+            "{}",
+            clock.now_micros() - t0
+        );
+        assert!(
+            lock(&q).is_empty(),
+            "the unsent snapshot is dropped, not retried"
+        );
+    }
+
+    /// Пауза с включённым NDP заканчивается чисто и приводит к `Paused`.
+    #[test]
+    fn pause_with_ndp_enabled_ends_cleanly() {
+        let leg = run_leg(&ndp_plan(Some(NDP_ME)), Some(5));
+        assert_eq!(leg.outcome.reason, Reason::Paused);
+    }
+
+    /// Прогон с NS, который приходит после `idles` пустых приёмов RX (по 50 мс часов fake) внутри окна ожидания
+    /// `wait_secs`. Часы стоят, пока TX ждёт в linger, и идут только от пустых приёмов RX. `pause_after = Some(n)`
+    /// подаёт Pause изнутри n-й отправки.
+    fn run_late_ns(
+        idles: u32,
+        wait_secs: u32,
+        pause_after: Option<usize>,
+    ) -> (Vec<Vec<u8>>, Outcome) {
+        use rmasscan_core::ndp::encode_neighbor_solicitation;
+        let mut m = MassIp::new();
+        add_target_string(m.ipv4_mut(), "198.18.0.0/30").unwrap();
+        parse_ports(m.ports_mut(), "80,443,8080").unwrap();
+        let cfg = ScanConfig {
+            targets: m,
+            seed: SEED,
+            max_rate: 1_000_000.0,
+            wait_secs,
+            ..ScanConfig::default()
+        };
+        let eff = validate(&cfg, Operation::Scan).unwrap();
+        let mut nic = ndp_plan(Some(NDP_ME)).nics()[0].clone();
+        nic.source_ipv6 = Some(NDP_ME);
+        let plan = ReadyPlan::new_cli(eff, vec![nic]).unwrap();
+        let clock = ManualClock::new();
+        clock.set_hold(true);
+        let fake = FakeAdapter::new().with_clock(clock.clone());
+        let cell: Arc<OnceLock<CancelHandle>> = Arc::default();
+        if let Some(n) = pause_after {
+            let c2 = cell.clone();
+            fake.set_send_hook(move |sent| {
+                if sent == n {
+                    let c = loop {
+                        if let Some(c) = c2.get() {
+                            break c;
+                        }
+                        std::thread::yield_now();
+                    };
+                    c.pause();
+                }
+            });
+        }
+        fake.push_rx(crate::fake::RxStep::Idle(idles));
+        fake.push_frame(
+            encode_neighbor_solicitation(NDP_ROUTER_MAC, NDP_ROUTER_IP, NDP_ME).to_vec(),
+        );
+        let c: Arc<dyn Clock + Send + Sync> = clock.clone();
+        let h = Engine::start_cli_with_clock(
+            plan,
+            vec![fake.pair()],
+            EngineOptions::new([1; 16], [2; 16]),
+            c,
+            None,
+        )
+        .unwrap();
+        cell.set(h.cancel_handle()).ok();
+        let t = Instant::now();
+        loop {
+            match h.recv_event_timeout(Duration::from_millis(50)) {
+                Ok(Event::Finished { .. }) | Err(TryRecvError::Disconnected) => break,
+                Ok(_) => {}
+                Err(TryRecvError::Empty) => assert!(t.elapsed() < Duration::from_secs(60)),
+            }
+        }
+        let outcome = h.join().unwrap();
+        (fake.sent_frames(), outcome)
+    }
+
+    /// Цель linger: NS, пришедший ПОСЛЕ конца передачи, в окне ожидания, тоже получает NA. 12 SYN уходят до NS
+    /// (2000 пустых приёмов = 100 с часов из окна в 1000 с, то есть сотни мс настоящего времени: голодный TX-поток
+    /// на загруженном раннере не успеет вклинить NA между SYN), NA идёт последним кадром.
+    #[test]
+    fn ns_arriving_after_tx_finished_still_gets_its_na() {
+        use rmasscan_core::ndp::encode_neighbor_advertisement;
+        let (sent, outcome) = run_late_ns(2000, 1000, None);
+        assert_eq!(outcome.reason, Reason::Completed);
+        assert_eq!(sent.len(), 13);
+        assert!(sent[..12].iter().all(|f| f.len() == 58), "SYNs first");
+        assert_eq!(
+            sent[12],
+            encode_neighbor_advertisement(NDP_ME_MAC, NDP_ME, NDP_ROUTER_MAC, NDP_ROUTER_IP)
+                .to_vec()
+        );
+    }
+
+    /// После Pause RX принимает до конца окна ожидания, и NS в этом окне тоже получает NA (в C очередь
+    /// сбрасывается до `is_rx_done`, main.c:470-493); linger заканчивается вместе с RX (скан завершается
+    /// `Paused`, а не зависает).
+    #[test]
+    fn ns_arriving_during_a_pause_wait_window_still_gets_its_na() {
+        use rmasscan_core::ndp::encode_neighbor_advertisement;
+        let (sent, outcome) = run_late_ns(2000, 1000, Some(5));
+        assert_eq!(outcome.reason, Reason::Paused);
+        assert_eq!(sent.len(), 6, "5 SYN before the pause, then the NA");
+        assert!(sent[..5].iter().all(|f| f.len() == 58));
+        assert_eq!(
+            sent[5],
+            encode_neighbor_advertisement(NDP_ME_MAC, NDP_ME, NDP_ROUTER_MAC, NDP_ROUTER_IP)
+                .to_vec()
+        );
     }
 }

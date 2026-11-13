@@ -12,6 +12,7 @@ use rmasscan_core::probe::AdapterBinding;
 use rmasscan_core::throttle::{Clock, SystemClock};
 use rmasscan_engine::AdapterPair;
 use rmasscan_net::arp_resolve::ArpPolicy;
+use rmasscan_net::ndp_resolve::NdpPolicy;
 use rmasscan_net::{Interfaces, NetError, RouteTable};
 
 pub struct OsBackend;
@@ -57,6 +58,11 @@ impl Backend for OsBackend {
 
     fn arp_policy(&self) -> ArpPolicy {
         ArpPolicy::default()
+    }
+
+    /// C `stack_ndpv6_resolve` (`stack-ndpv6.c:425-440`): раз в секунду, 10 попыток, как ARP.
+    fn ndp_policy(&self) -> NdpPolicy {
+        NdpPolicy::default()
     }
 
     fn clock(&self) -> Arc<dyn Clock + Send + Sync> {

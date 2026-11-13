@@ -1,0 +1,23 @@
+
+Dump of file C:\Users\lab\t4\rmasscan.exe
+
+File Type: EXECUTABLE IMAGE
+
+  Image has the following dependencies:
+
+    bcryptprimitives.dll
+    kernel32.dll
+    iphlpapi.dll
+    ntdll.dll
+    version.dll
+    api-ms-win-core-synch-l1-2-0.dll
+    KERNEL32.dll
+
+  Summary
+
+        2000 .data
+        1000 .fptable
+        E000 .pdata
+       58000 .rdata
+        2000 .reloc
+      15E000 .text

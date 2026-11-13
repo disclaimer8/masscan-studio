@@ -1,0 +1,12 @@
+{
+  "tag": "sc05_infinite_interrupt",
+  "steps": [
+    {
+      "name": "run",
+      "who": "rmasscan",
+      "links": 1,
+      "interrupt": true,
+      "netem": false
+    }
+  ]
+}

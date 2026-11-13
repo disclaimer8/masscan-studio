@@ -1,0 +1,11 @@
+# Superseded attempts of the post-merge live set (task 7d). The committed set is r3 on
+# C = 0ce2a9e8e9c1fec8e56655cef6b258c0cd0e5a54 (all six windows).
+#
+# The set number continues the stage's numbering: r1 (on cbcffe72, stopped at linux-ipv6-r1, INVALID) and r2 (on
+# e9eaebeb, all six PASS, committed in docs/experiments/2026-11-08-rmasscan-ipv6-acceptance-raw/) were task 7b's sets.
+
+## r3 on C
+
+No window of r3 stopped the set: every window PASSed on its first run, in the order linux-ipv6-r3, linux-protocols-r3,
+linux-scan-control-r3, linux-output-r3, linux-autodetect-r3, windows-autodetect-r3. No directory of this set was
+discarded or rerun, and no run of any window sits in runs_aborted/.

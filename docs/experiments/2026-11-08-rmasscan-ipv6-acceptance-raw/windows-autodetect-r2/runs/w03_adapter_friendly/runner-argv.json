@@ -1,0 +1,16 @@
+{
+  "argv": [
+    "198.18.0.2",
+    "-p80,443,8000-8007,8099",
+    "--adapter",
+    "Ethernet 2",
+    "--seed",
+    "1",
+    "--rate",
+    "100",
+    "--wait",
+    "3"
+  ],
+  "exe": "C:\\Users\\lab\\t4\\rmasscan.exe",
+  "invocation_nonce": "rce762278b7e1f29393374c030a9553b4-599eefc83a8a8474"
+}

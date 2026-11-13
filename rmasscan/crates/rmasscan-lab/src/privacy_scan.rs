@@ -6,7 +6,9 @@
 //!    the verifiers' pcap rules allow as OS traffic. The DNS names in them are decoded from wire form (length-prefixed
 //!    labels, compression pointers, names in PTR/CNAME/NS/SRV data, NetBIOS first-level names) and printed MASKED (the
 //!    first three characters and an ellipsis), with the file and the frame number. A text search for `_tcp.local` does
-//!    not find them: the labels are length-prefixed on the wire.
+//!    not find them: the labels are length-prefixed on the wire. The IPv6 stand adds the ICMPv6 messages that carry
+//!    names the same way: a Router Advertisement's DNS Search List (NDP option 31) and an ICMPv6 Node Information
+//!    Query or Reply (139/140); Neighbor Solicitations and Advertisements, MLD and Router Solicitations carry none.
 //! 2. Every other file is searched as text, and every capture as raw bytes, for the forbidden tokens the operator passes
 //!    with `--forbid TOKEN` (repeatable; no real name lives in the repository). A hit prints the file, the line and the
 //!    number of the token, never the token.
@@ -153,6 +155,70 @@ fn lan_discovery(f: &[u8]) -> Option<(&'static str, &[u8])> {
     Some((name, f.get(udp + 8..)?))
 }
 
+/// The names an ICMPv6 message of an Ethernet frame carries, with what it is: the DNS Search List options of a Router
+/// Advertisement (NDP, RFC 8106 type 31: uncompressed DNS names) and a Node Information Query or Reply (RFC 4620, ICMPv6
+/// 139/140: a name query, or a reply with the host's names after a 4-byte TTL, both in DNS wire form). `None` for any
+/// other frame: Neighbor Solicitations and Advertisements, MLD and Router Solicitations carry no name. A Node
+/// Information message is a hit even when no name decodes (it exists to tell a host's names and addresses).
+fn icmpv6_names(f: &[u8]) -> Option<(&'static str, Vec<String>)> {
+    let mut t = u16::from_be_bytes([*f.get(12)?, *f.get(13)?]);
+    let mut at = 14;
+    while t == 0x8100 || t == 0x88a8 {
+        t = u16::from_be_bytes([*f.get(at + 2)?, *f.get(at + 3)?]);
+        at += 4;
+    }
+    if t != 0x86dd {
+        return None;
+    }
+    let (mut next, mut o) = (*f.get(at + 6)?, at + 40);
+    while matches!(next, 0 | 43 | 60) {
+        let len = (usize::from(*f.get(o + 1)?) + 1) * 8;
+        next = *f.get(o)?;
+        o += len;
+    }
+    if next != 58 {
+        return None;
+    }
+    let icmp = f.get(o..)?;
+    match *icmp.first()? {
+        134 => {
+            let (mut names, mut seen, mut opt) = (Vec::new(), false, 16);
+            while let (Some(&ty), Some(&len)) = (icmp.get(opt), icmp.get(opt + 1)) {
+                let end = opt + usize::from(len) * 8;
+                if len == 0 || end > icmp.len() {
+                    break;
+                }
+                if ty == 31 {
+                    seen = true;
+                    let data = &icmp[opt + 8..end];
+                    let mut at = 0;
+                    while data.get(at).is_some_and(|b| *b != 0) {
+                        let Some((n, e)) = name_at(data, at) else {
+                            break;
+                        };
+                        names.push(n);
+                        at = e;
+                    }
+                }
+                opt = end;
+            }
+            seen.then_some(("NDP Router Advertisement DNS Search List", names))
+        }
+        139 | 140 => {
+            let data = icmp.get(16..).unwrap_or_default();
+            let qtype = icmp.get(4..6).map(|b| u16::from_be_bytes([b[0], b[1]]));
+            let at = if icmp[0] == 140 && qtype == Some(2) {
+                4
+            } else {
+                0
+            };
+            let names = name_at(data, at).map(|(n, _)| vec![n]).unwrap_or_default();
+            Some(("ICMPv6 Node Information", names))
+        }
+        _ => None,
+    }
+}
+
 /// The frames of a `.pcapng` file (Enhanced and Simple Packet Blocks), either byte order.
 fn pcapng_frames(b: &[u8]) -> Frames {
     let mut out = Vec::new();
@@ -282,8 +348,11 @@ pub fn scan(dir: &Path, forbid: &[String]) -> Result<Vec<Hit>, String> {
         };
         if let Some(frames) = frames {
             for (n, (_, f)) in frames.iter().enumerate() {
-                if let Some((proto, payload)) = lan_discovery(f) {
-                    let names: Vec<String> = dns_names(payload).iter().map(|n| mask(n)).collect();
+                let found = lan_discovery(f)
+                    .map(|(proto, payload)| (proto, dns_names(payload)))
+                    .or_else(|| icmpv6_names(f));
+                if let Some((proto, names)) = found {
+                    let names: Vec<String> = names.iter().map(|n| mask(n)).collect();
                     hits.push(Hit {
                         file: rel.clone(),
                         place: format!("frame {}", n + 1),
@@ -340,7 +409,7 @@ pub fn run(args: &[String]) -> Result<i32, String> {
         match a.as_str() {
             "--help" | "-h" => {
                 println!(
-                    "privacy-scan --dir DIR [--forbid TOKEN]...  (exit 0 no hit, 1 a hit; mDNS/LLMNR/NBNS frames in captures, forbidden tokens in every file)"
+                    "privacy-scan --dir DIR [--forbid TOKEN]...  (exit 0 no hit, 1 a hit; mDNS/LLMNR/NBNS and ICMPv6 name frames in captures, forbidden tokens in every file)"
                 );
                 return Ok(0);
             }

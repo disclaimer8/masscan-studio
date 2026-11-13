@@ -1,0 +1,2148 @@
+{
+  "aborted": [],
+  "behaviour_fail": [],
+  "dir": "linux-ipv6-r3",
+  "discarded": [],
+  "discarded_totals": {
+    "FAIL": 0,
+    "INVALID": 0,
+    "NOT RUN": 0,
+    "PASS": 0
+  },
+  "groups": [],
+  "overall": "PASS",
+  "runs": [
+    {
+      "behaviour_fail": false,
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "captures are stored uncompressed; the verifier has no decompression",
+          "name": "no compressed capture anywhere in the evidence directory",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "[]",
+          "name": "no symbolic link in the evidence directory (links are never followed)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "manifest.json names the ipv6 plan (linux)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[]",
+          "name": "evidence files outside the runs carry only the allowed extensions (json pcap txt log err sha256 md bin)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "8 files",
+          "name": "privacy: every text and binary file holds only allowlisted names, addresses and paths",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[]",
+          "name": "runs/ holds only the planned case directories",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "deleted [\"wl-scan-RUNID\", \"wl-peer-RUNID\"], left 0",
+          "name": "teardown.json: wire-lab.sh deleted both namespaces of the stand and none is left",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "manifest Some(\"ed898a55-96b8-46dd-9217-2b7c5262102e\"), teardown \"ed898a55-96b8-46dd-9217-2b7c5262102e\"",
+          "name": "teardown.json belongs to the lab of manifest.json (lab_id)",
+          "result": "PASS"
+        }
+      ],
+      "notes": {},
+      "safety_trip": false,
+      "tag": "manifest",
+      "verdict": "PASS"
+    },
+    {
+      "behaviour_fail": false,
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "captures are stored uncompressed; the verifier has no decompression",
+          "name": "no compressed capture in the case directory",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "28",
+          "name": "peer.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "valid true, []",
+          "name": "json/capture.json: the witness judged its capture complete",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "28 frames recorded, 28 in the file",
+          "name": "json/capture.json describes json/peer.pcap (sha256 and frame count)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3 start, 3 end markers; window 1794512395.3025491 .. 1794512400.325475",
+          "name": "json/peer.pcap: a start marker before and three end markers after every scanner frame",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "34",
+          "name": "peer.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "valid true, []",
+          "name": "oracle-json/capture.json: the witness judged its capture complete",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "34 frames recorded, 34 in the file",
+          "name": "oracle-json/capture.json describes oracle-json/peer.pcap (sha256 and frame count)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3 start, 3 end markers; window 1794512401.259729 .. 1794512419.0850968",
+          "name": "oracle-json/peer.pcap: a start marker before and three end markers after every scanner frame",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "28",
+          "name": "peer.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "valid true, []",
+          "name": "binary/capture.json: the witness judged its capture complete",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "28 frames recorded, 28 in the file",
+          "name": "binary/capture.json describes binary/peer.pcap (sha256 and frame count)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3 start, 3 end markers; window 1794512420.0342994 .. 1794512425.0541956",
+          "name": "binary/peer.pcap: a start marker before and three end markers after every scanner frame",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "34",
+          "name": "peer.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "valid true, []",
+          "name": "oracle-binary/capture.json: the witness judged its capture complete",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "34 frames recorded, 34 in the file",
+          "name": "oracle-binary/capture.json describes oracle-binary/peer.pcap (sha256 and frame count)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3 start, 3 end markers; window 1794512426.0041254 .. 1794512444.0544605",
+          "name": "oracle-binary/peer.pcap: a start marker before and three end markers after every scanner frame",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no IPv4 SYN on the json capture from outside the stand binding or to an address off the stand",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "no frame of the scanner on the json capture to an address off the stand or from another source",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0 frames: ",
+          "name": "no frame on the json capture from a MAC other than the stand's scanner and peer (markers aside)",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no IPv4 SYN on the oracle-json capture from outside the stand binding or to an address off the stand",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "no frame of the scanner on the oracle-json capture to an address off the stand or from another source",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0 frames: ",
+          "name": "no frame on the oracle-json capture from a MAC other than the stand's scanner and peer (markers aside)",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no IPv4 SYN on the binary capture from outside the stand binding or to an address off the stand",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "no frame of the scanner on the binary capture to an address off the stand or from another source",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0 frames: ",
+          "name": "no frame on the binary capture from a MAC other than the stand's scanner and peer (markers aside)",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no IPv4 SYN on the oracle-binary capture from outside the stand binding or to an address off the stand",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "no frame of the scanner on the oracle-binary capture to an address off the stand or from another source",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0 frames: ",
+          "name": "no frame on the oracle-binary capture from a MAC other than the stand's scanner and peer (markers aside)",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "41",
+          "name": "hashes-before-copy.txt matches every file of the case directory",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[]",
+          "name": "evidence files carry only the allowed extensions (json pcap txt log err sha256 md, bin for -oB)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "mode \"ipv6\", ipv6 \"fd00:198:18::/64\"",
+          "name": "isolation.json: the sealed IPv6 stand (capture isolation --mode ipv6)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "mode \"ipv6\"",
+          "name": "isolation-post.json: the IPv6 stand still sealed after the run (capture isolation --mode ipv6)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "37 files",
+          "name": "privacy: every text and binary file holds only allowlisted names, addresses and paths",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "table Some(Ipv6Expect { tag: \"v01_ndp_and_tcp6_syn\", targets: \"[fd00:198:18::2]-[fd00:198:18::5]\", ports: \"80,81\", router_mac_given: false, oracle_extra: [\"--adapter-ip\", \"fd00:198:18::1\", \"--router-mac-ipv6\", \"02-aa-00-00-00-02\"], steps: [ExpectStep { name: \"json\", who: Rmasscan, out: Json }, ExpectStep { name: \"oracle-json\", who: Oracle, out: Json }, ExpectStep { name: \"binary\", who: Rmasscan, out: Binary }, ExpectStep { name: \"oracle-binary\", who: Oracle, out: Binary }] })",
+          "name": "expect.json equals the case table's entry",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[\"[fd00:198:18::2]-[fd00:198:18::5]\", \"-p80,81\", \"-oJ\", \"output.json\", \"--show\", \"open,closed\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\", \"--source-port\", \"40000\"], table [\"[fd00:198:18::2]-[fd00:198:18::5]\", \"-p80,81\", \"-oJ\", \"output.json\", \"--show\", \"open,closed\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\", \"--source-port\", \"40000\"]",
+          "name": "json/argv.json is the step's argv in the case table",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[\"[fd00:198:18::2]-[fd00:198:18::5]\", \"-p80,81\", \"-oJ\", \"output.json\", \"--show\", \"open,closed\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\", \"--source-port\", \"40000\", \"--adapter-ip\", \"fd00:198:18::1\", \"--router-mac-ipv6\", \"02-aa-00-00-00-02\"], table [\"[fd00:198:18::2]-[fd00:198:18::5]\", \"-p80,81\", \"-oJ\", \"output.json\", \"--show\", \"open,closed\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\", \"--source-port\", \"40000\", \"--adapter-ip\", \"fd00:198:18::1\", \"--router-mac-ipv6\", \"02-aa-00-00-00-02\"]",
+          "name": "oracle-json/argv.json is the step's argv in the case table",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[\"[fd00:198:18::2]-[fd00:198:18::5]\", \"-p80,81\", \"-oB\", \"output.bin\", \"--show\", \"open,closed\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\", \"--source-port\", \"40000\"], table [\"[fd00:198:18::2]-[fd00:198:18::5]\", \"-p80,81\", \"-oB\", \"output.bin\", \"--show\", \"open,closed\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\", \"--source-port\", \"40000\"]",
+          "name": "binary/argv.json is the step's argv in the case table",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[\"[fd00:198:18::2]-[fd00:198:18::5]\", \"-p80,81\", \"-oB\", \"output.bin\", \"--show\", \"open,closed\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\", \"--source-port\", \"40000\", \"--adapter-ip\", \"fd00:198:18::1\", \"--router-mac-ipv6\", \"02-aa-00-00-00-02\"], table [\"[fd00:198:18::2]-[fd00:198:18::5]\", \"-p80,81\", \"-oB\", \"output.bin\", \"--show\", \"open,closed\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\", \"--source-port\", \"40000\", \"--adapter-ip\", \"fd00:198:18::1\", \"--router-mac-ipv6\", \"02-aa-00-00-00-02\"]",
+          "name": "oracle-binary/argv.json is the step's argv in the case table",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "it still ran",
+          "name": "json/responder.json: the peer responder ran until the scanner ended",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "it still ran",
+          "name": "oracle-json/responder.json: the peer responder ran until the scanner ended",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "it still ran",
+          "name": "binary/responder.json: the peer responder ran until the scanner ended",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "it still ran",
+          "name": "oracle-binary/responder.json: the peer responder ran until the scanner ended",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "ready",
+          "name": "ipv6-stack.json: the stand's IPv6 was ready before the case (the veth settings, the stand's addresses none tentative or failed)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "json: the stand answered every probe the stand's way (TCP 80 and 8080 open, the rest closed) and every NS of the scanner with exactly one NA of its form (from fe80::aa:ff:fe00:2, Solicited and Override, no Router flag, its MAC as target link-layer address)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "json: nothing on the peer side answers anything the scan did not send",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "{}",
+          "name": "json: no kernel noise of either side in the step (STAND_NOISE: MLD, RS, RA, DAD NS, a peer NS for the scanner, a scanner NS for a peer; bound 0 each)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "json: every probe, reply, NS and NA lies inside the witness window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0 other frames: ",
+          "name": "json: every frame of the scanner MAC is a probe of the scan or of a named class (next-hop who-has, next-hop NS, RST to a SYN-ACK, C's RST to an RST of the stand, NA to a peer NS)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "next_hop_who_has 0 of at most 0, next_hop_ns 1 of at most 10, rst_to_syn_ack 4 of at most 4, na_to_peer_ns 0 of at most 0, rst_to_rst 0 of at most 0",
+          "name": "json: the named scanner-side frames stay within their bounds (who-has and NS: the resolver's request count when the step resolves that next hop, else 0; RST: one per SYN-ACK frame, on the oracle's step plus one per distinct SYN-ACK; C's RST to an RST: one per distinct RST of the stand on the oracle's step, none on rmasscan's; NA: per peer NS one of the kernel, plus one of rmasscan's responder)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "8 records",
+          "name": "json: output.json is a well-formed document",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "json: exit.txt is 0",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "json: stdout.txt is empty (a file format silences stdout)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[]",
+          "name": "json: stderr.txt holds only [+] lines and rmasscan's status forms",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[(\"interface\", \"veth-a (detected: route to [fd00:198:18::2])\"), (\"source-mac\", \"02-aa-00-00-00-01 (detected)\"), (\"source-ip\", \"[fd00:198:18::1] (detected)\"), (\"router-ip\", \"[fe80::aa:ff:fe00:2] (interface default gateway)\"), (\"router-mac-ipv6\", \"02-aa-00-00-00-02 (ndp: 1 requests, 0 ms)\"), (\"seed\", \"1 (given)\"), (\"source-port\", \"40000 (given)\")]",
+          "name": "json: [+] lines are the stand's: interface = veth-a (detected: route to [fd00:198:18::2]) | source-mac = 02-aa-00-00-00-01 (detected) | source-ip = [fd00:198:18::1] (detected) | router-ip = [fe80::aa:ff:fe00:2] (interface default gateway) | router-mac-ipv6 = 02-aa-00-00-00-02 (ndp:  | seed = 1 (given) | source-port = 40000 (given)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "Some(Fin { reason: \"Completed\", sent: 8, replies: 8, open: 4 })",
+          "name": "json: [+] finished: Completed",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "printed Some((8, 8, 4)), wire (sent, replies, open) (8, 8, 4)",
+          "name": "json: [+] finished reports sent, replies and open equal to the probes and the distinct replies on the wire",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[]",
+          "name": "json: every record's time lies within the scan on the wire (2 s either side)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "1 NS on the wire (1 in the resolver's form), printed Some(1)",
+          "name": "json: rmasscan resolved its IPv6 next hop by NDP before its first probe: 1 to NEXT_HOP_NS_MAX Neighbor Solicitations, each in the resolver's form (from fd00:198:18::1 to ff02::1:ff00:2 for fe80::aa:ff:fe00:2), as many as its [+] router-mac-ipv6 line says it sent",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "NA gave [\"02:aa:00:00:00:02\"]",
+          "name": "json: every IPv6 probe goes to the MAC the stand's NA gave (02:aa:00:00:00:02)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "open fd00:198:18::2 80/tcp reason syn-ack ttl 64; closed fd00:198:18::5 81/tcp reason rst-ack ttl 64; closed fd00:198:18::2 81/tcp reason rst-ack ttl 64; closed fd00:198:18::3 81/tcp reason rst-ack ttl 64; open fd00:198:18::3 80/tcp reason syn-ack ttl 64; open fd00:198:18::4 80/tcp reason syn-ack ttl 64; open fd00:198:18::5 80/tcp reason syn-ack ttl 64; closed fd00:198:18::4 81/tcp reason rst-ack ttl 64",
+          "name": "json: the document holds the records of the replies on its wire, field for field (C's IPv6 ttl aside), in reply order (replies captured at most 50 us apart on the peer link, rounded to the microsecond, may come in either order: REPLY_REORDER_WINDOW_US)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "8 probes, 8 planned, first difference at None",
+          "name": "json: the probes on the wire equal the plan (ReadyPlan of the case), in order, each once",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "oracle-json: the stand answered every probe the stand's way (TCP 80 and 8080 open, the rest closed) and every NS of the scanner with exactly one NA of its form (from fe80::aa:ff:fe00:2, Solicited and Override, no Router flag, its MAC as target link-layer address)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "oracle-json: nothing on the peer side answers anything the scan did not send",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "{}",
+          "name": "oracle-json: no kernel noise of either side in the step (STAND_NOISE: MLD, RS, RA, DAD NS, a peer NS for the scanner, a scanner NS for a peer; bound 0 each)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "oracle-json: every probe, reply, NS and NA lies inside the witness window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0 other frames: ",
+          "name": "oracle-json: every frame of the scanner MAC is a probe of the scan or of a named class (next-hop who-has, next-hop NS, RST to a SYN-ACK, C's RST to an RST of the stand, NA to a peer NS)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "next_hop_who_has 0 of at most 0, next_hop_ns 0 of at most 0, rst_to_syn_ack 8 of at most 8, na_to_peer_ns 0 of at most 0, rst_to_rst 4 of at most 4",
+          "name": "oracle-json: the named scanner-side frames stay within their bounds (who-has and NS: the resolver's request count when the step resolves that next hop, else 0; RST: one per SYN-ACK frame, on the oracle's step plus one per distinct SYN-ACK; C's RST to an RST: one per distinct RST of the stand on the oracle's step, none on rmasscan's; NA: per peer NS one of the kernel, plus one of rmasscan's responder)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "8 records",
+          "name": "oracle-json: output.json is a well-formed document (an IPv6 record's ttl may be any 32-bit value: C prints the ip_ttl it never sets for IPv6, ipv6-ttl-not-compared)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "no footer",
+          "name": "oracle-json: its file lacks the footer only after masscan's forced exit (the line is on its stderr)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "oracle-json: exit.txt is 0",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "open fd00:198:18::2 80/tcp reason syn-ack; closed fd00:198:18::5 81/tcp reason rst-ack; closed fd00:198:18::2 81/tcp reason rst-ack; closed fd00:198:18::3 81/tcp reason rst-ack; open fd00:198:18::3 80/tcp reason syn-ack; open fd00:198:18::4 80/tcp reason syn-ack; open fd00:198:18::5 80/tcp reason syn-ack; closed fd00:198:18::4 81/tcp reason rst-ack",
+          "name": "oracle-json: the document holds the records of the replies on its wire, field for field (C's IPv6 ttl aside), in reply order (replies captured at most 50 us apart on the peer link, rounded to the microsecond, may come in either order: REPLY_REORDER_WINDOW_US)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "binary: the stand answered every probe the stand's way (TCP 80 and 8080 open, the rest closed) and every NS of the scanner with exactly one NA of its form (from fe80::aa:ff:fe00:2, Solicited and Override, no Router flag, its MAC as target link-layer address)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "binary: nothing on the peer side answers anything the scan did not send",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "{}",
+          "name": "binary: no kernel noise of either side in the step (STAND_NOISE: MLD, RS, RA, DAD NS, a peer NS for the scanner, a scanner NS for a peer; bound 0 each)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "binary: every probe, reply, NS and NA lies inside the witness window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0 other frames: ",
+          "name": "binary: every frame of the scanner MAC is a probe of the scan or of a named class (next-hop who-has, next-hop NS, RST to a SYN-ACK, C's RST to an RST of the stand, NA to a peer NS)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "next_hop_who_has 0 of at most 0, next_hop_ns 1 of at most 10, rst_to_syn_ack 4 of at most 4, na_to_peer_ns 0 of at most 0, rst_to_rst 0 of at most 0",
+          "name": "binary: the named scanner-side frames stay within their bounds (who-has and NS: the resolver's request count when the step resolves that next hop, else 0; RST: one per SYN-ACK frame, on the oracle's step plus one per distinct SYN-ACK; C's RST to an RST: one per distinct RST of the stand on the oracle's step, none on rmasscan's; NA: per peer NS one of the kernel, plus one of rmasscan's responder)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "8 records",
+          "name": "binary: output.bin is a well-formed document",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "binary: exit.txt is 0",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "binary: stdout.txt is empty (a file format silences stdout)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[]",
+          "name": "binary: stderr.txt holds only [+] lines and rmasscan's status forms",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[(\"interface\", \"veth-a (detected: route to [fd00:198:18::2])\"), (\"source-mac\", \"02-aa-00-00-00-01 (detected)\"), (\"source-ip\", \"[fd00:198:18::1] (detected)\"), (\"router-ip\", \"[fe80::aa:ff:fe00:2] (interface default gateway)\"), (\"router-mac-ipv6\", \"02-aa-00-00-00-02 (ndp: 1 requests, 0 ms)\"), (\"seed\", \"1 (given)\"), (\"source-port\", \"40000 (given)\")]",
+          "name": "binary: [+] lines are the stand's: interface = veth-a (detected: route to [fd00:198:18::2]) | source-mac = 02-aa-00-00-00-01 (detected) | source-ip = [fd00:198:18::1] (detected) | router-ip = [fe80::aa:ff:fe00:2] (interface default gateway) | router-mac-ipv6 = 02-aa-00-00-00-02 (ndp:  | seed = 1 (given) | source-port = 40000 (given)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "Some(Fin { reason: \"Completed\", sent: 8, replies: 8, open: 4 })",
+          "name": "binary: [+] finished: Completed",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "printed Some((8, 8, 4)), wire (sent, replies, open) (8, 8, 4)",
+          "name": "binary: [+] finished reports sent, replies and open equal to the probes and the distinct replies on the wire",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[]",
+          "name": "binary: every record's time lies within the scan on the wire (2 s either side)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "1 NS on the wire (1 in the resolver's form), printed Some(1)",
+          "name": "binary: rmasscan resolved its IPv6 next hop by NDP before its first probe: 1 to NEXT_HOP_NS_MAX Neighbor Solicitations, each in the resolver's form (from fd00:198:18::1 to ff02::1:ff00:2 for fe80::aa:ff:fe00:2), as many as its [+] router-mac-ipv6 line says it sent",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "NA gave [\"02:aa:00:00:00:02\"]",
+          "name": "binary: every IPv6 probe goes to the MAC the stand's NA gave (02:aa:00:00:00:02)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "open fd00:198:18::2 80/tcp reason syn-ack ttl 64; closed fd00:198:18::5 81/tcp reason rst-ack ttl 64; closed fd00:198:18::2 81/tcp reason rst-ack ttl 64; closed fd00:198:18::3 81/tcp reason rst-ack ttl 64; open fd00:198:18::3 80/tcp reason syn-ack ttl 64; open fd00:198:18::4 80/tcp reason syn-ack ttl 64; open fd00:198:18::5 80/tcp reason syn-ack ttl 64; closed fd00:198:18::4 81/tcp reason rst-ack ttl 64",
+          "name": "binary: the document holds the records of the replies on its wire, field for field (C's IPv6 ttl aside), in reply order (replies captured at most 50 us apart on the peer link, rounded to the microsecond, may come in either order: REPLY_REORDER_WINDOW_US)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "8 probes, 8 planned, first difference at None",
+          "name": "binary: the probes on the wire equal the plan (ReadyPlan of the case), in order, each once",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "oracle-binary: the stand answered every probe the stand's way (TCP 80 and 8080 open, the rest closed) and every NS of the scanner with exactly one NA of its form (from fe80::aa:ff:fe00:2, Solicited and Override, no Router flag, its MAC as target link-layer address)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "oracle-binary: nothing on the peer side answers anything the scan did not send",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "{}",
+          "name": "oracle-binary: no kernel noise of either side in the step (STAND_NOISE: MLD, RS, RA, DAD NS, a peer NS for the scanner, a scanner NS for a peer; bound 0 each)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "oracle-binary: every probe, reply, NS and NA lies inside the witness window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0 other frames: ",
+          "name": "oracle-binary: every frame of the scanner MAC is a probe of the scan or of a named class (next-hop who-has, next-hop NS, RST to a SYN-ACK, C's RST to an RST of the stand, NA to a peer NS)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "next_hop_who_has 0 of at most 0, next_hop_ns 0 of at most 0, rst_to_syn_ack 8 of at most 8, na_to_peer_ns 0 of at most 0, rst_to_rst 4 of at most 4",
+          "name": "oracle-binary: the named scanner-side frames stay within their bounds (who-has and NS: the resolver's request count when the step resolves that next hop, else 0; RST: one per SYN-ACK frame, on the oracle's step plus one per distinct SYN-ACK; C's RST to an RST: one per distinct RST of the stand on the oracle's step, none on rmasscan's; NA: per peer NS one of the kernel, plus one of rmasscan's responder)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "8 records",
+          "name": "oracle-binary: output.bin is a well-formed document (an IPv6 record's ttl may be any 32-bit value: C prints the ip_ttl it never sets for IPv6, ipv6-ttl-not-compared)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "no footer",
+          "name": "oracle-binary: its file lacks the footer only after masscan's forced exit (the line is on its stderr)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "oracle-binary: exit.txt is 0",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "open fd00:198:18::2 80/tcp reason syn-ack; closed fd00:198:18::5 81/tcp reason rst-ack; closed fd00:198:18::2 81/tcp reason rst-ack; closed fd00:198:18::3 81/tcp reason rst-ack; open fd00:198:18::3 80/tcp reason syn-ack; open fd00:198:18::4 80/tcp reason syn-ack; open fd00:198:18::5 80/tcp reason syn-ack; closed fd00:198:18::4 81/tcp reason rst-ack",
+          "name": "oracle-binary: the document holds the records of the replies on its wire, field for field (C's IPv6 ttl aside), in reply order (replies captured at most 50 us apart on the peer link, rounded to the microsecond, may come in either order: REPLY_REORDER_WINDOW_US)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "8 probes, the oracle 8, first difference at None",
+          "name": "json: the probes equal the C oracle's (oracle-json), byte for byte and in order",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "open fd00:198:18::2 80/tcp reason syn-ack; closed fd00:198:18::5 81/tcp reason rst-ack; closed fd00:198:18::2 81/tcp reason rst-ack; closed fd00:198:18::3 81/tcp reason rst-ack; open fd00:198:18::3 80/tcp reason syn-ack; open fd00:198:18::4 80/tcp reason syn-ack; open fd00:198:18::5 80/tcp reason syn-ack; closed fd00:198:18::4 81/tcp reason rst-ack",
+          "name": "json: the records equal the C oracle's (oracle-json) field for field but the time, in any order (each document's order is its own wire's reply order, judged above; the two wires' reply orders may differ) (ipv6-ttl-not-compared applied)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "8 probes, the oracle 8, first difference at None",
+          "name": "binary: the probes equal the C oracle's (oracle-binary), byte for byte and in order",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "open fd00:198:18::2 80/tcp reason syn-ack; closed fd00:198:18::5 81/tcp reason rst-ack; closed fd00:198:18::2 81/tcp reason rst-ack; closed fd00:198:18::3 81/tcp reason rst-ack; open fd00:198:18::3 80/tcp reason syn-ack; open fd00:198:18::4 80/tcp reason syn-ack; open fd00:198:18::5 80/tcp reason syn-ack; closed fd00:198:18::4 81/tcp reason rst-ack",
+          "name": "binary: the records equal the C oracle's (oracle-binary) field for field but the time, in any order (each document's order is its own wire's reply order, judged above; the two wires' reply orders may differ) (ipv6-ttl-not-compared applied)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "NS of the scanner: oracle steps 0, rmasscan steps [1, 1]",
+          "name": "deviation ndp-ns-not-rs: R11: rmasscan resolves its IPv6 next hop with a Neighbor Solicitation to the route's next hop (here the interface default gateway, the peer's link-local), C with a Router Solicitation and the Router Advertisement (stack_ndpv6_resolve); a Linux peer without a router daemon sends no RA, so the oracle step is given --router-mac-ipv6 02-aa-00-00-00-02: the condition checked here is the oracle's (its wire holds no NS of the scanner); rmasscan's NS are its own checks (1 to NEXT_HOP_NS_MAX, as many as its ndp: line)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0 IPv6 probes of the oracle from another source than fd00:198:18::1",
+          "name": "deviation oracle-source-given: C never takes a ULA (fc00::/7) or 2001:db8::/32 address as its IPv6 source (rawsock-getip6.c:68-71), rmasscan does; the oracle step is given --adapter-ip fd00:198:18::1, the address rmasscan detects; the condition checked here is the oracle's (every IPv6 probe of its wire leaves from it); rmasscan's detected source is its detection check",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "16 IPv6 records of C with a ttl, 16 of them not the reply's hop limit",
+          "name": "deviation ipv6-ttl-not-compared: T3: an IPv6 record's ttl is the reply's hop limit in rmasscan and a stale value in C (C sets ip_ttl for IPv4 only, proto-preprocess.c:127; its -oJ prints that unsigned value whole, out-json.c:51, live 7b r1 320995840, its -oB the low byte); rmasscan's IPv6 ttl is judged against its own wire (a byte), C's IPv6 ttl against nothing (in C's -oJ any 32-bit value), and IPv6 ttls are left out when the two documents are compared",
+          "result": "PASS"
+        }
+      ],
+      "notes": {
+        "deviations": [
+          {
+            "name": "ndp-ns-not-rs",
+            "observed": "NS of the scanner: oracle steps 0, rmasscan steps [1, 1]",
+            "rule": "R11: rmasscan resolves its IPv6 next hop with a Neighbor Solicitation to the route's next hop (here the interface default gateway, the peer's link-local), C with a Router Solicitation and the Router Advertisement (stack_ndpv6_resolve); a Linux peer without a router daemon sends no RA, so the oracle step is given --router-mac-ipv6 02-aa-00-00-00-02: the condition checked here is the oracle's (its wire holds no NS of the scanner); rmasscan's NS are its own checks (1 to NEXT_HOP_NS_MAX, as many as its ndp: line)"
+          },
+          {
+            "name": "oracle-source-given",
+            "observed": "0 IPv6 probes of the oracle from another source than fd00:198:18::1",
+            "rule": "C never takes a ULA (fc00::/7) or 2001:db8::/32 address as its IPv6 source (rawsock-getip6.c:68-71), rmasscan does; the oracle step is given --adapter-ip fd00:198:18::1, the address rmasscan detects; the condition checked here is the oracle's (every IPv6 probe of its wire leaves from it); rmasscan's detected source is its detection check"
+          },
+          {
+            "name": "ipv6-ttl-not-compared",
+            "observed": "16 IPv6 records of C with a ttl, 16 of them not the reply's hop limit",
+            "rule": "T3: an IPv6 record's ttl is the reply's hop limit in rmasscan and a stale value in C (C sets ip_ttl for IPv4 only, proto-preprocess.c:127; its -oJ prints that unsigned value whole, out-json.c:51, live 7b r1 320995840, its -oB the low byte); rmasscan's IPv6 ttl is judged against its own wire (a byte), C's IPv6 ttl against nothing (in C's -oJ any 32-bit value), and IPv6 ttls are left out when the two documents are compared"
+          }
+        ],
+        "oracle": "the pinned C masscan 8e6b3b0 with rmasscan's argv plus oracle_extra, one run per document, on the same stand",
+        "record_order_vs_c": {
+          "documents": {
+            "binary": "the same records in the same order",
+            "json": "the same records in the same order"
+          },
+          "rule": "each scanner prints its records in the order the replies arrive on its own wire (judged per step, up to replies captured at most REPLY_REORDER_WINDOW_US = 50 us apart); the two runs of a document do not get the same reply order from the stand (the peer kernel answers a burst of probes in an order that changes from run to run, protocols r1), so rmasscan's records must equal C's field for field but the time, IPv6 ttl aside (ipv6-ttl-not-compared), in any order"
+        },
+        "reply_order_swaps": {
+          "binary": {
+            "largest_gap_us": null,
+            "pairs": 0
+          },
+          "json": {
+            "largest_gap_us": null,
+            "pairs": 0
+          },
+          "oracle-binary": {
+            "largest_gap_us": null,
+            "pairs": 0
+          },
+          "oracle-json": {
+            "largest_gap_us": null,
+            "pairs": 0
+          }
+        },
+        "reply_order_window": "50 us: two replies captured on the peer link at most this far apart (rounded to the microsecond; exactly 50 us is inside) may reach the scanner in the other order (two CPUs send them); reply_order_swaps gives, per step, the pairs of records written in the other order within it (pairs) and the largest gap among them in microseconds (largest_gap_us, null without such a pair)",
+        "scanner_frame_classes": {
+          "na_to_peer_ns": "a Neighbor Advertisement of the scanner's address answering a Neighbor Solicitation of the peer for it: the scanner namespace kernel, and on rmasscan's step its NS responder (T4)",
+          "next_hop_ns": "rmasscan's IPv6 next-hop resolution (R11): the Neighbor Solicitation of its resolver for the router fe80::aa:ff:fe00:2 (is_next_hop_ns), only in a case without --router-mac-ipv6",
+          "next_hop_who_has": "the IPv4 next-hop resolution of a scan with IPv4 targets: an ARP who-has 198.18.0.2 from 198.18.0.1, 60 bytes zero-padded (the resolver form of C stack-arpv4.c and rmasscan)",
+          "rst_to_rst": "C's own TCP RST (no other flag) from the scanner's address of the family whose sequence number is the acknowledgment of an RST of the stand (a closed port): C resets each distinct reply that passes its cookie check and dedup, the RST as well as the SYN-ACK (main.c:1048-1101, `TCP_IS_SYNACK || TCP_IS_RST`, then tcp_send_RST; live 7b r1), in its template's form (window 1200, the MSS option); only on the oracle's step: rmasscan has no RST path and no kernel answers an RST",
+          "rst_to_syn_ack": "a TCP RST (no other flag) from the scanner's address of the family whose sequence number is the acknowledgment of a SYN-ACK of the stand: the scanner namespace kernel resets a SYN-ACK no socket owns, and C resets each distinct SYN-ACK itself once it passed its dedup (main.c:1067-1068, :1095; tcp_send_RST builds IPv6 too)"
+        },
+        "scanner_frames": {
+          "binary": {
+            "at_most": {
+              "na_to_peer_ns": 0,
+              "next_hop_ns": 10,
+              "next_hop_who_has": 0,
+              "rst_to_rst": 0,
+              "rst_to_syn_ack": 4
+            },
+            "na_to_peer_ns": 0,
+            "next_hop_ns": 1,
+            "next_hop_who_has": 0,
+            "rst_to_rst": 0,
+            "rst_to_syn_ack": 4,
+            "stand_noise": {},
+            "unexplained": 0
+          },
+          "json": {
+            "at_most": {
+              "na_to_peer_ns": 0,
+              "next_hop_ns": 10,
+              "next_hop_who_has": 0,
+              "rst_to_rst": 0,
+              "rst_to_syn_ack": 4
+            },
+            "na_to_peer_ns": 0,
+            "next_hop_ns": 1,
+            "next_hop_who_has": 0,
+            "rst_to_rst": 0,
+            "rst_to_syn_ack": 4,
+            "stand_noise": {},
+            "unexplained": 0
+          },
+          "oracle-binary": {
+            "at_most": {
+              "na_to_peer_ns": 0,
+              "next_hop_ns": 0,
+              "next_hop_who_has": 0,
+              "rst_to_rst": 4,
+              "rst_to_syn_ack": 8
+            },
+            "na_to_peer_ns": 0,
+            "next_hop_ns": 0,
+            "next_hop_who_has": 0,
+            "rst_to_rst": 4,
+            "rst_to_syn_ack": 8,
+            "stand_noise": {},
+            "unexplained": 0
+          },
+          "oracle-json": {
+            "at_most": {
+              "na_to_peer_ns": 0,
+              "next_hop_ns": 0,
+              "next_hop_who_has": 0,
+              "rst_to_rst": 4,
+              "rst_to_syn_ack": 8
+            },
+            "na_to_peer_ns": 0,
+            "next_hop_ns": 0,
+            "next_hop_who_has": 0,
+            "rst_to_rst": 4,
+            "rst_to_syn_ack": 8,
+            "stand_noise": {},
+            "unexplained": 0
+          }
+        },
+        "stand_noise_classes": {
+          "dad_ns": "a Neighbor Solicitation from :: (Duplicate Address Detection) from either MAC: the stand sets accept_dad=0 and adds its addresses nodad",
+          "mld": "an MLD query, report or done (ICMPv6 130, 131, 132, 143) from either MAC: a host reports only when it joins or leaves a group; the stand's groups are joined when it is raised, before wire-lab.sh's settle wait (an unsolicited report is expected to repeat within mldv2_unsolicited_report_interval, 1 s), so none may fall into a step",
+          "peer_ns_for_scanner": "a Neighbor Solicitation of the peer for the scanner's address: the peer has fd00:198:18::1 as a permanent neighbour, so it never resolves the scanner",
+          "router_advertisement": "ICMPv6 134: no router daemon runs on the stand and both ends have forwarding=0",
+          "router_solicitation": "ICMPv6 133 from either MAC: the stand sets accept_ra=0 and router_solicitations=0 on both veth ends",
+          "scanner_ns_for_peer": "a Neighbor Solicitation of the scanner MAC for a peer's ULA fd00:198:18::2-5: the scanner namespace kernel resolving a peer before it resets a SYN-ACK; the scanner has the peers as permanent neighbours, which prevents it. It is told apart from rmasscan's resolver NS by its target (a peer ULA, not the router fe80::aa:ff:fe00:2) and its time (after the SYN-ACKs, not before the first probe)"
+        }
+      },
+      "safety_trip": false,
+      "tag": "v01_ndp_and_tcp6_syn",
+      "verdict": "PASS"
+    },
+    {
+      "behaviour_fail": false,
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "captures are stored uncompressed; the verifier has no decompression",
+          "name": "no compressed capture in the case directory",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "50",
+          "name": "peer.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "valid true, []",
+          "name": "binary/capture.json: the witness judged its capture complete",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "50 frames recorded, 50 in the file",
+          "name": "binary/capture.json describes binary/peer.pcap (sha256 and frame count)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3 start, 3 end markers; window 1794512445.2208972 .. 1794512450.3301942",
+          "name": "binary/peer.pcap: a start marker before and three end markers after every scanner frame",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "64",
+          "name": "peer.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "valid true, []",
+          "name": "oracle-binary/capture.json: the witness judged its capture complete",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "64 frames recorded, 64 in the file",
+          "name": "oracle-binary/capture.json describes oracle-binary/peer.pcap (sha256 and frame count)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3 start, 3 end markers; window 1794512451.2718134 .. 1794512469.0658958",
+          "name": "oracle-binary/peer.pcap: a start marker before and three end markers after every scanner frame",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "50",
+          "name": "peer.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "valid true, []",
+          "name": "list/capture.json: the witness judged its capture complete",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "50 frames recorded, 50 in the file",
+          "name": "list/capture.json describes list/peer.pcap (sha256 and frame count)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3 start, 3 end markers; window 1794512469.937245 .. 1794512474.998754",
+          "name": "list/peer.pcap: a start marker before and three end markers after every scanner frame",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "64",
+          "name": "peer.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "valid true, []",
+          "name": "oracle-list/capture.json: the witness judged its capture complete",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "64 frames recorded, 64 in the file",
+          "name": "oracle-list/capture.json describes oracle-list/peer.pcap (sha256 and frame count)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3 start, 3 end markers; window 1794512475.8876247 .. 1794512493.932372",
+          "name": "oracle-list/peer.pcap: a start marker before and three end markers after every scanner frame",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no IPv4 SYN on the binary capture from outside the stand binding or to an address off the stand",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "no frame of the scanner on the binary capture to an address off the stand or from another source",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0 frames: ",
+          "name": "no frame on the binary capture from a MAC other than the stand's scanner and peer (markers aside)",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no IPv4 SYN on the oracle-binary capture from outside the stand binding or to an address off the stand",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "no frame of the scanner on the oracle-binary capture to an address off the stand or from another source",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0 frames: ",
+          "name": "no frame on the oracle-binary capture from a MAC other than the stand's scanner and peer (markers aside)",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no IPv4 SYN on the list capture from outside the stand binding or to an address off the stand",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "no frame of the scanner on the list capture to an address off the stand or from another source",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0 frames: ",
+          "name": "no frame on the list capture from a MAC other than the stand's scanner and peer (markers aside)",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no IPv4 SYN on the oracle-list capture from outside the stand binding or to an address off the stand",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "no frame of the scanner on the oracle-list capture to an address off the stand or from another source",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0 frames: ",
+          "name": "no frame on the oracle-list capture from a MAC other than the stand's scanner and peer (markers aside)",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "41",
+          "name": "hashes-before-copy.txt matches every file of the case directory",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[]",
+          "name": "evidence files carry only the allowed extensions (json pcap txt log err sha256 md, bin for -oB)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "mode \"ipv6\", ipv6 \"fd00:198:18::/64\"",
+          "name": "isolation.json: the sealed IPv6 stand (capture isolation --mode ipv6)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "mode \"ipv6\"",
+          "name": "isolation-post.json: the IPv6 stand still sealed after the run (capture isolation --mode ipv6)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "37 files",
+          "name": "privacy: every text and binary file holds only allowlisted names, addresses and paths",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "table Some(Ipv6Expect { tag: \"v02_mixed_v4_v6\", targets: \"198.18.0.2-198.18.0.5,[fd00:198:18::2]-[fd00:198:18::5]\", ports: \"80,81\", router_mac_given: false, oracle_extra: [\"--adapter-ip\", \"fd00:198:18::1\", \"--router-mac-ipv6\", \"02-aa-00-00-00-02\"], steps: [ExpectStep { name: \"binary\", who: Rmasscan, out: Binary }, ExpectStep { name: \"oracle-binary\", who: Oracle, out: Binary }, ExpectStep { name: \"list\", who: Rmasscan, out: List }, ExpectStep { name: \"oracle-list\", who: Oracle, out: List }] })",
+          "name": "expect.json equals the case table's entry",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[\"198.18.0.2-198.18.0.5,[fd00:198:18::2]-[fd00:198:18::5]\", \"-p80,81\", \"-oB\", \"output.bin\", \"--show\", \"open,closed\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\", \"--source-port\", \"40000\"], table [\"198.18.0.2-198.18.0.5,[fd00:198:18::2]-[fd00:198:18::5]\", \"-p80,81\", \"-oB\", \"output.bin\", \"--show\", \"open,closed\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\", \"--source-port\", \"40000\"]",
+          "name": "binary/argv.json is the step's argv in the case table",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[\"198.18.0.2-198.18.0.5,[fd00:198:18::2]-[fd00:198:18::5]\", \"-p80,81\", \"-oB\", \"output.bin\", \"--show\", \"open,closed\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\", \"--source-port\", \"40000\", \"--adapter-ip\", \"fd00:198:18::1\", \"--router-mac-ipv6\", \"02-aa-00-00-00-02\"], table [\"198.18.0.2-198.18.0.5,[fd00:198:18::2]-[fd00:198:18::5]\", \"-p80,81\", \"-oB\", \"output.bin\", \"--show\", \"open,closed\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\", \"--source-port\", \"40000\", \"--adapter-ip\", \"fd00:198:18::1\", \"--router-mac-ipv6\", \"02-aa-00-00-00-02\"]",
+          "name": "oracle-binary/argv.json is the step's argv in the case table",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[\"198.18.0.2-198.18.0.5,[fd00:198:18::2]-[fd00:198:18::5]\", \"-p80,81\", \"-oL\", \"output.txt\", \"--show\", \"open,closed\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\", \"--source-port\", \"40000\"], table [\"198.18.0.2-198.18.0.5,[fd00:198:18::2]-[fd00:198:18::5]\", \"-p80,81\", \"-oL\", \"output.txt\", \"--show\", \"open,closed\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\", \"--source-port\", \"40000\"]",
+          "name": "list/argv.json is the step's argv in the case table",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[\"198.18.0.2-198.18.0.5,[fd00:198:18::2]-[fd00:198:18::5]\", \"-p80,81\", \"-oL\", \"output.txt\", \"--show\", \"open,closed\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\", \"--source-port\", \"40000\", \"--adapter-ip\", \"fd00:198:18::1\", \"--router-mac-ipv6\", \"02-aa-00-00-00-02\"], table [\"198.18.0.2-198.18.0.5,[fd00:198:18::2]-[fd00:198:18::5]\", \"-p80,81\", \"-oL\", \"output.txt\", \"--show\", \"open,closed\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\", \"--source-port\", \"40000\", \"--adapter-ip\", \"fd00:198:18::1\", \"--router-mac-ipv6\", \"02-aa-00-00-00-02\"]",
+          "name": "oracle-list/argv.json is the step's argv in the case table",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "it still ran",
+          "name": "binary/responder.json: the peer responder ran until the scanner ended",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "it still ran",
+          "name": "oracle-binary/responder.json: the peer responder ran until the scanner ended",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "it still ran",
+          "name": "list/responder.json: the peer responder ran until the scanner ended",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "it still ran",
+          "name": "oracle-list/responder.json: the peer responder ran until the scanner ended",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "ready",
+          "name": "ipv6-stack.json: the stand's IPv6 was ready before the case (the veth settings, the stand's addresses none tentative or failed)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "binary: the stand answered every probe the stand's way (TCP 80 and 8080 open, the rest closed) and every NS of the scanner with exactly one NA of its form (from fe80::aa:ff:fe00:2, Solicited and Override, no Router flag, its MAC as target link-layer address)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "binary: nothing on the peer side answers anything the scan did not send",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "{}",
+          "name": "binary: no kernel noise of either side in the step (STAND_NOISE: MLD, RS, RA, DAD NS, a peer NS for the scanner, a scanner NS for a peer; bound 0 each)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "binary: every probe, reply, NS and NA lies inside the witness window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0 other frames: ",
+          "name": "binary: every frame of the scanner MAC is a probe of the scan or of a named class (next-hop who-has, next-hop NS, RST to a SYN-ACK, C's RST to an RST of the stand, NA to a peer NS)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "next_hop_who_has 1 of at most 10, next_hop_ns 1 of at most 10, rst_to_syn_ack 8 of at most 8, na_to_peer_ns 0 of at most 0, rst_to_rst 0 of at most 0",
+          "name": "binary: the named scanner-side frames stay within their bounds (who-has and NS: the resolver's request count when the step resolves that next hop, else 0; RST: one per SYN-ACK frame, on the oracle's step plus one per distinct SYN-ACK; C's RST to an RST: one per distinct RST of the stand on the oracle's step, none on rmasscan's; NA: per peer NS one of the kernel, plus one of rmasscan's responder)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "16 records",
+          "name": "binary: output.bin is a well-formed document",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "binary: exit.txt is 0",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "binary: stdout.txt is empty (a file format silences stdout)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[]",
+          "name": "binary: stderr.txt holds only [+] lines and rmasscan's status forms",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[(\"interface\", \"veth-a (detected: route to 198.18.0.2)\"), (\"source-mac\", \"02-aa-00-00-00-01 (detected)\"), (\"source-ip\", \"198.18.0.1 (detected)\"), (\"router-ip\", \"198.18.0.2 (interface default gateway)\"), (\"source-ip\", \"[fd00:198:18::1] (detected)\"), (\"router-ip\", \"[fe80::aa:ff:fe00:2] (interface default gateway)\"), (\"router-mac\", \"02-aa-00-00-00-02 (arp: 1 requests, 0 ms)\"), (\"router-mac-ipv6\", \"02-aa-00-00-00-02 (ndp: 1 requests, 0 ms)\"), (\"seed\", \"1 (given)\"), (\"source-port\", \"40000 (given)\")]",
+          "name": "binary: [+] lines are the stand's: interface = veth-a (detected: route to 198.18.0.2) | source-mac = 02-aa-00-00-00-01 (detected) | source-ip = 198.18.0.1 (detected) | router-ip = 198.18.0.2 (interface default gateway) | source-ip = [fd00:198:18::1] (detected) | router-ip = [fe80::aa:ff:fe00:2] (interface default gateway) | router-mac = 02-aa-00-00-00-02 (arp:  | router-mac-ipv6 = 02-aa-00-00-00-02 (ndp:  | seed = 1 (given) | source-port = 40000 (given)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "Some(Fin { reason: \"Completed\", sent: 16, replies: 16, open: 8 })",
+          "name": "binary: [+] finished: Completed",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "printed Some((16, 16, 8)), wire (sent, replies, open) (16, 16, 8)",
+          "name": "binary: [+] finished reports sent, replies and open equal to the probes and the distinct replies on the wire",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[]",
+          "name": "binary: every record's time lies within the scan on the wire (2 s either side)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "1 NS on the wire (1 in the resolver's form), printed Some(1)",
+          "name": "binary: rmasscan resolved its IPv6 next hop by NDP before its first probe: 1 to NEXT_HOP_NS_MAX Neighbor Solicitations, each in the resolver's form (from fd00:198:18::1 to ff02::1:ff00:2 for fe80::aa:ff:fe00:2), as many as its [+] router-mac-ipv6 line says it sent",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "NA gave [\"02:aa:00:00:00:02\"]",
+          "name": "binary: every IPv6 probe goes to the MAC the stand's NA gave (02:aa:00:00:00:02)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "1 who-has on the wire, printed Some(1)",
+          "name": "binary: rmasscan resolved its IPv4 next hop by ARP: as many who-has 198.18.0.2 on the wire as its [+] router-mac line says",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "8 IPv4 probes",
+          "name": "binary: v4-order invariant, bytes: every IPv4 probe of the mixed scan is the IPv4-only plan's probe of its address and port, byte for byte, and none of that plan is missing",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "8 IPv6 and 8 IPv4 probes",
+          "name": "binary: v4-order invariant, order: IPv6 takes the low shuffled indices (shuffle(i) < range_ipv6, main.c:258-260) and the IPv4 probe at i is the IPv4-only plan's target of shuffle(i) - range_ipv6",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "closed fd00:198:18::4 81/tcp reason rst-ack ttl 64; closed 198.18.0.3 81/tcp reason rst-ack ttl 64; closed 198.18.0.5 81/tcp reason rst-ack ttl 64; open 198.18.0.5 80/tcp reason syn-ack ttl 64; open fd00:198:18::3 80/tcp reason syn-ack ttl 64; closed fd00:198:18::2 81/tcp reason rst-ack ttl 64; closed fd00:198:18::5 81/tcp reason rst-ack ttl 64; closed 198.18.0.4 81/tcp reason rst-ack ttl 64; open 198.18.0.4 80/tcp reason syn-ack ttl 64; closed 198.18.0.2 81/tcp reason rst-ack ttl 64; open fd00:198:18::4 80/tcp reason syn-ack ttl 64; open fd00:198:18::5 80/tcp reason syn-ack ttl 64; open fd00:198:18::2 80/tcp reason syn-ack ttl 64; open 198.18.0.2 80/tcp reason syn-ack ttl 64; closed fd00:198:18::3 81/tcp reason rst-ack ttl 64; open 198.18.0.3 80/tcp reason syn-ack ttl 64",
+          "name": "binary: the document holds the records of the replies on its wire, field for field (C's IPv6 ttl aside), in reply order (replies captured at most 50 us apart on the peer link, rounded to the microsecond, may come in either order: REPLY_REORDER_WINDOW_US)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "16 probes, 16 planned, first difference at None",
+          "name": "binary: the probes on the wire equal the plan (ReadyPlan of the case), in order, each once",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "oracle-binary: the stand answered every probe the stand's way (TCP 80 and 8080 open, the rest closed) and every NS of the scanner with exactly one NA of its form (from fe80::aa:ff:fe00:2, Solicited and Override, no Router flag, its MAC as target link-layer address)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "oracle-binary: nothing on the peer side answers anything the scan did not send",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "{}",
+          "name": "oracle-binary: no kernel noise of either side in the step (STAND_NOISE: MLD, RS, RA, DAD NS, a peer NS for the scanner, a scanner NS for a peer; bound 0 each)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "oracle-binary: every probe, reply, NS and NA lies inside the witness window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0 other frames: ",
+          "name": "oracle-binary: every frame of the scanner MAC is a probe of the scan or of a named class (next-hop who-has, next-hop NS, RST to a SYN-ACK, C's RST to an RST of the stand, NA to a peer NS)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "next_hop_who_has 1 of at most 12, next_hop_ns 0 of at most 0, rst_to_syn_ack 16 of at most 16, na_to_peer_ns 0 of at most 0, rst_to_rst 8 of at most 8",
+          "name": "oracle-binary: the named scanner-side frames stay within their bounds (who-has and NS: the resolver's request count when the step resolves that next hop, else 0; RST: one per SYN-ACK frame, on the oracle's step plus one per distinct SYN-ACK; C's RST to an RST: one per distinct RST of the stand on the oracle's step, none on rmasscan's; NA: per peer NS one of the kernel, plus one of rmasscan's responder)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "16 records",
+          "name": "oracle-binary: output.bin is a well-formed document (an IPv6 record's ttl may be any 32-bit value: C prints the ip_ttl it never sets for IPv6, ipv6-ttl-not-compared)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "no footer",
+          "name": "oracle-binary: its file lacks the footer only after masscan's forced exit (the line is on its stderr)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "oracle-binary: exit.txt is 0",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "closed fd00:198:18::4 81/tcp reason rst-ack; closed 198.18.0.3 81/tcp reason rst-ack ttl 64; closed 198.18.0.5 81/tcp reason rst-ack ttl 64; open 198.18.0.5 80/tcp reason syn-ack ttl 64; open fd00:198:18::3 80/tcp reason syn-ack; closed fd00:198:18::2 81/tcp reason rst-ack; closed fd00:198:18::5 81/tcp reason rst-ack; closed 198.18.0.4 81/tcp reason rst-ack ttl 64; open 198.18.0.4 80/tcp reason syn-ack ttl 64; closed 198.18.0.2 81/tcp reason rst-ack ttl 64; open fd00:198:18::4 80/tcp reason syn-ack; open fd00:198:18::5 80/tcp reason syn-ack; open fd00:198:18::2 80/tcp reason syn-ack; open 198.18.0.2 80/tcp reason syn-ack ttl 64; closed fd00:198:18::3 81/tcp reason rst-ack; open 198.18.0.3 80/tcp reason syn-ack ttl 64",
+          "name": "oracle-binary: the document holds the records of the replies on its wire, field for field (C's IPv6 ttl aside), in reply order (replies captured at most 50 us apart on the peer link, rounded to the microsecond, may come in either order: REPLY_REORDER_WINDOW_US)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "list: the stand answered every probe the stand's way (TCP 80 and 8080 open, the rest closed) and every NS of the scanner with exactly one NA of its form (from fe80::aa:ff:fe00:2, Solicited and Override, no Router flag, its MAC as target link-layer address)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "list: nothing on the peer side answers anything the scan did not send",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "{}",
+          "name": "list: no kernel noise of either side in the step (STAND_NOISE: MLD, RS, RA, DAD NS, a peer NS for the scanner, a scanner NS for a peer; bound 0 each)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "list: every probe, reply, NS and NA lies inside the witness window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0 other frames: ",
+          "name": "list: every frame of the scanner MAC is a probe of the scan or of a named class (next-hop who-has, next-hop NS, RST to a SYN-ACK, C's RST to an RST of the stand, NA to a peer NS)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "next_hop_who_has 1 of at most 10, next_hop_ns 1 of at most 10, rst_to_syn_ack 8 of at most 8, na_to_peer_ns 0 of at most 0, rst_to_rst 0 of at most 0",
+          "name": "list: the named scanner-side frames stay within their bounds (who-has and NS: the resolver's request count when the step resolves that next hop, else 0; RST: one per SYN-ACK frame, on the oracle's step plus one per distinct SYN-ACK; C's RST to an RST: one per distinct RST of the stand on the oracle's step, none on rmasscan's; NA: per peer NS one of the kernel, plus one of rmasscan's responder)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "16 records",
+          "name": "list: output.txt is a well-formed document",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "list: exit.txt is 0",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "list: stdout.txt is empty (a file format silences stdout)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[]",
+          "name": "list: stderr.txt holds only [+] lines and rmasscan's status forms",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[(\"interface\", \"veth-a (detected: route to 198.18.0.2)\"), (\"source-mac\", \"02-aa-00-00-00-01 (detected)\"), (\"source-ip\", \"198.18.0.1 (detected)\"), (\"router-ip\", \"198.18.0.2 (interface default gateway)\"), (\"source-ip\", \"[fd00:198:18::1] (detected)\"), (\"router-ip\", \"[fe80::aa:ff:fe00:2] (interface default gateway)\"), (\"router-mac\", \"02-aa-00-00-00-02 (arp: 1 requests, 0 ms)\"), (\"router-mac-ipv6\", \"02-aa-00-00-00-02 (ndp: 1 requests, 0 ms)\"), (\"seed\", \"1 (given)\"), (\"source-port\", \"40000 (given)\")]",
+          "name": "list: [+] lines are the stand's: interface = veth-a (detected: route to 198.18.0.2) | source-mac = 02-aa-00-00-00-01 (detected) | source-ip = 198.18.0.1 (detected) | router-ip = 198.18.0.2 (interface default gateway) | source-ip = [fd00:198:18::1] (detected) | router-ip = [fe80::aa:ff:fe00:2] (interface default gateway) | router-mac = 02-aa-00-00-00-02 (arp:  | router-mac-ipv6 = 02-aa-00-00-00-02 (ndp:  | seed = 1 (given) | source-port = 40000 (given)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "Some(Fin { reason: \"Completed\", sent: 16, replies: 16, open: 8 })",
+          "name": "list: [+] finished: Completed",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "printed Some((16, 16, 8)), wire (sent, replies, open) (16, 16, 8)",
+          "name": "list: [+] finished reports sent, replies and open equal to the probes and the distinct replies on the wire",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[]",
+          "name": "list: every record's time lies within the scan on the wire (2 s either side)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "1 NS on the wire (1 in the resolver's form), printed Some(1)",
+          "name": "list: rmasscan resolved its IPv6 next hop by NDP before its first probe: 1 to NEXT_HOP_NS_MAX Neighbor Solicitations, each in the resolver's form (from fd00:198:18::1 to ff02::1:ff00:2 for fe80::aa:ff:fe00:2), as many as its [+] router-mac-ipv6 line says it sent",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "NA gave [\"02:aa:00:00:00:02\"]",
+          "name": "list: every IPv6 probe goes to the MAC the stand's NA gave (02:aa:00:00:00:02)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "1 who-has on the wire, printed Some(1)",
+          "name": "list: rmasscan resolved its IPv4 next hop by ARP: as many who-has 198.18.0.2 on the wire as its [+] router-mac line says",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "8 IPv4 probes",
+          "name": "list: v4-order invariant, bytes: every IPv4 probe of the mixed scan is the IPv4-only plan's probe of its address and port, byte for byte, and none of that plan is missing",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "8 IPv6 and 8 IPv4 probes",
+          "name": "list: v4-order invariant, order: IPv6 takes the low shuffled indices (shuffle(i) < range_ipv6, main.c:258-260) and the IPv4 probe at i is the IPv4-only plan's target of shuffle(i) - range_ipv6",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "closed fd00:198:18::4 81/tcp; closed 198.18.0.3 81/tcp; closed 198.18.0.5 81/tcp; open 198.18.0.5 80/tcp; open fd00:198:18::3 80/tcp; closed fd00:198:18::2 81/tcp; closed fd00:198:18::5 81/tcp; closed 198.18.0.4 81/tcp; open 198.18.0.4 80/tcp; closed 198.18.0.2 81/tcp; open fd00:198:18::4 80/tcp; open fd00:198:18::5 80/tcp; open fd00:198:18::2 80/tcp; open 198.18.0.2 80/tcp; closed fd00:198:18::3 81/tcp; open 198.18.0.3 80/tcp",
+          "name": "list: the document holds the records of the replies on its wire, field for field (C's IPv6 ttl aside), in reply order (replies captured at most 50 us apart on the peer link, rounded to the microsecond, may come in either order: REPLY_REORDER_WINDOW_US)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "16 probes, 16 planned, first difference at None",
+          "name": "list: the probes on the wire equal the plan (ReadyPlan of the case), in order, each once",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "oracle-list: the stand answered every probe the stand's way (TCP 80 and 8080 open, the rest closed) and every NS of the scanner with exactly one NA of its form (from fe80::aa:ff:fe00:2, Solicited and Override, no Router flag, its MAC as target link-layer address)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "oracle-list: nothing on the peer side answers anything the scan did not send",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "{}",
+          "name": "oracle-list: no kernel noise of either side in the step (STAND_NOISE: MLD, RS, RA, DAD NS, a peer NS for the scanner, a scanner NS for a peer; bound 0 each)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "oracle-list: every probe, reply, NS and NA lies inside the witness window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0 other frames: ",
+          "name": "oracle-list: every frame of the scanner MAC is a probe of the scan or of a named class (next-hop who-has, next-hop NS, RST to a SYN-ACK, C's RST to an RST of the stand, NA to a peer NS)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "next_hop_who_has 1 of at most 12, next_hop_ns 0 of at most 0, rst_to_syn_ack 16 of at most 16, na_to_peer_ns 0 of at most 0, rst_to_rst 8 of at most 8",
+          "name": "oracle-list: the named scanner-side frames stay within their bounds (who-has and NS: the resolver's request count when the step resolves that next hop, else 0; RST: one per SYN-ACK frame, on the oracle's step plus one per distinct SYN-ACK; C's RST to an RST: one per distinct RST of the stand on the oracle's step, none on rmasscan's; NA: per peer NS one of the kernel, plus one of rmasscan's responder)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "16 records",
+          "name": "oracle-list: output.txt is a well-formed document (an IPv6 record's ttl may be any 32-bit value: C prints the ip_ttl it never sets for IPv6, ipv6-ttl-not-compared)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "no footer",
+          "name": "oracle-list: its file lacks the footer only after masscan's forced exit (the line is on its stderr)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "oracle-list: exit.txt is 0",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "closed fd00:198:18::4 81/tcp; closed 198.18.0.3 81/tcp; closed 198.18.0.5 81/tcp; open 198.18.0.5 80/tcp; open fd00:198:18::3 80/tcp; closed fd00:198:18::2 81/tcp; closed fd00:198:18::5 81/tcp; closed 198.18.0.4 81/tcp; open 198.18.0.4 80/tcp; closed 198.18.0.2 81/tcp; open fd00:198:18::4 80/tcp; open fd00:198:18::5 80/tcp; open fd00:198:18::2 80/tcp; open 198.18.0.2 80/tcp; closed fd00:198:18::3 81/tcp; open 198.18.0.3 80/tcp",
+          "name": "oracle-list: the document holds the records of the replies on its wire, field for field (C's IPv6 ttl aside), in reply order (replies captured at most 50 us apart on the peer link, rounded to the microsecond, may come in either order: REPLY_REORDER_WINDOW_US)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "16 probes, the oracle 16, first difference at None",
+          "name": "binary: the probes equal the C oracle's (oracle-binary), byte for byte and in order",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "closed fd00:198:18::4 81/tcp reason rst-ack; closed 198.18.0.3 81/tcp reason rst-ack ttl 64; closed 198.18.0.5 81/tcp reason rst-ack ttl 64; open 198.18.0.5 80/tcp reason syn-ack ttl 64; open fd00:198:18::3 80/tcp reason syn-ack; closed fd00:198:18::2 81/tcp reason rst-ack; closed fd00:198:18::5 81/tcp reason rst-ack; closed 198.18.0.4 81/tcp reason rst-ack ttl 64; open 198.18.0.4 80/tcp reason syn-ack ttl 64; closed 198.18.0.2 81/tcp reason rst-ack ttl 64; open fd00:198:18::4 80/tcp reason syn-ack; open fd00:198:18::5 80/tcp reason syn-ack; open fd00:198:18::2 80/tcp reason syn-ack; open 198.18.0.2 80/tcp reason syn-ack ttl 64; closed fd00:198:18::3 81/tcp reason rst-ack; open 198.18.0.3 80/tcp reason syn-ack ttl 64",
+          "name": "binary: the records equal the C oracle's (oracle-binary) field for field but the time, in any order (each document's order is its own wire's reply order, judged above; the two wires' reply orders may differ) (ipv6-ttl-not-compared applied)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "16 probes, the oracle 16, first difference at None",
+          "name": "list: the probes equal the C oracle's (oracle-list), byte for byte and in order",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "closed fd00:198:18::4 81/tcp; closed 198.18.0.3 81/tcp; closed 198.18.0.5 81/tcp; open 198.18.0.5 80/tcp; open fd00:198:18::3 80/tcp; closed fd00:198:18::2 81/tcp; closed fd00:198:18::5 81/tcp; closed 198.18.0.4 81/tcp; open 198.18.0.4 80/tcp; closed 198.18.0.2 81/tcp; open fd00:198:18::4 80/tcp; open fd00:198:18::5 80/tcp; open fd00:198:18::2 80/tcp; open 198.18.0.2 80/tcp; closed fd00:198:18::3 81/tcp; open 198.18.0.3 80/tcp",
+          "name": "list: the records equal the C oracle's (oracle-list) field for field but the time, in any order (each document's order is its own wire's reply order, judged above; the two wires' reply orders may differ) (ipv6-ttl-not-compared applied)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "NS of the scanner: oracle steps 0, rmasscan steps [1, 1]",
+          "name": "deviation ndp-ns-not-rs: R11: rmasscan resolves its IPv6 next hop with a Neighbor Solicitation to the route's next hop (here the interface default gateway, the peer's link-local), C with a Router Solicitation and the Router Advertisement (stack_ndpv6_resolve); a Linux peer without a router daemon sends no RA, so the oracle step is given --router-mac-ipv6 02-aa-00-00-00-02: the condition checked here is the oracle's (its wire holds no NS of the scanner); rmasscan's NS are its own checks (1 to NEXT_HOP_NS_MAX, as many as its ndp: line)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0 IPv6 probes of the oracle from another source than fd00:198:18::1",
+          "name": "deviation oracle-source-given: C never takes a ULA (fc00::/7) or 2001:db8::/32 address as its IPv6 source (rawsock-getip6.c:68-71), rmasscan does; the oracle step is given --adapter-ip fd00:198:18::1, the address rmasscan detects; the condition checked here is the oracle's (every IPv6 probe of its wire leaves from it); rmasscan's detected source is its detection check",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "8 IPv6 records of C with a ttl, 1 of them not the reply's hop limit",
+          "name": "deviation ipv6-ttl-not-compared: T3: an IPv6 record's ttl is the reply's hop limit in rmasscan and a stale value in C (C sets ip_ttl for IPv4 only, proto-preprocess.c:127; its -oJ prints that unsigned value whole, out-json.c:51, live 7b r1 320995840, its -oB the low byte); rmasscan's IPv6 ttl is judged against its own wire (a byte), C's IPv6 ttl against nothing (in C's -oJ any 32-bit value), and IPv6 ttls are left out when the two documents are compared",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "oracle steps (IPv4, IPv6) probes on the stand's one link: [(8, 8), (8, 8)]",
+          "name": "deviation families-one-interface: R17: C sends IPv6 out of the IPv4 default interface, rmasscan routes each family by its own table and refuses a mixed scan whose families leave by different interfaces; on the stand both families route via veth-a, so the mixed scan is not refused; the condition checked here is the oracle's (both families' probes on the stand's one link); rmasscan's one interface and two source lines are its detection check",
+          "result": "PASS"
+        }
+      ],
+      "notes": {
+        "deviations": [
+          {
+            "name": "ndp-ns-not-rs",
+            "observed": "NS of the scanner: oracle steps 0, rmasscan steps [1, 1]",
+            "rule": "R11: rmasscan resolves its IPv6 next hop with a Neighbor Solicitation to the route's next hop (here the interface default gateway, the peer's link-local), C with a Router Solicitation and the Router Advertisement (stack_ndpv6_resolve); a Linux peer without a router daemon sends no RA, so the oracle step is given --router-mac-ipv6 02-aa-00-00-00-02: the condition checked here is the oracle's (its wire holds no NS of the scanner); rmasscan's NS are its own checks (1 to NEXT_HOP_NS_MAX, as many as its ndp: line)"
+          },
+          {
+            "name": "oracle-source-given",
+            "observed": "0 IPv6 probes of the oracle from another source than fd00:198:18::1",
+            "rule": "C never takes a ULA (fc00::/7) or 2001:db8::/32 address as its IPv6 source (rawsock-getip6.c:68-71), rmasscan does; the oracle step is given --adapter-ip fd00:198:18::1, the address rmasscan detects; the condition checked here is the oracle's (every IPv6 probe of its wire leaves from it); rmasscan's detected source is its detection check"
+          },
+          {
+            "name": "ipv6-ttl-not-compared",
+            "observed": "8 IPv6 records of C with a ttl, 1 of them not the reply's hop limit",
+            "rule": "T3: an IPv6 record's ttl is the reply's hop limit in rmasscan and a stale value in C (C sets ip_ttl for IPv4 only, proto-preprocess.c:127; its -oJ prints that unsigned value whole, out-json.c:51, live 7b r1 320995840, its -oB the low byte); rmasscan's IPv6 ttl is judged against its own wire (a byte), C's IPv6 ttl against nothing (in C's -oJ any 32-bit value), and IPv6 ttls are left out when the two documents are compared"
+          },
+          {
+            "name": "families-one-interface",
+            "observed": "oracle steps (IPv4, IPv6) probes on the stand's one link: [(8, 8), (8, 8)]",
+            "rule": "R17: C sends IPv6 out of the IPv4 default interface, rmasscan routes each family by its own table and refuses a mixed scan whose families leave by different interfaces; on the stand both families route via veth-a, so the mixed scan is not refused; the condition checked here is the oracle's (both families' probes on the stand's one link); rmasscan's one interface and two source lines are its detection check"
+          }
+        ],
+        "oracle": "the pinned C masscan 8e6b3b0 with rmasscan's argv plus oracle_extra, one run per document, on the same stand",
+        "record_order_vs_c": {
+          "documents": {
+            "binary": "the same records in the same order",
+            "list": "the same records in the same order"
+          },
+          "rule": "each scanner prints its records in the order the replies arrive on its own wire (judged per step, up to replies captured at most REPLY_REORDER_WINDOW_US = 50 us apart); the two runs of a document do not get the same reply order from the stand (the peer kernel answers a burst of probes in an order that changes from run to run, protocols r1), so rmasscan's records must equal C's field for field but the time, IPv6 ttl aside (ipv6-ttl-not-compared), in any order"
+        },
+        "reply_order_swaps": {
+          "binary": {
+            "largest_gap_us": null,
+            "pairs": 0
+          },
+          "list": {
+            "largest_gap_us": null,
+            "pairs": 0
+          },
+          "oracle-binary": {
+            "largest_gap_us": null,
+            "pairs": 0
+          },
+          "oracle-list": {
+            "largest_gap_us": null,
+            "pairs": 0
+          }
+        },
+        "reply_order_window": "50 us: two replies captured on the peer link at most this far apart (rounded to the microsecond; exactly 50 us is inside) may reach the scanner in the other order (two CPUs send them); reply_order_swaps gives, per step, the pairs of records written in the other order within it (pairs) and the largest gap among them in microseconds (largest_gap_us, null without such a pair)",
+        "scanner_frame_classes": {
+          "na_to_peer_ns": "a Neighbor Advertisement of the scanner's address answering a Neighbor Solicitation of the peer for it: the scanner namespace kernel, and on rmasscan's step its NS responder (T4)",
+          "next_hop_ns": "rmasscan's IPv6 next-hop resolution (R11): the Neighbor Solicitation of its resolver for the router fe80::aa:ff:fe00:2 (is_next_hop_ns), only in a case without --router-mac-ipv6",
+          "next_hop_who_has": "the IPv4 next-hop resolution of a scan with IPv4 targets: an ARP who-has 198.18.0.2 from 198.18.0.1, 60 bytes zero-padded (the resolver form of C stack-arpv4.c and rmasscan)",
+          "rst_to_rst": "C's own TCP RST (no other flag) from the scanner's address of the family whose sequence number is the acknowledgment of an RST of the stand (a closed port): C resets each distinct reply that passes its cookie check and dedup, the RST as well as the SYN-ACK (main.c:1048-1101, `TCP_IS_SYNACK || TCP_IS_RST`, then tcp_send_RST; live 7b r1), in its template's form (window 1200, the MSS option); only on the oracle's step: rmasscan has no RST path and no kernel answers an RST",
+          "rst_to_syn_ack": "a TCP RST (no other flag) from the scanner's address of the family whose sequence number is the acknowledgment of a SYN-ACK of the stand: the scanner namespace kernel resets a SYN-ACK no socket owns, and C resets each distinct SYN-ACK itself once it passed its dedup (main.c:1067-1068, :1095; tcp_send_RST builds IPv6 too)"
+        },
+        "scanner_frames": {
+          "binary": {
+            "at_most": {
+              "na_to_peer_ns": 0,
+              "next_hop_ns": 10,
+              "next_hop_who_has": 10,
+              "rst_to_rst": 0,
+              "rst_to_syn_ack": 8
+            },
+            "na_to_peer_ns": 0,
+            "next_hop_ns": 1,
+            "next_hop_who_has": 1,
+            "rst_to_rst": 0,
+            "rst_to_syn_ack": 8,
+            "stand_noise": {},
+            "unexplained": 0
+          },
+          "list": {
+            "at_most": {
+              "na_to_peer_ns": 0,
+              "next_hop_ns": 10,
+              "next_hop_who_has": 10,
+              "rst_to_rst": 0,
+              "rst_to_syn_ack": 8
+            },
+            "na_to_peer_ns": 0,
+            "next_hop_ns": 1,
+            "next_hop_who_has": 1,
+            "rst_to_rst": 0,
+            "rst_to_syn_ack": 8,
+            "stand_noise": {},
+            "unexplained": 0
+          },
+          "oracle-binary": {
+            "at_most": {
+              "na_to_peer_ns": 0,
+              "next_hop_ns": 0,
+              "next_hop_who_has": 12,
+              "rst_to_rst": 8,
+              "rst_to_syn_ack": 16
+            },
+            "na_to_peer_ns": 0,
+            "next_hop_ns": 0,
+            "next_hop_who_has": 1,
+            "rst_to_rst": 8,
+            "rst_to_syn_ack": 16,
+            "stand_noise": {},
+            "unexplained": 0
+          },
+          "oracle-list": {
+            "at_most": {
+              "na_to_peer_ns": 0,
+              "next_hop_ns": 0,
+              "next_hop_who_has": 12,
+              "rst_to_rst": 8,
+              "rst_to_syn_ack": 16
+            },
+            "na_to_peer_ns": 0,
+            "next_hop_ns": 0,
+            "next_hop_who_has": 1,
+            "rst_to_rst": 8,
+            "rst_to_syn_ack": 16,
+            "stand_noise": {},
+            "unexplained": 0
+          }
+        },
+        "stand_noise_classes": {
+          "dad_ns": "a Neighbor Solicitation from :: (Duplicate Address Detection) from either MAC: the stand sets accept_dad=0 and adds its addresses nodad",
+          "mld": "an MLD query, report or done (ICMPv6 130, 131, 132, 143) from either MAC: a host reports only when it joins or leaves a group; the stand's groups are joined when it is raised, before wire-lab.sh's settle wait (an unsolicited report is expected to repeat within mldv2_unsolicited_report_interval, 1 s), so none may fall into a step",
+          "peer_ns_for_scanner": "a Neighbor Solicitation of the peer for the scanner's address: the peer has fd00:198:18::1 as a permanent neighbour, so it never resolves the scanner",
+          "router_advertisement": "ICMPv6 134: no router daemon runs on the stand and both ends have forwarding=0",
+          "router_solicitation": "ICMPv6 133 from either MAC: the stand sets accept_ra=0 and router_solicitations=0 on both veth ends",
+          "scanner_ns_for_peer": "a Neighbor Solicitation of the scanner MAC for a peer's ULA fd00:198:18::2-5: the scanner namespace kernel resolving a peer before it resets a SYN-ACK; the scanner has the peers as permanent neighbours, which prevents it. It is told apart from rmasscan's resolver NS by its target (a peer ULA, not the router fe80::aa:ff:fe00:2) and its time (after the SYN-ACKs, not before the first probe)"
+        }
+      },
+      "safety_trip": false,
+      "tag": "v02_mixed_v4_v6",
+      "verdict": "PASS"
+    },
+    {
+      "behaviour_fail": false,
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "captures are stored uncompressed; the verifier has no decompression",
+          "name": "no compressed capture in the case directory",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "26",
+          "name": "peer.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "valid true, []",
+          "name": "json/capture.json: the witness judged its capture complete",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "26 frames recorded, 26 in the file",
+          "name": "json/capture.json describes json/peer.pcap (sha256 and frame count)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3 start, 3 end markers; window 1794512495.2987099 .. 1794512500.3119712",
+          "name": "json/peer.pcap: a start marker before and three end markers after every scanner frame",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "34",
+          "name": "peer.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "valid true, []",
+          "name": "oracle-json/capture.json: the witness judged its capture complete",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "34 frames recorded, 34 in the file",
+          "name": "oracle-json/capture.json describes oracle-json/peer.pcap (sha256 and frame count)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3 start, 3 end markers; window 1794512501.1998203 .. 1794512518.9475203",
+          "name": "oracle-json/peer.pcap: a start marker before and three end markers after every scanner frame",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no IPv4 SYN on the json capture from outside the stand binding or to an address off the stand",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "no frame of the scanner on the json capture to an address off the stand or from another source",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0 frames: ",
+          "name": "no frame on the json capture from a MAC other than the stand's scanner and peer (markers aside)",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no IPv4 SYN on the oracle-json capture from outside the stand binding or to an address off the stand",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "no frame of the scanner on the oracle-json capture to an address off the stand or from another source",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0 frames: ",
+          "name": "no frame on the oracle-json capture from a MAC other than the stand's scanner and peer (markers aside)",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "23",
+          "name": "hashes-before-copy.txt matches every file of the case directory",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[]",
+          "name": "evidence files carry only the allowed extensions (json pcap txt log err sha256 md, bin for -oB)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "mode \"ipv6\", ipv6 \"fd00:198:18::/64\"",
+          "name": "isolation.json: the sealed IPv6 stand (capture isolation --mode ipv6)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "mode \"ipv6\"",
+          "name": "isolation-post.json: the IPv6 stand still sealed after the run (capture isolation --mode ipv6)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "21 files",
+          "name": "privacy: every text and binary file holds only allowlisted names, addresses and paths",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "table Some(Ipv6Expect { tag: \"v03_explicit_router_mac_ipv6\", targets: \"[fd00:198:18::2]-[fd00:198:18::5]\", ports: \"80,81\", router_mac_given: true, oracle_extra: [\"--adapter-ip\", \"fd00:198:18::1\"], steps: [ExpectStep { name: \"json\", who: Rmasscan, out: Json }, ExpectStep { name: \"oracle-json\", who: Oracle, out: Json }] })",
+          "name": "expect.json equals the case table's entry",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[\"[fd00:198:18::2]-[fd00:198:18::5]\", \"-p80,81\", \"-oJ\", \"output.json\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\", \"--source-port\", \"40000\", \"--router-mac-ipv6\", \"02-aa-00-00-00-02\"], table [\"[fd00:198:18::2]-[fd00:198:18::5]\", \"-p80,81\", \"-oJ\", \"output.json\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\", \"--source-port\", \"40000\", \"--router-mac-ipv6\", \"02-aa-00-00-00-02\"]",
+          "name": "json/argv.json is the step's argv in the case table",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[\"[fd00:198:18::2]-[fd00:198:18::5]\", \"-p80,81\", \"-oJ\", \"output.json\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\", \"--source-port\", \"40000\", \"--router-mac-ipv6\", \"02-aa-00-00-00-02\", \"--adapter-ip\", \"fd00:198:18::1\"], table [\"[fd00:198:18::2]-[fd00:198:18::5]\", \"-p80,81\", \"-oJ\", \"output.json\", \"--seed\", \"1\", \"--rate\", \"100\", \"--wait\", \"3\", \"--source-port\", \"40000\", \"--router-mac-ipv6\", \"02-aa-00-00-00-02\", \"--adapter-ip\", \"fd00:198:18::1\"]",
+          "name": "oracle-json/argv.json is the step's argv in the case table",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "it still ran",
+          "name": "json/responder.json: the peer responder ran until the scanner ended",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "it still ran",
+          "name": "oracle-json/responder.json: the peer responder ran until the scanner ended",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "ready",
+          "name": "ipv6-stack.json: the stand's IPv6 was ready before the case (the veth settings, the stand's addresses none tentative or failed)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "json: the stand answered every probe the stand's way (TCP 80 and 8080 open, the rest closed) and every NS of the scanner with exactly one NA of its form (from fe80::aa:ff:fe00:2, Solicited and Override, no Router flag, its MAC as target link-layer address)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "json: nothing on the peer side answers anything the scan did not send",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "{}",
+          "name": "json: no kernel noise of either side in the step (STAND_NOISE: MLD, RS, RA, DAD NS, a peer NS for the scanner, a scanner NS for a peer; bound 0 each)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "json: every probe, reply, NS and NA lies inside the witness window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0 other frames: ",
+          "name": "json: every frame of the scanner MAC is a probe of the scan or of a named class (next-hop who-has, next-hop NS, RST to a SYN-ACK, C's RST to an RST of the stand, NA to a peer NS)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "next_hop_who_has 0 of at most 0, next_hop_ns 0 of at most 0, rst_to_syn_ack 4 of at most 4, na_to_peer_ns 0 of at most 0, rst_to_rst 0 of at most 0",
+          "name": "json: the named scanner-side frames stay within their bounds (who-has and NS: the resolver's request count when the step resolves that next hop, else 0; RST: one per SYN-ACK frame, on the oracle's step plus one per distinct SYN-ACK; C's RST to an RST: one per distinct RST of the stand on the oracle's step, none on rmasscan's; NA: per peer NS one of the kernel, plus one of rmasscan's responder)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "4 records",
+          "name": "json: output.json is a well-formed document",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "json: exit.txt is 0",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "json: stdout.txt is empty (a file format silences stdout)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[]",
+          "name": "json: stderr.txt holds only [+] lines and rmasscan's status forms",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[(\"interface\", \"veth-a (detected: route to [fd00:198:18::2])\"), (\"source-mac\", \"02-aa-00-00-00-01 (detected)\"), (\"source-ip\", \"[fd00:198:18::1] (detected)\"), (\"router-mac-ipv6\", \"02-aa-00-00-00-02 (given)\"), (\"seed\", \"1 (given)\"), (\"source-port\", \"40000 (given)\")]",
+          "name": "json: [+] lines are the stand's: interface = veth-a (detected: route to [fd00:198:18::2]) | source-mac = 02-aa-00-00-00-01 (detected) | source-ip = [fd00:198:18::1] (detected) | router-mac-ipv6 = 02-aa-00-00-00-02 (given) | seed = 1 (given) | source-port = 40000 (given)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "Some(Fin { reason: \"Completed\", sent: 8, replies: 8, open: 4 })",
+          "name": "json: [+] finished: Completed",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "printed Some((8, 8, 4)), wire (sent, replies, open) (8, 8, 4)",
+          "name": "json: [+] finished reports sent, replies and open equal to the probes and the distinct replies on the wire",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "[]",
+          "name": "json: every record's time lies within the scan on the wire (2 s either side)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0 NS on the wire",
+          "name": "json: --router-mac-ipv6 bypasses NDP: no Neighbor Solicitation of the scanner on the wire and every IPv6 probe goes to the given 02:aa:00:00:00:02",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "open fd00:198:18::2 80/tcp reason syn-ack ttl 64; open fd00:198:18::3 80/tcp reason syn-ack ttl 64; open fd00:198:18::4 80/tcp reason syn-ack ttl 64; open fd00:198:18::5 80/tcp reason syn-ack ttl 64",
+          "name": "json: the document holds the records of the replies on its wire, field for field (C's IPv6 ttl aside), in reply order (replies captured at most 50 us apart on the peer link, rounded to the microsecond, may come in either order: REPLY_REORDER_WINDOW_US)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "8 probes, 8 planned, first difference at None",
+          "name": "json: the probes on the wire equal the plan (ReadyPlan of the case), in order, each once",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "oracle-json: the stand answered every probe the stand's way (TCP 80 and 8080 open, the rest closed) and every NS of the scanner with exactly one NA of its form (from fe80::aa:ff:fe00:2, Solicited and Override, no Router flag, its MAC as target link-layer address)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "oracle-json: nothing on the peer side answers anything the scan did not send",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "{}",
+          "name": "oracle-json: no kernel noise of either side in the step (STAND_NOISE: MLD, RS, RA, DAD NS, a peer NS for the scanner, a scanner NS for a peer; bound 0 each)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "oracle-json: every probe, reply, NS and NA lies inside the witness window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0 other frames: ",
+          "name": "oracle-json: every frame of the scanner MAC is a probe of the scan or of a named class (next-hop who-has, next-hop NS, RST to a SYN-ACK, C's RST to an RST of the stand, NA to a peer NS)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "next_hop_who_has 0 of at most 0, next_hop_ns 0 of at most 0, rst_to_syn_ack 8 of at most 8, na_to_peer_ns 0 of at most 0, rst_to_rst 4 of at most 4",
+          "name": "oracle-json: the named scanner-side frames stay within their bounds (who-has and NS: the resolver's request count when the step resolves that next hop, else 0; RST: one per SYN-ACK frame, on the oracle's step plus one per distinct SYN-ACK; C's RST to an RST: one per distinct RST of the stand on the oracle's step, none on rmasscan's; NA: per peer NS one of the kernel, plus one of rmasscan's responder)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "4 records",
+          "name": "oracle-json: output.json is a well-formed document (an IPv6 record's ttl may be any 32-bit value: C prints the ip_ttl it never sets for IPv6, ipv6-ttl-not-compared)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "no footer",
+          "name": "oracle-json: its file lacks the footer only after masscan's forced exit (the line is on its stderr)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "oracle-json: exit.txt is 0",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "open fd00:198:18::2 80/tcp reason syn-ack; open fd00:198:18::3 80/tcp reason syn-ack; open fd00:198:18::4 80/tcp reason syn-ack; open fd00:198:18::5 80/tcp reason syn-ack",
+          "name": "oracle-json: the document holds the records of the replies on its wire, field for field (C's IPv6 ttl aside), in reply order (replies captured at most 50 us apart on the peer link, rounded to the microsecond, may come in either order: REPLY_REORDER_WINDOW_US)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "8 probes, the oracle 8, first difference at None",
+          "name": "json: the probes equal the C oracle's (oracle-json), byte for byte and in order",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "open fd00:198:18::2 80/tcp reason syn-ack; open fd00:198:18::3 80/tcp reason syn-ack; open fd00:198:18::4 80/tcp reason syn-ack; open fd00:198:18::5 80/tcp reason syn-ack",
+          "name": "json: the records equal the C oracle's (oracle-json) field for field but the time, in any order (each document's order is its own wire's reply order, judged above; the two wires' reply orders may differ) (ipv6-ttl-not-compared applied)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0 IPv6 probes of the oracle from another source than fd00:198:18::1",
+          "name": "deviation oracle-source-given: C never takes a ULA (fc00::/7) or 2001:db8::/32 address as its IPv6 source (rawsock-getip6.c:68-71), rmasscan does; the oracle step is given --adapter-ip fd00:198:18::1, the address rmasscan detects; the condition checked here is the oracle's (every IPv6 probe of its wire leaves from it); rmasscan's detected source is its detection check",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "4 IPv6 records of C with a ttl, 4 of them not the reply's hop limit",
+          "name": "deviation ipv6-ttl-not-compared: T3: an IPv6 record's ttl is the reply's hop limit in rmasscan and a stale value in C (C sets ip_ttl for IPv4 only, proto-preprocess.c:127; its -oJ prints that unsigned value whole, out-json.c:51, live 7b r1 320995840, its -oB the low byte); rmasscan's IPv6 ttl is judged against its own wire (a byte), C's IPv6 ttl against nothing (in C's -oJ any 32-bit value), and IPv6 ttls are left out when the two documents are compared",
+          "result": "PASS"
+        }
+      ],
+      "notes": {
+        "deviations": [
+          {
+            "name": "oracle-source-given",
+            "observed": "0 IPv6 probes of the oracle from another source than fd00:198:18::1",
+            "rule": "C never takes a ULA (fc00::/7) or 2001:db8::/32 address as its IPv6 source (rawsock-getip6.c:68-71), rmasscan does; the oracle step is given --adapter-ip fd00:198:18::1, the address rmasscan detects; the condition checked here is the oracle's (every IPv6 probe of its wire leaves from it); rmasscan's detected source is its detection check"
+          },
+          {
+            "name": "ipv6-ttl-not-compared",
+            "observed": "4 IPv6 records of C with a ttl, 4 of them not the reply's hop limit",
+            "rule": "T3: an IPv6 record's ttl is the reply's hop limit in rmasscan and a stale value in C (C sets ip_ttl for IPv4 only, proto-preprocess.c:127; its -oJ prints that unsigned value whole, out-json.c:51, live 7b r1 320995840, its -oB the low byte); rmasscan's IPv6 ttl is judged against its own wire (a byte), C's IPv6 ttl against nothing (in C's -oJ any 32-bit value), and IPv6 ttls are left out when the two documents are compared"
+          }
+        ],
+        "oracle": "the pinned C masscan 8e6b3b0 with rmasscan's argv plus oracle_extra, one run per document, on the same stand",
+        "record_order_vs_c": {
+          "documents": {
+            "json": "the same records in the same order"
+          },
+          "rule": "each scanner prints its records in the order the replies arrive on its own wire (judged per step, up to replies captured at most REPLY_REORDER_WINDOW_US = 50 us apart); the two runs of a document do not get the same reply order from the stand (the peer kernel answers a burst of probes in an order that changes from run to run, protocols r1), so rmasscan's records must equal C's field for field but the time, IPv6 ttl aside (ipv6-ttl-not-compared), in any order"
+        },
+        "reply_order_swaps": {
+          "json": {
+            "largest_gap_us": null,
+            "pairs": 0
+          },
+          "oracle-json": {
+            "largest_gap_us": null,
+            "pairs": 0
+          }
+        },
+        "reply_order_window": "50 us: two replies captured on the peer link at most this far apart (rounded to the microsecond; exactly 50 us is inside) may reach the scanner in the other order (two CPUs send them); reply_order_swaps gives, per step, the pairs of records written in the other order within it (pairs) and the largest gap among them in microseconds (largest_gap_us, null without such a pair)",
+        "scanner_frame_classes": {
+          "na_to_peer_ns": "a Neighbor Advertisement of the scanner's address answering a Neighbor Solicitation of the peer for it: the scanner namespace kernel, and on rmasscan's step its NS responder (T4)",
+          "next_hop_ns": "rmasscan's IPv6 next-hop resolution (R11): the Neighbor Solicitation of its resolver for the router fe80::aa:ff:fe00:2 (is_next_hop_ns), only in a case without --router-mac-ipv6",
+          "next_hop_who_has": "the IPv4 next-hop resolution of a scan with IPv4 targets: an ARP who-has 198.18.0.2 from 198.18.0.1, 60 bytes zero-padded (the resolver form of C stack-arpv4.c and rmasscan)",
+          "rst_to_rst": "C's own TCP RST (no other flag) from the scanner's address of the family whose sequence number is the acknowledgment of an RST of the stand (a closed port): C resets each distinct reply that passes its cookie check and dedup, the RST as well as the SYN-ACK (main.c:1048-1101, `TCP_IS_SYNACK || TCP_IS_RST`, then tcp_send_RST; live 7b r1), in its template's form (window 1200, the MSS option); only on the oracle's step: rmasscan has no RST path and no kernel answers an RST",
+          "rst_to_syn_ack": "a TCP RST (no other flag) from the scanner's address of the family whose sequence number is the acknowledgment of a SYN-ACK of the stand: the scanner namespace kernel resets a SYN-ACK no socket owns, and C resets each distinct SYN-ACK itself once it passed its dedup (main.c:1067-1068, :1095; tcp_send_RST builds IPv6 too)"
+        },
+        "scanner_frames": {
+          "json": {
+            "at_most": {
+              "na_to_peer_ns": 0,
+              "next_hop_ns": 0,
+              "next_hop_who_has": 0,
+              "rst_to_rst": 0,
+              "rst_to_syn_ack": 4
+            },
+            "na_to_peer_ns": 0,
+            "next_hop_ns": 0,
+            "next_hop_who_has": 0,
+            "rst_to_rst": 0,
+            "rst_to_syn_ack": 4,
+            "stand_noise": {},
+            "unexplained": 0
+          },
+          "oracle-json": {
+            "at_most": {
+              "na_to_peer_ns": 0,
+              "next_hop_ns": 0,
+              "next_hop_who_has": 0,
+              "rst_to_rst": 4,
+              "rst_to_syn_ack": 8
+            },
+            "na_to_peer_ns": 0,
+            "next_hop_ns": 0,
+            "next_hop_who_has": 0,
+            "rst_to_rst": 4,
+            "rst_to_syn_ack": 8,
+            "stand_noise": {},
+            "unexplained": 0
+          }
+        },
+        "stand_noise_classes": {
+          "dad_ns": "a Neighbor Solicitation from :: (Duplicate Address Detection) from either MAC: the stand sets accept_dad=0 and adds its addresses nodad",
+          "mld": "an MLD query, report or done (ICMPv6 130, 131, 132, 143) from either MAC: a host reports only when it joins or leaves a group; the stand's groups are joined when it is raised, before wire-lab.sh's settle wait (an unsolicited report is expected to repeat within mldv2_unsolicited_report_interval, 1 s), so none may fall into a step",
+          "peer_ns_for_scanner": "a Neighbor Solicitation of the peer for the scanner's address: the peer has fd00:198:18::1 as a permanent neighbour, so it never resolves the scanner",
+          "router_advertisement": "ICMPv6 134: no router daemon runs on the stand and both ends have forwarding=0",
+          "router_solicitation": "ICMPv6 133 from either MAC: the stand sets accept_ra=0 and router_solicitations=0 on both veth ends",
+          "scanner_ns_for_peer": "a Neighbor Solicitation of the scanner MAC for a peer's ULA fd00:198:18::2-5: the scanner namespace kernel resolving a peer before it resets a SYN-ACK; the scanner has the peers as permanent neighbours, which prevents it. It is told apart from rmasscan's resolver NS by its target (a peer ULA, not the router fe80::aa:ff:fe00:2) and its time (after the SYN-ACKs, not before the first probe)"
+        }
+      },
+      "safety_trip": false,
+      "tag": "v03_explicit_router_mac_ipv6",
+      "verdict": "PASS"
+    }
+  ],
+  "safety_scan": [],
+  "safety_trips": [],
+  "schema": 1,
+  "totals": {
+    "FAIL": 0,
+    "INVALID": 0,
+    "NOT RUN": 0,
+    "PASS": 4
+  }
+}

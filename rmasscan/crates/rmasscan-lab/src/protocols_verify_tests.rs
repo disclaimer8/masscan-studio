@@ -27,7 +27,7 @@ const PEER_MAC: [u8; 6] = [2, 0xaa, 0, 0, 0, 2];
 const SCANNER_IP: Ipv4Addr = Ipv4Addr::new(198, 18, 0, 1);
 const TTL: u8 = 64;
 
-fn sum16(b: &[u8], init: u32) -> u16 {
+pub(crate) fn sum16(b: &[u8], init: u32) -> u16 {
     let mut s = init;
     for c in b.chunks(2) {
         s += (u32::from(c[0]) << 8) | u32::from(*c.get(1).unwrap_or(&0));
@@ -38,7 +38,7 @@ fn sum16(b: &[u8], init: u32) -> u16 {
     !(s as u16)
 }
 /// An Ethernet + IPv4 frame around `l4`, its IPv4 header checksum and (TCP, UDP) its transport checksum set.
-fn ip_frame(
+pub(crate) fn ip_frame(
     dmac: [u8; 6],
     smac: [u8; 6],
     s: Ipv4Addr,
@@ -523,7 +523,7 @@ impl Sim {
     }
 }
 /// `serde_json::to_vec_pretty` behind one object-safe call (the generator's records are of several types).
-mod erased {
+pub(crate) mod erased {
     pub(crate) trait Ser {
         fn bytes(&self) -> Vec<u8>;
     }
@@ -541,13 +541,13 @@ fn all_cases(root: &Path) {
     }
     fs::write(root.join(av::TEARDOWN_JSON), format!("{TEARDOWN}\n")).unwrap();
 }
-fn run_of<'a>(res: &'a Value, tag: &str) -> &'a Value {
+pub(crate) fn run_of<'a>(res: &'a Value, tag: &str) -> &'a Value {
     array(&res["runs"])
         .iter()
         .find(|r| r["tag"] == tag)
         .unwrap_or_else(|| panic!("no run {tag}"))
 }
-fn bad(run: &Value) -> Vec<String> {
+pub(crate) fn bad(run: &Value) -> Vec<String> {
     array(&run["checks"])
         .iter()
         .filter(|c| c["result"] != PASS)
@@ -564,7 +564,7 @@ fn judge_one(sim: &Sim) -> (String, Vec<String>) {
     fs::remove_dir_all(&root).unwrap();
     (s(&run["verdict"]).to_owned(), bad(&run))
 }
-fn has(bad: &[String], result: &str, needle: &str) -> bool {
+pub(crate) fn has(bad: &[String], result: &str, needle: &str) -> bool {
     bad.iter()
         .any(|b| b.starts_with(result) && b.contains(needle))
 }

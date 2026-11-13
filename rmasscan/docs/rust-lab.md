@@ -803,7 +803,8 @@ target/release/rmasscan-lab protocols-verify --dir "$OUT" --out "$OUT/verdict.js
 
 TCP SYN поверх IPv6 (только TCP, П1 спеки) на стенде autodetect; принято живьём 2026-11-12 на коде `e9eaebeb`: `linux-ipv6-r2`
 **PASS 4/4** (три кейса и манифест, 286 проверок), вердикт и повторы в
-`docs/experiments/2026-11-08-rmasscan-ipv6-acceptance.md`.
+`docs/experiments/2026-11-08-rmasscan-ipv6-acceptance.md`. Повторено после слияния с main: `linux-ipv6-r3` **PASS 4/4** на
+`0ce2a9e8` (те же 286 проверок, раздел 11 отчёта).
 `wire-lab.sh --suite ipv6` сначала выключает IPv6 везде, как для прочих наборов (строки `disable_ipv6=1` общие и не
 менялись), затем только для этого набора включает его на `veth-a`, `veth-b` и `lo` двух netns: без DAD, без RS/RA,
 без форвардинга, link-local по EUI-64 (`IPV6_SETTINGS` = `capture::IPV6_SYSCTLS`). Сканер `fd00:198:18::1/64`, пиры
@@ -864,7 +865,7 @@ rmasscan 0 из 0, там тот же кадр это FAIL. Только ора�
 «an IPv6 record's ttl may be any 32-bit value … ipv6-ttl-not-compared» и в `notes.deviations`); TTL в документе rmasscan
 остаётся байтом (большее значение это его FAIL), значение с C не сравнивается.
 
-Не запускалось: macOS и link-local цели на macOS, Windows IPv6 (на lab-NIC гостя IPv6 выключен исправлением стенда, П14 спеки), физические NIC, Studio `cargo xtask test` (см. отчёт приёмки).
+Не запускалось: macOS и link-local цели на macOS, Windows IPv6 (на lab-NIC гостя IPv6 выключен исправлением стенда, П14 спеки), физические NIC, Studio `cargo xtask build` и живые окна Studio (офлайн-шаг `cargo xtask test` прогнан в r3, раздел 11 отчёта приёмки).
 
 ```sh
 cargo build --locked --release -p rmasscan-lab -p rmasscan-cli

@@ -527,7 +527,8 @@ IPv6. Принятый код `0ce2a9e8` — коммит слияния `ffb8d6
 PASS 10/10. Тесты на `0ce2a9e8`: Mac 2201/0, minipc 2084/0, гость 1973/0; офлайн-тесты Studio (`cargo xtask test`) на Mac
 484/0. Правило подтверждения 1e9 в `validate` и проверка MAC следующего хопа IPv6 в `ReadyPlan::new_cli` в коде под окнами есть, но
 ни одно окно их не упражняет. Прежний набор r2 на `e9eaebeb` (до правок итогового ревью и до слияния): evidence `f089b071`, те же
-вердикты. GO (stands) условно: зелёный CI на точном HEAD и ревью слияния фиксирует контролёр при слиянии. Windows IPv6, macOS
+вердикты. Итоговое ревью ветки (правки до `0e0bd100`) и ревью слияния пройдены. GO (stands) условно: зелёный CI на точном HEAD и
+Studio CI PR фиксирует контролёр при слиянии. Windows IPv6, macOS
 живой и физические NIC: NOT RUN. Сырые данные r3: `../docs/experiments/2026-11-12-rmasscan-ipv6-postmerge-raw/`; отчёт:
 `../docs/experiments/2026-11-08-rmasscan-ipv6-acceptance.md` (раздел 11 — r3).
 

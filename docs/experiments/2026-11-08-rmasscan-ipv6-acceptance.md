@@ -1,8 +1,9 @@
 # rmasscan: IPv6 (TCP SYN поверх IPv6, NDP, смешанный скан IPv4 и IPv6, записи IPv6 в выводе и `--readscan`), приёмка (итоговый отчёт этапа)
 
 Дата: 2026-11-12 (r2; окна 2026-11-12 08:03Z – 08:56Z; после слияния с main набор r3 на `0ce2a9e8`, окна 19:39Z – 20:29Z,
-раздел 11). Ветка `feat/rmasscan-ipv6`, база `fdd18b37` (слияние PR #55, протоколы IPv4;
-`git merge-base main HEAD`). Документ фиксирует измеренное и открытое. Статусы: PASS / FAIL / INVALID / NOT RUN / OPEN / PENDING,
+раздел 11). Ветка `feat/rmasscan-ipv6`, база этапа `fdd18b37` (слияние PR #55, протоколы IPv4;
+до слияния с main её давал `git merge-base main HEAD`, после слияния `d2a6603f` в ветку — `d2a6603f`, раздел 11).
+Документ фиксирует измеренное и открытое. Статусы: PASS / FAIL / INVALID / NOT RUN / OPEN / PENDING,
 никогда не повышаются. Сырые данные:
 [`2026-11-08-rmasscan-ipv6-acceptance-raw/`](2026-11-08-rmasscan-ipv6-acceptance-raw/) (корневой
 [README](2026-11-08-rmasscan-ipv6-acceptance-raw/README.md) и `MANIFEST.sha256`; у каждого из шести каталогов свои
@@ -18,8 +19,9 @@
   обнаружения). Ветка слила `origin/main` `d2a6603f` (коммит слияния `ffb8d6c1` плюс коммит только с тестом), и все шесть окон
   прогнаны заново на C r3 = `0ce2a9e8`: IPv6 **PASS 4/4**, протоколы **PASS 6/6**, управление сканом **PASS 7/7**, вывод
   **PASS 18/18**, автоопределение Linux **PASS 13/13** и Windows VM **PASS 10/10**, `safety_trips` пуст, ни одной замещённой
-  попытки; сырые данные [`2026-11-12-rmasscan-ipv6-postmerge-raw/`](2026-11-12-rmasscan-ipv6-postmerge-raw/). Разделы 1–10
-  ниже описывают набор r2 на `e9eaebeb` (до правок итогового ревью и до слияния) и не переписаны.
+  попытки; сырые данные [`2026-11-12-rmasscan-ipv6-postmerge-raw/`](2026-11-12-rmasscan-ipv6-postmerge-raw/). Остальные
+  пункты раздела 1 и разделы 2–10 описывают набор r2 на `e9eaebeb` (до правок итогового ревью и до слияния); r3 в них только
+  дописан (строки r3 в разделах 2 и 10).
 - Все шесть живых окон набора r2 сняты на одном коде C = `e9eaebeb`. Набор r1 на `cbcffe72` остановлен первым же окном
   (`linux-ipv6-r1`, INVALID 3 из 3) и замещён; три причины и три правки лаборатории в разделе 5, продукт между r1 и r2 не менялся.
 - Живая приёмка IPv6 на Linux: `linux-ipv6-r2` **PASS 4/4** (манифест и кейсы `v01`–`v03`: автоопределение и NDP с TCP SYN по
@@ -42,7 +44,7 @@
 
 | Часть | Коммит | Привязка |
 | --- | --- | --- |
-| Код под живыми окнами (C) | `e9eaebeb0fe2024bdde29961892e122cd93ab901` (2026-11-12) | minipc и гость: полное дерево из `git archive C`, на госте затем `git init; git add -A`; home-pc: `rmasscan/` из `git archive C`; Mac (оркестратор и верификаторы): чистая рабочая копия на C. Release, `CARGO_INCREMENTAL=0`, `RMASSCAN_LAB_BUILD_COMMIT=C`, rustc 1.99.1 (`58cf8f9c3 2026-10-13`). HEAD ветки весь набор r2 стоял на C, рабочая копия чистая |
+| Код под живыми окнами r2 (C) | `e9eaebeb0fe2024bdde29961892e122cd93ab901` (2026-11-12) | minipc и гость: полное дерево из `git archive C`, на госте затем `git init; git add -A`; home-pc: `rmasscan/` из `git archive C`; Mac (оркестратор и верификаторы): чистая рабочая копия на C. Release, `CARGO_INCREMENTAL=0`, `RMASSCAN_LAB_BUILD_COMMIT=C`, rustc 1.99.1 (`58cf8f9c3 2026-10-13`). HEAD ветки весь набор r2 стоял на C, рабочая копия чистая |
 | Код продукта | `68c0e2e4` … `c1e76779` (задачи 1–6 и их правки): диапазоны IPv6 и `ipv6address_fmt`, смешанная индексация, TCP SYN поверх IPv6, NDP, записи 10 и 11, обнаружение IPv6 на трёх ОС | не менялся с `c1e76779` до `e9eaebeb`: `git diff --stat c1e76779 e9eaebeb -- rmasscan/crates ':!rmasscan/crates/rmasscan-lab'` пуст; **после окон продукт менялся**: правило подтверждения 1e9 в `validate` (`eba1492b`, затем `9dbbfd69`: исключение IPv6 подтверждает только переполнение от целей IPv6, R24) и отказ плана при MAC следующего хопа IPv6, равном MAC источника (`6d6b235a`, `ReadyPlan::new_cli`); ни одно живое окно эти пути не упражняет, их покрывают только офлайн-тесты (Mac на `f171465e`: 2153 прошли, 0 упали; minipc и гость прогнаны на `e9eaebeb`, до этих изменений);  бинарник `rmasscan` на minipc `479eaffe…` и в r1 (на `cbcffe72`), и в r2 |
 | Лаборатория | `06227c14`, `0f48dfac`, `cbcffe72` (задача 7a: набор `ipv6`, `ipv6-verify`, общий `pair_verify.rs` для протоколов и IPv6); `1abae2aa`, `f346a66b`, `e9eaebeb` (правки задачи окон 7b, раздел 5) | `wire-lab.sh --suite ipv6`, `ipv6-suite`, `ipv6-verify`, `privacy-scan` (имена из кадров ICMPv6) |
 | Evidence | `f089b071` (`test(cli): record IPv6 acceptance r2 at C on the Linux stand and the Windows VM`) | только `docs/experiments/2026-11-08-rmasscan-ipv6-acceptance-raw/` (в каталоге 1169 файлов, `MANIFEST.sha256` на 1168 записей; `shasum -a 256 -c --quiet MANIFEST.sha256` даёт rc 0) |

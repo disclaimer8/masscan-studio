@@ -1,0 +1,5 @@
+udp-oracle port=19 cookie=0x5eed1234 rawudp=1 mode=whole sections=1 framing=rawip
+section len=100
+status open count=1
+banner 0 64 =datagram
+banner 0 100 "=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\x5c]^_`abcdefghijklmnopqrstuvwxyz{|}~!\x22#$%&\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee\xee"

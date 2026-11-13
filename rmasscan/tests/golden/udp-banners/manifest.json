@@ -2,14 +2,14 @@
   "oracle": {
     "masscan_git_head": "8e6b3b0c07a81e8ea61d557c06134a21a6881614",
     "harness": "udp_oracle.c + build.sh + run-goldens.sh (kept off the repository, R14)",
-    "driver_sha256": "107cdaaba4fd074d880929318be1c17ede4738eca51688b7591274040c4ceb2d",
+    "driver_sha256": "efb5fb825b7843e58b0d09a61807a84ab646522abce81bc935e77b74bcea2e90",
     "build_script_sha256": "3470f7af4830efce9c7e088934f1056cb132da94ddee6b05c2f3a418543b1b8a",
-    "runner_sha256": "b477a6c59de0f9906655c952aa7fd90fcf7fb56ce0ec80f181c3d129ffd8e372",
+    "runner_sha256": "42f7dcbc744e8cb8b1ffa58d7bed4e41dbb7404884b1c0a3e5484562a1b3ec98",
     "binaries_sha256": {
-      "default": "1599a77ae09cb3a0b829f037a7f45aded2eec36bfb6488b1898b767e3e0b117a",
-      "zero": "76b713d5ba9ecf0cf2d0db46af881cb71f41bef18bf971dbb24fe54aae0cbcd7",
-      "pattern": "9b5fb1c8c5e22efbaf1b6364e7dc9a9c45a86f1828a0cde337cf87cc198513c0",
-      "asan": "9d965cd8457d86a3626ca14c4310cfac161a62aeb8ac65307284f50bc9108d13"
+      "default": "db04585239216d8fcfe3040b10b3094cbc9b66b9e646bad720f6cc18f62e6596",
+      "zero": "e002e61ca2df1240571b3046c9d012ed6de7f7a67a6959aaabddd87848d41d9b",
+      "pattern": "d3c336f9cd9b5ab07a9bf8a2d5155d12626ea59080ef4121ea3bf0ca2bc6f66b",
+      "asan": "3a96cbbdc0826b8530cde98c0567e1d81a02bd580f795cd38410ae03d1a7534b"
     },
     "compiler": "gcc (Ubuntu 15.2.0-16ubuntu1) 15.2.0",
     "linked_sources": [
@@ -71,8 +71,16 @@
     "asan_options": "halt_on_error=0:detect_leaks=0:suppress_equal_pcs=0"
   },
   "host": "Ubuntu 26.04.1 LTS, kernel 7.0.0-38-generic, x86_64",
-  "captured_at": "2026-11-13T14:17:34Z",
+  "captured_at": "2026-11-13T14:34:02Z",
   "expected": "udp-oracle-pattern, payload framing (cases/NAME.out)",
+  "framings": {
+    "payload": "the UDP payload alone, app_offset 0",
+    "eth": "Ethernet II + IPv4 + UDP, padded to 60, app_offset 42",
+    "eth6": "Ethernet II + IPv6 + UDP, app_offset 62",
+    "vlan": "Ethernet II + 802.1Q (VLAN 100) + IPv4 + UDP, padded to 60, app_offset 46",
+    "rawip": "IPv4 + UDP (raw-IP link type), app_offset 28",
+    "addresses": "them 192.0.2.1 / 2001:db8::1, me 198.51.100.1 / 2001:db8::2, ports P -> 40000"
+  },
   "cases": [
     {
       "name": "dns-chaos-txt",
@@ -87,9 +95,34 @@
       "sections": 51,
       "output": "cases/dns-chaos-txt.out",
       "output_sha256": "9c7d69ba00273f5c0439d171a255493fa747cbb5dfffabd89b2eaf79b2588bb0",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": "cases/dns-chaos-txt.eth6.out",
+          "raw_past_datagram": [],
+          "frame": [
+            "len=43..50"
+          ]
+        },
+        "vlan": {
+          "output": "cases/dns-chaos-txt.vlan.out",
+          "raw_past_datagram": [],
+          "frame": [
+            "len=43..50"
+          ]
+        },
+        "rawip": {
+          "output": "cases/dns-chaos-txt.rawip.out",
+          "raw_past_datagram": [],
+          "frame": [
+            "len=43..50"
+          ]
+        }
+      },
       "c_uninit_sections": [
         "len=0..11"
       ],
@@ -109,9 +142,34 @@
       "sections": 1,
       "output": "cases/dns-chaos-txt-rawudp.out",
       "output_sha256": "c01cdbc68bc87ac2fa092172821ef1bfb1997fc22076c318523147f5b619be3d",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": "cases/dns-chaos-txt-rawudp.eth6.out",
+          "raw_past_datagram": [],
+          "frame": [
+            "len=50"
+          ]
+        },
+        "vlan": {
+          "output": "cases/dns-chaos-txt-rawudp.vlan.out",
+          "raw_past_datagram": [],
+          "frame": [
+            "len=50"
+          ]
+        },
+        "rawip": {
+          "output": "cases/dns-chaos-txt-rawudp.rawip.out",
+          "raw_past_datagram": [],
+          "frame": [
+            "len=50"
+          ]
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -129,9 +187,28 @@
       "sections": 1,
       "output": "cases/dns-chaos-txt-wrong-cookie.out",
       "output_sha256": "9531e7d9b33795885d6d16e547f4102f566da6277a8f57541403578f2c837123",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -149,9 +226,28 @@
       "sections": 1,
       "output": "cases/dns-chaos-txt-wrong-cookie-rawudp.out",
       "output_sha256": "73e8bb740bd9f64b0f6700267665bc92a78989b9317027dab4dfc4099b6c8ee5",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -169,9 +265,34 @@
       "sections": 1,
       "output": "cases/dns-chaos-txt-cookie-high-bits.out",
       "output_sha256": "df16907d810fabae500e1c973a7fbdcb0a97baf13053f8f726c4fcf1bc9dbc32",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": "cases/dns-chaos-txt-cookie-high-bits.eth6.out",
+          "raw_past_datagram": [],
+          "frame": [
+            "len=50"
+          ]
+        },
+        "vlan": {
+          "output": "cases/dns-chaos-txt-cookie-high-bits.vlan.out",
+          "raw_past_datagram": [],
+          "frame": [
+            "len=50"
+          ]
+        },
+        "rawip": {
+          "output": "cases/dns-chaos-txt-cookie-high-bits.rawip.out",
+          "raw_past_datagram": [],
+          "frame": [
+            "len=50"
+          ]
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -189,9 +310,34 @@
       "sections": 256,
       "output": "cases/dns-flags-hi-sweep.out",
       "output_sha256": "ab3a4e51a6746e698ceb35be3fb3bc28797ab39222815c089774a46c9fb0300d",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": "cases/dns-flags-hi-sweep.eth6.out",
+          "raw_past_datagram": [],
+          "frame": [
+            "len=50 byte[2]=128..255"
+          ]
+        },
+        "vlan": {
+          "output": "cases/dns-flags-hi-sweep.vlan.out",
+          "raw_past_datagram": [],
+          "frame": [
+            "len=50 byte[2]=128..255"
+          ]
+        },
+        "rawip": {
+          "output": "cases/dns-flags-hi-sweep.rawip.out",
+          "raw_past_datagram": [],
+          "frame": [
+            "len=50 byte[2]=128..255"
+          ]
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -209,9 +355,82 @@
       "sections": 256,
       "output": "cases/dns-flags-lo-sweep.out",
       "output_sha256": "c8f64505934e413aacda8b02cebfd2177418890f54db5ed92eec33f66e82cff4",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": "cases/dns-flags-lo-sweep.eth6.out",
+          "raw_past_datagram": [],
+          "frame": [
+            "len=50 byte[3]=0",
+            "len=50 byte[3]=10..16",
+            "len=50 byte[3]=26..32",
+            "len=50 byte[3]=42..48",
+            "len=50 byte[3]=58..64",
+            "len=50 byte[3]=74..80",
+            "len=50 byte[3]=90..96",
+            "len=50 byte[3]=106..112",
+            "len=50 byte[3]=122..128",
+            "len=50 byte[3]=138..144",
+            "len=50 byte[3]=154..160",
+            "len=50 byte[3]=170..176",
+            "len=50 byte[3]=186..192",
+            "len=50 byte[3]=202..208",
+            "len=50 byte[3]=218..224",
+            "len=50 byte[3]=234..240",
+            "len=50 byte[3]=250..255"
+          ]
+        },
+        "vlan": {
+          "output": "cases/dns-flags-lo-sweep.vlan.out",
+          "raw_past_datagram": [],
+          "frame": [
+            "len=50 byte[3]=0",
+            "len=50 byte[3]=10..16",
+            "len=50 byte[3]=26..32",
+            "len=50 byte[3]=42..48",
+            "len=50 byte[3]=58..64",
+            "len=50 byte[3]=74..80",
+            "len=50 byte[3]=90..96",
+            "len=50 byte[3]=106..112",
+            "len=50 byte[3]=122..128",
+            "len=50 byte[3]=138..144",
+            "len=50 byte[3]=154..160",
+            "len=50 byte[3]=170..176",
+            "len=50 byte[3]=186..192",
+            "len=50 byte[3]=202..208",
+            "len=50 byte[3]=218..224",
+            "len=50 byte[3]=234..240",
+            "len=50 byte[3]=250..255"
+          ]
+        },
+        "rawip": {
+          "output": "cases/dns-flags-lo-sweep.rawip.out",
+          "raw_past_datagram": [],
+          "frame": [
+            "len=50 byte[3]=0",
+            "len=50 byte[3]=10..16",
+            "len=50 byte[3]=26..32",
+            "len=50 byte[3]=42..48",
+            "len=50 byte[3]=58..64",
+            "len=50 byte[3]=74..80",
+            "len=50 byte[3]=90..96",
+            "len=50 byte[3]=106..112",
+            "len=50 byte[3]=122..128",
+            "len=50 byte[3]=138..144",
+            "len=50 byte[3]=154..160",
+            "len=50 byte[3]=170..176",
+            "len=50 byte[3]=186..192",
+            "len=50 byte[3]=202..208",
+            "len=50 byte[3]=218..224",
+            "len=50 byte[3]=234..240",
+            "len=50 byte[3]=250..255"
+          ]
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -229,9 +448,28 @@
       "sections": 1,
       "output": "cases/dns-rcode-3-rawudp.out",
       "output_sha256": "a976b376ea01c243bbd79f058fc53ae56cdc2a4a4a45cbfdf2ed3fb1854b798e",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -249,9 +487,34 @@
       "sections": 1,
       "output": "cases/dns-txt-two-strings.out",
       "output_sha256": "2e0aec71a18662f66bc6e7c000afabec37539d681b9428e70f725a618793c09e",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": "cases/dns-txt-two-strings.eth6.out",
+          "raw_past_datagram": [],
+          "frame": [
+            "len=50"
+          ]
+        },
+        "vlan": {
+          "output": "cases/dns-txt-two-strings.vlan.out",
+          "raw_past_datagram": [],
+          "frame": [
+            "len=50"
+          ]
+        },
+        "rawip": {
+          "output": "cases/dns-txt-two-strings.rawip.out",
+          "raw_past_datagram": [],
+          "frame": [
+            "len=50"
+          ]
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -269,9 +532,28 @@
       "sections": 1,
       "output": "cases/dns-txt-uncompressed-name.out",
       "output_sha256": "2c68abc038ed41a573922f320d486b455885f357f3f6abcf18e8ea4e9b8210e2",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -289,9 +571,34 @@
       "sections": 1,
       "output": "cases/dns-txt-empty-string.out",
       "output_sha256": "80428b4f3464f22270be8029802b5a3b16ee4e575ecae5777837d8c38110c576",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": "cases/dns-txt-empty-string.eth6.out",
+          "raw_past_datagram": [],
+          "frame": [
+            "len=43"
+          ]
+        },
+        "vlan": {
+          "output": "cases/dns-txt-empty-string.vlan.out",
+          "raw_past_datagram": [],
+          "frame": [
+            "len=43"
+          ]
+        },
+        "rawip": {
+          "output": "cases/dns-txt-empty-string.rawip.out",
+          "raw_past_datagram": [],
+          "frame": [
+            "len=43"
+          ]
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -309,9 +616,28 @@
       "sections": 1,
       "output": "cases/dns-txt-rdlength-0.out",
       "output_sha256": "8f2bcbdb86d17f551de017892be93a2fb91f796c266bce83baa872372f401919",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -329,9 +655,28 @@
       "sections": 1,
       "output": "cases/dns-txt-len-over-rdlength.out",
       "output_sha256": "643999ae456dd417ccbca6c4dcf90186bdf330180d07c292c0262190596afa9f",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -349,9 +694,34 @@
       "sections": 1,
       "output": "cases/dns-txt-rdlength-past-end.out",
       "output_sha256": "fc56cccb51e71480006b2600eecbf2efad4031a51c555d0f6872af5b392b7781",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": "cases/dns-txt-rdlength-past-end.eth6.out",
+          "raw_past_datagram": [],
+          "frame": [
+            "len=50"
+          ]
+        },
+        "vlan": {
+          "output": "cases/dns-txt-rdlength-past-end.vlan.out",
+          "raw_past_datagram": [],
+          "frame": [
+            "len=50"
+          ]
+        },
+        "rawip": {
+          "output": "cases/dns-txt-rdlength-past-end.rawip.out",
+          "raw_past_datagram": [],
+          "frame": [
+            "len=50"
+          ]
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -369,9 +739,34 @@
       "sections": 1,
       "output": "cases/dns-txt-len-clamped.out",
       "output_sha256": "fc56cccb51e71480006b2600eecbf2efad4031a51c555d0f6872af5b392b7781",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": "cases/dns-txt-len-clamped.eth6.out",
+          "raw_past_datagram": [],
+          "frame": [
+            "len=50"
+          ]
+        },
+        "vlan": {
+          "output": "cases/dns-txt-len-clamped.vlan.out",
+          "raw_past_datagram": [],
+          "frame": [
+            "len=50"
+          ]
+        },
+        "rawip": {
+          "output": "cases/dns-txt-len-clamped.rawip.out",
+          "raw_past_datagram": [],
+          "frame": [
+            "len=50"
+          ]
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -389,9 +784,28 @@
       "sections": 1,
       "output": "cases/dns-answer-type-a.out",
       "output_sha256": "58e21a1d8b41c276d53a601d1afd1190480e3eac8bb1cb323125ac4e024b6c26",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -409,9 +823,28 @@
       "sections": 1,
       "output": "cases/dns-answer-txt-class-in.out",
       "output_sha256": "643999ae456dd417ccbca6c4dcf90186bdf330180d07c292c0262190596afa9f",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -429,9 +862,34 @@
       "sections": 1,
       "output": "cases/dns-edns-ext-rcode.out",
       "output_sha256": "cfe6035c758de0554c9f2401be697d2e16d014bfed0b93f042ded5fc0b4c4868",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": "cases/dns-edns-ext-rcode.eth6.out",
+          "raw_past_datagram": [],
+          "frame": [
+            "len=61"
+          ]
+        },
+        "vlan": {
+          "output": "cases/dns-edns-ext-rcode.vlan.out",
+          "raw_past_datagram": [],
+          "frame": [
+            "len=61"
+          ]
+        },
+        "rawip": {
+          "output": "cases/dns-edns-ext-rcode.rawip.out",
+          "raw_past_datagram": [],
+          "frame": [
+            "len=61"
+          ]
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -449,9 +907,34 @@
       "sections": 1,
       "output": "cases/dns-edns-ext-rcode-nxdomain.out",
       "output_sha256": "cfe6035c758de0554c9f2401be697d2e16d014bfed0b93f042ded5fc0b4c4868",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": "cases/dns-edns-ext-rcode-nxdomain.eth6.out",
+          "raw_past_datagram": [],
+          "frame": [
+            "len=61"
+          ]
+        },
+        "vlan": {
+          "output": "cases/dns-edns-ext-rcode-nxdomain.vlan.out",
+          "raw_past_datagram": [],
+          "frame": [
+            "len=61"
+          ]
+        },
+        "rawip": {
+          "output": "cases/dns-edns-ext-rcode-nxdomain.rawip.out",
+          "raw_past_datagram": [],
+          "frame": [
+            "len=61"
+          ]
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -469,9 +952,28 @@
       "sections": 1,
       "output": "cases/dns-edns-small-udp-size.out",
       "output_sha256": "726c61904bf9d8d327fef3dc54fd50ac7c33626e96e9902a54d34a4149115f6a",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -489,9 +991,28 @@
       "sections": 1,
       "output": "cases/dns-qd0-two-answers.out",
       "output_sha256": "1de80c51f412f2a1699974773a5f60aa3f9760689eea4e2768c5becc72374ed3",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -509,9 +1030,28 @@
       "sections": 1,
       "output": "cases/dns-qd0-one-answer.out",
       "output_sha256": "cd88abf2c1724c1795389818620553ad021f630759f5ffdf9e7a1ea2fd13eeb8",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [
         "len=44"
       ],
@@ -531,9 +1071,28 @@
       "sections": 1,
       "output": "cases/dns-qd2.out",
       "output_sha256": "94ba8f4c0345da4b949ab1202f2d65568d0810c174e7101c9011cc7bec469a90",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -551,9 +1110,28 @@
       "sections": 1,
       "output": "cases/dns-header-only.out",
       "output_sha256": "66fa6ded16f9e514a96eba3f07d313c6e683beee0b202ffcf85214ebbb71fa8f",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": [
@@ -580,9 +1158,28 @@
       "sections": 1,
       "output": "cases/dns-formerr-header-only.out",
       "output_sha256": "36356badded882d56c07397556bfbdb76c7b5bc5d52a04b531b600f1792c0ccc",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": [
@@ -609,9 +1206,28 @@
       "sections": 1,
       "output": "cases/dns-question-only.out",
       "output_sha256": "061f158cd5eebf27dd71852fb09e74a600fdf15e0a5998e730487b77c8e3c180",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -629,9 +1245,28 @@
       "sections": 1,
       "output": "cases/dns-question-bad-class.out",
       "output_sha256": "643999ae456dd417ccbca6c4dcf90186bdf330180d07c292c0262190596afa9f",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -649,9 +1284,28 @@
       "sections": 1,
       "output": "cases/dns-short-11.out",
       "output_sha256": "a11904934f3640886eee35813c17067c6bb22439b5273435ff56b5f3b888766a",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [
         "len=11"
       ],
@@ -671,9 +1325,28 @@
       "sections": 1,
       "output": "cases/dns-short-11-rawudp.out",
       "output_sha256": "060270e192465d4dec1e755e3460b4636703f2015bf6a555a6abb46e553b45af",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -691,9 +1364,28 @@
       "sections": 1,
       "output": "cases/dns-empty.out",
       "output_sha256": "3f48ddd0815b60671b811dc632137ee97d3100dec3488a172dc63f941915591d",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [
         "len=0"
       ],
@@ -713,11 +1405,34 @@
       "sections": 1,
       "output": "cases/dns-pointer-to-id.out",
       "output_sha256": "643999ae456dd417ccbca6c4dcf90186bdf330180d07c292c0262190596afa9f",
-      "eth_output": "cases/dns-pointer-to-id.eth.out",
-      "eth_raw_past_datagram": [],
-      "eth_frame": [
-        "len=50"
-      ],
+      "frames": {
+        "eth": {
+          "output": "cases/dns-pointer-to-id.eth.out",
+          "raw_past_datagram": [],
+          "frame": [
+            "len=50"
+          ]
+        },
+        "eth6": {
+          "output": "cases/dns-pointer-to-id.eth6.out",
+          "raw_past_datagram": [],
+          "frame": [
+            "len=50"
+          ]
+        },
+        "vlan": {
+          "output": "cases/dns-pointer-to-id.vlan.out",
+          "raw_past_datagram": [],
+          "frame": [
+            "len=50"
+          ]
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -735,9 +1450,32 @@
       "sections": 1,
       "output": "cases/dns-pointer-loop.out",
       "output_sha256": "643999ae456dd417ccbca6c4dcf90186bdf330180d07c292c0262190596afa9f",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": "cases/dns-pointer-loop.eth6.out",
+          "raw_past_datagram": [],
+          "frame": [
+            "len=50"
+          ]
+        },
+        "vlan": {
+          "output": "cases/dns-pointer-loop.vlan.out",
+          "raw_past_datagram": [],
+          "frame": [
+            "len=50"
+          ]
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -755,9 +1493,30 @@
       "sections": 1,
       "output": "cases/dns-pointer-chain-4.out",
       "output_sha256": "f810ffc3d44367665916630828a825a1d5c94b464a449e4970c6cce9d1b6cfad",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": "cases/dns-pointer-chain-4.rawip.out",
+          "raw_past_datagram": [],
+          "frame": [
+            "len=56"
+          ]
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -775,11 +1534,34 @@
       "sections": 1,
       "output": "cases/dns-pointer-chain-5.out",
       "output_sha256": "84d1985a42de31c49223460ae596ea8b8e9300a6d3b2de833136f364881d8b93",
-      "eth_output": "cases/dns-pointer-chain-5.eth.out",
-      "eth_raw_past_datagram": [],
-      "eth_frame": [
-        "len=58"
-      ],
+      "frames": {
+        "eth": {
+          "output": "cases/dns-pointer-chain-5.eth.out",
+          "raw_past_datagram": [],
+          "frame": [
+            "len=58"
+          ]
+        },
+        "eth6": {
+          "output": "cases/dns-pointer-chain-5.eth6.out",
+          "raw_past_datagram": [],
+          "frame": [
+            "len=58"
+          ]
+        },
+        "vlan": {
+          "output": "cases/dns-pointer-chain-5.vlan.out",
+          "raw_past_datagram": [],
+          "frame": [
+            "len=58"
+          ]
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -797,9 +1579,28 @@
       "sections": 1,
       "output": "cases/dns-label-0x40.out",
       "output_sha256": "f626e45286e061ed557837e979c3b047b818bf6b2d39d2bd22a8c6a8178b61e8",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -817,9 +1618,28 @@
       "sections": 1,
       "output": "cases/dns-label-0x80.out",
       "output_sha256": "f626e45286e061ed557837e979c3b047b818bf6b2d39d2bd22a8c6a8178b61e8",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -837,9 +1657,28 @@
       "sections": 1,
       "output": "cases/dns-name-254.out",
       "output_sha256": "98a7d444a64cfa1834587c50927fbadfa3066d94f3dce2ac9071a60ab0d522c4",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -857,9 +1696,28 @@
       "sections": 1,
       "output": "cases/dns-name-255.out",
       "output_sha256": "fcf8bb82bc882340ce7530c2b3a7e23919967dbd3c7d9061a60498a4b6632432",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -877,9 +1735,28 @@
       "sections": 1,
       "output": "cases/dns-many-questions.out",
       "output_sha256": "a512de2e3aabf73b6a98f501bf334ff1df0d48389d7b250c633ce5041313201b",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -897,9 +1774,34 @@
       "sections": 1,
       "output": "cases/dns-many-answers.out",
       "output_sha256": "7e4bb155bda0a1ec0f2ffef75c2227b9e42fdd5a319748d38b774884c2d38c54",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": "cases/dns-many-answers.eth6.out",
+          "raw_past_datagram": [],
+          "frame": [
+            "len=20630"
+          ]
+        },
+        "vlan": {
+          "output": "cases/dns-many-answers.vlan.out",
+          "raw_past_datagram": [],
+          "frame": [
+            "len=20630"
+          ]
+        },
+        "rawip": {
+          "output": "cases/dns-many-answers.rawip.out",
+          "raw_past_datagram": [],
+          "frame": [
+            "len=20630"
+          ]
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -917,9 +1819,28 @@
       "sections": 81,
       "output": "cases/ntp-monlist-1.out",
       "output_sha256": "608cc3bdca09f51f857f4088e651abd60cb5eeb507f3f1d18ac3ff82566c6799",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -937,9 +1858,28 @@
       "sections": 1,
       "output": "cases/ntp-monlist-6x72.out",
       "output_sha256": "5a70857351f1fdb37c6af8af9b32fe54558331327373f55871fc4f349c503264",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -957,9 +1897,28 @@
       "sections": 1,
       "output": "cases/ntp-monlist-more.out",
       "output_sha256": "7acfbeff9aa9def1ad4f70b5c6c0e72f8dca74d475e254a88ab8b2599cdc9303",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -977,9 +1936,28 @@
       "sections": 13,
       "output": "cases/ntp-monlist-err-4.out",
       "output_sha256": "a3501377db277c69bf7c3a15d57fa775be65a967ad88ff5076a1658e77a45ad6",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -997,9 +1975,28 @@
       "sections": 1,
       "output": "cases/ntp-err-1.out",
       "output_sha256": "4b5a69d849221318d7f22d1f01d517c760debfd8b52d9239053497d17429addd",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -1017,9 +2014,28 @@
       "sections": 1,
       "output": "cases/ntp-err-2.out",
       "output_sha256": "f798f0b9814a316f0d15714ae1234945bf987c59d55cf7264f8df134f3b06262",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -1037,9 +2053,28 @@
       "sections": 1,
       "output": "cases/ntp-err-3.out",
       "output_sha256": "6ac8a3f2b3321041c80392bcc641f859939854d26c8212c92b9f0cc98497d21c",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -1057,9 +2092,28 @@
       "sections": 1,
       "output": "cases/ntp-err-5.out",
       "output_sha256": "419e5b102ea5fabf6c5375661df465f1f7739516c2e72b598ae349c4dda723a3",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -1077,9 +2131,28 @@
       "sections": 1,
       "output": "cases/ntp-err-7.out",
       "output_sha256": "e4d29460c2a72a4d086ce1dd43c558aeab11377f23adac29e99c62719c8ac32c",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -1097,9 +2170,28 @@
       "sections": 1,
       "output": "cases/ntp-err-15.out",
       "output_sha256": "82385dfba6ecb145da0d70e97de5ae2b34bdb6b5ef201f7a6252d754288f5f4c",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -1117,9 +2209,28 @@
       "sections": 256,
       "output": "cases/ntp-byte0-sweep.out",
       "output_sha256": "38be306cea897a360f261dff5846761ae3b893a0a6f12fe7d1880000c281bc61",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -1137,9 +2248,28 @@
       "sections": 256,
       "output": "cases/ntp-impl-sweep.out",
       "output_sha256": "e38a0e770a5a8573abc5bde01c74f45ad687dd45e42c06b6fdc73b46b7364e5b",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -1157,9 +2287,28 @@
       "sections": 256,
       "output": "cases/ntp-code-sweep.out",
       "output_sha256": "1f02962a4fc7ac13609031677b805122f26509f44252b25fc63ed44aa394bee6",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -1177,9 +2326,28 @@
       "sections": 256,
       "output": "cases/ntp-err-count-sweep.out",
       "output_sha256": "1a586afaf52322c47c6af50423fc35d3558cf92edad2743938e461f54c9bc122",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -1197,9 +2365,28 @@
       "sections": 1,
       "output": "cases/ntp-too-big-length.out",
       "output_sha256": "be2394e7e6cf57a621073ea251c96e5be645c167c20bf816f152cc377e7c75c7",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -1217,9 +2404,28 @@
       "sections": 1,
       "output": "cases/ntp-too-big-500.out",
       "output_sha256": "78fe8da32d0f43006ca5b7a55c749118ca88ba7bfa57e377a7d9355df0a86fd7",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -1237,9 +2443,28 @@
       "sections": 1,
       "output": "cases/ntp-size-500.out",
       "output_sha256": "660658189e4a94b23e3a3eb91dd2d96b226d269927a68246b12644f4fceaba83",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -1257,9 +2482,28 @@
       "sections": 1,
       "output": "cases/ntp-v4-server.out",
       "output_sha256": "d09b759c65714b9677d36f9bf6cbcdeec7d1910f519bcf3bb1628936fba23f18",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -1277,9 +2521,28 @@
       "sections": 1,
       "output": "cases/ntp-short-3.out",
       "output_sha256": "35c5d749a5d1b7b5efc56210a2de52ed55994764c65fdaf0cbca0b3a4fc7c97d",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -1297,9 +2560,28 @@
       "sections": 1,
       "output": "cases/ntp-monlist-1-rawudp.out",
       "output_sha256": "bedf98bd828870e6b63cf079867a6b2a46063efb420d4484d7a7955cbecb2cbe",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -1317,9 +2599,28 @@
       "sections": 140,
       "output": "cases/nbns-nbstat.out",
       "output_sha256": "56110faf8e18cd69418c6956dfe6f91056a7136e010cf93ca7166bd2e3ac137d",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [
         "len=0..11"
       ],
@@ -1339,9 +2640,28 @@
       "sections": 1,
       "output": "cases/nbns-nbstat-rawudp.out",
       "output_sha256": "faf96daecd6ca0b3aa42fe8c8cfc0106d804dd1663bdc68004ba9fe46979dec3",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -1359,9 +2679,28 @@
       "sections": 1,
       "output": "cases/nbns-nbstat-wrong-cookie.out",
       "output_sha256": "1e0462c3e95e328cdaa23c9f1ecebac1e82ab02f1ad015e8f971530fba6464c5",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -1379,9 +2718,28 @@
       "sections": 1,
       "output": "cases/nbns-nbstat-wrong-cookie-rawudp.out",
       "output_sha256": "5e26077d19e42502132993d348c28a048dd07e1b4f815de77240cf067137e8d6",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -1399,9 +2757,34 @@
       "sections": 1,
       "output": "cases/nbns-nbstat-with-question.out",
       "output_sha256": "05c1d23a281aea9616ee4bad62f63039655cbdc5101e3a3a9be3a72818cfcf6a",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": "cases/nbns-nbstat-with-question.eth6.out",
+          "raw_past_datagram": [],
+          "frame": [
+            "len=145"
+          ]
+        },
+        "vlan": {
+          "output": "cases/nbns-nbstat-with-question.vlan.out",
+          "raw_past_datagram": [],
+          "frame": [
+            "len=145"
+          ]
+        },
+        "rawip": {
+          "output": "cases/nbns-nbstat-with-question.rawip.out",
+          "raw_past_datagram": [],
+          "frame": [
+            "len=145"
+          ]
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -1419,9 +2802,28 @@
       "sections": 256,
       "output": "cases/nbns-flags-hi-sweep.out",
       "output_sha256": "d5a24dbef2800a3447f0718083fa8f82564f60c7ca43c89775b78a7e9d00ff76",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -1439,9 +2841,28 @@
       "sections": 256,
       "output": "cases/nbns-flags-lo-sweep.out",
       "output_sha256": "90830ab7fb20fcb4ae4b80990026e7bb4f6076c04eadee17a047c0bf9f4df02b",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -1459,9 +2880,28 @@
       "sections": 256,
       "output": "cases/nbns-name-char-sweep.out",
       "output_sha256": "6575317db48a2354dbea9f542944782ea6eb91d66185ee7df66db78ee86a69af",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -1479,9 +2919,28 @@
       "sections": 1,
       "output": "cases/nbns-qd2.out",
       "output_sha256": "41f53230dedb05be07baa6e0b294c38174a88060e3871f83ac608759b13c059d",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -1499,9 +2958,28 @@
       "sections": 1,
       "output": "cases/nbns-an0.out",
       "output_sha256": "f617aa9e6acda272493b656c30087a999008cef8f84870785da012d1dda35f95",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -1519,9 +2997,28 @@
       "sections": 1,
       "output": "cases/nbns-type-nb.out",
       "output_sha256": "f7a0689630d9a1f6e5734bdc588c0577399122ba57d66004fee34a7e7f191667",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -1539,9 +3036,28 @@
       "sections": 1,
       "output": "cases/nbns-class-2.out",
       "output_sha256": "f7a0689630d9a1f6e5734bdc588c0577399122ba57d66004fee34a7e7f191667",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -1559,9 +3075,28 @@
       "sections": 1,
       "output": "cases/nbns-rdlength-0.out",
       "output_sha256": "f7a0689630d9a1f6e5734bdc588c0577399122ba57d66004fee34a7e7f191667",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -1579,9 +3114,28 @@
       "sections": 1,
       "output": "cases/nbns-count-over-rdlength.out",
       "output_sha256": "f7a0689630d9a1f6e5734bdc588c0577399122ba57d66004fee34a7e7f191667",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -1599,9 +3153,28 @@
       "sections": 1,
       "output": "cases/nbns-question-bad-class.out",
       "output_sha256": "6e4d96cf8ce5281ef847e43f6174b5f058804772e6ba6de9cdd89f24a91388fc",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [
         "len=177"
       ],
@@ -1621,9 +3194,28 @@
       "sections": 1,
       "output": "cases/nbns-zero-names.out",
       "output_sha256": "76b629c9a4618503e57f95eea4dbae3a8ccd266a1c173a4a1fcff1d838bcadcc",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -1641,9 +3233,28 @@
       "sections": 1,
       "output": "cases/nbns-count-past-entries.out",
       "output_sha256": "8bc79f424af97b83d892cec8e474f5e9378cd13fe81763863fced2e2417864d8",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -1661,9 +3272,28 @@
       "sections": 1,
       "output": "cases/nbns-mac-3-bytes.out",
       "output_sha256": "69d07a37e69c145694a98cfa343e39293c9e9cb7626cb554ac78e4f0ae789cc2",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -1681,9 +3311,28 @@
       "sections": 1,
       "output": "cases/nbns-mac-none.out",
       "output_sha256": "2ba6bd172a0b6244abaf989e8a01c5deaf5828b74552de8b5a196fe5a5cc6b8f",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -1701,9 +3350,28 @@
       "sections": 1,
       "output": "cases/nbns-edns-ext-rcode.out",
       "output_sha256": "4f2a296be7a06037e09d11983447d9836a3bc37eb3651917bb5728b47df852b7",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -1721,9 +3389,28 @@
       "sections": 1,
       "output": "cases/nbns-short-11.out",
       "output_sha256": "f04f4762ce3b3fbbda25e4acb55952d180ced57ef2fe70e8205c6569e43602b1",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [
         "len=11"
       ],
@@ -1743,9 +3430,28 @@
       "sections": 1,
       "output": "cases/nbns-empty.out",
       "output_sha256": "bb09eeff9a3d50ae9b45f9f52c180325b9c27708dd11585d12cae6a7ffc3ce75",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [
         "len=0"
       ],
@@ -1765,9 +3471,28 @@
       "sections": 1,
       "output": "cases/nbns-header-only.out",
       "output_sha256": "eb97445855665a709d3b3723b3798274380b32695c8c75f1f8bf19ca00be5edf",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": [
@@ -1794,9 +3519,28 @@
       "sections": 1,
       "output": "cases/nbns-255-names.out",
       "output_sha256": "04afcdc87d3c3d411f79db42e62edde498934b00f7aedb418b987a699063c2dd",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -1814,9 +3558,28 @@
       "sections": 60,
       "output": "cases/snmp-selftest.out",
       "output_sha256": "505489766f726eda140627ad5d951288e4d1e7d70d2c1c7585a2c9419e767aca",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": [
@@ -1829,11 +3592,37 @@
           ]
         },
         {
+          "framing": "eth6",
+          "kind": "heap-buffer-overflow READ",
+          "where": "asn1_integer proto-snmp.c:151",
+          "sections": [
+            "len=1..2",
+            "len=14..21"
+          ]
+        },
+        {
           "framing": "payload",
           "kind": "heap-buffer-overflow READ",
           "where": "asn1_integer proto-snmp.c:151",
           "sections": [
             "len=1..2",
+            "len=14..21"
+          ]
+        },
+        {
+          "framing": "rawip",
+          "kind": "heap-buffer-overflow READ",
+          "where": "asn1_integer proto-snmp.c:151",
+          "sections": [
+            "len=1..2",
+            "len=14..21"
+          ]
+        },
+        {
+          "framing": "vlan",
+          "kind": "heap-buffer-overflow READ",
+          "where": "asn1_integer proto-snmp.c:151",
+          "sections": [
             "len=14..21"
           ]
         }
@@ -1852,9 +3641,28 @@
       "sections": 1,
       "output": "cases/snmp-selftest-wrong-cookie.out",
       "output_sha256": "2dfd5cad46fad97387616cae0becf8496d23537283053a25a3b332b5b231f33c",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -1872,9 +3680,28 @@
       "sections": 83,
       "output": "cases/snmp-sysdescr-sysname.out",
       "output_sha256": "ddc9e77cbfbb46bbe1bd40d1c3db0dbbaadf5879a5e2cb616ec80ccfc98f5bdf",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": [
@@ -1887,11 +3714,37 @@
           ]
         },
         {
+          "framing": "eth6",
+          "kind": "heap-buffer-overflow READ",
+          "where": "asn1_integer proto-snmp.c:151",
+          "sections": [
+            "len=1..2",
+            "len=14..24"
+          ]
+        },
+        {
           "framing": "payload",
           "kind": "heap-buffer-overflow READ",
           "where": "asn1_integer proto-snmp.c:151",
           "sections": [
             "len=1..2",
+            "len=14..24"
+          ]
+        },
+        {
+          "framing": "rawip",
+          "kind": "heap-buffer-overflow READ",
+          "where": "asn1_integer proto-snmp.c:151",
+          "sections": [
+            "len=1..2",
+            "len=14..24"
+          ]
+        },
+        {
+          "framing": "vlan",
+          "kind": "heap-buffer-overflow READ",
+          "where": "asn1_integer proto-snmp.c:151",
+          "sections": [
             "len=14..24"
           ]
         }
@@ -1910,9 +3763,28 @@
       "sections": 1,
       "output": "cases/snmp-sysdescr-sysname-rawudp.out",
       "output_sha256": "b04a12839ad0d6df6b99ea3e286236befd505c0427f83741e421274dd2a67217",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -1930,9 +3802,28 @@
       "sections": 1,
       "output": "cases/snmp-probe-oids.out",
       "output_sha256": "fbbbc6a98b680fc0e207091e9203f56eb62a70d191c5bceff149bcc168fe479f",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -1950,9 +3841,28 @@
       "sections": 1,
       "output": "cases/snmp-cookie-top-bit.out",
       "output_sha256": "70b7cca3476d942b400c3d1b1799cbc9ad7400ad2fa1381e5882cb9881a18d25",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -1970,9 +3880,28 @@
       "sections": 1,
       "output": "cases/snmp-v2c.out",
       "output_sha256": "ab1ac85dea244c6142e798c1ef83d8bb6ad465c6ebc505d69b315ad8c09a0eff",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -1990,9 +3919,28 @@
       "sections": 1,
       "output": "cases/snmp-v2c-cookie-zero.out",
       "output_sha256": "e36a409fe28e51a547cdfcce259a2ab759411a6e63917c3be819dd1998088bcc",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -2010,9 +3958,28 @@
       "sections": 1,
       "output": "cases/snmp-not-ber-cookie-zero.out",
       "output_sha256": "1902c1ba3099178ae291cebb0f61b388eb07da7824495f66913884512b3e6fba",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -2030,9 +3997,28 @@
       "sections": 256,
       "output": "cases/snmp-pdu-tag-sweep.out",
       "output_sha256": "5d622d9c90b0d032de334c142507a4187e1e4f6c1861d55f7d9e2b5bdbe427d6",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -2050,9 +4036,28 @@
       "sections": 256,
       "output": "cases/snmp-value-tag-sweep.out",
       "output_sha256": "b0824d5453f8b9027b8afb0feca72ae2cdfc609dcb862a104c3db230cfabe9d1",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -2070,9 +4075,28 @@
       "sections": 256,
       "output": "cases/snmp-oid-byte-sweep.out",
       "output_sha256": "c9af2c27e335e64b708a7fe196405e913aeb17dfb05b06cdd9fa51cc27324637",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -2090,9 +4114,28 @@
       "sections": 256,
       "output": "cases/snmp-oid-first-byte-sweep.out",
       "output_sha256": "4821cacb9e68f19b8975dea4a42e660ce7886e5e0e1b76954cb5266c169293f9",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -2110,9 +4153,28 @@
       "sections": 1,
       "output": "cases/snmp-reqid-5-bytes.out",
       "output_sha256": "8827fcb65e06c740c174f82ef08d34eaef78139b8361335de9b1b7846b609205",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -2130,9 +4192,28 @@
       "sections": 1,
       "output": "cases/snmp-reqid-9-bytes.out",
       "output_sha256": "5eb532d3931060d3eac15af66eb93c01b582081988cf23c5320f3158d285012c",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -2150,9 +4231,28 @@
       "sections": 1,
       "output": "cases/snmp-reqid-20-bytes.out",
       "output_sha256": "194ddf6213b7f6e3aec67d54e052b4a85f742a2f0cafa6078d0d3d83a24a01a7",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -2170,9 +4270,28 @@
       "sections": 1,
       "output": "cases/snmp-reqid-21-bytes.out",
       "output_sha256": "f6fbe13e0a5543f4e0bf519e2b4fbfcf69b3d483e2baffa91e6a93e1d302da11",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": [
@@ -2185,7 +4304,31 @@
           ]
         },
         {
+          "framing": "eth6",
+          "kind": "heap-buffer-overflow READ",
+          "where": "asn1_integer proto-snmp.c:151",
+          "sections": [
+            "len=62"
+          ]
+        },
+        {
           "framing": "payload",
+          "kind": "heap-buffer-overflow READ",
+          "where": "asn1_integer proto-snmp.c:151",
+          "sections": [
+            "len=62"
+          ]
+        },
+        {
+          "framing": "rawip",
+          "kind": "heap-buffer-overflow READ",
+          "where": "asn1_integer proto-snmp.c:151",
+          "sections": [
+            "len=62"
+          ]
+        },
+        {
+          "framing": "vlan",
           "kind": "heap-buffer-overflow READ",
           "where": "asn1_integer proto-snmp.c:151",
           "sections": [
@@ -2207,9 +4350,28 @@
       "sections": 1,
       "output": "cases/snmp-reqid-empty.out",
       "output_sha256": "695fd3f00f1533bbcff0c03504953826cc7dbcbe07799895b26dd97681750557",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -2227,9 +4389,28 @@
       "sections": 1,
       "output": "cases/snmp-integer-values.out",
       "output_sha256": "9b4c207ed961f981dda4fa7c7b161ad7c579b074a9f7cf06337e2afd435e77d7",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -2247,9 +4428,28 @@
       "sections": 1,
       "output": "cases/snmp-oid-value.out",
       "output_sha256": "8b0983f8794c20c7b1fa048e480accd793cda9f8260e3a9a277cd872f15d70b0",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -2267,9 +4467,28 @@
       "sections": 1,
       "output": "cases/snmp-other-value-tags.out",
       "output_sha256": "4b668f8ebd29a055139caa2f0f4fc4552531405e5660663eb50527e3016f2c64",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -2287,9 +4506,28 @@
       "sections": 1,
       "output": "cases/snmp-null-first.out",
       "output_sha256": "c97723e921ac82195cbf9fb564b796ff828f79a1d6376a01bb902523dd35b821",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -2307,9 +4545,28 @@
       "sections": 1,
       "output": "cases/snmp-oid-names.out",
       "output_sha256": "9ee4fc8269c26164d55877ba71c5684ea483a2a75adef2fd72baba52ce7b0ed9",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -2327,9 +4584,28 @@
       "sections": 1,
       "output": "cases/snmp-huge-subid.out",
       "output_sha256": "4720e4635b6b7b04248920472ad5b35eef9e1c8f002084d392df40036f895a76",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -2347,9 +4623,28 @@
       "sections": 1,
       "output": "cases/snmp-long-lengths.out",
       "output_sha256": "0cf3ca2c457a003f500b751ae3c2f184b6fb6a3910cc9666746eaa05eae55b3d",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -2367,9 +4662,28 @@
       "sections": 1,
       "output": "cases/snmp-length-0x10000.out",
       "output_sha256": "9b834ec962aa19aba94c257472ce629b2c41754deb5cea4d45e02af04ca9d2a5",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -2387,9 +4701,28 @@
       "sections": 1,
       "output": "cases/snmp-length-over-0x10000.out",
       "output_sha256": "5b6a5e1ec535d34577a0f5de804fdeeae0eb9872ed633b769ef05dbf7b687bbe",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": [
@@ -2402,7 +4735,31 @@
           ]
         },
         {
+          "framing": "eth6",
+          "kind": "heap-buffer-overflow READ",
+          "where": "asn1_integer proto-snmp.c:151",
+          "sections": [
+            "len=85"
+          ]
+        },
+        {
           "framing": "payload",
+          "kind": "heap-buffer-overflow READ",
+          "where": "asn1_integer proto-snmp.c:151",
+          "sections": [
+            "len=85"
+          ]
+        },
+        {
+          "framing": "rawip",
+          "kind": "heap-buffer-overflow READ",
+          "where": "asn1_integer proto-snmp.c:151",
+          "sections": [
+            "len=85"
+          ]
+        },
+        {
+          "framing": "vlan",
           "kind": "heap-buffer-overflow READ",
           "where": "asn1_integer proto-snmp.c:151",
           "sections": [
@@ -2424,9 +4781,28 @@
       "sections": 1,
       "output": "cases/snmp-length-indefinite.out",
       "output_sha256": "3458d6a4e47d8f9d59aee382fbf35800e25427ad749b654f7d17ac9c56f2c565",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": [
@@ -2439,7 +4815,31 @@
           ]
         },
         {
+          "framing": "eth6",
+          "kind": "heap-buffer-overflow READ",
+          "where": "asn1_integer proto-snmp.c:151",
+          "sections": [
+            "len=82"
+          ]
+        },
+        {
           "framing": "payload",
+          "kind": "heap-buffer-overflow READ",
+          "where": "asn1_integer proto-snmp.c:151",
+          "sections": [
+            "len=82"
+          ]
+        },
+        {
+          "framing": "rawip",
+          "kind": "heap-buffer-overflow READ",
+          "where": "asn1_integer proto-snmp.c:151",
+          "sections": [
+            "len=82"
+          ]
+        },
+        {
+          "framing": "vlan",
           "kind": "heap-buffer-overflow READ",
           "where": "asn1_integer proto-snmp.c:151",
           "sections": [
@@ -2461,9 +4861,28 @@
       "sections": 1,
       "output": "cases/snmp-outer-length-short.out",
       "output_sha256": "85df5e9edcf6bbdfaaff8999c77fb19269e57f44054631e9b867043bca3be335",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -2481,9 +4900,28 @@
       "sections": 1,
       "output": "cases/snmp-varbind-not-seq.out",
       "output_sha256": "1e63bcfcea317f686614d575b7c6b842c5bc69ec11f49da5bb978841afb75eda",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -2501,9 +4939,28 @@
       "sections": 1,
       "output": "cases/snmp-varbind-past-end.out",
       "output_sha256": "1e63bcfcea317f686614d575b7c6b842c5bc69ec11f49da5bb978841afb75eda",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -2521,9 +4978,28 @@
       "sections": 1,
       "output": "cases/snmp-oid-tag-not-6.out",
       "output_sha256": "1e63bcfcea317f686614d575b7c6b842c5bc69ec11f49da5bb978841afb75eda",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -2541,9 +5017,28 @@
       "sections": 1,
       "output": "cases/snmp-value-spans-varbinds.out",
       "output_sha256": "5a0673af7d3353559821df29d21ab14d3b24ab4c14c82fa74a845db30ea6d849",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -2561,9 +5056,28 @@
       "sections": 1,
       "output": "cases/snmp-many-varbinds.out",
       "output_sha256": "12cf21fcaa9e6deb0b667416205137e746b6a00cd1e2532547256372e523a7cf",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -2581,9 +5095,28 @@
       "sections": 1,
       "output": "cases/snmp-error-status.out",
       "output_sha256": "0cf3ca2c457a003f500b751ae3c2f184b6fb6a3910cc9666746eaa05eae55b3d",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []
@@ -2601,16 +5134,65 @@
       "sections": 1,
       "output": "cases/default-echo.out",
       "output_sha256": "308f4546ca27d2c3df75e63be0a380a36488e12d627dcd21362a0dbb7ebaba6a",
-      "eth_output": "cases/default-echo.eth.out",
-      "eth_raw_past_datagram": [
-        "len=23"
-      ],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": "cases/default-echo.eth.out",
+          "raw_past_datagram": [
+            "len=23"
+          ],
+          "frame": []
+        },
+        "eth6": {
+          "output": "cases/default-echo.eth6.out",
+          "raw_past_datagram": [
+            "len=23"
+          ],
+          "frame": []
+        },
+        "vlan": {
+          "output": "cases/default-echo.vlan.out",
+          "raw_past_datagram": [
+            "len=23"
+          ],
+          "frame": []
+        },
+        "rawip": {
+          "output": "cases/default-echo.rawip.out",
+          "raw_past_datagram": [
+            "len=23"
+          ],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": [
         {
           "framing": "eth",
+          "kind": "heap-buffer-overflow READ",
+          "where": "handle_udp proto-udp.c:121",
+          "sections": [
+            "len=23"
+          ]
+        },
+        {
+          "framing": "eth6",
+          "kind": "heap-buffer-overflow READ",
+          "where": "handle_udp proto-udp.c:121",
+          "sections": [
+            "len=23"
+          ]
+        },
+        {
+          "framing": "rawip",
+          "kind": "heap-buffer-overflow READ",
+          "where": "handle_udp proto-udp.c:121",
+          "sections": [
+            "len=23"
+          ]
+        },
+        {
+          "framing": "vlan",
           "kind": "heap-buffer-overflow READ",
           "where": "handle_udp proto-udp.c:121",
           "sections": [
@@ -2632,11 +5214,36 @@
       "sections": 101,
       "output": "cases/default-chargen.out",
       "output_sha256": "e712ef773b456e2f571d046dde3233510d64708d77ecf91c7974d0e0da7e628f",
-      "eth_output": "cases/default-chargen.eth.out",
-      "eth_raw_past_datagram": [
-        "len=1..100"
-      ],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": "cases/default-chargen.eth.out",
+          "raw_past_datagram": [
+            "len=1..100"
+          ],
+          "frame": []
+        },
+        "eth6": {
+          "output": "cases/default-chargen.eth6.out",
+          "raw_past_datagram": [
+            "len=1..100"
+          ],
+          "frame": []
+        },
+        "vlan": {
+          "output": "cases/default-chargen.vlan.out",
+          "raw_past_datagram": [
+            "len=1..100"
+          ],
+          "frame": []
+        },
+        "rawip": {
+          "output": "cases/default-chargen.rawip.out",
+          "raw_past_datagram": [
+            "len=1..100"
+          ],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": [
@@ -2655,6 +5262,54 @@
           "sections": [
             "len=54..100"
           ]
+        },
+        {
+          "framing": "eth6",
+          "kind": "heap-buffer-overflow READ",
+          "where": "handle_udp proto-udp.c:121",
+          "sections": [
+            "len=1..73"
+          ]
+        },
+        {
+          "framing": "eth6",
+          "kind": "unknown-crash READ",
+          "where": "handle_udp proto-udp.c:121",
+          "sections": [
+            "len=74..100"
+          ]
+        },
+        {
+          "framing": "rawip",
+          "kind": "heap-buffer-overflow READ",
+          "where": "handle_udp proto-udp.c:121",
+          "sections": [
+            "len=1..43"
+          ]
+        },
+        {
+          "framing": "rawip",
+          "kind": "unknown-crash READ",
+          "where": "handle_udp proto-udp.c:121",
+          "sections": [
+            "len=44..100"
+          ]
+        },
+        {
+          "framing": "vlan",
+          "kind": "heap-buffer-overflow READ",
+          "where": "handle_udp proto-udp.c:121",
+          "sections": [
+            "len=1..57"
+          ]
+        },
+        {
+          "framing": "vlan",
+          "kind": "unknown-crash READ",
+          "where": "handle_udp proto-udp.c:121",
+          "sections": [
+            "len=58..100"
+          ]
         }
       ]
     },
@@ -2671,16 +5326,65 @@
       "sections": 1,
       "output": "cases/default-chargen-rawudp.out",
       "output_sha256": "fb9e26b2984bee45bd56fe352a57eeb9a91c1c1139b4e3553487b08c14c6c9be",
-      "eth_output": "cases/default-chargen-rawudp.eth.out",
-      "eth_raw_past_datagram": [
-        "len=100"
-      ],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": "cases/default-chargen-rawudp.eth.out",
+          "raw_past_datagram": [
+            "len=100"
+          ],
+          "frame": []
+        },
+        "eth6": {
+          "output": "cases/default-chargen-rawudp.eth6.out",
+          "raw_past_datagram": [
+            "len=100"
+          ],
+          "frame": []
+        },
+        "vlan": {
+          "output": "cases/default-chargen-rawudp.vlan.out",
+          "raw_past_datagram": [
+            "len=100"
+          ],
+          "frame": []
+        },
+        "rawip": {
+          "output": "cases/default-chargen-rawudp.rawip.out",
+          "raw_past_datagram": [
+            "len=100"
+          ],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": [
         {
           "framing": "eth",
+          "kind": "unknown-crash READ",
+          "where": "handle_udp proto-udp.c:121",
+          "sections": [
+            "len=100"
+          ]
+        },
+        {
+          "framing": "eth6",
+          "kind": "unknown-crash READ",
+          "where": "handle_udp proto-udp.c:121",
+          "sections": [
+            "len=100"
+          ]
+        },
+        {
+          "framing": "rawip",
+          "kind": "unknown-crash READ",
+          "where": "handle_udp proto-udp.c:121",
+          "sections": [
+            "len=100"
+          ]
+        },
+        {
+          "framing": "vlan",
           "kind": "unknown-crash READ",
           "where": "handle_udp proto-udp.c:121",
           "sections": [
@@ -2702,16 +5406,65 @@
       "sections": 1,
       "output": "cases/default-port-0.out",
       "output_sha256": "7e1ac9f3fd30aea52b954cbaedbe7522c0ebde9906a4eede489eacc6cc1d0e70",
-      "eth_output": "cases/default-port-0.eth.out",
-      "eth_raw_past_datagram": [
-        "len=5"
-      ],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": "cases/default-port-0.eth.out",
+          "raw_past_datagram": [
+            "len=5"
+          ],
+          "frame": []
+        },
+        "eth6": {
+          "output": "cases/default-port-0.eth6.out",
+          "raw_past_datagram": [
+            "len=5"
+          ],
+          "frame": []
+        },
+        "vlan": {
+          "output": "cases/default-port-0.vlan.out",
+          "raw_past_datagram": [
+            "len=5"
+          ],
+          "frame": []
+        },
+        "rawip": {
+          "output": "cases/default-port-0.rawip.out",
+          "raw_past_datagram": [
+            "len=5"
+          ],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": [
         {
           "framing": "eth",
+          "kind": "heap-buffer-overflow READ",
+          "where": "handle_udp proto-udp.c:121",
+          "sections": [
+            "len=5"
+          ]
+        },
+        {
+          "framing": "eth6",
+          "kind": "heap-buffer-overflow READ",
+          "where": "handle_udp proto-udp.c:121",
+          "sections": [
+            "len=5"
+          ]
+        },
+        {
+          "framing": "rawip",
+          "kind": "heap-buffer-overflow READ",
+          "where": "handle_udp proto-udp.c:121",
+          "sections": [
+            "len=5"
+          ]
+        },
+        {
+          "framing": "vlan",
           "kind": "heap-buffer-overflow READ",
           "where": "handle_udp proto-udp.c:121",
           "sections": [
@@ -2733,16 +5486,65 @@
       "sections": 1,
       "output": "cases/default-port-65535.out",
       "output_sha256": "21dc047daa02627d571487a92423ab545a345dc755e0dad9af92bd9988a247df",
-      "eth_output": "cases/default-port-65535.eth.out",
-      "eth_raw_past_datagram": [
-        "len=3"
-      ],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": "cases/default-port-65535.eth.out",
+          "raw_past_datagram": [
+            "len=3"
+          ],
+          "frame": []
+        },
+        "eth6": {
+          "output": "cases/default-port-65535.eth6.out",
+          "raw_past_datagram": [
+            "len=3"
+          ],
+          "frame": []
+        },
+        "vlan": {
+          "output": "cases/default-port-65535.vlan.out",
+          "raw_past_datagram": [
+            "len=3"
+          ],
+          "frame": []
+        },
+        "rawip": {
+          "output": "cases/default-port-65535.rawip.out",
+          "raw_past_datagram": [
+            "len=3"
+          ],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": [
         {
           "framing": "eth",
+          "kind": "heap-buffer-overflow READ",
+          "where": "handle_udp proto-udp.c:121",
+          "sections": [
+            "len=3"
+          ]
+        },
+        {
+          "framing": "eth6",
+          "kind": "heap-buffer-overflow READ",
+          "where": "handle_udp proto-udp.c:121",
+          "sections": [
+            "len=3"
+          ]
+        },
+        {
+          "framing": "rawip",
+          "kind": "heap-buffer-overflow READ",
+          "where": "handle_udp proto-udp.c:121",
+          "sections": [
+            "len=3"
+          ]
+        },
+        {
+          "framing": "vlan",
           "kind": "heap-buffer-overflow READ",
           "where": "handle_udp proto-udp.c:121",
           "sections": [
@@ -2764,9 +5566,28 @@
       "sections": 1,
       "output": "cases/default-empty.out",
       "output_sha256": "cd8ab755ccf3407e9ed4b1c16a6b1bfae3bba425ba27eb83e75e7413369f40ce",
-      "eth_output": null,
-      "eth_raw_past_datagram": [],
-      "eth_frame": [],
+      "frames": {
+        "eth": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "eth6": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "vlan": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        },
+        "rawip": {
+          "output": null,
+          "raw_past_datagram": [],
+          "frame": []
+        }
+      },
       "c_uninit_sections": [],
       "asan_exit": 0,
       "sanitizer": []

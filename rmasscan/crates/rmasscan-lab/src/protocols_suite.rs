@@ -245,6 +245,10 @@ fn linux_run(
 /// The peer stack, read in the peer namespace: `net.ipv4.icmp_ratemask`, `net.ipv4.icmp_echo_ignore_all`, whether
 /// `/proc/net/protocols` lists SCTP (the host kernel has it), and the responder the suite starts.
 pub(crate) fn peer_stack(l: &Linux) -> Result<PeerStack, String> {
+    peer_stack_with(l, pv::responder_args())
+}
+/// [`peer_stack`] with the responder options of another suite on the same stand (the banners suite's).
+pub(crate) fn peer_stack_with(l: &Linux, responder: Vec<String>) -> Result<PeerStack, String> {
     let read = |path: &str| -> Result<String, String> {
         let o = l.host.exec(
             &l.ns(&l.ns_b, [CAT.to_owned(), path.to_owned()]),
@@ -259,7 +263,7 @@ pub(crate) fn peer_stack(l: &Linux) -> Result<PeerStack, String> {
         icmp_ratemask: read(RATEMASK)?.trim().to_owned(),
         icmp_echo_ignore_all: read(ECHO_IGNORE)?.trim().to_owned(),
         sctp_in_kernel: pv::lists_sctp(&read(PROTOCOLS)?),
-        responder: pv::responder_args(),
+        responder,
     })
 }
 

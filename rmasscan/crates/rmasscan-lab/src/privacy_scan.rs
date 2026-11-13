@@ -155,6 +155,49 @@ fn lan_discovery(f: &[u8]) -> Option<(&'static str, &[u8])> {
     Some((name, f.get(udp + 8..)?))
 }
 
+/// The banners window's own NBNS frames (`banners_verify`: it probes UDP 137 and its responder answers): an NBSTAT
+/// probe of the scanner or a scenario reply of the peer, exactly as the lab makes them, between the Linux stand's MACs
+/// and addresses (198.18.0.1 and 198.18.0.2-.5), UDP 40000 and 137, no VLAN. The payload must equal, from its third
+/// byte on (the first two are the probe's cookie), the built-in NBSTAT probe or one of the four scenario replies to
+/// it: names of the lab's fixed bytes, never a host's. Any other NBNS frame, on the stand or not, stays a hit.
+pub fn stand_nbns(f: &[u8]) -> bool {
+    let st = crate::autodetect_verify::stand(crate::autodetect_verify::Plan::Linux);
+    if f.len() < 42 || f[12..14] != [8, 0] || f[14] != 0x45 || f[23] != 17 {
+        return false;
+    }
+    let ip = |at: usize| std::net::Ipv4Addr::new(f[at], f[at + 1], f[at + 2], f[at + 3]);
+    let port = |at: usize| u16::from_be_bytes([f[at], f[at + 1]]);
+    let (src, dst) = (ip(26), ip(30));
+    let (macs, ips, ports) = ((&f[6..12], &f[0..6]), (src, dst), (port(34), port(36)));
+    let lab = crate::banners_verify::SOURCE_PORT;
+    let probe = macs == (&st.scanner_mac[..], &st.peer_mac[..])
+        && ips.0 == st.scanner_ip
+        && st.peer_ips.contains(&ips.1)
+        && ports == (lab, 137);
+    let reply = macs == (&st.peer_mac[..], &st.scanner_mac[..])
+        && ips.1 == st.scanner_ip
+        && st.peer_ips.contains(&ips.0)
+        && ports == (137, lab);
+    if !(probe || reply) {
+        return false;
+    }
+    let total = usize::from(u16::from_be_bytes([f[16], f[17]]));
+    let Some(payload) = f.get(42..14 + total).filter(|p| p.len() > 2) else {
+        return false;
+    };
+    let Some(built_in) = rmasscan_core::payloads::PayloadTable::builtin()
+        .get(137)
+        .map(|e| e.with_cookie(0))
+    else {
+        return false;
+    };
+    if probe {
+        return payload[2..] == built_in[2..];
+    }
+    crate::banners_verify::scenario_reply(137, src, &built_in)
+        .is_some_and(|r| r.len() == payload.len() && r[2..] == payload[2..])
+}
+
 /// The names an ICMPv6 message of an Ethernet frame carries, with what it is: the DNS Search List options of a Router
 /// Advertisement (NDP, RFC 8106 type 31: uncompressed DNS names) and a Node Information Query or Reply (RFC 4620, ICMPv6
 /// 139/140: a name query, or a reply with the host's names after a 4-byte TTL, both in DNS wire form). `None` for any
@@ -330,9 +373,14 @@ fn walk(dir: &Path, out: &mut Vec<std::path::PathBuf>) -> Result<(), String> {
 
 /// Scans `dir`: every hit, in file and frame order.
 pub fn scan(dir: &Path, forbid: &[String]) -> Result<Vec<Hit>, String> {
+    scan_counted(dir, forbid).map(|(hits, _)| hits)
+}
+/// [`scan`], and how many frames were the banners stand's own NBNS probes and replies ([`stand_nbns`]), which are no hit.
+pub fn scan_counted(dir: &Path, forbid: &[String]) -> Result<(Vec<Hit>, usize), String> {
     let mut files = Vec::new();
     walk(dir, &mut files)?;
     let mut hits = Vec::new();
+    let mut stand = 0;
     for path in files {
         let rel = path
             .strip_prefix(dir)
@@ -351,7 +399,9 @@ pub fn scan(dir: &Path, forbid: &[String]) -> Result<Vec<Hit>, String> {
                 let found = lan_discovery(f)
                     .map(|(proto, payload)| (proto, dns_names(payload)))
                     .or_else(|| icmpv6_names(f));
-                if let Some((proto, names)) = found {
+                if found.is_some() && stand_nbns(f) {
+                    stand += 1;
+                } else if let Some((proto, names)) = found {
                     let names: Vec<String> = names.iter().map(|n| mask(n)).collect();
                     hits.push(Hit {
                         file: rel.clone(),
@@ -398,7 +448,7 @@ pub fn scan(dir: &Path, forbid: &[String]) -> Result<Vec<Hit>, String> {
             }
         }
     }
-    Ok(hits)
+    Ok((hits, stand))
 }
 
 /// `privacy-scan --dir DIR [--forbid TOKEN]...`: 0 no hit, 1 a hit, 2 NOT RUN.
@@ -427,11 +477,14 @@ pub fn run(args: &[String]) -> Result<i32, String> {
             i + 1
         ));
     }
-    let hits = scan(Path::new(&dir), &forbid)?;
+    let (hits, stand) = scan_counted(Path::new(&dir), &forbid)?;
     for h in &hits {
         println!("HIT {}", h.line());
     }
-    println!("privacy-scan: {} hits in {dir}", hits.len());
+    println!(
+        "privacy-scan: {} hits in {dir} ({stand} frames were the banners stand's own NBNS probes and replies)",
+        hits.len()
+    );
     Ok(i32::from(!hits.is_empty()))
 }
 

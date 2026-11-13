@@ -124,7 +124,9 @@ fn port_list(ports: &str) -> Result<Vec<u16>, String> {
 /// for the protocols stand, UDP and SCTP:
 /// - `--udp-ports P,.. --udp-ips A,..`: one UDP socket per address and port (a reply leaves from the address the
 ///   datagram went to), each datagram answered once with `protocols_verify::UDP_REPLY`; the kernel sends ICMP 3/3
-///   for every other port;
+///   for every other port. With `--udp-answer banners` (the banners stand) each datagram is answered once with
+///   `banners_verify::scenario_reply` of the socket's address and port and the datagram's payload instead (the
+///   probe's identifier copied into the scenario's reply), and not at all when the table has no reply for it;
 /// - `--sctp-iface IF --sctp-open P,..`: every SCTP INIT on the link `IF` answered on the link with
 ///   `protocols_verify::sctp_reply` (INIT-ACK on the open ports, ABORT elsewhere). The host kernel must have no SCTP
 ///   (the suite checks it): no SCTP socket is ever opened here, so no module is loaded either;
@@ -158,6 +160,7 @@ fn responder(a: &BTreeMap<String, String>) -> Result<i32, String> {
         said.push_str(&format!(" tcp6 {ips}"));
     }
     if let Some(udp) = a.get("udp-ports") {
+        let answer = udp_answer(a.get("udp-answer").map(String::as_str))?;
         for ip in get(a, "udp-ips")?.split(',') {
             let ip: std::net::Ipv4Addr = ip.parse().map_err(err)?;
             for p in port_list(udp)? {
@@ -165,10 +168,13 @@ fn responder(a: &BTreeMap<String, String>) -> Result<i32, String> {
                 s.set_read_timeout(Some(Duration::from_millis(100)))
                     .map_err(err)?;
                 let h = halt.clone();
-                workers.push(std::thread::spawn(move || udp_answers(&s, &h)));
+                workers.push(std::thread::spawn(move || udp_answers(&s, answer, &h)));
             }
         }
         said.push_str(&format!(" udp {udp}"));
+        if let Some(mode) = a.get("udp-answer") {
+            said.push_str(&format!(" answer {mode}"));
+        }
     }
     if let Some(iface) = a.get("sctp-iface") {
         let open = port_list(get(a, "sctp-open")?)?;
@@ -222,14 +228,42 @@ fn supervise(
         None => Ok(()),
     }
 }
-/// Answer every datagram on `s` once with the stand's reply, until the stop request or `halt`.
-fn udp_answers(s: &std::net::UdpSocket, halt: &AtomicBool) -> Result<(), String> {
+/// How a UDP socket of the responder answers a datagram: from the socket's own address and port and the datagram's
+/// payload, the reply's payload, or none.
+type UdpAnswer = fn(std::net::Ipv4Addr, u16, &[u8]) -> Option<Vec<u8>>;
+/// The protocols stand's answer: `protocols_verify::UDP_REPLY` to every datagram.
+fn lab_reply(_: std::net::Ipv4Addr, _: u16, _: &[u8]) -> Option<Vec<u8>> {
+    Some(crate::protocols_verify::UDP_REPLY.to_vec())
+}
+/// The banners stand's answer: the scenario reply of the address and port to that probe.
+fn banners_reply(ip: std::net::Ipv4Addr, port: u16, probe: &[u8]) -> Option<Vec<u8>> {
+    crate::banners_verify::scenario_reply(port, ip, probe)
+}
+/// `--udp-answer`: absent for the protocols stand, `banners` for the banners stand.
+fn udp_answer(mode: Option<&str>) -> Result<UdpAnswer, String> {
+    match mode {
+        None => Ok(lab_reply),
+        Some(crate::banners_verify::UDP_ANSWER) => Ok(banners_reply),
+        Some(other) => Err(format!("--udp-answer {other}: only banners")),
+    }
+}
+/// Answer every datagram on `s` once with `answer`, until the stop request or `halt`.
+fn udp_answers(
+    s: &std::net::UdpSocket,
+    answer: UdpAnswer,
+    halt: &AtomicBool,
+) -> Result<(), String> {
     let mut buf = [0u8; 2048];
+    let local = s.local_addr().map_err(err)?;
+    let std::net::IpAddr::V4(ip) = local.ip() else {
+        return Err(format!("udp responder on {local}: IPv4 only"));
+    };
     while !lab_io::stop_requested() && !halt.load(Ordering::SeqCst) {
         match s.recv_from(&mut buf) {
-            Ok((_, from)) => {
-                s.send_to(crate::protocols_verify::UDP_REPLY, from)
-                    .map_err(err)?;
+            Ok((n, from)) => {
+                if let Some(reply) = answer(ip, local.port(), &buf[..n]) {
+                    s.send_to(&reply, from).map_err(err)?;
+                }
             }
             Err(e)
                 if matches!(
@@ -1488,7 +1522,7 @@ mod tests {
         let at = s.local_addr().unwrap();
         let halt = std::sync::Arc::new(AtomicBool::new(false));
         let h = halt.clone();
-        let w = std::thread::spawn(move || udp_answers(&s, &h));
+        let w = std::thread::spawn(move || udp_answers(&s, lab_reply, &h));
         let c = std::net::UdpSocket::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
         c.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
         c.send_to(b"probe", at).unwrap();
@@ -1499,6 +1533,35 @@ mod tests {
         let started = std::time::Instant::now();
         assert_eq!(w.join().unwrap(), Ok(()));
         assert!(started.elapsed() < Duration::from_secs(2));
+    }
+
+    #[test]
+    fn the_banners_answer_is_the_scenario_reply_of_the_sockets_address_and_port() {
+        // The answer the banners stand's sockets give, without a socket: the table's reply, by address and port.
+        let peer = std::net::Ipv4Addr::new(198, 18, 0, 2);
+        let probe = rmasscan_core::payloads::PayloadTable::builtin()
+            .get(53)
+            .unwrap()
+            .with_cookie(0x1234_abcd);
+        let reply = banners_reply(peer, 53, &probe).unwrap();
+        assert_eq!(
+            Some(reply.clone()),
+            crate::banners_verify::scenario_reply(53, peer, &probe)
+        );
+        assert_eq!(&reply[..2], &probe[..2], "the probe's DNS id");
+        // Off the table: no reply at all.
+        assert_eq!(
+            banners_reply(std::net::Ipv4Addr::LOCALHOST, 53, &probe),
+            None
+        );
+        assert_eq!(banners_reply(peer, 9, b"x"), None);
+        // The mode is named; another one is refused; none is the protocols stand's reply.
+        assert_eq!(
+            udp_answer(None).unwrap()(peer, 9, b"x"),
+            Some(crate::protocols_verify::UDP_REPLY.to_vec())
+        );
+        assert!(udp_answer(Some("banners")).is_ok());
+        assert!(udp_answer(Some("echo")).is_err());
     }
 
     fn args(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {

@@ -3,9 +3,12 @@
 
 pub mod autodetect_suite;
 pub mod autodetect_verify;
+pub mod banners_suite;
+pub mod banners_verify;
 pub mod capture;
 pub mod deploy;
 pub mod dump;
+pub mod fuzz;
 pub mod ipv6_suite;
 pub mod ipv6_verify;
 pub mod link;

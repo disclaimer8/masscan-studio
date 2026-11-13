@@ -411,3 +411,73 @@ fn icmpv6_messages_that_carry_names_are_hits_with_masked_names_and_ndp_without_n
     );
     fs::remove_dir_all(&d).unwrap();
 }
+
+/// A UDP frame of the Linux stand: scanner 198.18.0.1:40000 to `peer`:137 (`probe`) or back.
+fn stand_udp(peer: u8, probe: bool, payload: &[u8]) -> Vec<u8> {
+    let (a, b) = ([2u8, 0xaa, 0, 0, 0, 1], [2u8, 0xaa, 0, 0, 0, 2]);
+    let (s, d) = (
+        std::net::Ipv4Addr::new(198, 18, 0, 1),
+        std::net::Ipv4Addr::new(198, 18, 0, peer),
+    );
+    let mut u = Vec::new();
+    let (sp, dp) = if probe {
+        (40000u16, 137u16)
+    } else {
+        (137, 40000)
+    };
+    u.extend(sp.to_be_bytes());
+    u.extend(dp.to_be_bytes());
+    u.extend(((8 + payload.len()) as u16).to_be_bytes());
+    u.extend([0, 0]);
+    u.extend(payload);
+    if probe {
+        crate::protocols_verify::tests::ip_frame(b, a, s, d, 17, u)
+    } else {
+        crate::protocols_verify::tests::ip_frame(a, b, d, s, 17, u)
+    }
+}
+
+#[test]
+fn the_banners_stands_own_nbns_probes_and_replies_are_counted_not_hits_and_nothing_else_is() {
+    let d = scratch();
+    let probe = rmasscan_core::payloads::PayloadTable::builtin()
+        .get(137)
+        .unwrap()
+        .with_cookie(0x4321);
+    let mut frames = Vec::new();
+    for peer in 2..=5u8 {
+        let ip = std::net::Ipv4Addr::new(198, 18, 0, peer);
+        frames.push(stand_udp(peer, true, &probe));
+        frames.push(stand_udp(
+            peer,
+            false,
+            &crate::banners_verify::scenario_reply(137, ip, &probe).unwrap(),
+        ));
+    }
+    assert!(frames.iter().all(|f| stand_nbns(f)));
+    write_pcap(&d, "peer.pcap", &frames);
+    assert_eq!(scan_counted(&d, &[]).unwrap(), (Vec::new(), 8));
+    // A changed name byte, another address, another port, a VLAN tag: each an NBNS frame that is a hit again.
+    let reply =
+        crate::banners_verify::scenario_reply(137, std::net::Ipv4Addr::new(198, 18, 0, 2), &probe)
+            .unwrap();
+    let mut renamed = reply.clone();
+    renamed[60] ^= 0x20;
+    let mut off_stand = stand_udp(2, false, &reply);
+    off_stand[29] = 9;
+    let mut other_port = stand_udp(2, false, &reply);
+    other_port[37] = 1;
+    let others = [stand_udp(2, false, &renamed), off_stand, other_port];
+    for f in &others {
+        assert!(!stand_nbns(f));
+    }
+    write_pcap(&d, "other.pcap", &others);
+    let (hits, stand) = scan_counted(&d, &[]).unwrap();
+    assert_eq!(stand, 8);
+    assert_eq!(hits.len(), 3, "{hits:?}");
+    assert!(
+        hits.iter()
+            .all(|h| h.file == "other.pcap" && h.what.starts_with("NBNS frame"))
+    );
+    fs::remove_dir_all(&d).unwrap();
+}

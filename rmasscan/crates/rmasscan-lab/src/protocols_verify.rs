@@ -1573,7 +1573,7 @@ fn stand_answers(r: &mut Run, s: &Side<WireView>, v: &WireView) {
 
 /// What the `[+]` lines of a rmasscan step must say: the stand's interface, MAC and address detected, the next hop by
 /// the route and ARP (an ARP scan: the broadcast MAC as given, no next-hop resolution), seed 1 and port 40000 given.
-fn detection(r: &mut Run, s: &Side<WireView>, c: &CaseSpec) {
+pub(crate) fn detection(r: &mut Run, s: &Side<WireView>, c: &CaseSpec) {
     let get = |k: &str| s.se.value(k).map(str::to_owned);
     let keys: Vec<&str> = s.se.plus.iter().map(|(k, _)| k.as_str()).collect();
     let common = get("interface").as_deref() == Some("veth-a (detected: route to 198.18.0.2)")
@@ -1705,7 +1705,7 @@ fn deviations(r: &mut Run, c: &CaseSpec, sides: &[Side<WireView>], r12: usize, c
 
 /// Every frame of the scanner MAC is a probe of the scan or one of [`SCANNER_CLASSES`]; any other is the scanner's
 /// own extra frame: a FAIL on rmasscan's step (once the evidence is proven), INVALID on the oracle's.
-fn scanner_frames(r: &mut Run, s: &Side<WireView>, v: &WireView) {
+pub(crate) fn scanner_frames(r: &mut Run, s: &Side<WireView>, v: &WireView) {
     scanner_frame_checks(
         r,
         s,

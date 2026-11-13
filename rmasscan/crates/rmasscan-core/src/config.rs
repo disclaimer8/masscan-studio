@@ -17,6 +17,7 @@
 //! с `is_echo_all = 0` и для `--echo-all` (main.c:1803-1805), поэтому CLI
 //! обязан передавать `false` в обоих случаях.
 
+use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use std::net::Ipv4Addr;
 
@@ -180,6 +181,11 @@ pub struct ScanConfig {
     pub nmap_payloads: Option<String>,
     /// `--pcap-payloads FILE` (main-conf.c:1832): нагрузки UDP из захвата pcap. Читает слой CLI.
     pub pcap_payloads: Option<String>,
+    /// `--banner-types` и синонимы `banner-type`, `banner-apps`, `banner-app` (`masscan->banner_types`,
+    /// `src/main-conf.c:2683-2697`): номера приложений, которые оставляет `--readscan` (`src/in-binary.c:684`), её
+    /// единственный потребитель. Имена разбирает слой CLI (`masscan_string_to_app` живёт в `rmasscan-proto`, ядро от
+    /// него не зависит); `--echo` и `paused.conf` C их не пишут.
+    pub banner_types: BTreeSet<u16>,
 }
 
 impl Default for ScanConfig {
@@ -212,6 +218,7 @@ impl Default for ScanConfig {
             tcp_opts: TcpHeaderOptions::default(),
             nmap_payloads: None,
             pcap_payloads: None,
+            banner_types: BTreeSet::new(),
         }
     }
 }
@@ -1596,6 +1603,8 @@ mod tests {
             (c.adapter_ip, c.adapter_mac, c.router_mac, c.source_port),
             (None, None, None, None)
         );
+        // `masscan->banner_types` пуст: `--readscan` пропускает все баннеры и читает статус (`in-binary.c:584`).
+        assert!(c.banner_types.is_empty());
     }
 
     // ---- parse_rate ----

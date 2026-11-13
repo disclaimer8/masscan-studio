@@ -6,7 +6,9 @@
 //! манифеста (поля, которые C берёт из часов при записи: XML `start`, `finished` `time`/`timestr`/`elapsed`,
 //! `# Masscan done at …` grepable); stdout и stderr равны дословно (путь входа заменён на `@INPUT@`). Кейсы `many`
 //! (входы и выходы больше `store_max_bytes`) сверяются по sha256 после масок: вход строится тем же генератором
-//! `examples/format_inputs.rs`.
+//! `examples/format_inputs.rs`. У кейсов с баннерами certs и формата по умолчанию stdout C лежит файлом
+//! (`stdout_output`: сырые байты PEM или длинные строки `Banner on port`) и сверяется побайтно; у формата по умолчанию
+//! файла вывода нет вовсе (в `args` нет `@OUTPUT@`).
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -66,13 +68,27 @@ struct Case {
     name: String,
     input: String,
     args: Vec<String>,
-    /// `None`: выход не хранится (вход больше `store_max_bytes`), сверка по `masked_sha256`.
+    /// `None`: выход не хранится (вход больше `store_max_bytes`), сверка по `masked_sha256`; или у кейса нет файла
+    /// вывода (в `args` нет `@OUTPUT@`).
     output: Option<String>,
-    sha256: String,
-    masked_sha256: String,
+    /// `None` только у кейса без `@OUTPUT@`.
+    sha256: Option<String>,
+    masked_sha256: Option<String>,
     masks: Vec<Mask>,
-    stdout: String,
+    /// stdout C строкой; `None`, когда он лежит файлом [`Case::stdout_output`].
+    stdout: Option<String>,
+    /// stdout C файлом (байты как есть) и его sha256.
+    #[serde(default)]
+    stdout_output: Option<String>,
+    #[serde(default)]
+    stdout_sha256: Option<String>,
     stderr: String,
+}
+
+impl Case {
+    fn has_output_file(&self) -> bool {
+        self.args.iter().any(|a| a == "@OUTPUT@")
+    }
 }
 
 #[derive(Deserialize)]
@@ -259,26 +275,51 @@ fn check_case(
     let cli = Cli::try_parse_masscan(argv).map_err(|e| format!("parse: {e}"))?;
     let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
     run(&cli, backend, &mut stdout, &mut stderr).map_err(|e| format!("run: {e}"))?;
-    let stdout = String::from_utf8_lossy(&stdout).replace(input, "@INPUT@");
+    match (&case.stdout, &case.stdout_output) {
+        (Some(want), None) => {
+            let got = String::from_utf8_lossy(&stdout).replace(input, "@INPUT@");
+            if got != *want {
+                return Err(format!("stdout {got:?}, C {want:?}"));
+            }
+        }
+        (None, Some(rel)) => {
+            let want = fs::read(format!("{DIR}/{rel}")).map_err(|e| format!("{rel}: {e}"))?;
+            assert_eq!(
+                Some(sha256_hex(&want)),
+                case.stdout_sha256,
+                "{rel}: golden file changed"
+            );
+            if stdout != want {
+                return Err(format!("stdout: {}", first_difference(&stdout, &want)));
+            }
+        }
+        _ => panic!("{}: exactly one of stdout and stdout_output", case.name),
+    }
     let stderr = String::from_utf8_lossy(&stderr)
         .replace(input, "@INPUT@")
         .replace(out, "@OUTPUT@");
-    if stdout != case.stdout {
-        return Err(format!("stdout {stdout:?}, C {:?}", case.stdout));
-    }
     if stderr != case.stderr {
         return Err(format!("stderr {stderr:?}, C {:?}", case.stderr));
     }
+    if !case.has_output_file() {
+        // Формат по умолчанию: C файла не открывает (`src/output.c:479`), rmasscan пути не получил.
+        return Ok(());
+    }
+    let sha = case.sha256.as_deref().expect("sha256 of a file case");
+    let masked_sha = case
+        .masked_sha256
+        .as_deref()
+        .expect("masked_sha256 of a file case");
     let got = fs::read(&out_path).map_err(|e| format!("{out}: {e}"))?;
     let got = apply_masks(&got, &case.masks).map_err(|e| format!("rmasscan output: {e}"))?;
     match &case.output {
         Some(rel) => {
             let want = fs::read(format!("{DIR}/{rel}")).map_err(|e| format!("{rel}: {e}"))?;
-            assert_eq!(sha256_hex(&want), case.sha256, "{rel}: golden file changed");
+            assert_eq!(sha256_hex(&want), sha, "{rel}: golden file changed");
             let want = apply_masks(&want, &case.masks).map_err(|e| format!("{rel}: {e}"))?;
             assert_eq!(
                 sha256_hex(&want),
-                case.masked_sha256,
+                masked_sha,
                 "{rel}: the Rust masks disagree with the sed masks of the capture script"
             );
             if got != want {
@@ -287,10 +328,9 @@ fn check_case(
         }
         None => {
             let h = sha256_hex(&got);
-            if h != case.masked_sha256 {
+            if h != masked_sha {
                 return Err(format!(
-                    "masked sha256 {h}, C {} ({} bytes from rmasscan)",
-                    case.masked_sha256,
+                    "masked sha256 {h}, C {masked_sha} ({} bytes from rmasscan)",
                     got.len()
                 ));
             }
@@ -388,19 +428,22 @@ fn inputs_are_the_generator_output() {
     }
 }
 
-/// Манифест снят с закреплённого оракула и содержит всю матрицу скрипта: 6 входов × 2 режима `--show` ×
+/// Манифест снят с закреплённого оракула и содержит всю матрицу скрипта: 8 входов × 2 режима `--show` ×
 /// (8 форматов + `-oX --webxml`), 2 кейса фильтра на `basic` (`--range` и `-p80`), 2 на `protocols` (только
 /// `--range`: фильтр `-p` по не-TCP записям это отличие Р5, его эталонов C нет) и 7 на `ipv6` (адресный фильтр
 /// со смешанным списком, из одного IPv4, порты и порты со смешанным списком; фильтр из одних диапазонов IPv6 не
-/// снят: C его игнорирует, rmasscan фильтрует, R14); имена уникальны, пропуски
-/// называют существующие кейсы, у хранимых входов есть файл эталона, у остальных его нет.
+/// снят: C его игнорирует, rmasscan фильтрует, R14); на каждом из двух входов с баннерами certs и формат по умолчанию
+/// с `--show` и без, 2 × 3 кейса `--banner-types` (`dns-ver`; `ssl` и `http` двумя опциями) на `banners`, фильтр
+/// адреса и порта на `banners` (`-oL`, `-oG`) и на `banners-legacy` (`-oL`). Имена уникальны, пропуски называют
+/// существующие кейсы, у хранимых входов есть файл эталона, у остальных его нет; у кейса без `@OUTPUT@` нет файла
+/// вывода, а stdout лежит файлом.
 #[test]
 fn manifest_covers_the_capture_matrix() {
     let m = manifest();
     assert_eq!(m.oracle.git_head, ORACLE_GIT_HEAD);
     assert_eq!(m.oracle.binary_sha256, ORACLE_SHA256);
-    assert_eq!(m.inputs.len(), 6);
-    assert_eq!(m.cases.len(), 6 * 2 * 9 + 2 + 2 + 7);
+    assert_eq!(m.inputs.len(), 8);
+    assert_eq!(m.cases.len(), 8 * 2 * 9 + 2 + 2 + 7 + 2 * 3 + 2 * 3 + 2 + 1);
     let mut names: Vec<&str> = m.cases.iter().map(|c| c.name.as_str()).collect();
     names.sort_unstable();
     names.dedup();
@@ -414,12 +457,30 @@ fn manifest_covers_the_capture_matrix() {
             .iter()
             .find(|i| i.name == c.input)
             .unwrap_or_else(|| panic!("{}: input {} is not in the manifest", c.name, c.input));
-        assert_eq!(c.output.is_some(), input.stored, "{}", c.name);
+        if c.has_output_file() {
+            assert_eq!(c.output.is_some(), input.stored, "{}", c.name);
+            assert!(
+                c.sha256.is_some() && c.masked_sha256.is_some(),
+                "{}",
+                c.name
+            );
+        } else {
+            assert!(
+                c.output.is_none() && c.sha256.is_none() && c.stdout_output.is_some(),
+                "{}",
+                c.name
+            );
+        }
         if let Some(rel) = &c.output {
             assert!(Path::new(&format!("{DIR}/{rel}")).is_file(), "{rel}");
         }
+        assert_ne!(c.stdout.is_some(), c.stdout_output.is_some(), "{}", c.name);
+        if let Some(rel) = &c.stdout_output {
+            assert!(input.stored, "{}", c.name);
+            assert!(c.stdout_sha256.is_some(), "{}", c.name);
+            assert!(Path::new(&format!("{DIR}/{rel}")).is_file(), "{rel}");
+        }
         assert!(c.args.iter().any(|a| a == "@INPUT@"), "{}", c.name);
-        assert!(c.args.iter().any(|a| a == "@OUTPUT@"), "{}", c.name);
     }
 }
 
@@ -462,4 +523,102 @@ fn ipv6_cases_pin_the_c_filter_semantics() {
             .iter()
             .any(|l| l.contains("2a03:9060") || l.contains("fe80"))
     );
+}
+
+/// Задача 3 подэтапа 4a: кейсы с баннерами фиксируют то, что C делает с записями баннеров в `--readscan`
+/// (`in-binary.c:584-627`, справка A5) и при их выводе (A1, A4). Сам разбор сверяет `every_golden_case_is_checked`;
+/// здесь выписаны ожидаемые строки, снятые с оракула.
+#[test]
+fn banner_cases_pin_the_c_readscan_semantics() {
+    let m = manifest();
+    let bytes = |rel: &str| fs::read(format!("{DIR}/{rel}")).expect(rel);
+    let output = |name: &str| -> Vec<u8> {
+        let c = m.cases.iter().find(|c| c.name == name).expect(name);
+        bytes(c.output.as_deref().expect("stored output"))
+    };
+    let stdout = |name: &str| -> Vec<u8> {
+        let c = m.cases.iter().find(|c| c.name == name).expect(name);
+        bytes(c.stdout_output.as_deref().expect("stdout file"))
+    };
+    let text = |b: Vec<u8>| String::from_utf8(b).expect("ASCII output");
+
+    // `--banner-types dns-ver`: no status record is parsed (the input starts with one at 1700021600), so the -oB
+    // scan start is the first banner's time, before the application filter (`in-binary.c:437-438`).
+    assert_eq!(
+        text(output("banner-types.dns-ver.list")),
+        "#masscan\nbanner udp 53 192.0.2.21 1700021601 dns-ver 9.18.24\n\
+         banner tcp 1006 198.51.100.7 1700021604 dns-ver banner-6\n\
+         banner udp 53 2001:db8::53 1700021611 dns-ver \n# end\n"
+    );
+    assert!(output("banner-types.dns-ver.binary").starts_with(b"masscan/1.1\ns:1700021601\n"));
+    // Two names are two options (`ssl,http` is one bad name: `FAIL: bad banner app: ssl,http`, exit 1, measured).
+    let ssl_http = text(output("banner-types.ssl-http.list"));
+    assert_eq!(
+        ssl_http
+            .lines()
+            .filter(|l| l.starts_with("banner "))
+            .count(),
+        5
+    );
+    assert!(!ssl_http.contains("\nopen ") && !ssl_http.contains("\nclosed "));
+
+    // Legacy types 3/4/5 pass the address, port and application filters; type 9 and status records do not.
+    let legacy = text(output("filter.banners-legacy.list"));
+    assert_eq!(
+        legacy.lines().filter(|l| l.starts_with("banner ")).count(),
+        8
+    );
+    assert!(!legacy.contains("192.0.2.40"));
+    // Type 3 is always TCP with TTL 0; type 4's extra byte is the last payload byte (`9.18.24`) or, with a 12-byte
+    // length, the low byte of the application (`ssl`).
+    assert!(legacy.contains("banner udp 53 10.4.0.1 1700028802 dns-ver 9.18.24\n"));
+    assert!(legacy.contains("banner tcp 443 10.4.0.2 1700028803 ssl \n"));
+    // -oB rewrites the legacy records as type 9 with TTL 0.
+    let rewritten = output("banners-legacy.open.binary");
+    assert_eq!(&rewritten[99..101], [9, 14 + 19]);
+    assert_eq!(rewritten[99 + 2 + 13], 0, "TTL 0");
+
+    // XML `reason` is keyed on the application id (`out-xml.c:106-109`): dns-ver says `syn-ack` even over TCP.
+    let xml = text(output("banners.open.xml"));
+    assert!(xml.contains(
+        "<port protocol=\"tcp\" portid=\"1006\"><state state=\"open\" reason=\"syn-ack\" reason_ttl=\"6\" />"
+    ));
+    // `normalize_string` holes (`output.c:143-170`): once `\xNN` no longer fits, printable bytes are still added.
+    let list = text(output("banners.open.list"));
+    let long = list
+        .lines()
+        .find(|l| l.starts_with("banner tcp 8443 "))
+        .expect("16369-byte banner");
+    assert!(
+        long.ends_with("\\xdb\\xdc !#"),
+        "{}",
+        &long[long.len() - 40..]
+    );
+    assert_eq!(
+        long.len() - "banner tcp 8443 192.0.2.25 1700021613 html ".len(),
+        8190
+    );
+
+    // certs: `{finished: 1}` in the file, one PEM block per banner on stdout, `cert:` stripped only past 5 bytes.
+    assert_eq!(output("banners.open.certs"), b"{finished: 1}\n");
+    let pem = stdout("banners.open.certs");
+    let blocks = pem
+        .windows(28)
+        .filter(|w| *w == b"-----BEGIN CERTIFICATE-----\n")
+        .count();
+    assert_eq!(blocks, 56);
+    assert!(pem.windows(22).any(|w| w == b"\nMIIBszCCAVmgAwIBAgIJ\n"));
+    assert!(pem.windows(7).any(|w| w == b"\ncert:\n"));
+
+    // Default format: `Discovered` and `Banner on port` lines, padded to 79 columns when shorter.
+    let console = text(stdout("banners.open.default"));
+    assert!(console.starts_with(
+        "Discovered open port 80/tcp on 192.0.2.20                                      \n\
+         Banner on port 80/tcp on 192.0.2.20: [http] HTTP/1.1 200 OK\\x0d\\x0aServer: nginx\\x0d\\x0a\\x0d\\x0a\n"
+    ));
+    assert!(console.contains(&format!(
+        "Banner on port 53/udp on 2001:db8::53: [dns-ver] {:width$}\n",
+        "",
+        width = 79 - "Banner on port 53/udp on 2001:db8::53: [dns-ver] ".len()
+    )));
 }

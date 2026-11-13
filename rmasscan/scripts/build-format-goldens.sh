@@ -105,10 +105,14 @@ masked() {
 }
 
 # ---- inputs ----------------------------------------------------------------
-# walk_records FILE : one line "type ip_proto port" per record between the 99-byte header and the 99-byte footer:
-# types 6/7 (IPv4, length 13; out-binary.c:154-211) and 10/11 (IPv6, length 26; out-binary.c:103-149). Fails when the
-# records do not end exactly at the footer. The bytes are regrouped in awk, whatever line width od prints (uutils od
-# does not keep `-w15` lines on large inputs).
+# walk_records FILE : one line "type ip_proto port" per record between the 99-byte header and the 99-byte footer.
+# Type and length are 7-bit-group varints (in-binary.c:546-570). Status: types 6/7 (IPv4, length 13;
+# out-binary.c:154-211) and 10/11 (IPv6, length 26; out-binary.c:103-149). Banners: type 9 (IPv4, at least 14 bytes;
+# out-binary.c:293-355) and 13 (IPv6, at least 27 bytes, version 6; out-binary.c:216-289), and the legacy types C
+# only reads (in-binary.c:339-409): 3 (at least 12 bytes, always TCP), 4 (at least 13 bytes counting the one byte C
+# reads after the body, in-binary.c:595-602) and 5 (at least 13). Fails when the records do not end exactly at the
+# footer. The bytes are regrouped in awk, whatever line width od prints (uutils od does not keep `-w15` lines on
+# large inputs).
 walk_records() {
   local f=$1 size
   size=$(stat -c %s "$f")
@@ -118,12 +122,20 @@ walk_records() {
     awk '{ for (k = 1; k <= NF; k++) v[c++] = $k }
          END { i = 0
                while (i < c) {
-                 t = v[i]; l = v[i + 1]
-                 if (l >= 128 || i + 2 + l > c) exit 1
-                 if ((t == 6 || t == 7) && l == 13) print t, v[i + 10], v[i + 11] * 256 + v[i + 12]
-                 else if ((t == 10 || t == 11) && l == 26) print t, v[i + 6], v[i + 7] * 256 + v[i + 8]
+                 t = 0; n = 0
+                 do { if (i >= c || n++ >= 4) exit 1; b = v[i++]; t = t * 128 + b % 128 } while (b >= 128)
+                 l = 0; n = 0
+                 do { if (i >= c || n++ >= 4) exit 1; b = v[i++]; l = l * 128 + b % 128 } while (b >= 128)
+                 if (t == 4) l++
+                 if (i + l > c) exit 1
+                 if ((t == 6 || t == 7) && l == 13) print t, v[i + 8], v[i + 9] * 256 + v[i + 10]
+                 else if ((t == 10 || t == 11) && l == 26) print t, v[i + 4], v[i + 5] * 256 + v[i + 6]
+                 else if (t == 9 && l >= 14) print t, v[i + 8], v[i + 9] * 256 + v[i + 10]
+                 else if (t == 13 && l >= 27 && v[i + 10] == 6) print t, v[i + 4], v[i + 5] * 256 + v[i + 6]
+                 else if (t == 3 && l >= 12) print t, 6, v[i + 8] * 256 + v[i + 9]
+                 else if ((t == 4 || t == 5) && l >= 13) print t, v[i + 8], v[i + 9] * 256 + v[i + 10]
                  else exit 1
-                 i += 2 + l
+                 i += l
                } }'
 }
 
@@ -137,11 +149,12 @@ for f in "${inputs[@]}"; do
   name=${f##*/}
   size=$(stat -c %s "$f")
   head -c 11 "$f" | cmp -s - <(printf 'masscan/1.1') || die "$name: not a masscan -oB file"
-  recs=$(walk_records "$f") || die "$name: not 99 + records (types 6/7 of 15 bytes, 10/11 of 28) + 99 bytes"
+  recs=$(walk_records "$f") || die "$name: not 99 + records (status 6/7/10/11, banners 3/4/5/9/13) + 99 bytes"
   nrec=0
   [ -z "$recs" ] || nrec=$(printf '%s\n' "$recs" | wc -l)
   if [ "$size" -le "$STORE_MAX" ]; then STORED[$name]=true; else STORED[$name]=false; fi
-  printf '%s\n' "$recs" | awk 'NF == 3 { print $2, $3 }' >>"$ports_all"
+  # Only status records look up a service name (-oG, -oU); banner records print the application name.
+  printf '%s\n' "$recs" | awk 'NF == 3 && ($1 == 6 || $1 == 7 || $1 == 10 || $1 == 11) { print $2, $3 }' >>"$ports_all"
   jq -n -c --arg name "$name" --arg sha "$(sha256sum <"$f" | cut -d' ' -f1)" \
     --argjson size "$size" --argjson records "$nrec" --argjson stored "${STORED[$name]}" \
     '{name: $name, sha256: $sha, size_bytes: $size, records: $records, stored: $stored}' >>"$STAGE/inputs.jsonl"
@@ -170,7 +183,12 @@ echo "[*] protocols.txt: $(wc -l <"$OUT/protocols.txt") entries"
 
 # ---- cases -----------------------------------------------------------------
 # run_case NAME INPUT KIND ARGS... : ARGS use @INPUT@ and @OUTPUT@ for the two paths. KIND (xml,
-# grepable, other) selects the masks when the output is not empty.
+# grepable, other) selects the masks when the output is not empty. Two kinds keep C's stdout as a file
+# (`outputs/NAME.stdout.out`, `stdout_output` and `stdout_sha256` in the case, `stdout` null) instead of a JSON
+# string, because it holds raw banner bytes or long lines: `certs` (an output file too: `{finished: 1}`; the PEM
+# blocks go to stdout, out-certs.c:49-80) and `stdout` (no -o at all, ARGS have no @OUTPUT@: the default format
+# prints the `Discovered` and `Banner on port` lines, output.c:903-923; `output`, `sha256`, `masked_sha256` and
+# `size_bytes` are null).
 run_case() {
   local name=$1 input=$2 kind=$3; shift 3
   local in_path="$INPUTS/$input" r a rc
@@ -185,8 +203,38 @@ run_case() {
     rc=0
     "${NS[@]}" "$ORACLE" "${argv[@]}" >"$STAGE/run$r/$name.stdout" 2>"$STAGE/run$r/$name.stderr" || rc=$?
     [ "$rc" = 0 ] || { cat "$STAGE/run$r/$name.stderr" >&2; die "$name: exit $rc"; }
-    [ -f "$out_path" ] || die "$name: no output file"
+    if [ "$kind" = stdout ]; then
+      [ ! -e "$out_path" ] || die "$name: unexpected output file"
+    else
+      [ -f "$out_path" ] || die "$name: no output file"
+    fi
   done
+  cmp -s "$STAGE/run1/$name.stdout" "$STAGE/run2/$name.stdout" || die "$name: stdout differs between runs"
+  cmp -s "$STAGE/run1/$name.stderr" "$STAGE/run2/$name.stderr" || die "$name: stderr differs between runs"
+  local args_json
+  args_json=$(printf '%s\n' "$@" | jq -R . | jq -s -c .)
+
+  # C's stdout as a file: the input path must not be in it (it is compared byte for byte).
+  local extra='{}'
+  if [ "$kind" = certs ] || [ "$kind" = stdout ]; then
+    [ "${STORED[$input]}" = true ] || die "$name: a stdout case needs a stored input"
+    if grep -qF "$in_path" "$STAGE/run1/$name.stdout"; then die "$name: the input path is in stdout"; fi
+    cp "$STAGE/run1/$name.stdout" "$OUT/outputs/$name.stdout.out"
+    extra=$(jq -n -c --arg p "outputs/$name.stdout.out" \
+      --arg s "$(sha256sum <"$STAGE/run1/$name.stdout" | cut -d' ' -f1)" \
+      '{stdout: null, stdout_output: $p, stdout_sha256: $s}')
+  fi
+  if [ "$kind" = stdout ]; then
+    jq -n -c --arg name "$name" --arg input "$input" --argjson args "$args_json" --arg in_path "$in_path" \
+      --argjson extra "$extra" --rawfile stderr "$STAGE/run1/$name.stderr" \
+      '{name: $name, input: $input, args: $args, output: null, sha256: null, masked_sha256: null,
+        size_bytes: null, masks: [], stdout: null,
+        stderr: ($stderr | split($in_path) | join("@INPUT@"))} + $extra' \
+      >>"$STAGE/cases.jsonl"
+    echo "[+] $name: stdout $(stat -c %s "$STAGE/run1/$name.stdout") bytes"
+    return
+  fi
+
   local o1="$STAGE/run1/$name.out" o2="$STAGE/run2/$name.out"
   local masks=()
   if [ -s "$o1" ]; then
@@ -206,8 +254,6 @@ run_case() {
   h1=$(masked "$o1" "${masks[@]}" | sha256sum | cut -d' ' -f1)
   h2=$(masked "$o2" "${masks[@]}" | sha256sum | cut -d' ' -f1)
   [ "$h1" = "$h2" ] || die "$name: the two runs differ after masking"
-  cmp -s "$STAGE/run1/$name.stdout" "$STAGE/run2/$name.stdout" || die "$name: stdout differs between runs"
-  cmp -s "$STAGE/run1/$name.stderr" "$STAGE/run2/$name.stderr" || die "$name: stderr differs between runs"
 
   local size rel=null
   size=$(stat -c %s "$o1")
@@ -215,17 +261,18 @@ run_case() {
     cp "$o1" "$OUT/outputs/$name.out"
     rel="\"outputs/$name.out\""
   fi
-  local args_json masks_json
-  args_json=$(printf '%s\n' "$@" | jq -R . | jq -s -c .)
+  # A stdout kept as a file is not read into the JSON (raw bytes); `$extra` sets `stdout` to null.
+  local masks_json stdout_src="$STAGE/run1/$name.stdout"
+  [ "$extra" = '{}' ] || stdout_src=/dev/null
   masks_json=$(printf '%s\n' "${masks[@]}" | jq -R 'select(length > 0) | {kind: .}' | jq -s -c .)
   jq -n -c --arg name "$name" --arg input "$input" --argjson args "$args_json" --argjson output "$rel" \
     --arg sha "$(sha256sum <"$o1" | cut -d' ' -f1)" --arg msha "$h1" --argjson size "$size" \
-    --argjson masks "$masks_json" --arg in_path "$in_path" --arg out_path "$o1" \
-    --rawfile stdout "$STAGE/run1/$name.stdout" --rawfile stderr "$STAGE/run1/$name.stderr" \
+    --argjson masks "$masks_json" --arg in_path "$in_path" --arg out_path "$o1" --argjson extra "$extra" \
+    --rawfile stdout "$stdout_src" --rawfile stderr "$STAGE/run1/$name.stderr" \
     '{name: $name, input: $input, args: $args, output: $output, sha256: $sha, masked_sha256: $msha,
       size_bytes: $size, masks: $masks,
       stdout: ($stdout | split($in_path) | join("@INPUT@")),
-      stderr: ($stderr | split($in_path) | join("@INPUT@") | split($out_path) | join("@OUTPUT@"))}' \
+      stderr: ($stderr | split($in_path) | join("@INPUT@") | split($out_path) | join("@OUTPUT@"))} + $extra' \
     >>"$STAGE/cases.jsonl"
   echo "[+] $name: $size bytes, masks=${masks[*]:-none}"
 }
@@ -267,6 +314,37 @@ fi
 if [ -n "${STORED[protocols.scan.bin]:-}" ]; then
   run_case filter.protocols.list protocols.scan.bin other --range 192.0.2.0/28 --readscan @INPUT@ -oL @OUTPUT@
   run_case filter.protocols.grepable protocols.scan.bin grepable --range 192.0.2.0/28 --readscan @INPUT@ -oG @OUTPUT@
+fi
+# Banner records (types 9/13 and the legacy 3/4/5, in-binary.c:592-627; `--readscan` turns banners on,
+# main-conf.c:3266-3272): certs (PEM blocks on stdout, `{finished: 1}` in the file) and the default format (stdout
+# only) for both banner inputs; `--banner-types` (status records are not parsed at all, the application filter applies
+# to 9/13; one name per option, main-conf.c:2683-2697, so two names are two options: `ssl,http` is one bad name, exit
+# 1); an address and port filter on banners (ports 80 and 443 carry only TCP records in `banners`, so C's unshifted
+# port and rmasscan's (ip_proto, port) mean the same, Р5); and the legacy types passing every filter (no
+# readscan_filter_pass for 3/4/5).
+for stem in banners banners-legacy; do
+  input=$stem.scan.bin
+  [ -n "${STORED[$input]:-}" ] || continue
+  run_case "$stem.open.certs" "$input" certs --readscan @INPUT@ --output-format certs --output-filename @OUTPUT@
+  run_case "$stem.open.default" "$input" stdout --readscan @INPUT@
+  run_case "$stem.open-closed.default" "$input" stdout --readscan @INPUT@ --show open,closed
+done
+if [ -n "${STORED[banners.scan.bin]:-}" ]; then
+  for spec in list:-oL:other grepable:-oG:grepable binary:-oB:other; do
+    IFS=: read -r fmt flag kind <<<"$spec"
+    run_case "banner-types.dns-ver.$fmt" banners.scan.bin "$kind" \
+      --banner-types dns-ver --readscan @INPUT@ "$flag" @OUTPUT@
+    run_case "banner-types.ssl-http.$fmt" banners.scan.bin "$kind" \
+      --banner-types ssl --banner-types http --readscan @INPUT@ "$flag" @OUTPUT@
+  done
+  run_case filter.banners.list banners.scan.bin other \
+    --range 192.0.2.0/24,2001:db8::/120 -p80,443 --readscan @INPUT@ -oL @OUTPUT@
+  run_case filter.banners.grepable banners.scan.bin grepable \
+    --range 192.0.2.0/24,2001:db8::/120 -p80,443 --readscan @INPUT@ -oG @OUTPUT@
+fi
+if [ -n "${STORED[banners-legacy.scan.bin]:-}" ]; then
+  run_case filter.banners-legacy.list banners-legacy.scan.bin other \
+    --range 10.0.0.0/8 -p22 --banner-types ssh --readscan @INPUT@ -oL @OUTPUT@
 fi
 
 # ---- manifest --------------------------------------------------------------

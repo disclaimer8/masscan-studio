@@ -1,7 +1,9 @@
 # Output-format goldens from the pinned C masscan oracle
 
 Offline parity for `-oL -oJ -oD -oG -oX -oB -oH -oU` (design §6.1,
-`docs/superpowers/specs/2026-11-06-rmasscan-output-formats-design.md`). The C oracle
+`docs/superpowers/specs/2026-11-06-rmasscan-output-formats-design.md`), and for banner records in `--readscan`
+(types 9/13 and the legacy 3/4/5), `--output-format certs`, the default format and `--banner-types` (banners
+sub-stage 4a, `docs/superpowers/specs/2026-11-13-rmasscan-banners-c-reference-output-udp.md` A5, C2-C3.1). The C oracle
 (masscan `8e6b3b0c07a81e8ea61d557c06134a21a6881614`, binary sha256 in `manifest.json`, the
 same build as `../manifest.json`) converted each input with `--readscan`; the test
 `crates/rmasscan-cli/tests/formats_golden.rs` replays every case through `rmasscan_cli::run`
@@ -17,17 +19,20 @@ on the three CI operating systems.
    The script checks the oracle sha256, refuses `/etc/masscan/masscan.conf`, runs every masscan
    invocation in `sudo -n unshare -n` (only a DOWN loopback), runs each case twice and requires both
    runs to agree after masking.
-3. Copy `$W/golden/{manifest.json,services.txt,protocols.txt,outputs}` here, keep `inputs/` and this README
-   (hand-written), run the privacy grep over this directory, then delete `$W` on the host.
+3. Copy `$W/golden/{manifest.json,services.txt,protocols.txt,outputs}` here (`outputs/` holds `*.stdout.out` too),
+   keep `inputs/` and this README (hand-written), run the privacy grep over this directory, then delete `$W` on the
+   host.
 
-Extending (how the `protocols` and then the `ipv6` input were added): run the script on all inputs as above, check that every
-earlier case reproduces (`masked_sha256`, `stdout`, `stderr`), and copy only the new cases: their outputs,
-their manifest entries and input, `services.txt` and `protocols.txt`; the earlier entries and outputs stay as
-committed (the raw `sha256` of the 26 outputs with a clock mask differs in the new capture, in the masked fields
-only; `masked_sha256`, `stdout` and `stderr` of all 94 earlier cases reproduced, so none of them was touched), and
-`extended` in `manifest.json` records the later capture (time, host, its cases). The script walks the records of an
-input by type and length (`walk_records`: types 6/7 of 15 bytes, 10/11 of 28) instead of assuming 15 bytes.
-The `extended` block and the new case entries were merged into the committed `manifest.json` by hand with `jq`:
+Extending (how the `protocols`, then the `ipv6` and then the two banner inputs were added): run the script on all
+inputs as above, check that every earlier case reproduces (`masked_sha256`, `stdout`, `stderr`), and copy only the
+new cases: their outputs, their manifest entries and input, `services.txt` and `protocols.txt`; the earlier entries
+and outputs stay as committed (the raw `sha256` of the outputs with a clock mask differs in the new capture, in the
+masked fields only: 26 of 94 earlier cases at the `ipv6` capture, 35 of 119 at the banner capture; `masked_sha256`,
+`stdout` and `stderr` of every earlier case reproduced, so none of them was touched), and `extended` in
+`manifest.json` records the later capture (time, host, its cases). The script walks the records of an input by type
+and length (`walk_records`: varint type and length, `in-binary.c:546-570`; status types 6/7 of 15 bytes and 10/11 of
+28, banner types 9 and 13, legacy 3/4/5 with the extra byte of type 4) instead of assuming 15 bytes. The `extended`
+block and the new case entries were merged into the committed `manifest.json` by hand with `jq`:
 `build-format-goldens.sh` alone regenerates the case entries of a whole new manifest, but never writes `extended`.
 
 ## Layout
@@ -46,7 +51,21 @@ The `extended` block and the new case entries were merged into the committed `ma
   `ffff:...:ffff`, `::ffff:192.0.2.1` as `::ffff:c000:201`, `2001:db8::`; TCP open and closed, UDP, SCTP and ICMP,
   ports 0 and 65535, TTL 0 and 255, and `2a03:9060:0:400::2` on 443 and 22). `many` (70 000 records, 1 MiB) is not committed. ARP (type 8) has
   no input here: C cannot read it (`in-binary.c:583`), the `readscan` unit tests cover it.
+  `banners` (61 records, written by the rmasscan `-oB` writer, `Formatter::banner`): 56 banner records of types 9
+  (IPv4) and 13 (IPv6) mixed with 5 status records (types 6/7/10, the first record is a status record); application ids
+  0..=37 and 65535 (`(37)`, `(65535)`), `ip_proto` 0, 1, 6, 17, 132 and 99 (`arp`, `icmp`, `tcp`, `udp`, `sctp`,
+  `err`), every byte 0..=255 as a payload (IPv4 and IPv6), `< > & " ' \` in a title, `cert:MIIB…` and a bare
+  `cert:` (5 bytes, not stripped by certs), empty payloads, the one/two-byte `-oB` length boundary (113/114 bytes
+  IPv4, 100/101 IPv6), a 16 369-byte payload (the longest IPv4 `-oB` banner; text cut at 8190 with holes, JSON cut at
+  the 65 536 buffer), dns-ver (app 6) over TCP (XML `syn-ack`), TTL 0 and 255; ports 80 and 443 carry only TCP records.
+  `banners-legacy` (10 records): the legacy banner types C reads but never writes, as raw bytes (type 3: time,
+  address, port, app, payload, always TCP; types 4 and 5: time, address, protocol, port, app, payload; type 4's
+  length is one less than its body, C reads the last byte separately, `in-binary.c:595-602`, and with a 12-byte
+  length that byte is the low byte of the app), including an empty type 3, a 120-byte type 5 (two-byte length) and
+  `ip_proto` 99, plus one status record (type 6) and one type 9 banner for the filter case.
 - `outputs/<case>.out`: what C wrote to the `-o?` file, byte for byte.
+- `outputs/<case>.stdout.out`: C's stdout, byte for byte, for the cases whose stdout carries the result: certs (the
+  PEM blocks, raw payload bytes) and the default format (`Discovered` and `Banner on port` lines).
 - `services.txt`: `getent services <port>/tcp` for every TCP record port and `<port>/udp` for every UDP
   record port of the inputs on the oracle host (`getservbyport`, `out-tcp-services.c:34-99`); the test
   loads it with `ServiceNames::parse`.
@@ -56,7 +75,9 @@ The `extended` block and the new case entries were merged into the committed `ma
 - `manifest.json`: oracle pin, host (OS and kernel only), `inputs` (`sha256`, `records`, `stored`)
   and one record per case: `args` (masscan argv, `@INPUT@` and `@OUTPUT@` stand for the two
   paths), `output` (`null` when not stored), `sha256` of the raw output, `masked_sha256`, `masks`,
-  and C's `stdout` and `stderr` with the input path replaced by `@INPUT@`.
+  and C's `stdout` and `stderr` with the input path replaced by `@INPUT@`. A case whose stdout is kept as a file has
+  `stdout: null`, `stdout_output` and `stdout_sha256`; a case without a file (the default format, no `@OUTPUT@` in
+  `args`) also has `output`, `sha256`, `masked_sha256` and `size_bytes` null.
 
 Cases: for each input, with and without `--show open,closed`, every format plus `-oX --webxml`
 (`<stem>.<open|open-closed>.<format>`), and two filter cases on `basic`:
@@ -70,6 +91,14 @@ see below).
 A `-p` filter over non-TCP records is not captured: C compares the record's unshifted port with the
 shifted port ranges (`in-filter.c:14–17`), rmasscan compares `(ip_proto, port)`, a named difference
 (design `2026-11-08-rmasscan-protocols-ipv4` Р5); an address filter means the same in both.
+
+Banner cases: both banner inputs also have `<stem>.open.certs` (`--output-format certs --output-filename F`: the
+file and stdout), `<stem>.open.default` and `<stem>.open-closed.default` (no `-o`: stdout only); on `banners`,
+`banner-types.dns-ver.<list|grepable|binary>` (`--banner-types dns-ver`) and `banner-types.ssl-http.<…>`
+(`--banner-types ssl --banner-types http`), and `filter.banners.<list|grepable>` (`--range
+192.0.2.0/24,2001:db8::/120 -p80,443`: ports 80 and 443 carry only TCP records there, so the port filter means the
+same in C and rmasscan); on `banners-legacy`, `filter.banners-legacy.list` (`--range 10.0.0.0/8 -p22 --banner-types
+ssh`: every legacy record passes, the type 9 and the status record do not).
 
 File names use `.bin`, `.out` and `.txt`: the repository language guard
 (`scripts/language-guard.sh`, `allowed_name`) accepts no `.scan`, `.xml` or extensionless data file.
@@ -113,6 +142,32 @@ sha256 against `inputs` first.
   `<hosts up= down=>` (`up="1" down="2"` with `--show open,closed`); with no `-p` the grepable header
   lists no port of any protocol.
 
+## Banner records (types 3, 4, 5, 9 and 13)
+
+- `--readscan` turns banners on (`main-conf.c:3266-3272`): every format prints the banner records next to the status
+  records, in file order; banners ignore `--show` and are not counted in XML `<hosts up= down=>`. The default format
+  prints `Banner on port P/proto on IP: [app] text` padded to 79 columns, after `Discovered` lines (`output.c:903-923`).
+- `--banner-types NAME` (and `--banner-type`, `--banner-apps`, `--banner-app`, `main-conf.c:2683-2697`) takes one
+  `masscan_string_to_app` name per option (case-sensitive; `ssh` is 3, `vnc-old` 23, `x509` 15). With any name every
+  status record is skipped unparsed (`in-binary.c:584-623`, so a status record before the first banner does not set
+  the scan start: `-oB` `s:` is the first banner's time) and types 9/13 pass only with a listed app; types 3/4/5 pass
+  every filter (no `readscan_filter_pass`). A bad name (measured on the oracle with `ssl,http`, `HTTP`, `unknown` and
+  `error`): stderr `FAIL: bad banner app: NAME\nerr\n`, exit 1, no output file; rmasscan prints the same.
+- `-oB` rewrites types 3/4/5 as type 9 (TTL 0, type 3 always TCP) and keeps types 9/13 byte for byte.
+- certs writes `{finished: 1}` to the file and one PEM block per banner, any app, on stdout (72-byte lines, each cut at
+  its first NUL byte by `%.*s`); `cert:` is stripped only when the payload is longer than 5 bytes.
+- XML says `reason="syn-ack"` for app 6 (dns-ver) whatever the protocol, `response` otherwise (`out-xml.c:106-109`),
+  and writes ` />` with a space; `-oU` prints nothing for a banner (header and footer still come); `-oH` prints one
+  more address line per banner.
+- Unit tests only (`readscan.rs`), measured on the oracle with the same isolation but not stored as goldens: a type 4
+  record cut before its extra byte prints `[-] read() error`, exits 1 and leaves the output without its footer (C calls
+  `exit(1)`); type 5 shorter than 13 bytes and type 9 shorter than 14 are skipped silently and set no scan start; type
+  13 with a version other than 6, or too short to hold it, prints `[-] corrupt record` and the read goes on; type 13
+  with version 6 but shorter than 27 bytes prints nothing yet sets the scan start (`in-binary.c:304-305, 318-319`);
+  with `--banner-types` a type 10 with version 4, a type 6 with `ip_proto` 47 and types 1 and 2 are skipped without a
+  message. C and rmasscan gave the same bytes, stderr and exit code in every one of them. A type 3 shorter than 12
+  bytes is not fed to C (it reads about 4 GiB past its buffer, `in-binary.c:363`).
+
 ## IPv6 records (types 10 and 11)
 
 - C reads them (`in-binary.c:228-276`, `parse_status6`) and writes them (`out-binary.c:103-149`); the body is
@@ -147,4 +202,11 @@ reader itself, tested in `output::services`).
 
 Named differences outside the goldens (unit tests in `readscan.rs`): a type 10/11 record with an `ip_proto` other
 than 1, 6, 17 and 132 is an error (`unsupported record protocol N`, design decision Р13, as for types 6/7), C prints
-`err` for it; type 12 stays `Unsupported` (C: `unknown type 12`, both stop the read).
+`err` for it; type 12 stays `Unsupported` (C: `unknown type 12`, both stop the read); the legacy status types 1 and 2
+stay `Unsupported` (C reads them, guessing the protocol from the port, `in-binary.c:41-98`) except with
+`--banner-types`, where both skip them unparsed. Banner records: a type 3 body shorter than 12 bytes is `[-] file
+corrupt` (exit 1, output closed with its footer; banners design Р2: C reads about 4 GiB past its buffer); a `-p`
+filter compares a banner record's `(ip_proto, port)` with the shifted ranges like a status record (Р5; a protocol
+without its own port space, not 1/6/17/132, never passes a `-p` filter), C compares the unshifted port, so
+`-p53` keeps a UDP banner on 53 in C and not in rmasscan; an IPv6-only address filter filters banner records too
+(R14).

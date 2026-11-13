@@ -132,6 +132,15 @@ impl<'a> Pipeline<'a> {
         }
     }
 
+    /// `exit(1)` C посреди вывода (`--readscan`, тип 4 без лишнего байта, `in-binary.c:597-600`): `output_destroy` не
+    /// зовётся, подвала нет, а буферы stdio сбрасываются при выходе. Файл закрывается без подвала.
+    pub fn abandon(&mut self) -> Result<(), String> {
+        if let Target::File(mut f) = std::mem::replace(&mut self.target, Target::Closed) {
+            f.flush().map_err(|e| write_failed(WriteTarget::File, e))?;
+        }
+        self.stdout.flush().map_err(io_fail)
+    }
+
     fn interactive_line(&self) -> bool {
         self.opts.interactive || matches!(self.opts.format, Format::Default | Format::Interactive)
     }

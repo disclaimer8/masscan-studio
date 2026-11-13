@@ -1,0 +1,13 @@
+# Masscan 1.3.9-integration scan initiated Wed Nov 15 06:13:20 2023
+# Ports scanned: TCP(0;) UDP(0;) SCTP(0;) PROTOCOLS(0;)
+Host: 10.3.0.1 ()	Port: 22	Service: ssh	Banner: SSH-2.0-OpenSSH_9.6
+Host: 10.3.0.2 ()	Port: 80	Service: http	Banner: 
+Host: 10.4.0.1 ()	Port: 53	Service: dns-ver	Banner: 9.18.24
+Host: 10.4.0.2 ()	Port: 443	Service: ssl	Banner: 
+Host: 10.5.0.1 ()	Port: 161	Service: snmp	Banner: sysDescr:Linux
+Host: 10.5.0.2 ()	Port: 7	Service: (37)	Banner: x
+Host: 10.5.0.3 ()	Port: 2905	Service: (65535)	Banner: zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz
+Timestamp: 1700028807	Host: 192.0.2.40 ()	Ports: 80/open/tcp//http//
+Host: 192.0.2.40 ()	Port: 80	Service: http	Banner: HTTP/1.0 200
+Host: 10.3.0.3 ()	Port: 443	Service: X509	Banner: cert:MIIB
+# Masscan done at Fri Nov 13 13:08:27 2026

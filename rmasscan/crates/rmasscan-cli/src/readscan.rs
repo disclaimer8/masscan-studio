@@ -1,17 +1,20 @@
 //! Чтение `-oB` и операция `--readscan` (AGPL-3.0). Порт `in-binary.c` (`_binaryfile_parse` :470–640,
-//! `parse_status2` :100–150, `readscan_binary_scanfile` :650–691) masscan © Robert David Graham. Читается только
-//! то, что пишет `-oB` этой версии: записи типа 6/7 (IPv4: TCP, UDP, SCTP, ICMP), 8 (ARP), 10/11 (IPv6, 28 байт,
-//! `parse_status6` :228–276) и подвал `'m'`. Остальные типы C (баннеры, устаревшие 1/2, 12 `Out_Arp6`) дают ошибку
-//! `Unsupported` (Р13), а не молчаливый пропуск.
+//! `parse_status2` :100–150, `readscan_binary_scanfile` :650–691) masscan © Robert David Graham. Читается то, что
+//! пишет `-oB`: записи статуса типа 6/7 (IPv4: TCP, UDP, SCTP, ICMP), 8 (ARP), 10/11 (IPv6, 28 байт,
+//! `parse_status6` :228–276), баннеры типа 9 (IPv4, `parse_banner9` :414–467) и 13 (IPv6, `parse_banner6`
+//! :280–330), устаревшие баннеры 3, 4, 5 (`parse_banner3` :339–369, `parse_banner4` :375–409) и подвал `'m'`.
+//! Устаревшие записи статуса 1/2 и тип 12 (`Out_Arp6`) дают ошибку `Unsupported` (Р13), а не молчаливый пропуск.
 //! Отличия от C (Р5, лучше C): тип 8 читается (в `in-binary.c:583–634` нет `case Out_Arp2`, это «unknown type 8»),
 //! а фильтр `-p` сравнивает пару (протокол, порт) со сдвинутыми диапазонами (`in-filter.c:14–17` сравнивает
-//! несдвинутый порт).
+//! несдвинутый порт). Тип 3 с телом короче 12 байт это `file corrupt` (Р2: у C `buf_length-12` переполняется, и
+//! `output_report_banner` читает ~4 ГиБ, `in-binary.c:363`).
 //!
-//! Записи уходят в [`Pipeline::report_record`] со своим исходным временем (никогда не штампуются заново).
-//! Начало скана `s:` берётся из заголовка `masscan/1.1.N` (N >= 2, `in-binary.c:518-534`), иначе из первой записи
-//! до фильтра, как `when_scan_started` C (`in-binary.c:128-129`).
+//! Записи уходят в [`Pipeline::report_record`] и [`Pipeline::report_banner`] со своим исходным временем (никогда не
+//! штампуются заново). Начало скана `s:` берётся из заголовка `masscan/1.1.N` (N >= 2, `in-binary.c:518-534`), иначе
+//! из первой записи, дошедшей до функции разбора, до фильтра, как `when_scan_started` C (`in-binary.c:128-129`,
+//! :304–305, :353–354, :393–394, :437–438).
 
-use std::cell::RefCell;
+use std::collections::BTreeSet;
 use std::fmt;
 use std::fs::File;
 use std::io::{self, BufReader, Read, Write};
@@ -20,6 +23,7 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use rmasscan_core::config::ScanConfig;
 use rmasscan_core::massip::MassIp;
 use rmasscan_core::targets::{TEMPL_ARP, TEMPL_ICMP_ECHO, TEMPL_SCTP, TEMPL_UDP};
+use rmasscan_proto::BannerRecord;
 
 use crate::LOGGED;
 use crate::output::{Pipeline, Proto, Record, Sink, Status};
@@ -37,10 +41,13 @@ pub enum ReadError {
     NotMasscan,
     /// Пустая строка значит просто `file corrupt`; иначе уточнение (`unknown type N`).
     Corrupt(String),
-    /// Тип записи, которого этот читатель не умеет (баннеры, `Out_Arp6`, v1).
+    /// Тип записи, которого этот читатель не умеет (устаревший статус 1/2, `Out_Arp6`).
     Unsupported(u64),
     /// Запись типа 6/7/8/10/11 с номером протокола, который этот порт не выводит (не 1/6/17/132, у типа 8 не 0).
     UnsupportedProtocol(u8),
+    /// Тип 4: лишний байт после тела не прочитан (`in-binary.c:595-600`): `LOG(0, "[-] read() error\n"); exit(1);`.
+    /// C выходит, не закрывая вывод: подвала нет ([`run_readscan`] делает так же).
+    ExtraByte,
 }
 
 impl fmt::Display for ReadError {
@@ -53,15 +60,16 @@ impl fmt::Display for ReadError {
             ReadError::Corrupt(s) => write!(f, "file corrupt: {s}"),
             ReadError::Unsupported(t) => write!(f, "unsupported record type {t}"),
             ReadError::UnsupportedProtocol(p) => write!(f, "unsupported record protocol {p}"),
+            ReadError::ExtraByte => f.write_str("read() error"),
         }
     }
 }
 
 impl ReadError {
-    /// Строка stderr в форме C: у `file corrupt` имени файла нет, у остальных есть.
+    /// Строка stderr в форме C: у `file corrupt` и `read() error` имени файла нет, у остальных есть.
     fn log_line(&self, file: &str) -> String {
         match self {
-            ReadError::Corrupt(_) => format!("[-] {self}\n"),
+            ReadError::Corrupt(_) | ReadError::ExtraByte => format!("[-] {self}\n"),
             _ => format!("[-] {file}: {self}\n"),
         }
     }
@@ -149,21 +157,41 @@ fn strtoul(s: &[u8]) -> u64 {
     if neg { v.wrapping_neg() } else { v }
 }
 
-/// Читает записи типа 6/7/8/10/11 из файла `-oB`. `f` получает каждую; его ошибка прерывает чтение.
-pub fn read_records(
-    r: &mut dyn Read,
-    f: &mut dyn FnMut(Record) -> Result<(), String>,
-) -> Result<(), ReadError> {
-    read_records_counted(r, f, &mut |_| {}, &mut |_| {}, &mut || {})
+/// Запись файла `-oB`, которую читатель отдаёт дальше.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Item {
+    /// Типы 6/7/8/10/11.
+    Status(Record),
+    /// Типы 9 и 13: проходят фильтр адреса, порта и `--banner-types` (`readscan_filter_pass`, `in-binary.c:450-452`,
+    /// :311–313).
+    Banner(BannerRecord),
+    /// Устаревшие типы 3, 4 и 5: только IPv4, TTL 0, у типа 3 протокол всегда TCP; фильтров нет никаких
+    /// (`in-binary.c:592-603`).
+    LegacyBanner(BannerRecord),
 }
 
-/// То же, с обратным вызовом после каждой записи (в том числе `'m'`) с общим числом: для строки прогресса.
-fn read_records_counted(
+/// Что читатель сообщает о файле, в порядке `_binaryfile_parse` C.
+pub trait ReadEvents {
+    /// `s:` заголовка `masscan/1.1.N`, N >= 2 (`in-binary.c:518-534`): начало скана без проверки на ноль.
+    fn header_start(&mut self, _ts: u64) {}
+    /// Время записи, дошедшей до функции разбора, до фильтров: `if (out->when_scan_started == 0)
+    /// out->when_scan_started = record.timestamp;`.
+    fn record_time(&mut self, _ts: u64) {}
+    /// Разобранная запись; ошибка прерывает чтение.
+    fn item(&mut self, it: Item) -> Result<(), String>;
+    /// `fprintf(stderr, "[-] corrupt record\n")` типов 10, 11 и 13 с версией не 6 (`in-binary.c:244-247`, :297–300).
+    fn corrupt_record(&mut self) {}
+    /// Общее число записей после каждой, в том числе `'m'` и пропущенных (`in-binary.c:635-637`).
+    fn progress(&mut self, _total: u64) {}
+}
+
+/// Читает файл `-oB`. `skip_status`: `--banner-types` не пуст, записи статуса (типы 1, 2, 6, 7, 10, 11; у этого порта
+/// ещё 8) пропускаются не разобранными (`if (!btypes->count)`, `in-binary.c:584-623`): ни времени начала скана, ни
+/// `[-] corrupt record`, ни отказа по протоколу.
+pub fn read_items(
     r: &mut dyn Read,
-    f: &mut dyn FnMut(Record) -> Result<(), String>,
-    progress: &mut dyn FnMut(u64),
-    scan_start: &mut dyn FnMut(u64),
-    corrupt_record: &mut dyn FnMut(),
+    skip_status: bool,
+    ev: &mut dyn ReadEvents,
 ) -> Result<(), ReadError> {
     let mut head = [0u8; BLOCK];
     let n = read_up_to(r, &mut head).map_err(ReadError::Io)?;
@@ -189,7 +217,7 @@ fn read_records_counted(
             i += 1;
         }
         if i < 97 {
-            scan_start(strtoul(&head[i..]));
+            ev.header_start(strtoul(&head[i..]));
         }
     }
     let mut total = 0u64;
@@ -203,6 +231,96 @@ fn read_records_counted(
             return Err(corrupt());
         }
         match ty {
+            // `if (!btypes->count)` (`in-binary.c:584-623`): с `--banner-types` статус не разбирается вовсе.
+            1 | 2 | 6..=8 | 10 | 11 if skip_status => {}
+            3 => {
+                // `parse_banner3` (`in-binary.c:339-369`): время, адрес, порт, app, баннер с 12-го байта; протокол
+                // всегда TCP, TTL 0. Длину C не проверяет (Р2, см. начало модуля): короткое тело это битая запись.
+                if body.len() < 12 {
+                    return Err(corrupt());
+                }
+                let timestamp = u64::from(be32(&body[..4]));
+                ev.record_time(timestamp);
+                ev.item(Item::LegacyBanner(BannerRecord {
+                    timestamp,
+                    ip: IpAddr::V4(Ipv4Addr::new(body[4], body[5], body[6], body[7])),
+                    ip_proto: 6,
+                    port: u16::from_be_bytes([body[8], body[9]]),
+                    app: u16::from_be_bytes([body[10], body[11]]),
+                    ttl: 0,
+                    payload: body[12..].to_vec(),
+                }))
+                .map_err(item_failed)?;
+            }
+            4 | 5 => {
+                if ty == 4 {
+                    // `in-binary.c:595-602`: ещё один байт из файла становится последним байтом тела. У C при длине
+                    // ровно `BUF_MAX` это запись за буфером (класс а); здесь тело просто растёт.
+                    let mut extra = [0u8; 1];
+                    if read_up_to(r, &mut extra).map_err(ReadError::Io)? != 1 {
+                        return Err(ReadError::ExtraByte);
+                    }
+                    body.push(extra[0]);
+                }
+                // `parse_banner4` (`in-binary.c:375-409`): тело короче 13 байт молча пропускается; TTL 0.
+                if body.len() >= 13 {
+                    let timestamp = u64::from(be32(&body[..4]));
+                    ev.record_time(timestamp);
+                    ev.item(Item::LegacyBanner(BannerRecord {
+                        timestamp,
+                        ip: IpAddr::V4(Ipv4Addr::new(body[4], body[5], body[6], body[7])),
+                        ip_proto: body[8],
+                        port: u16::from_be_bytes([body[9], body[10]]),
+                        app: u16::from_be_bytes([body[11], body[12]]),
+                        ttl: 0,
+                        payload: body[13..].to_vec(),
+                    }))
+                    .map_err(item_failed)?;
+                }
+            }
+            9 => {
+                // `parse_banner9` (`in-binary.c:414-467`): тело короче 14 байт молча пропускается (до начала скана).
+                if body.len() >= 14 {
+                    let timestamp = u64::from(be32(&body[..4]));
+                    ev.record_time(timestamp);
+                    ev.item(Item::Banner(BannerRecord {
+                        timestamp,
+                        ip: IpAddr::V4(Ipv4Addr::new(body[4], body[5], body[6], body[7])),
+                        ip_proto: body[8],
+                        port: u16::from_be_bytes([body[9], body[10]]),
+                        app: u16::from_be_bytes([body[11], body[12]]),
+                        ttl: body[13],
+                        payload: body[14..].to_vec(),
+                    }))
+                    .map_err(item_failed)?;
+                }
+            }
+            13 => {
+                // `parse_banner6` (`in-binary.c:280-330`): поля через `_get_*`; версия не 6 (и тело без байта версии)
+                // это `[-] corrupt record`, чтение идёт дальше. С версией 6 время уже начало скана (:304–305), а тело
+                // короче 27 байт после фильтра молча не выводится (`if (offset > length) return;`, :318–319).
+                let get = |off: usize, n: usize| get_be(&body, off, n);
+                if get(10, 1) != Some(6) {
+                    ev.corrupt_record();
+                } else {
+                    // Байт версии на месте, значит тело не короче 11 байт и поля до него целы.
+                    let timestamp = u64::from(be32(&body[..4]));
+                    ev.record_time(timestamp);
+                    if body.len() >= 27 {
+                        let ip = Ipv6Addr::from(get(11, 16).unwrap_or(u128::MAX));
+                        ev.item(Item::Banner(BannerRecord {
+                            timestamp,
+                            ip: IpAddr::V6(ip),
+                            ip_proto: body[4],
+                            port: u16::from_be_bytes([body[5], body[6]]),
+                            app: u16::from_be_bytes([body[7], body[8]]),
+                            ttl: body[9],
+                            payload: body[27..].to_vec(),
+                        }))
+                        .map_err(item_failed)?;
+                    }
+                }
+            }
             6..=8 => {
                 // `parse_status2`: тело короче 13 байт молча пропускается.
                 if body.len() >= 13 {
@@ -222,10 +340,10 @@ fn read_records_counted(
                         }
                         m
                     });
-                    f(Record {
-                        timestamp: u64::from(u32::from_be_bytes([
-                            body[0], body[1], body[2], body[3],
-                        ])),
+                    let timestamp = u64::from(be32(&body[..4]));
+                    ev.record_time(timestamp);
+                    ev.item(Item::Status(Record {
+                        timestamp,
                         ip: IpAddr::V4(ip),
                         port: u16::from_be_bytes([body[9], body[10]]),
                         proto,
@@ -237,19 +355,16 @@ fn read_records_counted(
                         reason: body[11],
                         ttl: body[12],
                         mac,
-                    })
-                    .map_err(|e| ReadError::Io(io::Error::other(e)))?;
+                    }))
+                    .map_err(item_failed)?;
                 }
             }
             10 | 11 => {
                 // `parse_status6` (`in-binary.c:228-276`): поля читаются `_get_*` (за концом тела 0xFF…), версия не 6
                 // это `[-] corrupt record` в stderr и запись пропущена, чтение идёт дальше.
-                let get = |off: usize, n: usize| -> Option<u128> {
-                    body.get(off..off + n)
-                        .map(|b| b.iter().fold(0u128, |v, &x| (v << 8) | u128::from(x)))
-                };
+                let get = |off: usize, n: usize| get_be(&body, off, n);
                 if get(9, 1) != Some(6) {
-                    corrupt_record();
+                    ev.corrupt_record();
                 } else {
                     let ip_proto = body[4];
                     let proto = match Proto::from_ip_proto(ip_proto) {
@@ -259,8 +374,10 @@ fn read_records_counted(
                     // `_get_long` (`in-binary.c:200-218`): половина адреса, которой не хватает целиком, это 2^64-1.
                     let half = |off: usize| get(off, 8).unwrap_or(u128::from(u64::MAX));
                     let ip = Ipv6Addr::from(half(10) << 64 | half(18));
-                    f(Record {
-                        timestamp: get(0, 4).unwrap_or(0xFFFF_FFFF) as u64,
+                    let timestamp = get(0, 4).unwrap_or(0xFFFF_FFFF) as u64;
+                    ev.record_time(timestamp);
+                    ev.item(Item::Status(Record {
+                        timestamp,
                         ip: IpAddr::V6(ip),
                         port: get(5, 2).unwrap_or(0xFFFF) as u16,
                         proto,
@@ -272,19 +389,36 @@ fn read_records_counted(
                         reason: get(7, 1).unwrap_or(0xFF) as u8,
                         ttl: get(8, 1).unwrap_or(0xFF) as u8,
                         mac: None,
-                    })
-                    .map_err(|e| ReadError::Io(io::Error::other(e)))?;
+                    }))
+                    .map_err(item_failed)?;
                 }
             }
             // `case 'm'`: подвал.
             0x6D => {}
-            1..=5 | 9 | 12 | 13 => return Err(ReadError::Unsupported(ty)),
+            1 | 2 | 12 => return Err(ReadError::Unsupported(ty)),
             _ => return Err(ReadError::Corrupt(format!("unknown type {ty}"))),
         }
         total += 1;
-        progress(total);
+        ev.progress(total);
     }
     Ok(())
+}
+
+/// Ошибка приёмника записи прерывает чтение; текст уже сохранил вызывающий.
+fn item_failed(e: String) -> ReadError {
+    ReadError::Io(io::Error::other(e))
+}
+
+/// Число big-endian из `b[..4]`.
+fn be32(b: &[u8]) -> u32 {
+    b.iter().take(4).fold(0, |v, &x| (v << 8) | u32::from(x))
+}
+
+/// `_get_byte`/`_get_short`/`_get_integer`/`_get_long` (`in-binary.c:156-223`): `n` байт big-endian с `off`, `None`,
+/// если тело кончилось раньше (C тогда даёт значение из одних единиц).
+fn get_be(body: &[u8], off: usize, n: usize) -> Option<u128> {
+    body.get(off..off.checked_add(n)?)
+        .map(|b| b.iter().fold(0u128, |v, &x| (v << 8) | u128::from(x)))
 }
 
 /// Индекс порта записи в списке портов цели со сдвигом протокола (`massip-port.h:11–25`): TCP +0, UDP +65536,
@@ -310,6 +444,9 @@ pub struct ReadFilter {
     pub targets: MassIp,
     pub by_ip: bool,
     pub by_port: bool,
+    /// `--banner-types` (`masscan->banner_types`, `src/main-conf.c:2683-2697`): если не пуст, баннеры типов 9 и 13
+    /// проходят только с этими номерами приложения, а записи статуса не читаются вовсе (`in-binary.c:584-623`).
+    pub banner_types: BTreeSet<u16>,
 }
 
 impl ReadFilter {
@@ -325,22 +462,63 @@ impl ReadFilter {
             by_ip: targets.count_ipv4s() > 0 || targets.has_ipv6_targets(),
             by_port: targets.count_ports() > 0,
             targets,
+            banner_types: cfg.banner_types.clone(),
         }
     }
 
-    pub fn keeps(&self, r: &Record) -> bool {
-        (!self.by_ip
-            || match r.ip {
+    /// Записи статуса не разбираются (`if (!btypes->count)`, `in-binary.c:584-623`).
+    pub fn drops_status(&self) -> bool {
+        !self.banner_types.is_empty()
+    }
+
+    fn keeps_ip(&self, ip: IpAddr) -> bool {
+        !self.by_ip
+            || match ip {
                 IpAddr::V4(a) => self.targets.has_ip(u32::from(a)),
                 IpAddr::V6(a) => self.targets.has_ip6(u128::from(a)),
-            })
-            && (!self.by_port || self.targets.has_port(port_index(r)))
+            }
     }
+
+    pub fn keeps(&self, r: &Record) -> bool {
+        self.keeps_ip(r.ip) && (!self.by_port || self.targets.has_port(port_index(r)))
+    }
+
+    /// `readscan_filter_pass` (`src/in-filter.c:5-24`) для типов 9 и 13: адрес и порт как у записи статуса (R14 и
+    /// Р5: порт со сдвигом протокола; у протокола без своего пространства портов, не 1/6/17/132, фильтр `-p` не
+    /// пропускает ничего), затем номер приложения в `--banner-types`.
+    pub fn keeps_banner(&self, b: &BannerRecord) -> bool {
+        self.keeps_ip(b.ip)
+            && (!self.by_port
+                || banner_port_index(b.ip_proto, b.port).is_some_and(|i| self.targets.has_port(i)))
+            && (self.banner_types.is_empty() || self.banner_types.contains(&b.app))
+    }
+}
+
+/// Индекс порта записи баннера в сдвинутом списке портов (см. [`port_index`]); `None` для протоколов, у которых
+/// нет своего пространства портов.
+fn banner_port_index(ip_proto: u8, port: u16) -> Option<u32> {
+    let p = u32::from(port);
+    match ip_proto {
+        6 => Some(p),
+        17 => Some(TEMPL_UDP + p),
+        132 => Some(TEMPL_SCTP + p),
+        1 => Some(TEMPL_ICMP_ECHO + p),
+        _ => None,
+    }
+}
+
+/// Чем кончилось чтение одного файла.
+enum Stop {
+    /// Ошибка с закрытием вывода (`goto end` C, затем `output_destroy`: подвал пишется).
+    Close(String),
+    /// `exit(1)` посреди чтения (`in-binary.c:597-600`): вывод не закрывается, подвала нет.
+    Exit(String),
 }
 
 /// `readscan_binary_scanfile`: файлы по порядку в один вывод. На первой ошибке чтения пишет текст C в `log`, всё
 /// равно закрывает вывод (`sink.finish()` даёт подвал) и возвращает `Err(LOGGED)`: текст уже напечатан. Ошибки
-/// открытия и записи вывода возвращаются своим текстом (их печатает вызывающий).
+/// открытия и записи вывода возвращаются своим текстом (их печатает вызывающий). Обрыв типа 4 на лишнем байте
+/// выходит как `exit(1)` C: буферы сбрасываются, подвала нет ([`Pipeline::abandon`]).
 pub fn run_readscan(
     files: &[String],
     filter: &ReadFilter,
@@ -353,9 +531,16 @@ pub fn run_readscan(
     sink.open()?;
     let mut failure: Option<String> = None;
     for name in files {
-        if let Err(msg) = read_one(name, filter, sink, log) {
-            failure = Some(msg);
-            break;
+        match read_one(name, filter, sink, log) {
+            Ok(()) => {}
+            Err(Stop::Close(msg)) => {
+                failure = Some(msg);
+                break;
+            }
+            Err(Stop::Exit(msg)) => {
+                sink.abandon()?;
+                return Err(msg);
+            }
         }
     }
     let closed = sink.finish();
@@ -365,60 +550,85 @@ pub fn run_readscan(
     }
 }
 
+/// Приёмник событий чтения одного файла: фильтр, конвейер и stderr.
+struct OneFile<'f, 'p, 'a, 'l> {
+    name: &'f str,
+    filter: &'f ReadFilter,
+    sink: &'p mut Pipeline<'a>,
+    log: &'l mut dyn Write,
+    /// Ошибка конвейера: её текст важнее текста читателя.
+    sink_failure: Option<String>,
+}
+
+impl ReadEvents for OneFile<'_, '_, '_, '_> {
+    /// `in-binary.c:518-534`: `s:` заголовка перекрывает начало скана (C присваивает без проверки на ноль).
+    fn header_start(&mut self, ts: u64) {
+        self.sink.set_scan_started(ts);
+    }
+    fn record_time(&mut self, ts: u64) {
+        self.sink.set_scan_started_if_unset(ts);
+    }
+    fn item(&mut self, it: Item) -> Result<(), String> {
+        let res = match it {
+            Item::Status(r) if self.filter.keeps(&r) => self.sink.report_record(&r),
+            // `--readscan` включает баннеры (`is_banners`, `src/main-conf.c:3266-3272`): проверки `is_banner` нет.
+            Item::Banner(b) if self.filter.keeps_banner(&b) => self.sink.report_banner(&b),
+            Item::LegacyBanner(b) => self.sink.report_banner(&b),
+            Item::Status(_) | Item::Banner(_) => Ok(()),
+        };
+        res.inspect_err(|e| self.sink_failure = Some(e.clone()))
+    }
+    /// `fprintf(stderr, "[-] corrupt record\n")` без имени файла (`in-binary.c:244-247`, :297–300).
+    fn corrupt_record(&mut self) {
+        let _ = self.log.write_all(b"[-] corrupt record\n");
+    }
+    fn progress(&mut self, n: u64) {
+        if n & 0xFFFF == 0 {
+            let _ = self
+                .log
+                .write_all(format!("[+] {}: {n:8}\r", self.name).as_bytes());
+        }
+    }
+}
+
 fn read_one(
     name: &str,
     filter: &ReadFilter,
     sink: &mut Pipeline,
     log: &mut dyn Write,
-) -> Result<(), String> {
+) -> Result<(), Stop> {
     // `in-binary.c:486-493`: `fopen` раньше строки `[+] --readscan`, на отсутствующем файле её нет.
     // `log` best-effort (`BestEffort` в `run_readscan`): запись в него не возвращает ошибок.
     let file = match File::open(name) {
         Ok(f) => f,
         Err(e) => {
             let _ = log.write_all(format!("[-] FAIL: --readscan\n[-] {name}: {e}\n").as_bytes());
-            return Err(LOGGED.into());
+            return Err(Stop::Close(LOGGED.into()));
         }
     };
     let _ = log.write_all(format!("[+] --readscan {name}\n").as_bytes());
-    let log = RefCell::new(log);
     let mut reader = BufReader::new(file);
-    let sink = RefCell::new(sink);
-    let mut sink_failure: Option<String> = None;
-    let res = read_records_counted(
-        &mut reader,
-        &mut |rec: Record| {
-            let mut sink = sink.borrow_mut();
-            sink.set_scan_started_if_unset(rec.timestamp);
-            if filter.keeps(&rec) {
-                sink.report_record(&rec).inspect_err(|e| {
-                    sink_failure = Some(e.clone());
-                })?;
-            }
-            Ok(())
-        },
-        &mut |n| {
-            if n & 0xFFFF == 0 {
-                let _ = log
-                    .borrow_mut()
-                    .write_all(format!("[+] {name}: {n:8}\r").as_bytes());
-            }
-        },
-        // `in-binary.c:518-534`: `s:` заголовка перекрывает начало скана (C присваивает без проверки на ноль).
-        &mut |ts| sink.borrow_mut().set_scan_started(ts),
-        // `parse_status6`: `fprintf(stderr, "[-] corrupt record\n")` без имени файла (`in-binary.c:244-247`).
-        &mut || {
-            let _ = log.borrow_mut().write_all(b"[-] corrupt record\n");
-        },
-    );
-    if let Some(msg) = sink_failure {
-        return Err(msg);
+    let mut ev = OneFile {
+        name,
+        filter,
+        sink,
+        log,
+        sink_failure: None,
+    };
+    let res = read_items(&mut reader, filter.drops_status(), &mut ev);
+    if let Some(msg) = ev.sink_failure {
+        return Err(Stop::Close(msg));
     }
-    if let Err(e) = res {
-        let _ = log.borrow_mut().write_all(e.log_line(name).as_bytes());
-        return Err(LOGGED.into());
+    match res {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            let _ = ev.log.write_all(e.log_line(name).as_bytes());
+            Err(match e {
+                ReadError::ExtraByte => Stop::Exit(LOGGED.into()),
+                _ => Stop::Close(LOGGED.into()),
+            })
+        }
     }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -490,13 +700,45 @@ mod tests {
         out
     }
 
-    fn read_all(bytes: &[u8]) -> (Vec<Record>, Result<(), ReadError>) {
-        let mut got = Vec::new();
-        let res = read_records(&mut &bytes[..], &mut |r| {
-            got.push(r);
+    /// Всё, что читатель сообщил о файле.
+    #[derive(Default)]
+    struct Collect {
+        items: Vec<Item>,
+        times: Vec<u64>,
+        corrupt: usize,
+    }
+
+    impl ReadEvents for Collect {
+        fn record_time(&mut self, ts: u64) {
+            self.times.push(ts);
+        }
+        fn item(&mut self, it: Item) -> Result<(), String> {
+            self.items.push(it);
             Ok(())
-        });
-        (got, res)
+        }
+        fn corrupt_record(&mut self) {
+            self.corrupt += 1;
+        }
+    }
+
+    fn read_items_all(bytes: &[u8], skip_status: bool) -> (Collect, Result<(), ReadError>) {
+        let mut c = Collect::default();
+        let res = read_items(&mut &bytes[..], skip_status, &mut c);
+        (c, res)
+    }
+
+    /// Только записи статуса; запись баннера здесь ошибка теста.
+    fn read_all(bytes: &[u8]) -> (Vec<Record>, Result<(), ReadError>) {
+        let (c, res) = read_items_all(bytes, false);
+        let recs = c
+            .items
+            .into_iter()
+            .map(|it| match it {
+                Item::Status(r) => r,
+                other => panic!("not a status record: {other:?}"),
+            })
+            .collect();
+        (recs, res)
     }
 
     fn tmp_file(scratch: &Scratch, name: &str, bytes: &[u8]) -> String {
@@ -584,9 +826,11 @@ mod tests {
         ));
     }
 
+    /// Устаревший статус 1/2 (`parse_status`, порт угадывает протокол, `in-binary.c:41-98`) и тип 12 `Out_Arp6` (у C
+    /// «unknown type 12») не читаются (Р13). Баннеры 3, 4, 5, 9 и 13 читаются (`readscan_banner_*`).
     #[test]
     fn unsupported_types_are_errors() {
-        for t in [1u8, 2, 3, 4, 5, 9, 12, 13] {
+        for t in [1u8, 2, 12] {
             let f = with_header(&[t, 0]);
             match read_all(&f).1 {
                 Err(ReadError::Unsupported(n)) => assert_eq!(n, u64::from(t)),
@@ -723,8 +967,8 @@ mod tests {
         unk.extend_from_slice(&[0x7E, 0]);
         cases.push(("unk", unk, "[-] file corrupt: unknown type 126\n"));
         let mut uns = ok_prefix.clone();
-        uns.extend_from_slice(&[9, 0]);
-        cases.push(("uns", uns, ": unsupported record type 9\n"));
+        uns.extend_from_slice(&[12, 0]);
+        cases.push(("uns", uns, ": unsupported record type 12\n"));
         for (name, bytes, expect) in cases {
             let path = tmp_file(&scratch, name, &bytes);
             let (out, log, res) = convert(std::slice::from_ref(&path), Format::Json, &no_filter());
@@ -954,7 +1198,7 @@ mod tests {
             }
             let cut = (next() as usize) % 40;
             b.truncate(b.len().saturating_sub(cut));
-            let _ = read_all(&b);
+            let _ = read_items_all(&b, false);
         }
     }
 
@@ -1060,6 +1304,541 @@ mod tests {
         let (_, log, res) = convert(&[a.clone(), b.clone()], Format::Ndjson, &no_filter());
         res.unwrap();
         assert_eq!(log, format!("[+] --readscan {a}\n[+] --readscan {b}\n"));
+    }
+
+    fn banner(
+        ts: u64,
+        ip: &str,
+        ip_proto: u8,
+        port: u16,
+        app: u16,
+        ttl: u8,
+        payload: &[u8],
+    ) -> BannerRecord {
+        BannerRecord {
+            timestamp: ts,
+            ip: ip.parse().unwrap(),
+            ip_proto,
+            port,
+            app,
+            ttl,
+            payload: payload.to_vec(),
+        }
+    }
+
+    /// Файл `-oB` из записей статуса и баннеров, собранный настоящим писателем конвейера (типы 6/7/10/11, 9/13).
+    fn make_bin_items(items: &[Item]) -> Vec<u8> {
+        let wall = FakeWall(1_800_000_000);
+        let mut out = Vec::new();
+        {
+            let env = OutputEnv {
+                wall: &wall,
+                services: services::empty(),
+                ports: Vec::new(),
+                scan_started: None,
+            };
+            let mut p = Pipeline::new(opts(Format::Binary), &mut out, env);
+            p.open().unwrap();
+            for it in items {
+                match it {
+                    Item::Status(r) => p.report_record(r).unwrap(),
+                    Item::Banner(b) | Item::LegacyBanner(b) => p.report_banner(b).unwrap(),
+                }
+            }
+            p.finish().unwrap();
+        }
+        out
+    }
+
+    /// Семибитный varint C (`in-binary.c:546-570`): старшие группы с битом продолжения.
+    fn varint(mut n: usize) -> Vec<u8> {
+        let mut v = vec![(n & 0x7F) as u8];
+        n >>= 7;
+        while n > 0 {
+            v.insert(0, (n & 0x7F) as u8 | 0x80);
+            n >>= 7;
+        }
+        v
+    }
+
+    /// Устаревшая запись 3, 4 или 5. Тело типа 3: время, адрес, порт, app, баннер (`in-binary.c:339-369`); 4 и 5:
+    /// время, адрес, протокол, порт, app, баннер (`:375-409`). У типа 4 длина на один байт меньше тела: последний
+    /// байт C дочитывает отдельно (`:595-602`).
+    fn legacy(ty: u8, ts: u32, ip: [u8; 4], proto: u8, port: u16, app: u16, px: &[u8]) -> Vec<u8> {
+        let mut body = ts.to_be_bytes().to_vec();
+        body.extend_from_slice(&ip);
+        if ty != 3 {
+            body.push(proto);
+        }
+        body.extend_from_slice(&port.to_be_bytes());
+        body.extend_from_slice(&app.to_be_bytes());
+        body.extend_from_slice(px);
+        let mut v = vec![ty];
+        v.extend(varint(body.len() - usize::from(ty == 4)));
+        v.extend(body);
+        v
+    }
+
+    /// Запись типа 13 как `binary_out_banner_ipv6` (`out-binary.c:216-289`) с подменяемой версией и длиной тела.
+    #[allow(clippy::too_many_arguments)]
+    fn raw13(
+        ts: u32,
+        proto: u8,
+        port: u16,
+        app: u16,
+        version: u8,
+        ip: &str,
+        px: &[u8],
+        len: usize,
+    ) -> Vec<u8> {
+        let mut b = ts.to_be_bytes().to_vec();
+        b.push(proto);
+        b.extend_from_slice(&port.to_be_bytes());
+        b.extend_from_slice(&app.to_be_bytes());
+        b.extend_from_slice(&[57, version]);
+        b.extend_from_slice(&u128::from(ip.parse::<Ipv6Addr>().unwrap()).to_be_bytes());
+        b.extend_from_slice(px);
+        b.truncate(len);
+        let mut v = vec![13];
+        v.extend(varint(b.len()));
+        v.extend(b);
+        v
+    }
+
+    fn list_of(path: &str, filter: &ReadFilter) -> (String, String, Result<(), String>) {
+        let (out, log, res) = convert(&[path.to_string()], Format::List, filter);
+        (String::from_utf8(out).unwrap(), log, res)
+    }
+
+    /// Типы 9 и 13 читаются ровно такими, какими их пишет `-oB` (`out-binary.c:216-355`), в порядке файла
+    /// вперемешку со статусом: длина в один байт и в два (113/114 байт у IPv4, 100/101 у IPv6), 16 369 байт (самая
+    /// длинная запись `-oB` IPv4), пустой баннер, любой `ip_proto` и любой номер приложения.
+    #[test]
+    fn readscan_banner_types_9_and_13_roundtrip() {
+        let cyc: Vec<u8> = (0..16_369u32).map(|i| i as u8).collect();
+        let items = vec![
+            Item::Status(rec(1_700_000_001, [192, 0, 2, 1], 80, Status::Open)),
+            Item::Banner(banner(
+                1_700_000_002,
+                "192.0.2.1",
+                17,
+                53,
+                6,
+                57,
+                b"9.18.24",
+            )),
+            Item::Banner(banner(
+                1_700_000_003,
+                "2001:db8::1",
+                6,
+                443,
+                9,
+                64,
+                &cyc[..256],
+            )),
+            Item::Status(v6(1_700_000_004, "2001:db8::1", 443, Status::Closed)),
+            Item::Banner(banner(
+                1_700_000_005,
+                "192.0.2.2",
+                6,
+                80,
+                4,
+                0,
+                &[b'a'; 113],
+            )),
+            Item::Banner(banner(
+                1_700_000_005,
+                "192.0.2.2",
+                6,
+                80,
+                4,
+                0,
+                &[b'b'; 114],
+            )),
+            Item::Banner(banner(
+                1_700_000_006,
+                "2001:db8::2",
+                132,
+                1,
+                37,
+                255,
+                &[b'c'; 100],
+            )),
+            Item::Banner(banner(
+                1_700_000_006,
+                "2001:db8::2",
+                99,
+                2,
+                65535,
+                1,
+                &[b'd'; 101],
+            )),
+            Item::Banner(banner(1_700_000_007, "192.0.2.3", 0, 0, 0, 1, b"")),
+            Item::Banner(banner(1_700_000_007, "::", 1, 0, 36, 2, b"")),
+            Item::Banner(banner(1_700_000_008, "192.0.2.4", 6, 443, 15, 64, &cyc)),
+        ];
+        let bin = make_bin_items(&items);
+        let (c, res) = read_items_all(&bin, false);
+        res.unwrap();
+        assert_eq!(c.items, items);
+        assert_eq!(c.corrupt, 0);
+        assert_eq!(c.times.len(), items.len());
+        // Тот же файл ещё раз через `-oB` даёт те же байты, кроме `s:` заголовка (начало скана из первой записи).
+        let scratch = Scratch::new();
+        let path = tmp_file(&scratch, "b", &bin);
+        let (out, log, res) = convert(std::slice::from_ref(&path), Format::Binary, &no_filter());
+        res.unwrap();
+        assert_eq!(log, format!("[+] --readscan {path}\n"));
+        assert_eq!(out[BLOCK..], bin[BLOCK..]);
+        assert_eq!(out[..BLOCK], header_for(1_700_000_001)[..]);
+    }
+
+    /// `parse_banner3` (`in-binary.c:339-369`) длину не проверяет: тело короче 12 байт даёт `(unsigned)buf_length-12`
+    /// около 4 ГиБ, и `output_report_banner` читает за буфером. Здесь (Р2) это битая запись, как прочие: `[-] file
+    /// corrupt` без имени файла, вывод закрыт с подвалом, код 1. Тело ровно 12 байт это пустой баннер TCP с TTL 0.
+    #[test]
+    fn readscan_type3_short_body_is_corrupt_not_crash() {
+        let ok = legacy(3, 1_700_000_000, [10, 3, 0, 1], 0, 22, 2, b"");
+        let (c, res) = read_items_all(&with_header(&ok), false);
+        res.unwrap();
+        assert_eq!(
+            c.items,
+            vec![Item::LegacyBanner(banner(
+                1_700_000_000,
+                "10.3.0.1",
+                6,
+                22,
+                2,
+                0,
+                b""
+            ))]
+        );
+        for short in 0..12usize {
+            let mut tail = ok.clone();
+            tail.extend([3, short as u8]);
+            tail.extend(vec![0x41; short]);
+            let (c, res) = read_items_all(&with_header(&tail), false);
+            assert!(
+                matches!(&res, Err(ReadError::Corrupt(s)) if s.is_empty()),
+                "{short}: {res:?}"
+            );
+            assert_eq!(c.items.len(), 1, "{short}");
+        }
+        let mut tail = ok.clone();
+        tail.extend([3, 11]);
+        tail.extend([0x41; 11]);
+        let scratch = Scratch::new();
+        let path = tmp_file(&scratch, "t3", &with_header(&tail));
+        let (out, log, res) = list_of(&path, &no_filter());
+        assert_eq!(res.unwrap_err(), LOGGED);
+        assert_eq!(log, format!("[+] --readscan {path}\n[-] file corrupt\n"));
+        assert_eq!(
+            out,
+            "#masscan\nbanner tcp 22 10.3.0.1 1700000000 ssh \n# end\n"
+        );
+    }
+
+    /// Тип 4 (`in-binary.c:595-602`): после тела длины L C читает из файла ещё один байт, и он становится последним
+    /// байтом тела (при L = 12 это младший байт номера приложения); следующая запись начинается после него. Если
+    /// байта нет, `[-] read() error` и `exit(1)`: вывод не закрывается, подвала нет. Тип 5 тот же разбор без
+    /// лишнего байта; у обоих TTL 0, протокол из записи.
+    #[test]
+    fn readscan_type4_reads_extra_byte() {
+        let mut tail = legacy(4, 1_700_000_000, [192, 0, 2, 4], 17, 53, 6, b"hello!");
+        assert_eq!(
+            tail[1],
+            13 + 5,
+            "length counts the body without the extra byte"
+        );
+        // L = 12: лишний байт это младший байт app (6, dns-ver), баннер пуст.
+        tail.extend(legacy(4, 1_700_000_001, [192, 0, 2, 5], 6, 80, 6, b""));
+        assert_eq!(&tail[tail.len() - 15..tail.len() - 13], [4, 12]);
+        tail.extend(legacy(
+            5,
+            1_700_000_002,
+            [192, 0, 2, 6],
+            132,
+            2905,
+            37,
+            b"x",
+        ));
+        let after = banner(1_700_000_003, "192.0.2.7", 6, 22, 3, 64, b"SSH-2.0-x");
+        tail.extend(&make_bin_items(&[Item::Banner(after.clone())])[BLOCK..]);
+        let (c, res) = read_items_all(&with_header(&tail), false);
+        res.unwrap();
+        assert_eq!(
+            c.items,
+            vec![
+                Item::LegacyBanner(banner(1_700_000_000, "192.0.2.4", 17, 53, 6, 0, b"hello!")),
+                Item::LegacyBanner(banner(1_700_000_001, "192.0.2.5", 6, 80, 6, 0, b"")),
+                Item::LegacyBanner(banner(1_700_000_002, "192.0.2.6", 132, 2905, 37, 0, b"x")),
+                Item::Banner(after),
+            ]
+        );
+
+        // Файл кончается на теле типа 4: лишнего байта нет.
+        let mut cut = legacy(5, 1_700_000_000, [192, 0, 2, 6], 6, 80, 4, b"ok");
+        let t4 = legacy(4, 1_700_000_001, [192, 0, 2, 4], 17, 53, 6, b"hello!");
+        cut.extend_from_slice(&t4[..t4.len() - 1]);
+        assert!(matches!(
+            read_items_all(&with_header(&cut), false).1,
+            Err(ReadError::ExtraByte)
+        ));
+        let scratch = Scratch::new();
+        let path = tmp_file(&scratch, "t4", &with_header(&cut));
+        let (out, log, res) = list_of(&path, &no_filter());
+        assert_eq!(res.unwrap_err(), LOGGED);
+        assert_eq!(log, format!("[+] --readscan {path}\n[-] read() error\n"));
+        assert_eq!(
+            out,
+            "#masscan\nbanner tcp 80 192.0.2.6 1700000000 http ok\n"
+        );
+    }
+
+    /// `parse_banner4` пропускает тело короче 13 байт, `parse_banner9` короче 14 (`in-binary.c:384-385`, :423–424),
+    /// молча и до `when_scan_started`: время такой записи не начало скана.
+    #[test]
+    fn readscan_type5_and_9_short_skipped() {
+        let mut tail = vec![5, 12];
+        tail.extend([0x11; 12]);
+        tail.extend([9, 13]);
+        tail.extend([0x22; 13]);
+        tail.extend([4, 11]);
+        tail.extend([0x33; 12]);
+        tail.extend([9, 0, 5, 0]);
+        let ok = banner(1_700_000_009, "192.0.2.9", 6, 80, 4, 64, b"x");
+        tail.extend(&make_bin_items(&[Item::Banner(ok.clone())])[BLOCK..]);
+        let (c, res) = read_items_all(&with_header(&tail), false);
+        res.unwrap();
+        assert_eq!(c.items, vec![Item::Banner(ok)]);
+        assert_eq!(c.times, vec![1_700_000_009]);
+        let scratch = Scratch::new();
+        let path = file_with_header_bytes(&scratch, "short", b"masscan/1.1\ns:5\n", &tail);
+        assert_eq!(started_of(&path, &no_filter()), header_for(1_700_000_009));
+    }
+
+    /// `parse_banner6` (`in-binary.c:280-330`): версия не 6 (и тело короче 11 байт, где версии нет) это
+    /// `[-] corrupt record` без имени файла, запись пропущена, чтение идёт дальше. С версией 6, но телом короче 27
+    /// байт запись молча не выводится (`offset > length`, :318–319), а её время уже стало началом скана (:304–305).
+    #[test]
+    fn readscan_type13_bad_version_prints_corrupt_record() {
+        let ip = "2001:db8::13";
+        let mut tail = raw13(1_700_000_100, 6, 443, 9, 4, ip, b"v4?", 30);
+        tail.extend(raw13(1_700_000_101, 6, 443, 9, 6, ip, b"", 10));
+        tail.extend(raw13(1_700_000_102, 6, 443, 9, 6, ip, b"", 11));
+        tail.extend(raw13(1_700_000_103, 6, 443, 9, 6, ip, b"", 26));
+        tail.extend(raw13(1_700_000_104, 17, 53, 6, 6, ip, b"ok", 29));
+        let (c, res) = read_items_all(&with_header(&tail), false);
+        res.unwrap();
+        assert_eq!(c.corrupt, 2);
+        assert_eq!(c.times, vec![1_700_000_102, 1_700_000_103, 1_700_000_104]);
+        let want = banner(1_700_000_104, ip, 17, 53, 6, 57, b"ok");
+        assert_eq!(c.items, vec![Item::Banner(want)]);
+        let scratch = Scratch::new();
+        let path = tmp_file(&scratch, "t13", &with_header(&tail));
+        let (out, log, res) = list_of(&path, &no_filter());
+        res.unwrap();
+        assert_eq!(
+            log,
+            format!("[+] --readscan {path}\n[-] corrupt record\n[-] corrupt record\n")
+        );
+        assert_eq!(
+            out,
+            "#masscan\nbanner udp 53 2001:db8::13 1700000104 dns-ver ok\n# end\n"
+        );
+        // Начало скана из записи, которая не вывелась.
+        let p2 = file_with_header_bytes(&scratch, "t13s", b"masscan/1.1\n", &tail);
+        assert_eq!(started_of(&p2, &no_filter()), header_for(1_700_000_102));
+    }
+
+    fn types(names: &[u16]) -> ReadFilter {
+        let mut cfg = ScanConfig::default();
+        cfg.banner_types.extend(names);
+        ReadFilter::from_config(&cfg)
+    }
+
+    /// `--banner-types` не пуст: записи статуса (типы 1, 2, 6, 7, 10, 11, у этого порта и 8) пропускаются не
+    /// разобранными (`if (!btypes->count)`, `in-binary.c:584-623`): нет вывода, нет начала скана, нет `[-] corrupt
+    /// record` и отказа по протоколу; баннеры 9 и 13 фильтруются по номеру приложения, 3/4/5 проходят все.
+    #[test]
+    fn banner_types_drop_all_status_records() {
+        let mut tail = make_bin_items(&[
+            Item::Status(rec(1_700_000_000, [192, 0, 2, 1], 80, Status::Open)),
+            Item::Banner(banner(
+                1_700_000_001,
+                "192.0.2.1",
+                6,
+                80,
+                4,
+                64,
+                b"HTTP/1.1",
+            )),
+            Item::Status(v6(1_700_000_002, "2001:db8::1", 443, Status::Closed)),
+            Item::Banner(banner(1_700_000_003, "2001:db8::1", 17, 53, 6, 64, b"9.18")),
+        ])[BLOCK..]
+            .to_vec();
+        tail.truncate(tail.len() - BLOCK);
+        tail.extend(raw6(10, "2001:db8::2", 7, 6, 4, 26));
+        tail.extend(record_bytes(6, 13, 47));
+        tail.extend([1, 12]);
+        tail.extend([0; 12]);
+        tail.extend([2, 12]);
+        tail.extend([0; 12]);
+        tail.extend(record_bytes(8, 13, 0));
+        tail.extend(legacy(5, 1_700_000_004, [10, 5, 0, 1], 17, 161, 7, b"sys"));
+        let bytes = with_header(&tail);
+        // Без `--banner-types` первая же устаревшая запись статуса это отказ: файл читается дальше только с ним.
+        assert!(matches!(
+            read_items_all(&bytes, false).1,
+            Err(ReadError::UnsupportedProtocol(47))
+        ));
+        let (c, res) = read_items_all(&bytes, true);
+        res.unwrap();
+        assert_eq!(c.corrupt, 0);
+        assert_eq!(c.times, vec![1_700_000_001, 1_700_000_003, 1_700_000_004]);
+        assert_eq!(c.items.len(), 3);
+        assert!(c.items.iter().all(|i| !matches!(i, Item::Status(_))));
+
+        let scratch = Scratch::new();
+        let path = tmp_file(&scratch, "bt", &bytes);
+        let (out, log, res) = list_of(&path, &types(&[6]));
+        res.unwrap();
+        assert_eq!(log, format!("[+] --readscan {path}\n"));
+        assert_eq!(
+            out,
+            "#masscan\nbanner udp 53 2001:db8::1 1700000003 dns-ver 9.18\n\
+             banner udp 161 10.5.0.1 1700000004 snmp sys\n# end\n"
+        );
+        let (out, _, res) = list_of(&path, &types(&[4, 6]));
+        res.unwrap();
+        assert_eq!(out.lines().count(), 5, "{out}");
+        // Начало скана из первого баннера: запись статуса до него не разобрана.
+        assert_eq!(started_of(&path, &types(&[9])), header_for(1_700_000_001));
+    }
+
+    /// Устаревшие баннеры 3, 4, 5 не проходят ни фильтр адреса и порта, ни `--banner-types` (`in-binary.c:592-603`,
+    /// у них нет вызова `readscan_filter_pass`); тип 9 и статус фильтруются.
+    #[test]
+    fn types_3_4_5_bypass_filters() {
+        let mut tail = legacy(3, 1_700_000_000, [10, 3, 0, 1], 0, 22, 2, b"SSH-2.0");
+        tail.extend(legacy(4, 1_700_000_001, [10, 4, 0, 1], 17, 53, 6, b"9.18"));
+        tail.extend(legacy(5, 1_700_000_002, [10, 5, 0, 1], 99, 7, 65535, b""));
+        let v9 = make_bin_items(&[
+            Item::Banner(banner(1_700_000_003, "10.9.0.1", 6, 80, 4, 64, b"drop")),
+            Item::Banner(banner(1_700_000_004, "192.0.2.5", 6, 443, 9, 64, b"keep")),
+            Item::Status(rec(1_700_000_005, [192, 0, 2, 5], 443, Status::Open)),
+            Item::Banner(banner(1_700_000_006, "192.0.2.5", 17, 443, 9, 64, b"udp")),
+        ]);
+        tail.extend(&v9[BLOCK..v9.len() - BLOCK]);
+        let scratch = Scratch::new();
+        let path = tmp_file(&scratch, "legacy", &with_header(&tail));
+        let mut cfg = ScanConfig::default();
+        add_target_string(cfg.targets.ipv4_mut(), "192.0.2.0/24").unwrap();
+        parse_ports(cfg.targets.ports_mut(), "443").unwrap();
+        cfg.banner_types.insert(9);
+        let (out, _, res) = list_of(&path, &ReadFilter::from_config(&cfg));
+        res.unwrap();
+        assert_eq!(
+            out,
+            "#masscan\nbanner tcp 22 10.3.0.1 1700000000 ssh SSH-2.0\n\
+             banner udp 53 10.4.0.1 1700000001 dns-ver 9.18\n\
+             banner err 7 10.5.0.1 1700000002 (65535) \n\
+             banner tcp 443 192.0.2.5 1700000004 ssl keep\n# end\n"
+        );
+        // Без `--banner-types` тот же фильтр пропускает статус; UDP 443 не проходит `-p443` (Р5: порт со сдвигом).
+        cfg.banner_types.clear();
+        let (out, _, res) = list_of(&path, &ReadFilter::from_config(&cfg));
+        res.unwrap();
+        assert!(out.contains("open tcp 443 192.0.2.5 1700000005\n"), "{out}");
+        assert!(!out.contains(" drop\n") && !out.contains(" udp\n"), "{out}");
+        assert_eq!(out.lines().count(), 7, "{out}");
+    }
+
+    /// `-oB` пишет устаревшие баннеры типом 9 (`binary_out_banner`, `out-binary.c:293-355`): они только IPv4, TTL 0, у
+    /// типа 3 протокол TCP.
+    #[test]
+    fn binary_rewrites_3_4_5_as_9() {
+        let mut tail = legacy(3, 1_700_000_000, [10, 3, 0, 1], 0, 22, 2, b"SSH-2.0");
+        tail.extend(legacy(4, 1_700_000_001, [10, 4, 0, 1], 17, 53, 6, b"9.18"));
+        tail.extend(legacy(
+            5,
+            1_700_000_002,
+            [10, 5, 0, 1],
+            132,
+            2905,
+            37,
+            &[b'z'; 120],
+        ));
+        let scratch = Scratch::new();
+        let path = tmp_file(&scratch, "rw", &with_header(&tail));
+        let (out, _, res) = convert(std::slice::from_ref(&path), Format::Binary, &no_filter());
+        res.unwrap();
+        let mut want = vec![9, 14 + 7];
+        want.extend(1_700_000_000u32.to_be_bytes());
+        want.extend([10, 3, 0, 1, 6, 0, 22, 0, 2, 0]);
+        want.extend(b"SSH-2.0");
+        assert_eq!(out[BLOCK..BLOCK + want.len()], want[..]);
+        let (c, res) = read_items_all(&out, false);
+        res.unwrap();
+        assert_eq!(
+            c.items,
+            vec![
+                Item::Banner(banner(1_700_000_000, "10.3.0.1", 6, 22, 2, 0, b"SSH-2.0")),
+                Item::Banner(banner(1_700_000_001, "10.4.0.1", 17, 53, 6, 0, b"9.18")),
+                Item::Banner(banner(
+                    1_700_000_002,
+                    "10.5.0.1",
+                    132,
+                    2905,
+                    37,
+                    0,
+                    &[b'z'; 120]
+                )),
+            ]
+        );
+        // 120 байт: длина `-oB` в два байта, `((120+14)>>7)|0x80` и `(120+14)&0x7F`.
+        let start = out.len() - BLOCK - (3 + 14 + 120);
+        assert_eq!(out[start..start + 3], [9, 0x81, 6]);
+    }
+
+    /// Изменённые и обрезанные записи баннеров (3, 4, 5, 9, 13) не роняют читатель ни с `--banner-types`, ни без.
+    #[test]
+    fn readscan_banner_records_survive_random_mutation_and_truncation() {
+        let mut tail = make_bin_items(&[
+            Item::Banner(banner(1, "192.0.2.1", 17, 53, 6, 57, b"9.18.24")),
+            Item::Banner(banner(2, "2001:db8::1", 6, 443, 9, 64, &[0xAB; 130])),
+            Item::Status(rec(3, [10, 0, 0, 1], 80, Status::Open)),
+        ]);
+        tail.truncate(tail.len() - BLOCK);
+        tail.extend(legacy(3, 4, [10, 3, 0, 1], 0, 22, 2, b"SSH"));
+        tail.extend(legacy(4, 5, [10, 4, 0, 1], 17, 53, 6, b"x"));
+        tail.extend(legacy(5, 6, [10, 5, 0, 1], 6, 80, 4, b"y"));
+        let base = tail;
+        let mut x: u64 = 0x2545_f491_4f6c_dd1d;
+        let mut next = move || {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            x
+        };
+        for i in 0..4000 {
+            let mut b = base.clone();
+            for _ in 0..(next() % 6) {
+                let k = BLOCK + (next() as usize) % (b.len() - BLOCK);
+                b[k] = next() as u8;
+            }
+            let cut = (next() as usize) % 60;
+            b.truncate(b.len().saturating_sub(cut));
+            let _ = read_items_all(&b, i % 2 == 0);
+        }
+    }
+
+    /// Файл с заголовком `head` (дополняется нулями до 99 байт) и хвостом `tail` как есть.
+    fn file_with_header_bytes(scratch: &Scratch, name: &str, head: &[u8], tail: &[u8]) -> String {
+        let mut v = head.to_vec();
+        v.resize(BLOCK, 0);
+        v.extend_from_slice(tail);
+        tmp_file(scratch, name, &v)
     }
 
     #[test]

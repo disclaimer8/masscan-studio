@@ -2,9 +2,11 @@
 //! (порт `out-binary.c` masscan © Robert David Graham) напрямую через форматтер: так пишутся и заголовок с подвалом
 //! без записей (`empty`), чего конвейер с ленивым заголовком не делает (`output.c:867–870`).
 //!
-//! `cargo run -p rmasscan-cli --example format_inputs -- OUTDIR` пишет шесть файлов; `tests/golden/formats/inputs/`
-//! хранит пять маленьких, `many` (1 МиБ) не коммитится. Тот же модуль подключает `tests/formats_golden.rs`: тест
-//! сверяет закоммиченные входы и sha256 из манифеста с [`inputs`] и строит `many` на лету.
+//! `cargo run -p rmasscan-cli --example format_inputs -- OUTDIR` пишет восемь файлов; `tests/golden/formats/inputs/`
+//! хранит семь маленьких, `many` (1 МиБ) не коммитится. Тот же модуль подключает `tests/formats_golden.rs`: тест
+//! сверяет закоммиченные входы и sha256 из манифеста с [`inputs`] и строит `many` на лету. Входы с баннерами
+//! (`banners`, `banners-legacy`) пишет тот же форматтер (`Formatter::banner`), устаревшие типы 3/4/5 это готовые
+//! байты.
 //!
 //! Имена `*.scan.bin`, а не `*.scan` C: расширение `.scan` не входит в список данных языкового сторожа репозитория
 //! (`scripts/language-guard.sh`, `allowed_name`).
@@ -18,6 +20,7 @@ use std::process::ExitCode;
 use rmasscan_cli::output::{
     Counts, FileCtx, Format, Proto, Record, ServiceNames, Status, formatter,
 };
+use rmasscan_proto::BannerRecord;
 
 /// Время записей `basic`, `many` и `s:` пустого файла.
 pub const BASE: u64 = 1_700_000_000;
@@ -188,6 +191,230 @@ fn many() -> Vec<Record> {
         .collect()
 }
 
+/// Время записей `banners`: `BASE + 21_600`, через шесть часов после `basic`.
+pub const BANNERS_BASE: u64 = BASE + 21_600;
+/// Время записей `banners-legacy`: `BASE + 28_800`.
+pub const LEGACY_BASE: u64 = BASE + 28_800;
+
+/// Запись входа с баннерами: статус и баннер пишет писатель `-oB` rmasscan (типы 6/7/10/11 и 9/13,
+/// `out-binary.c:103-355`), `Raw` это готовые байты записи (устаревшие типы 3/4/5, которых не пишет ни C, ни rmasscan).
+enum Item {
+    Status(Record),
+    Banner(BannerRecord),
+    Raw(Vec<u8>),
+}
+
+fn banner(ip: &str, ip_proto: u8, port: u16, app: u16, ttl: u8, at: u64, px: &[u8]) -> Item {
+    Item::Banner(BannerRecord {
+        timestamp: BANNERS_BASE + at,
+        ip: ip.parse::<IpAddr>().expect("address literal"),
+        ip_proto,
+        port,
+        app,
+        ttl,
+        payload: px.to_vec(),
+    })
+}
+
+fn status(proto: Proto, ip: &str, port: u16, status: Status, reason: u8, ttl: u8, at: u64) -> Item {
+    Item::Status(Record {
+        timestamp: BANNERS_BASE + at,
+        ip: ip.parse::<IpAddr>().expect("address literal"),
+        port,
+        proto,
+        status,
+        reason,
+        ttl,
+        mac: None,
+    })
+}
+
+/// Баннеры IPv4 и IPv6 вперемешку со статусом (справка C2): номера приложений 0..=36, 37 и 65535 (`(N)`),
+/// `ip_proto` 0, 1, 6, 17, 132 и 99 (`arp`, `icmp`, …, `err`), все 256 байтов в полезной нагрузке (оба нормализатора),
+/// экранируемые `< > & " ' \`, `cert:` длиной 5 и больше (снятие у certs), пустые баннеры, длина `-oB` в один и два
+/// байта (113/114 у IPv4, 100/101 у IPv6), 16 369 байт (самая длинная запись IPv4: усечение текста до 8190 с «дырами»
+/// и JSON за буфером 65 536), app 6 у не-UDP (XML `syn-ack`), TTL 0 и 255. Порты 80 и 443 только у TCP: фильтр `-p`
+/// здесь значит одно и то же у C (несдвинутый порт) и у rmasscan (Р5), адреса из RFC 5737 и RFC 3849.
+fn banners() -> Vec<Item> {
+    use Proto::{Tcp, Udp};
+    use Status::{Closed, Open};
+    let all: Vec<u8> = (0..=255u8).collect();
+    let text = |n: usize| -> Vec<u8> { (0..n).map(|i| b'a' + (i % 26) as u8).collect() };
+    let cyc: Vec<u8> = (0..16_369u32).map(|i| i as u8).collect();
+    let mut v = vec![
+        status(Tcp, "192.0.2.20", 80, Open, 0x12, 64, 0),
+        banner(
+            "192.0.2.20",
+            6,
+            80,
+            4,
+            64,
+            1,
+            b"HTTP/1.1 200 OK\r\nServer: nginx\r\n\r\n",
+        ),
+        status(Udp, "192.0.2.21", 53, Open, 0x00, 57, 1),
+        banner("192.0.2.21", 17, 53, 6, 57, 1, b"9.18.24"),
+        status(Tcp, "2001:db8::20", 443, Open, 0x12, 60, 2),
+        banner("2001:db8::20", 6, 443, 9, 60, 2, &all),
+        banner("192.0.2.22", 6, 8080, 4, 128, 3, &all),
+        status(Tcp, "192.0.2.22", 443, Closed, 0x14, 128, 3),
+    ];
+    const PROTOS: [u8; 6] = [6, 17, 132, 1, 0, 99];
+    let apps: Vec<u16> = (0..=37).chain([65535]).collect();
+    for (i, &app) in apps.iter().enumerate() {
+        let px: Vec<u8> = match app {
+            15 => b"cert:MIIBszCCAVmgAwIBAgIJ".to_vec(),
+            16 => b"cert:".to_vec(),
+            17 => b"<title>A & B \"q\" 'x' \\ </title>".to_vec(),
+            _ => format!("banner-{app}").into_bytes(),
+        };
+        let ip = format!("198.51.100.{}", i + 1);
+        let ttl = if app == 65535 { 255 } else { i as u8 };
+        v.push(banner(
+            &ip,
+            PROTOS[i % PROTOS.len()],
+            1000 + i as u16,
+            app,
+            ttl,
+            4 + i as u64 / 8,
+            &px,
+        ));
+    }
+    for (i, app) in [2u16, 3, 23, 33, 36, 37].into_iter().enumerate() {
+        let ip = format!("2001:db8:1::{}", i + 1);
+        let px = format!("v6-{app}");
+        v.push(banner(
+            &ip,
+            PROTOS[i],
+            2000 + i as u16,
+            app,
+            64,
+            10,
+            px.as_bytes(),
+        ));
+    }
+    v.extend([
+        banner("192.0.2.23", 17, 123, 19, 64, 11, b""),
+        banner("2001:db8::53", 17, 53, 6, 64, 11, b""),
+        banner("192.0.2.24", 6, 8081, 31, 64, 12, &text(113)),
+        banner("192.0.2.24", 6, 8081, 31, 64, 12, &text(114)),
+        banner("2001:db8::24", 6, 8081, 31, 0, 12, &text(100)),
+        banner("2001:db8::24", 6, 8081, 31, 0, 12, &text(101)),
+        banner("192.0.2.25", 6, 8443, 18, 64, 13, &cyc),
+        status(Tcp, "2001:db8::25", 8443, Open, 0x12, 64, 13),
+    ]);
+    v
+}
+
+/// Семибитный varint длины записи (`in-binary.c:557-570`).
+fn varint(mut n: usize) -> Vec<u8> {
+    let mut v = vec![(n & 0x7F) as u8];
+    n >>= 7;
+    while n > 0 {
+        v.insert(0, (n & 0x7F) as u8 | 0x80);
+        n >>= 7;
+    }
+    v
+}
+
+/// Устаревшая запись 3, 4 или 5 (`in-binary.c:339-409`). Тело типа 3: время, адрес, порт, app, баннер; 4 и 5:
+/// время, адрес, протокол, порт, app, баннер. У типа 4 длина на единицу меньше тела: последний байт C дочитывает
+/// отдельно (`:595-602`), при теле из 13 байт это младший байт app.
+fn legacy(ty: u8, ip: [u8; 4], proto: u8, port: u16, app: u16, at: u64, px: &[u8]) -> Item {
+    let mut body = ((LEGACY_BASE + at) as u32).to_be_bytes().to_vec();
+    body.extend_from_slice(&ip);
+    if ty != 3 {
+        body.push(proto);
+    }
+    body.extend_from_slice(&port.to_be_bytes());
+    body.extend_from_slice(&app.to_be_bytes());
+    body.extend_from_slice(px);
+    let mut v = vec![ty];
+    v.extend(varint(body.len() - usize::from(ty == 4)));
+    v.extend(body);
+    Item::Raw(v)
+}
+
+/// Устаревшие баннеры 3, 4 и 5 с корректными телами (C читает их, но не пишет: `-oB` переписывает их типом 9) и, для
+/// фильтров, по одной записи статуса (6) и баннера (9): у 3/4/5 фильтров нет (`in-binary.c:592-603`).
+fn banners_legacy() -> Vec<Item> {
+    let at = |s: u64| LEGACY_BASE + s;
+    vec![
+        legacy(3, [10, 3, 0, 1], 0, 22, 2, 0, b"SSH-2.0-OpenSSH_9.6"),
+        legacy(3, [10, 3, 0, 2], 0, 80, 4, 1, b""),
+        legacy(4, [10, 4, 0, 1], 17, 53, 6, 2, b"9.18.24"),
+        legacy(4, [10, 4, 0, 2], 6, 443, 9, 3, b""),
+        legacy(5, [10, 5, 0, 1], 17, 161, 7, 4, b"sysDescr:Linux"),
+        legacy(5, [10, 5, 0, 2], 99, 7, 37, 5, b"x"),
+        legacy(5, [10, 5, 0, 3], 132, 2905, 65535, 6, &[b'z'; 120]),
+        Item::Status(Record {
+            timestamp: at(7),
+            ip: Ipv4Addr::new(192, 0, 2, 40).into(),
+            port: 80,
+            proto: Proto::Tcp,
+            status: Status::Open,
+            reason: 0x12,
+            ttl: 64,
+            mac: None,
+        }),
+        Item::Banner(BannerRecord {
+            timestamp: at(7),
+            ip: Ipv4Addr::new(192, 0, 2, 40).into(),
+            ip_proto: 6,
+            port: 80,
+            app: 4,
+            ttl: 64,
+            payload: b"HTTP/1.0 200".to_vec(),
+        }),
+        legacy(3, [10, 3, 0, 3], 0, 443, 15, 8, b"cert:MIIB"),
+    ]
+}
+
+/// Время записи входа с баннерами (у `Raw` из байтов тела).
+fn item_time(it: &Item) -> u64 {
+    match it {
+        Item::Status(r) => r.timestamp,
+        Item::Banner(b) => b.timestamp,
+        Item::Raw(v) => {
+            let skip = 1 + v[1..].iter().take_while(|&&b| b & 0x80 != 0).count() + 1;
+            u64::from(u32::from_be_bytes([
+                v[skip],
+                v[skip + 1],
+                v[skip + 2],
+                v[skip + 3],
+            ]))
+        }
+    }
+}
+
+/// Файл `-oB` из записей статуса, баннеров и готовых байтов (см. [`scan_file`]).
+fn mixed_file(items: &[Item]) -> Vec<u8> {
+    let started = items.first().map_or(BASE, item_time);
+    let services = ServiceNames::empty();
+    let cx = FileCtx {
+        now: started,
+        utc_offset_secs: 0,
+        scan_started: started,
+        file_opened: started,
+        counts: Counts::default(),
+        stylesheet: None,
+        ports: &[],
+        services: &services,
+    };
+    let mut fm = formatter(Format::Binary).expect("-oB has a formatter");
+    let mut out = Vec::new();
+    fm.header(&mut out, &cx).expect("write to Vec");
+    for it in items {
+        match it {
+            Item::Status(r) => fm.record(&mut out, &cx, r).expect("write to Vec"),
+            Item::Banner(b) => fm.banner(&mut out, &cx, b).expect("write to Vec"),
+            Item::Raw(v) => out.extend_from_slice(v),
+        }
+    }
+    fm.footer(&mut out, &cx).expect("write to Vec");
+    out
+}
+
 /// Файл `-oB`: заголовок 99 байт с `s:` = время первой записи (как пишет C `--readscan`, `in-binary.c` и
 /// `out-binary.c:11–29`; без записей `BASE`), записи по 15 байт (IPv4) и по 28 (IPv6), подвал 99 байт.
 fn scan_file(records: &[Record]) -> Vec<u8> {
@@ -222,6 +449,8 @@ pub fn inputs() -> Vec<(&'static str, Vec<u8>)> {
         ("empty.scan.bin", scan_file(&[])),
         ("protocols.scan.bin", scan_file(&protocols())),
         ("ipv6.scan.bin", scan_file(&ipv6())),
+        ("banners.scan.bin", mixed_file(&banners())),
+        ("banners-legacy.scan.bin", mixed_file(&banners_legacy())),
     ]
 }
 

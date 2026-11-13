@@ -197,6 +197,17 @@ fn load(
     loader(Path::new(path)).map_err(|e| format!("{path}: {e}"))
 }
 
+/// Начало текста отказа `--banner-types`: [`crate::error_text`] печатает его как есть.
+pub const BAD_BANNER_APP: &str = "FAIL: bad banner app: ";
+
+/// Значение `--banner-types` и ключей `banner-type(s)`, `banner-app(s)` (`src/main-conf.c:2683-2697`):
+/// `masscan_string_to_app` (`src/masscan-app.c:61-112`, регистр важен, одно имя). Неизвестное имя (и `unknown`,
+/// `error`, у которых номер 0 или нет имени в таблице разбора) это `LOG(0, "FAIL: bad banner app: %s\n", value);
+/// fprintf(stderr, "err\n"); exit(1);`: текст отказа это обе строки.
+pub fn banner_app(value: &str) -> Result<u16, String> {
+    rmasscan_proto::app_from_name(value).ok_or_else(|| format!("{BAD_BANNER_APP}{value}\nerr"))
+}
+
 /// Применяет одну пару `name = value` в позиции разбора (ключи правее
 /// переопределяют ключи левее, как в `masscan_set_parameter`, main-conf.c:2429).
 /// Отличия от C: неизвестный ключ и нечитаемый файл возвращают `Err` (C на
@@ -233,6 +244,9 @@ pub fn apply_conf_key(
                 .map_err(|e| ConfigError::from(e).to_string())?
         }
         "pcapfilename" | "pcap" => base.pcap_filename = Some(value.to_string()),
+        "bannertypes" | "bannertype" | "bannerapps" | "bannerapp" => {
+            base.scan.banner_types.insert(banner_app(value)?);
+        }
         "ndjsonstatus" | "statusndjson" => base.ndjson_status = parse_bool(value),
         "jsonstatus" | "statusjson" => {
             return Err(format!("{name} not supported, use --ndjson-status"));

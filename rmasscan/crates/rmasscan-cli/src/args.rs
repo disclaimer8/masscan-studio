@@ -25,7 +25,7 @@ use rmasscan_core::targets::{
     TEMPL_ICMP_ECHO, TEMPL_SCTP, TEMPL_UDP, add_top_ports, parse_ports_with, range_parse_ipv4,
 };
 
-use crate::conf::{FullConf, OutputConfPatch, apply_conf_key};
+use crate::conf::{FullConf, OutputConfPatch, apply_conf_key, banner_app};
 use crate::output::{Format, OutputOptions};
 use crate::status::StatusMode;
 
@@ -387,9 +387,20 @@ pub struct Cli {
         value_name = "FILE",
         num_args = 1..,
         conflicts_with_all = ["list", "echo", "echo_all", "offline", "iflist", "packet_trace"],
-        help = "Read masscan -oB files (TCP status records) and write them with the output options; targets and ports given before it filter the records"
+        help = "Read masscan -oB files (status and banner records) and write them with the output options; targets and ports given before it filter the records"
     )]
     pub readscan: Vec<String>,
+    // `--banner-types` и синонимы `--banner-type`, `--banner-apps`, `--banner-app` (`src/main-conf.c:2683-2697`): одно
+    // имя `masscan_string_to_app` на опцию, набор копится; его потребитель только `--readscan` (`src/in-binary.c:684`).
+    // Имена проверяет [`Cli::try_parse_masscan`].
+    #[arg(
+        long = "banner-types",
+        aliases = ["banner-type", "banner-apps", "banner-app"],
+        value_name = "APP",
+        action = clap::ArgAction::Append,
+        help = "With --readscan: keep only banner records of this application (http, ssl, dns-ver, ...; repeatable, one name each) and drop every status record"
+    )]
+    pub banner_types: Vec<String>,
     // Каждое вхождение проверяется (Р6), побеждает последнее (Р17).
     #[arg(
         long = "output-format",
@@ -1023,6 +1034,10 @@ impl Cli {
             .try_get_matches_from(argv)
             .map_err(from_clap)?;
         let mut cli = Cli::from_arg_matches(&m).map_err(ParseError::Clap)?;
+        // `src/main-conf.c:2688-2696`: неизвестное имя это выход с кодом 1 прямо при разборе.
+        for name in &cli.banner_types {
+            banner_app(name).map_err(ParseError::Masscan)?;
+        }
         cli.show_steps = show_steps(&m);
         (cli.style, cli.style_sets_xml) = fold_stylesheet(&m);
         if cli.resume.len() > 1 {
@@ -1326,6 +1341,10 @@ impl Cli {
             }
             for f in &self.includefile {
                 read_include_file(cfg, f)?;
+            }
+            // Набор, а не значение: файл левее или правее его только дополняет (`rangelist_add_range`).
+            for name in &self.banner_types {
+                cfg.banner_types.insert(banner_app(name)?);
             }
         }
         // `--offline`/`--infinite` по порядку `argv`: файл левее/правее включает или отключает их (M-2).

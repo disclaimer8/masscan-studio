@@ -1,0 +1,10 @@
+{"ip":"10.3.0.1","timestamp":"1700028800","port":22,"proto":"tcp","rec_type":"banner","data":{"service_name":"ssh","banner":"SSH-2.0-OpenSSH_9.6"}}
+{"ip":"10.3.0.2","timestamp":"1700028801","port":80,"proto":"tcp","rec_type":"banner","data":{"service_name":"http","banner":""}}
+{"ip":"10.4.0.1","timestamp":"1700028802","port":53,"proto":"udp","rec_type":"banner","data":{"service_name":"dns-ver","banner":"9.18.24"}}
+{"ip":"10.4.0.2","timestamp":"1700028803","port":443,"proto":"tcp","rec_type":"banner","data":{"service_name":"ssl","banner":""}}
+{"ip":"10.5.0.1","timestamp":"1700028804","port":161,"proto":"udp","rec_type":"banner","data":{"service_name":"snmp","banner":"sysDescr:Linux"}}
+{"ip":"10.5.0.2","timestamp":"1700028805","port":7,"proto":"err","rec_type":"banner","data":{"service_name":"(37)","banner":"x"}}
+{"ip":"10.5.0.3","timestamp":"1700028806","port":2905,"proto":"sctp","rec_type":"banner","data":{"service_name":"(65535)","banner":"zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"}}
+{"ip":"192.0.2.40","timestamp":"1700028807","port":80,"proto":"tcp","rec_type":"status","data":{"status":"open","reason":"syn-ack","ttl":64}}
+{"ip":"192.0.2.40","timestamp":"1700028807","port":80,"proto":"tcp","rec_type":"banner","data":{"service_name":"http","banner":"HTTP/1.0 200"}}
+{"ip":"10.3.0.3","timestamp":"1700028808","port":443,"proto":"tcp","rec_type":"banner","data":{"service_name":"X509","banner":"cert:MIIB"}}

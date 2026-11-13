@@ -99,7 +99,8 @@ fn refuse_ipv6_non_tcp(cli: &Cli, cfg: &ScanConfig) -> Result<(), String> {
 }
 
 /// Текст stderr для ошибки [`run`]: отказы обнаружения и ARP (`[-] FAIL: …` и подсказки C), отказ `ExcludeRequired`
-/// (три строки `main.c:1236-1238`) и отказ открытия файла
+/// (три строки `main.c:1236-1238`), плохое имя `banner-types` файла конфигурации (`FAIL: bad banner app: …` и `err`,
+/// `src/main-conf.c:2694-2695`) и отказ открытия файла
 /// вывода (`out: could not open file for …`) как есть, [`LOGGED`] пусто (уже в `log`), прочие ошибки с обёрткой
 /// `rmasscan: error:`. Любая ошибка даёт exit 1.
 pub fn error_text(msg: &str) -> String {
@@ -107,6 +108,7 @@ pub fn error_text(msg: &str) -> String {
         String::new()
     } else if msg.starts_with(live::REFUSAL_PREFIX)
         || msg.starts_with(OPEN_FAILURE_PREFIX)
+        || msg.starts_with(conf::BAD_BANNER_APP)
         || msg == ARP_PORTSCAN_REFUSAL
         || msg == ConfigError::ExcludeRequired.to_string()
     {
@@ -839,6 +841,135 @@ mod tests {
         assert_eq!(error_text(&r.unwrap_err()), "");
         assert_eq!(log.matches("[-] file corrupt").count(), 1, "{log}");
         assert!(out.is_empty(), "no record was read");
+    }
+
+    /// `--banner-types` и синонимы `--banner-type`, `--banner-apps`, `--banner-app` (`src/main-conf.c:2683-2697`):
+    /// одно имя `masscan_string_to_app` на опцию, регистр важен, запятая не разделяет (`ssl,http` это одно неизвестное
+    /// имя), `unknown` и `error` не выбираются. Плохое имя: `LOG(0, "FAIL: bad banner app: %s\n")` и `err` в stderr,
+    /// код 1, до чтения входа; то же у ключа файла конфигурации.
+    #[test]
+    fn banner_types_bad_name_fails() {
+        for (opt, v) in [
+            ("--banner-types", "X"),
+            ("--banner-type", "HTTP"),
+            ("--banner-apps", "ssl,http"),
+            ("--banner-app", "unknown"),
+            ("--banner-types", "error"),
+        ] {
+            match Cli::try_parse_masscan(["rmasscan", opt, v, "--readscan", "f"]) {
+                Err(args::ParseError::Masscan(t)) => {
+                    assert_eq!(t, format!("FAIL: bad banner app: {v}\nerr"), "{opt} {v}")
+                }
+                other => panic!("{opt} {v}: {other:?}"),
+            }
+        }
+        let scratch = Scratch::new();
+        let conf = scratch.write("bt.conf", b"banner-types = x509ca\nbanner-app = bogus\n");
+        let e =
+            run_args(&["rmasscan", "-c", conf.to_str().unwrap(), "--readscan", "f"]).unwrap_err();
+        assert_eq!(error_text(&e), "FAIL: bad banner app: bogus\nerr");
+        // Хорошие имена копятся из всех синонимов, командной строки и файла.
+        let conf = scratch.write("ok.conf", b"banner-apps = x509\nbannerapp = vnc-old\n");
+        let cli = Cli::try_parse_masscan([
+            "rmasscan",
+            "--banner-types",
+            "ssl",
+            "--banner-app",
+            "http",
+            "--banner-type=dns-ver",
+            "-c",
+            conf.to_str().unwrap(),
+            "--banner-apps",
+            "ssh1",
+            "--readscan",
+            "f",
+        ])
+        .unwrap();
+        assert_eq!(
+            cli.to_config()
+                .unwrap()
+                .banner_types
+                .into_iter()
+                .collect::<Vec<_>>(),
+            vec![2, 4, 6, 9, 15, 23]
+        );
+    }
+
+    /// `--readscan` с `--banner-types` через `run`: записи статуса не выводятся, баннеры типов 9/13 только своих
+    /// приложений; два имени это две опции (`--banner-types ssl --banner-types http`).
+    #[test]
+    fn readscan_banner_types_select_apps() {
+        let scratch = Scratch::new();
+        let path = scratch.path("bt.scan");
+        {
+            let wall = FakeBackend::default();
+            let mut sink_out = Vec::new();
+            let env = OutputEnv {
+                wall: &wall,
+                services: output::ServiceNames::empty(),
+                ports: Vec::new(),
+                scan_started: None,
+            };
+            let o = OutputOptions {
+                format: output::Format::Binary,
+                filename: Some(path.to_string_lossy().into_owned()),
+                ..OutputOptions::default()
+            };
+            let mut p = Pipeline::new(o, &mut sink_out, env);
+            output::Sink::open(&mut p).unwrap();
+            p.report_record(&open_rec()).unwrap();
+            for (app, text) in [(4u16, "HTTP/1.1"), (9, "TLS"), (6, "9.18")] {
+                p.report_banner(&rmasscan_proto::BannerRecord {
+                    timestamp: 1_700_000_000 + u64::from(app),
+                    ip: Ipv4Addr::new(192, 0, 2, 1).into(),
+                    ip_proto: 6,
+                    port: 80,
+                    app,
+                    ttl: 64,
+                    payload: text.as_bytes().to_vec(),
+                })
+                .unwrap();
+            }
+            output::Sink::finish(&mut p).unwrap();
+        }
+        let input = path.to_str().unwrap();
+        let (r, out, _) = readscan_run(
+            &FakeBackend::default(),
+            &["--banner-types", "dns-ver", "--readscan", input, "-oL", "-"],
+        );
+        r.unwrap();
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            "#masscan\nbanner tcp 80 192.0.2.1 1700000006 dns-ver 9.18\n# end\n"
+        );
+        let (r, out, _) = readscan_run(
+            &FakeBackend::default(),
+            &[
+                "--banner-types",
+                "ssl",
+                "--banner-types",
+                "http",
+                "--readscan",
+                input,
+                "-oL",
+                "-",
+            ],
+        );
+        r.unwrap();
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            "#masscan\nbanner tcp 80 192.0.2.1 1700000004 http HTTP/1.1\n\
+             banner tcp 80 192.0.2.1 1700000009 ssl TLS\n# end\n"
+        );
+        // Без `--banner-types` и без `-o`: строки `Discovered` и `Banner on port` в stdout (`output.c:903-923`).
+        let (r, out, _) = readscan_run(&FakeBackend::default(), &["--readscan", input]);
+        r.unwrap();
+        let out = String::from_utf8(out).unwrap();
+        assert_eq!(out.lines().count(), 4, "{out}");
+        assert!(
+            out.contains("Banner on port 80/tcp on 192.0.2.1: [dns-ver] 9.18"),
+            "{out}"
+        );
     }
 
     /// Решение 2 контроллера: реальный формат без имени файла (C молча теряет записи, `output.c:799–803`)

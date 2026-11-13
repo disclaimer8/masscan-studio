@@ -1,0 +1,21 @@
+[
+{   "ip": "10.3.0.1",   "timestamp": "1700028800", "ports": [ {"port": 22, "proto": "tcp", "service": {"name": "ssh", "banner": "SSH-2.0-OpenSSH_9.6"} } ] }
+,
+{   "ip": "10.3.0.2",   "timestamp": "1700028801", "ports": [ {"port": 80, "proto": "tcp", "service": {"name": "http", "banner": ""} } ] }
+,
+{   "ip": "10.4.0.1",   "timestamp": "1700028802", "ports": [ {"port": 53, "proto": "udp", "service": {"name": "dns-ver", "banner": "9.18.24"} } ] }
+,
+{   "ip": "10.4.0.2",   "timestamp": "1700028803", "ports": [ {"port": 443, "proto": "tcp", "service": {"name": "ssl", "banner": ""} } ] }
+,
+{   "ip": "10.5.0.1",   "timestamp": "1700028804", "ports": [ {"port": 161, "proto": "udp", "service": {"name": "snmp", "banner": "sysDescr:Linux"} } ] }
+,
+{   "ip": "10.5.0.2",   "timestamp": "1700028805", "ports": [ {"port": 7, "proto": "err", "service": {"name": "(37)", "banner": "x"} } ] }
+,
+{   "ip": "10.5.0.3",   "timestamp": "1700028806", "ports": [ {"port": 2905, "proto": "sctp", "service": {"name": "(65535)", "banner": "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"} } ] }
+,
+{   "ip": "192.0.2.40",   "timestamp": "1700028807", "ports": [ {"port": 80, "proto": "tcp", "status": "open", "reason": "syn-ack", "ttl": 64} ] }
+,
+{   "ip": "192.0.2.40",   "timestamp": "1700028807", "ports": [ {"port": 80, "proto": "tcp", "service": {"name": "http", "banner": "HTTP/1.0 200"} } ] }
+,
+{   "ip": "10.3.0.3",   "timestamp": "1700028808", "ports": [ {"port": 443, "proto": "tcp", "service": {"name": "X509", "banner": "cert:MIIB"} } ] }
+]

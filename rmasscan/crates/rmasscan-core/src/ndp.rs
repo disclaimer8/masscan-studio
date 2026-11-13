@@ -7,7 +7,7 @@
 //! * В C нет кодировщика Neighbor Solicitation: `stack_ndpv6_resolve` (:312-487) ищет маршрутизатор Router
 //!   Solicitation (133) и ждёт Router Advertisement (134). Здесь соседа и шлюз разрешают Neighbor Solicitation
 //!   на solicited-node multicast (RFC 4861 §7.2.2), как ARP-резолвер.
-//! * Ответчик C отвечает только по случайному совпадению: `parsed->opcode` (:111) заполняет один разбор ARP
+//! * Ответчик C отвечает только по случайному совпадению: `parsed->opcode` (проверка `!= 135`, :112) заполняет один разбор ARP
 //!   (`proto-preprocess.c:604-605`), а `parse_icmpv6` кладёт тип в `port_src` и `opcode` не трогает; `main.c:833`
 //!   и `:845` читают `parsed.opcode` ICMPv6-кадра, то есть чужое значение. Здесь тип читается из самого кадра.
 //! * C копирует запрос целиком (:145) и не переписывает IPv6 `payload_length`: на запрос без опции Source

@@ -59,8 +59,11 @@ pub enum ConfigError {
     /// Больше 63 бит (main.c:1698-1704).
     #[error(transparent)]
     RangeOverflow(#[from] RangeOverflow),
-    /// Больше 1e9 адресов без единого `--exclude` (main.c:1235-1239).
-    #[error("range too big, need confirmation: at least one --exclude must be specified")]
+    /// Больше 1e9 адресов без единого `--exclude` (main.c:1235-1239). Текст это три строки `LOG(0, ...)` из
+    /// main.c:1236-1238 дословно (подсказки с одним пробелом впереди, без префикса `[-]`); CLI выводит его как есть.
+    #[error(
+        "FAIL: range too big, need confirmation\n [hint] to prevent accidents, at least one --exclude must be specified\n [hint] use \"--exclude 255.255.255.255\" as a simple confirmation"
+    )]
     ExcludeRequired,
     /// `blackrock_rounds >= 64`: в C это UB-сдвиг (crypto-blackrock.c),
     /// C такое значение принимает.
@@ -2676,6 +2679,47 @@ mod tests {
                 1 << 62
             );
         }
+    }
+
+    /// main.c:1236-1238: C печатает три строки LOG(0, ...), а не одну. Отказ показывается как есть, без обёртки.
+    #[test]
+    fn exclude_required_prints_c_second_hint() {
+        assert_eq!(
+            ConfigError::ExcludeRequired.to_string(),
+            "FAIL: range too big, need confirmation\n\
+             \x20[hint] to prevent accidents, at least one --exclude must be specified\n\
+             \x20[hint] use \"--exclude 255.255.255.255\" as a simple confirmation"
+        );
+    }
+
+    /// R24, граница main.c:1235 (`count_ips > 1000000000`): ровно 1e9 адресов подтверждения не требует, 1e9 + 1
+    /// требует; IPv6-исключение подтверждает только переполнение, вызванное целями IPv6 (R23).
+    #[test]
+    fn r24_boundary_exactly_1e9() {
+        // 0.0.0.0-59.154.201.255 = 0x3B9ACA00 = 1_000_000_000 адресов
+        let exactly = || cfg_v46("0.0.0.0-59.154.201.255", "80");
+        assert_eq!(
+            validate(&exactly(), Operation::Scan).unwrap().range(),
+            1_000_000_000
+        );
+        // 1e9 + 1 за счёт IPv4: нужен IPv4-exclude, IPv6-исключение не помогает
+        let over_v4 = || cfg_v46("0.0.0.0-59.154.202.0", "80");
+        assert_eq!(
+            err(&over_v4(), Operation::Scan),
+            ConfigError::ExcludeRequired
+        );
+        let mut cfg = over_v4();
+        cfg.excludes.add_target_string("2001:db8::1").unwrap();
+        assert_eq!(err(&cfg, Operation::Scan), ConfigError::ExcludeRequired);
+        let mut cfg = over_v4();
+        cfg.excludes.add_target_string("255.255.255.255").unwrap();
+        assert!(validate(&cfg, Operation::Scan).is_ok());
+        // 1e9 IPv4 + один адрес IPv6 = 1e9 + 1: требует подтверждения; IPv6-исключение подтверждает (R23)
+        let mut cfg = exactly();
+        cfg.targets.add_target_string("2001:db8::1").unwrap();
+        assert_eq!(err(&cfg, Operation::Scan), ConfigError::ExcludeRequired);
+        cfg.excludes.add_target_string("2001:db8::ff").unwrap();
+        assert!(validate(&cfg, Operation::Scan).is_ok());
     }
 
     /// R24. main.c:1235 confirms an over-1e9 scan only with an IPv4 exclude. rmasscan also accepts an IPv6

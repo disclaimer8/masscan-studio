@@ -1064,10 +1064,12 @@ fn internet_wide_range_without_exclude_is_refused_before_detection() {
     b.panic_on_open = true;
     let (r, out, log) = cli(&b, &["0.0.0.0/0", "-p80"]);
     let e = r.unwrap_err();
-    assert!(e.contains("range too big"), "{e}");
-    assert!(
-        rmasscan_cli::error_text(&e).starts_with("rmasscan: error: "),
-        "{e}"
+    // main.c:1236-1238: три строки C дословно, без обёртки `rmasscan: error:`.
+    assert_eq!(
+        rmasscan_cli::error_text(&e),
+        "FAIL: range too big, need confirmation\n \
+         [hint] to prevent accidents, at least one --exclude must be specified\n \
+         [hint] use \"--exclude 255.255.255.255\" as a simple confirmation"
     );
     assert!(out.is_empty() && log.is_empty());
     assert!(b.lookups().is_empty());

@@ -3,7 +3,7 @@
 //! через [`Clock`]). Кодек в `rmasscan_core::ndp`.
 //!
 //! Отличие от C: `stack_ndpv6_resolve` (`stack-ndpv6.c:312-487`) не шлёт Neighbor Solicitation, а шлёт Router
-//! Solicitation на `ff02::2` и ждёт Router Advertisement (повтор раз в секунду, 10 повторов, :357-374, как у ARP).
+//! Solicitation на `ff02::2` и ждёт Router Advertisement (повтор раз в секунду, 10 повторов, `stack-ndpv6.c:425-440`, как у ARP).
 //! Здесь резолвер задаёт тот же вопрос "кто имеет адрес", что и ARP (RFC 4861 §7.2.2), и принимает только NA по
 //! §7.1.2; интервал и срок взяты у C (`stack_ndpv6_resolve` :425-440: смена секунды, `i++ >= 10`).
 //!
@@ -56,6 +56,9 @@ pub struct NdpReport {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NdpResolveError {
+    /// Политика не выполнима: интервал короче микросекунды, срок или интервал не умещаются в `u64` микросекунд,
+    /// абсолютный срок выходит за диапазон часов (как `ArpResolveError::InvalidPolicy`).
+    InvalidPolicy(&'static str),
     NdpTimeout {
         ifname: String,
         target: Ipv6Addr,
@@ -69,6 +72,7 @@ pub enum NdpResolveError {
 impl fmt::Display for NdpResolveError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::InvalidPolicy(reason) => write!(f, "FAIL: invalid NDP policy: {reason}"),
             Self::NdpTimeout {
                 ifname,
                 target,
@@ -112,8 +116,8 @@ pub fn ndp_binding(
     }
 }
 
-fn micros(d: Duration) -> u64 {
-    u64::try_from(d.as_micros()).unwrap_or(u64::MAX)
+fn micros(d: Duration) -> Option<u64> {
+    u64::try_from(d.as_micros()).ok()
 }
 
 /// Разрешает MAC следующего хопа IPv6 запросами Neighbor Solicitation раз в `policy.interval` до `policy.timeout`.
@@ -160,12 +164,24 @@ pub fn resolve_next_hop_v6_until(
     clock: &dyn Clock,
     interrupted: &mut dyn FnMut() -> bool,
 ) -> Result<Option<NdpReport>, NdpResolveError> {
+    let interval_us =
+        micros(policy.interval)
+            .filter(|&us| us != 0)
+            .ok_or(NdpResolveError::InvalidPolicy(
+                "interval must fit u64 microseconds and be at least one microsecond",
+            ))?;
+    let timeout_us = micros(policy.timeout).ok_or(NdpResolveError::InvalidPolicy(
+        "timeout must fit u64 microseconds",
+    ))?;
+    let t0 = clock.now_micros();
+    let deadline = t0
+        .checked_add(timeout_us)
+        .ok_or(NdpResolveError::InvalidPolicy(
+            "absolute deadline exceeds the clock range",
+        ))?;
     let mut pending = PendingNdp::new(my_mac, u128::from(my_ip), u128::from(target));
     let frame = pending.request_frame();
-    let timeout_us = micros(policy.timeout);
-    let interval_us = micros(policy.interval);
-    let max_io_us = micros(MAX_IO_TIMEOUT);
-    let t0 = clock.now_micros();
+    let max_io_us = u64::try_from(MAX_IO_TIMEOUT.as_micros()).unwrap_or(u64::MAX);
     let mut next_send = t0;
     let mut requests_sent = 0u32;
     let mut buf = [0u8; 2048];
@@ -191,10 +207,11 @@ pub fn resolve_next_hop_v6_until(
             {
                 SendStatus::Sent => {
                     requests_sent += 1;
-                    next_send += interval_us;
+                    // На сроке и позже новый запрос не нужен.
+                    next_send = next_send.saturating_add(interval_us).min(deadline);
                 }
                 SendStatus::WouldBlockUnsent => {
-                    clock.sleep_micros(1000);
+                    clock.sleep_micros(1000.min(deadline.saturating_sub(clock.now_micros())));
                     continue;
                 }
                 SendStatus::Uncertain => return Err(NdpResolveError::Uncertain),
@@ -202,7 +219,7 @@ pub fn resolve_next_hop_v6_until(
         }
         let now = clock.now_micros();
         let until_send = next_send.saturating_sub(now);
-        let until_end = (t0 + timeout_us).saturating_sub(now);
+        let until_end = deadline.saturating_sub(now);
         let wait = max_io_us.min(until_send).min(until_end);
         let got = io
             .rx

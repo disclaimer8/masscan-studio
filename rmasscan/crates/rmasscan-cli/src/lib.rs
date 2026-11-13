@@ -32,7 +32,7 @@ use args::{Cli, SeedPolicy, seed_policy};
 use output::{
     Format, OPEN_FAILURE_PREFIX, OutputEnv, OutputOptions, Pipeline, ServiceNames, io_fail,
 };
-use rmasscan_core::config::{EchoExtras, Operation, ScanConfig, echo_with, validate};
+use rmasscan_core::config::{ConfigError, EchoExtras, Operation, ScanConfig, echo_with, validate};
 use rmasscan_core::scan::{format_list_line_v46, list_scan_v46};
 
 /// Ошибка [`run`], строки которой уже записаны в `log` (`[-] FAIL: --readscan`, `[-] <файл>: …`, `[-] file
@@ -98,7 +98,8 @@ fn refuse_ipv6_non_tcp(cli: &Cli, cfg: &ScanConfig) -> Result<(), String> {
     Ok(())
 }
 
-/// Текст stderr для ошибки [`run`]: отказы обнаружения и ARP (`[-] FAIL: …` и подсказки C) и отказ открытия файла
+/// Текст stderr для ошибки [`run`]: отказы обнаружения и ARP (`[-] FAIL: …` и подсказки C), отказ `ExcludeRequired`
+/// (три строки `main.c:1236-1238`) и отказ открытия файла
 /// вывода (`out: could not open file for …`) как есть, [`LOGGED`] пусто (уже в `log`), прочие ошибки с обёрткой
 /// `rmasscan: error:`. Любая ошибка даёт exit 1.
 pub fn error_text(msg: &str) -> String {
@@ -107,6 +108,7 @@ pub fn error_text(msg: &str) -> String {
     } else if msg.starts_with(live::REFUSAL_PREFIX)
         || msg.starts_with(OPEN_FAILURE_PREFIX)
         || msg == ARP_PORTSCAN_REFUSAL
+        || msg == ConfigError::ExcludeRequired.to_string()
     {
         msg.to_string()
     } else {

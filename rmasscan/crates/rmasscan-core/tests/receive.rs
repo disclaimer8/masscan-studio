@@ -2299,3 +2299,345 @@ mod ipv6_never_panic {
         }
     }
 }
+
+/// Глубокие генераторы IPv6/NDP (хвост этапа IPv6): строят структурно верные кадры с цепочкой расширений
+/// (`next` 0 и 6), обрезкой кратной 3 и пересчётом длины и контрольных сумм, чтобы вход доходил до обхода цепочки и до
+/// разбора опций, а не отсеивался на первой проверке. Тест `deep_ipv6_generators_reach_the_chain_and_the_options`
+/// измеряет долю дошедших входов (критерий: не меньше половины).
+mod ipv6_deep_generators {
+    use super::*;
+    use proptest::test_runner::{Config, TestRunner};
+    use rmasscan_core::checksum::checksum_ipv6;
+    use rmasscan_core::ndp::{
+        PendingNdp, answer_neighbor_solicitation, decode_neighbor_advertisement,
+        decode_neighbor_solicitation,
+    };
+    use rmasscan_core::probe::NicBinding;
+
+    const THEM6: u128 = 0x2001_0db8_0000_0000_0000_0000_0000_0001;
+    const ME6: u128 = 0xfd00_0000_0000_0000_0000_0000_0000_0002;
+    const SEED6: u64 = 0x0123_4567_89ab_cdef;
+
+    fn plan6(link: LinkType) -> ReadyPlan {
+        let mut m = MassIp::new();
+        m.ipv6_mut().add(THEM6 & !0xff, THEM6 | 0xff);
+        parse_ports(m.ports_mut(), "80").unwrap();
+        let cfg = ScanConfig {
+            targets: m,
+            seed: SEED6,
+            max_rate: 100.0,
+            ..ScanConfig::default()
+        };
+        let eff = validate(&cfg, Operation::Scan).unwrap();
+        ReadyPlan::new_cli(
+            eff,
+            vec![NicBinding {
+                binding: AdapterBinding {
+                    interface_id: "t0".into(),
+                    link_type: link,
+                    source_ipv4: IP_ME,
+                    source_mac: MAC_ME,
+                    next_hop_mac: MAC_NH,
+                    source_ports: (40000, 40015),
+                },
+                source_ipv4_last: IP_ME,
+                legacy_c_17_port_mask: false,
+                source_ipv6: Some(ME6),
+                next_hop_mac_ipv6: None,
+            }],
+        )
+        .unwrap()
+    }
+
+    fn with_link(link: LinkType, p: Vec<u8>) -> Vec<u8> {
+        match link {
+            LinkType::Ethernet => [&MAC_ME[..], &MAC_NH[..], &[0x86, 0xdd][..], &p].concat(),
+            LinkType::Null => [&[0x1e, 0, 0, 0][..], &p].concat(),
+            LinkType::Raw => p,
+        }
+    }
+
+    /// Вход `parse_reply`: цепочка из `exts` Hop-by-Hop заголовков (`next` 0 между ними, 6 в конце), затем TCP.
+    #[derive(Debug, Clone)]
+    struct ChainInput {
+        link: usize,
+        exts: Vec<(u8, Vec<u8>)>,
+        tcp: Vec<u8>,
+        data_offset: u8,
+        cut_thirds: usize,
+        fix_len: bool,
+        to_me: bool,
+        fix_sum: bool,
+    }
+
+    fn chain_input() -> impl Strategy<Value = ChainInput> {
+        (
+            0usize..3,
+            proptest::collection::vec((0u8..4, proptest::collection::vec(any::<u8>(), 30)), 0..=3),
+            proptest::collection::vec(any::<u8>(), 20..=60),
+            prop_oneof![9 => 5u8..=8, 1 => any::<u8>().prop_map(|b| b & 0x0f)],
+            prop_oneof![5 => Just(0usize), 5 => 0usize..=8],
+            prop_oneof![9 => Just(true), 1 => Just(false)],
+            prop_oneof![9 => Just(true), 1 => Just(false)],
+            prop_oneof![9 => Just(true), 1 => Just(false)],
+        )
+            .prop_map(
+                |(link, exts, tcp, data_offset, cut_thirds, fix_len, to_me, fix_sum)| ChainInput {
+                    link,
+                    exts,
+                    tcp,
+                    data_offset,
+                    cut_thirds,
+                    fix_len,
+                    to_me,
+                    fix_sum,
+                },
+            )
+    }
+
+    fn build_chain(i: &ChainInput) -> (LinkType, Vec<u8>) {
+        let link = LINKS[i.link];
+        let mut tcp = i.tcp.clone();
+        tcp[0..2].copy_from_slice(&80u16.to_be_bytes());
+        tcp[2..4].copy_from_slice(&40000u16.to_be_bytes());
+        tcp[12] = i.data_offset << 4;
+        let mut body = Vec::new();
+        for (k, (units, fill)) in i.exts.iter().enumerate() {
+            let len = (usize::from(*units) + 1) * 8;
+            let next = if k + 1 < i.exts.len() { 0 } else { 6 };
+            let mut h = vec![next, *units];
+            h.extend(fill.iter().cycle().take(len - 2));
+            body.extend(h);
+        }
+        let dst = if i.to_me { ME6 } else { ME6 ^ 1 };
+        if i.fix_sum {
+            tcp[16..18].copy_from_slice(&[0, 0]);
+            let c = checksum_ipv6(THEM6, dst, 6, &tcp);
+            tcp[16..18].copy_from_slice(&c.to_be_bytes());
+        }
+        body.extend(tcp);
+        body.truncate(body.len().saturating_sub(3 * i.cut_thirds));
+        let first = if i.exts.is_empty() { 6 } else { 0 };
+        let plen = if i.fix_len { body.len() as u16 } else { 0xffff };
+        let mut p = vec![0x60, 0, 0, 0];
+        p.extend_from_slice(&plen.to_be_bytes());
+        p.extend_from_slice(&[first, 64]);
+        p.extend_from_slice(&THEM6.to_be_bytes());
+        p.extend_from_slice(&dst.to_be_bytes());
+        p.extend(body);
+        (link, with_link(link, p))
+    }
+
+    /// Насколько глубоко дошёл разбор.
+    #[derive(Debug, Default, Clone, Copy)]
+    struct Reach {
+        total: usize,
+        /// Вошёл в обход цепочки расширений (прошёл заголовок IPv6 и длину).
+        chain: usize,
+        /// Вышел из цепочки к заголовку TCP.
+        past_chain: usize,
+        /// Дошёл до проверки опций TCP (data offset и длина сегмента).
+        tcp_options: usize,
+    }
+
+    fn run_chain(i: &ChainInput, r: &mut Reach) {
+        let (link, f) = build_chain(i);
+        let plan = plan6(link);
+        let res = parse_reply(&f, link, &plan);
+        let _ = parse_reply_with(&f, link, &plan, ChecksumPolicy::TrustHardware);
+        r.total += 1;
+        let early = matches!(
+            res,
+            Err(ParseError::Truncated("ipv6 header"))
+                | Err(ParseError::BadIpVersion(_))
+                | Err(ParseError::Ipv6PayloadBeyondFrame { .. })
+        ) || f.len() < 40;
+        if early {
+            return;
+        }
+        r.chain += 1;
+        if matches!(res, Err(ParseError::Truncated("ipv6 hop-by-hop header"))) {
+            return;
+        }
+        r.past_chain += 1;
+        if !matches!(
+            res,
+            Err(ParseError::Truncated("tcp header")) | Err(ParseError::BadTcpDataOffset(_))
+        ) {
+            r.tcp_options += 1;
+        }
+    }
+
+    /// Вход декодеров NS/NA: опции произвольной длины, обрезка кратная 3, пересчёт длины и суммы ICMPv6.
+    #[derive(Debug, Clone)]
+    struct NdpInput {
+        na: bool,
+        opts: Vec<(u8, u8, Vec<u8>)>,
+        cut_thirds: usize,
+        fix_len: bool,
+        fix_sum: bool,
+        unspecified_src: bool,
+        hop: u8,
+    }
+
+    fn ndp_input() -> impl Strategy<Value = NdpInput> {
+        (
+            any::<bool>(),
+            proptest::collection::vec(
+                (
+                    prop_oneof![4 => Just(1u8), 4 => Just(2u8), 2 => any::<u8>()],
+                    prop_oneof![7 => Just(1u8), 3 => 0u8..4],
+                    proptest::collection::vec(any::<u8>(), 30),
+                ),
+                0..=3,
+            ),
+            prop_oneof![6 => Just(0usize), 4 => 0usize..=4],
+            prop_oneof![9 => Just(true), 1 => Just(false)],
+            prop_oneof![9 => Just(true), 1 => Just(false)],
+            prop_oneof![9 => Just(false), 1 => Just(true)],
+            prop_oneof![9 => Just(255u8), 1 => any::<u8>()],
+        )
+            .prop_map(
+                |(na, opts, cut_thirds, fix_len, fix_sum, unspecified_src, hop)| NdpInput {
+                    na,
+                    opts,
+                    cut_thirds,
+                    fix_len,
+                    fix_sum,
+                    unspecified_src,
+                    hop,
+                },
+            )
+    }
+
+    fn build_ndp(i: &NdpInput) -> Vec<u8> {
+        let src = if i.unspecified_src { 0 } else { THEM6 };
+        let mut icmp = vec![if i.na { 136 } else { 135 }, 0, 0, 0];
+        icmp.extend_from_slice(&[if i.na { 0x60 } else { 0 }, 0, 0, 0]);
+        icmp.extend_from_slice(&THEM6.to_be_bytes());
+        for (ty, units, fill) in &i.opts {
+            let len = (usize::from(*units).max(1)) * 8;
+            let mut o = vec![*ty, *units];
+            o.extend(fill.iter().cycle().take(len - 2));
+            icmp.extend(o);
+        }
+        icmp.truncate(icmp.len().saturating_sub(3 * i.cut_thirds));
+        if i.fix_sum && icmp.len() >= 4 {
+            let c = checksum_ipv6(src, ME6, 58, &icmp);
+            icmp[2..4].copy_from_slice(&c.to_be_bytes());
+        }
+        let plen = if i.fix_len { icmp.len() as u16 } else { 0xffff };
+        let mut f = [&MAC_ME[..], &MAC_NH[..], &[0x86, 0xdd][..]].concat();
+        f.extend_from_slice(&[0x60, 0, 0, 0]);
+        f.extend_from_slice(&plen.to_be_bytes());
+        f.extend_from_slice(&[58, i.hop]);
+        f.extend_from_slice(&src.to_be_bytes());
+        f.extend_from_slice(&ME6.to_be_bytes());
+        f.extend(icmp);
+        f
+    }
+
+    #[derive(Debug, Default, Clone, Copy)]
+    struct NdpReach {
+        total: usize,
+        /// Прошёл общую проверку (`common`): дошёл до проверок полей сообщения и опций.
+        past_common: usize,
+        /// Дошёл до разбора опций: успех, `BadOption` или `NoTargetLla`.
+        options: usize,
+    }
+
+    fn run_ndp(i: &NdpInput, r: &mut NdpReach) {
+        use rmasscan_core::ndp::NdpError as E;
+        let f = build_ndp(i);
+        let res = if i.na {
+            decode_neighbor_advertisement(&f).map(|_| ())
+        } else {
+            decode_neighbor_solicitation(&f).map(|_| ())
+        };
+        // Остальные точки входа на том же кадре: не должны паниковать.
+        let _ = decode_neighbor_solicitation(&f);
+        let _ = decode_neighbor_advertisement(&f);
+        let _ = answer_neighbor_solicitation(&f, MAC_ME, ME6);
+        let mut p = PendingNdp::new(MAC_ME, ME6, THEM6);
+        let _ = p.offer(&f);
+        let plan = plan6(LinkType::Ethernet);
+        let _ = parse_reply(&f, LinkType::Ethernet, &plan);
+        r.total += 1;
+        let before_common = matches!(
+            res,
+            Err(E::Truncated(_)
+                | E::NotIpv6(_)
+                | E::NotIcmpv6(_)
+                | E::PayloadBeyondFrame { .. }
+                | E::WrongType(_)
+                | E::HopLimit(_)
+                | E::Code(_)
+                | E::Length(_)
+                | E::Checksum)
+        );
+        if before_common {
+            return;
+        }
+        r.past_common += 1;
+        if matches!(res, Ok(()) | Err(E::BadOption | E::NoTargetLla)) {
+            r.options += 1;
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(4000))]
+
+        /// `parse_reply` на структурных кадрах IPv6 с цепочкой расширений.
+        #[test]
+        fn ipv6_extension_chain_frames_never_panic(i in chain_input()) {
+            run_chain(&i, &mut Reach::default());
+        }
+
+        /// Декодеры NS/NA и ответчик на кадрах с пересчитанными длиной и суммой.
+        #[test]
+        fn ndp_frames_with_valid_checksum_never_panic(i in ndp_input()) {
+            run_ndp(&i, &mut NdpReach::default());
+        }
+    }
+
+    /// Критерий задачи: не меньше половины входов доходят до цепочки расширений и до разбора опций. Числа
+    /// печатаются (`--nocapture`) и попадают в отчёт.
+    #[test]
+    fn deep_ipv6_generators_reach_the_chain_and_the_options() {
+        let reach_cell = std::cell::RefCell::new(Reach::default());
+        let nreach_cell = std::cell::RefCell::new(NdpReach::default());
+        // Свой прогонщик на каждую стратегию: отработавший прогонщик новых случаев не запускает.
+        let new_runner = || {
+            TestRunner::new(Config {
+                cases: 4000,
+                ..Config::default()
+            })
+        };
+        new_runner()
+            .run(&chain_input(), |i| {
+                run_chain(&i, &mut reach_cell.borrow_mut());
+                Ok(())
+            })
+            .unwrap();
+        new_runner()
+            .run(&ndp_input(), |i| {
+                run_ndp(&i, &mut nreach_cell.borrow_mut());
+                Ok(())
+            })
+            .unwrap();
+        let (reach, nreach) = (*reach_cell.borrow(), *nreach_cell.borrow());
+        println!(
+            "reach parse_reply: total={} chain={} past_chain={} tcp_options={}",
+            reach.total, reach.chain, reach.past_chain, reach.tcp_options
+        );
+        println!(
+            "reach ndp: total={} past_common={} options={}",
+            nreach.total, nreach.past_common, nreach.options
+        );
+        assert!(reach.chain * 2 >= reach.total, "{reach:?}");
+        assert!(reach.past_chain * 2 >= reach.total, "{reach:?}");
+        assert!(reach.tcp_options * 2 >= reach.total, "{reach:?}");
+        assert!(nreach.past_common * 2 >= nreach.total, "{nreach:?}");
+        assert!(nreach.options * 2 >= nreach.total, "{nreach:?}");
+    }
+}

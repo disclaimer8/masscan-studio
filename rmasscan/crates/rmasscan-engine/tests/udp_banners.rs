@@ -24,24 +24,12 @@ use rmasscan_engine::fake::{FakeAdapter, ManualClock, port_unreachable_for, repl
 use rmasscan_engine::{
     BannerOptions, Engine, EngineHandle, EngineOptions, Event, Outcome, Output, udp_reply_banners,
 };
-use rmasscan_proto::app_id;
-
-/// Настоящие парсеры `rmasscan-proto` в форме указателя, которую принимает движок.
-fn proto_parser(port_them: u16, cookie: u32, rawudp: bool, payload: &[u8]) -> Vec<(u16, Vec<u8>)> {
-    rmasscan_proto::handle_udp(
-        &rmasscan_proto::UdpContext {
-            port_them,
-            cookie,
-            rawudp,
-        },
-        payload,
-    )
-}
+use rmasscan_proto::{app_id, udp_banner_parser};
 
 fn banner_options(rawudp: bool) -> BannerOptions {
     BannerOptions {
         rawudp,
-        udp_parser: proto_parser,
+        udp_parser: udp_banner_parser,
     }
 }
 
@@ -743,7 +731,7 @@ fn timestamp_of_banner_equals_its_status() {
 #[test]
 fn banner_payload_is_capped_at_max_banner_bytes() {
     let payload: Vec<u8> = (0..70_000u32).map(|i| i as u8).collect();
-    let got = proto_parser(9999, 0, false, &payload);
+    let got = udp_banner_parser(9999, 0, false, &payload);
     assert_eq!(got[1].1.len(), 70_000, "the parser itself does not cap");
     let options = BannerOptions {
         rawudp: false,
@@ -827,7 +815,7 @@ fn udp_reply_of_2000_bytes_is_dropped_like_c_and_parsers_take_any_length() {
             Some((app_id::NONE, 1472)),
             "port {port}"
         );
-        let all = proto_parser(port, 0, true, &datagram);
+        let all = udp_banner_parser(port, 0, true, &datagram);
         assert_eq!(
             all.last(),
             Some(&(app_id::NONE, datagram.clone())),
@@ -907,5 +895,63 @@ fn banners_count_toward_the_result_capacity() {
     for (r, banners) in &groups {
         let apps: Vec<u16> = banners.iter().map(|b| b.app).collect();
         assert_eq!(apps, [app_id::DNS_VERSIONBIND, app_id::NONE], "{r:?}");
+    }
+}
+
+/// Сумма UDP над псевдозаголовком IPv4 (`src_dst`: адреса источника и назначения) и сегментом `seg` (RFC 768).
+fn udp_checksum(src_dst: &[u8], seg: &[u8]) -> u16 {
+    let mut data = src_dst.to_vec();
+    data.extend([0, 17]);
+    data.extend(u16::try_from(seg.len()).unwrap().to_be_bytes());
+    data.extend(seg);
+    if data.len() % 2 == 1 {
+        data.push(0);
+    }
+    let mut sum: u32 = data
+        .chunks(2)
+        .map(|c| u32::from(u16::from_be_bytes([c[0], c[1]])))
+        .sum();
+    while sum >> 16 != 0 {
+        sum = (sum & 0xffff) + (sum >> 16);
+    }
+    match !(sum as u16) {
+        0 => 0xffff,
+        c => c,
+    }
+}
+
+/// Длина UDP (13) короче IP-пакета (`helloTRAIL`), сумма UDP верна по этим 13 байтам: `parse_reply` принимает ответ
+/// (сумма проверяется только по `udp_len`), а нагрузка баннера идёт до конца IP-пакета, как `app_length` C
+/// (`src/proto-preprocess.c:109, :173`, поле длины UDP C не читает). Порт без парсера: первые 64 байта и сырой, оба
+/// `helloTRAIL`.
+#[test]
+fn udp_length_shorter_than_the_ip_payload_reaches_the_banner_like_c() {
+    let p = plan("U:9999");
+    let (outputs, _, _) = run_outputs(
+        &p,
+        |f: &[u8]| {
+            if !is_udp(f) {
+                return vec![];
+            }
+            let mut r = reply_to_udp(f, b"helloTRAIL").unwrap();
+            r[38..40].copy_from_slice(&13u16.to_be_bytes());
+            r[40..42].copy_from_slice(&[0, 0]);
+            let c = udp_checksum(&r[26..34], &r[34..47]);
+            r[40..42].copy_from_slice(&c.to_be_bytes());
+            vec![r]
+        },
+        with_banners(false),
+    );
+    let groups = grouped(&outputs);
+    assert_eq!(groups.len(), 8, "{outputs:?}");
+    for (_, banners) in &groups {
+        let got: Vec<(u16, &[u8])> = banners.iter().map(|b| (b.app, &b.payload[..])).collect();
+        assert_eq!(
+            got,
+            [
+                (app_id::NONE, &b"helloTRAIL"[..]),
+                (app_id::NONE, &b"helloTRAIL"[..])
+            ]
+        );
     }
 }

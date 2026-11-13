@@ -1457,3 +1457,213 @@ mod tests_ipv6 {
         assert!(ndp_reply_for(&ns, LinkType::Ethernet, &with).is_none());
     }
 }
+
+#[cfg(test)]
+mod tests_udp_payload {
+    //! `udp_payload` (баннеры UDP, подэтап 4a): нагрузка датаграммы того же кадра, который принимает `parse_reply`.
+    //! Кадры собираются здесь по RFC 791/768; суммы не нужны (`udp_payload` их не проверяет, это делает
+    //! `parse_reply`). Адреса RFC 5737 и `2001:db8::/32`.
+    use super::*;
+
+    /// Пакет IPv4 + UDP: IHL `ihl` (5..=15, опции NOP), поле фрагментации `frag`, длина UDP `udp_len` (по умолчанию
+    /// 8 + нагрузка), полная длина IPv4 по фактическим байтам.
+    fn ipv4_udp(ihl: u8, frag: u16, udp_len: Option<u16>, payload: &[u8]) -> Vec<u8> {
+        let header = usize::from(ihl) * 4;
+        let total = u16::try_from(header + 8 + payload.len()).unwrap();
+        let mut ip = vec![0x40 | ihl, 0];
+        ip.extend(total.to_be_bytes());
+        ip.extend([0x12, 0x34]);
+        ip.extend(frag.to_be_bytes());
+        ip.extend([64, 17, 0, 0, 192, 0, 2, 1, 198, 51, 100, 1]);
+        ip.resize(header, 0x01);
+        ip.extend(53u16.to_be_bytes());
+        ip.extend(40000u16.to_be_bytes());
+        let len = udp_len.unwrap_or(u16::try_from(8 + payload.len()).unwrap());
+        ip.extend(len.to_be_bytes());
+        ip.extend([0, 0]);
+        ip.extend(payload);
+        ip
+    }
+
+    /// Пакет IPv6 + UDP с цепочкой Hop-by-Hop из `hbh` заголовков по 8 байт.
+    fn ipv6_udp(hbh: usize, payload: &[u8]) -> Vec<u8> {
+        let plen = u16::try_from(hbh * 8 + 8 + payload.len()).unwrap();
+        let mut ip = vec![0x60, 0, 0, 0];
+        ip.extend(plen.to_be_bytes());
+        ip.extend([if hbh > 0 { 0 } else { 17 }, 57]);
+        ip.extend(0x2001_0db8_0000_0000_0000_0000_0000_0005u128.to_be_bytes());
+        ip.extend(0x2001_0db8_0000_0000_0000_0000_0000_0001u128.to_be_bytes());
+        for i in 0..hbh {
+            ip.extend([if i + 1 == hbh { 17 } else { 0 }, 0, 1, 4, 0, 0, 0, 0]);
+        }
+        ip.extend(53u16.to_be_bytes());
+        ip.extend(40000u16.to_be_bytes());
+        ip.extend((8 + u16::try_from(payload.len()).unwrap()).to_be_bytes());
+        ip.extend([0, 0]);
+        ip.extend(payload);
+        ip
+    }
+
+    fn eth(ethertype: u16, ip: &[u8]) -> Vec<u8> {
+        let mut f = vec![0x02, 0, 0, 0, 0, 1, 0x02, 0, 0, 0, 0, 2];
+        f.extend(ethertype.to_be_bytes());
+        f.extend(ip);
+        f
+    }
+
+    fn eth4(ip: &[u8]) -> Vec<u8> {
+        eth(0x0800, ip)
+    }
+
+    #[test]
+    fn ethernet_padding_is_not_payload() {
+        let mut f = eth4(&ipv4_udp(5, 0, None, b"abc"));
+        assert_eq!(f.len(), 45);
+        f.resize(60, 0);
+        assert_eq!(udp_payload(&f, LinkType::Ethernet), Some(&b"abc"[..]));
+    }
+
+    #[test]
+    fn ipv4_options_raw_and_null_links_give_the_payload() {
+        for ihl in 5..=15 {
+            let ip = ipv4_udp(ihl, 0, None, b"hello");
+            assert_eq!(
+                udp_payload(&eth4(&ip), LinkType::Ethernet),
+                Some(&b"hello"[..]),
+                "IHL {ihl}"
+            );
+            assert_eq!(
+                udp_payload(&ip, LinkType::Raw),
+                Some(&b"hello"[..]),
+                "IHL {ihl}"
+            );
+            for family in [[2, 0, 0, 0], [0, 0, 0, 2]] {
+                let f = [&family[..], &ip].concat();
+                assert_eq!(
+                    udp_payload(&f, LinkType::Null),
+                    Some(&b"hello"[..]),
+                    "IHL {ihl}"
+                );
+            }
+        }
+        // DF не фрагмент.
+        let df = ipv4_udp(5, 0x4000, None, b"df");
+        assert_eq!(
+            udp_payload(&eth4(&df), LinkType::Ethernet),
+            Some(&b"df"[..])
+        );
+    }
+
+    #[test]
+    fn ipv6_with_and_without_hop_by_hop_gives_the_payload() {
+        for hbh in 0..3 {
+            let ip = ipv6_udp(hbh, b"v6");
+            assert_eq!(
+                udp_payload(&eth(0x86dd, &ip), LinkType::Ethernet),
+                Some(&b"v6"[..])
+            );
+            assert_eq!(udp_payload(&ip, LinkType::Raw), Some(&b"v6"[..]));
+            for family in [[24, 0, 0, 0], [0, 0, 0, 28], [30, 0, 0, 0]] {
+                let f = [&family[..], &ip].concat();
+                assert_eq!(udp_payload(&f, LinkType::Null), Some(&b"v6"[..]));
+            }
+        }
+    }
+
+    #[test]
+    fn fragments_and_everything_not_udp_give_none() {
+        let ok = ipv4_udp(5, 0, None, b"x");
+        // MF и смещение фрагмента (`proto-preprocess.c:104-108`).
+        for frag in [0x2000, 0x0001, 0x1fff, 0x6000] {
+            let f = eth4(&ipv4_udp(5, frag, None, b"x"));
+            assert_eq!(udp_payload(&f, LinkType::Ethernet), None, "frag {frag:#x}");
+        }
+        // TCP, ICMP, SCTP.
+        for proto in [6u8, 1, 132] {
+            let mut ip = ok.clone();
+            ip[9] = proto;
+            assert_eq!(
+                udp_payload(&eth4(&ip), LinkType::Ethernet),
+                None,
+                "proto {proto}"
+            );
+        }
+        // 802.1Q, QinQ: VLAN не разбирается (`locate_ipv4`), ARP и неизвестный EtherType.
+        for ethertype in [0x8100, 0x88a8, 0x9100, 0x0806, 0x88cc] {
+            assert_eq!(udp_payload(&eth(ethertype, &ok), LinkType::Ethernet), None);
+        }
+        // Полная длина за кадром, меньше заголовка, версия не 4.
+        let mut beyond = ok.clone();
+        beyond[2..4].copy_from_slice(&(u16::try_from(ok.len()).unwrap() + 1).to_be_bytes());
+        assert_eq!(udp_payload(&eth4(&beyond), LinkType::Ethernet), None);
+        let mut below = ok.clone();
+        below[2..4].copy_from_slice(&19u16.to_be_bytes());
+        assert_eq!(udp_payload(&eth4(&below), LinkType::Ethernet), None);
+        let mut v5 = ok.clone();
+        v5[0] = 0x55;
+        assert_eq!(udp_payload(&eth4(&v5), LinkType::Ethernet), None);
+        // Заголовок UDP в 7 байт: полная длина IPv4 обрезает его (`VERIFY_REMAINING(8, FOUND_UDP)`).
+        let mut short = ipv4_udp(5, 0, None, b"");
+        short.truncate(27);
+        short[2..4].copy_from_slice(&27u16.to_be_bytes());
+        assert_eq!(udp_payload(&eth4(&short), LinkType::Ethernet), None);
+        // Next Header IPv6 не UDP.
+        let mut tcp6 = ipv6_udp(0, b"x");
+        tcp6[6] = 6;
+        assert_eq!(udp_payload(&eth(0x86dd, &tcp6), LinkType::Ethernet), None);
+    }
+
+    #[test]
+    fn empty_datagram_and_frame_length_limit() {
+        let f = eth4(&ipv4_udp(5, 0, None, b""));
+        assert_eq!(udp_payload(&f, LinkType::Ethernet), Some(&b""[..]));
+        // 1514 байт кадра (`MAX_FRAME_LEN`, `src/main.c:799`): 1472 байта нагрузки; на байт длиннее ничего.
+        let max = eth4(&ipv4_udp(5, 0, None, &[0x5a; 1472]));
+        assert_eq!(max.len(), MAX_FRAME_LEN);
+        assert_eq!(
+            udp_payload(&max, LinkType::Ethernet).map(<[u8]>::len),
+            Some(1472)
+        );
+        let over = eth4(&ipv4_udp(5, 0, None, &[0x5a; 1473]));
+        assert_eq!(over.len(), MAX_FRAME_LEN + 1);
+        assert_eq!(udp_payload(&over, LinkType::Ethernet), None);
+    }
+
+    /// Длина UDP короче IP-пакета: нагрузка идёт до конца IP-пакета, как `app_length` C (`length = offset +
+    /// total_length`, `src/proto-preprocess.c:109`, `app_length = length - app_offset`, `:173`); поле длины UDP C не
+    /// читает. `parse_reply` проверяет сумму UDP только по `udp_len` байтам, поэтому хвост за ним в сырой баннер
+    /// попадает непроверенным (README, блок «Баннеры»).
+    #[test]
+    fn udp_length_shorter_than_the_ip_payload_keeps_the_tail_like_c() {
+        let ip = ipv4_udp(5, 0, Some(13), b"helloTRAIL");
+        assert_eq!(
+            udp_payload(&eth4(&ip), LinkType::Ethernet),
+            Some(&b"helloTRAIL"[..])
+        );
+    }
+
+    /// Каждый префикс кадра (и каждый из трёх каналов) разбирается без паники; полный кадр даёт нагрузку.
+    #[test]
+    fn every_truncated_prefix_returns_without_panic() {
+        let frames = [
+            (eth4(&ipv4_udp(7, 0, None, b"payload")), LinkType::Ethernet),
+            (eth(0x86dd, &ipv6_udp(2, b"payload")), LinkType::Ethernet),
+            (ipv4_udp(5, 0, None, b"payload"), LinkType::Raw),
+            (
+                [&[24, 0, 0, 0][..], &ipv6_udp(1, b"payload")].concat(),
+                LinkType::Null,
+            ),
+            (
+                [&[0, 0, 0, 2][..], &ipv4_udp(6, 0, None, b"payload")].concat(),
+                LinkType::Null,
+            ),
+        ];
+        for (f, link) in &frames {
+            for n in 0..f.len() {
+                let got = udp_payload(&f[..n], *link);
+                assert!(got.is_none(), "{link:?} prefix {n}: {got:?}");
+            }
+            assert_eq!(udp_payload(f, *link), Some(&b"payload"[..]));
+        }
+    }
+}

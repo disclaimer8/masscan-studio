@@ -36,12 +36,13 @@ pub trait Sink {
     /// Запись баннера (`output_report_banner`, `src/output.c:886-956`): без фильтра show и без счётчиков.
     fn report_banner(&mut self, b: &BannerRecord) -> Result<(), String>;
     /// Баннер ответа, который последним прошёл через [`Sink::report`] (живой скан: движок выдаёт баннеры ответа сразу
-    /// за ним, `rmasscan_engine::Output`). Время записи то же, что у записи статуса этого ответа: у C оба получают
-    /// `secs` одного кадра (`src/main.c:915`, справка A0), у rmasscan время статуса это момент обработки (Р9 этапа
-    /// вывода). По умолчанию как [`Sink::report_banner`] (у приёмника без времени записи разницы нет).
-    fn report_reply_banner(&mut self, b: &BannerRecord) -> Result<(), String> {
-        self.report_banner(b)
-    }
+    /// за ним, `rmasscan_engine::Output`).
+    ///
+    /// Контракт: `b.timestamp` от движка всегда 0 (у `Reply` времени нет). Приёмник, который пишет время, обязан
+    /// поставить баннеру время записи статуса этого ответа: у C оба получают `secs` одного кадра (`src/main.c:915`,
+    /// справка A0), у rmasscan время статуса это момент обработки (Р9 этапа вывода). Метод обязательный, чтобы новый
+    /// приёмник не унаследовал молча время 0 (1970 год в выводе).
+    fn report_reply_banner(&mut self, b: BannerRecord) -> Result<(), String>;
     fn finish(&mut self) -> Result<(), String>;
 }
 
@@ -178,6 +179,11 @@ impl<W: Write> Sink for Interactive<W> {
             .write_all(banner_line(b).as_bytes())
             .map_err(io_fail)?;
         self.out.flush().map_err(io_fail)
+    }
+
+    /// Строка `Banner on port …` времени не печатает (`src/output.c:903-923`): метку ставить некуда.
+    fn report_reply_banner(&mut self, b: BannerRecord) -> Result<(), String> {
+        self.report_banner(&b)
     }
 
     fn finish(&mut self) -> Result<(), String> {

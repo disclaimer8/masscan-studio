@@ -23,7 +23,7 @@
 //! `paused.conf` к этому времени уже на диске.
 //!
 //! Баннеры (`--banners`, `--rawudp`, подэтап 4a, только UDP): движок разбирает датаграмму ответа, прошедшего дедуп,
-//! функцией `udp_banners` (`handle_udp` крейта `rmasscan-proto`) и выдаёт баннеры сразу за пачкой, которая этим ответом
+//! функцией `rmasscan_proto::udp_banner_parser` (`handle_udp`) и выдаёт баннеры сразу за пачкой, которая этим ответом
 //! кончается (`rmasscan_engine::Output`); цикл событий пишет их в [`Sink::report_reply_banner`] со временем записи
 //! статуса того же ответа. Без `--banners` движок датаграммы не разбирает.
 
@@ -64,19 +64,6 @@ use rmasscan_net::{
 use crate::args::SeedPolicy;
 use crate::output::{ServiceNames, Sink, Wall, io_fail};
 use crate::pcap_writer::{PcapTarget, PcapWriter};
-
-/// `handle_udp` (`src/proto-udp.c:54-132`, крейт `rmasscan-proto`) в форме [`rmasscan_engine::UdpBannerParser`]:
-/// движок от `rmasscan-proto` не зависит (Р11), разбор ему передаёт CLI.
-fn udp_banners(port_them: u16, cookie: u32, rawudp: bool, payload: &[u8]) -> Vec<(u16, Vec<u8>)> {
-    rmasscan_proto::handle_udp(
-        &rmasscan_proto::UdpContext {
-            port_them,
-            cookie,
-            rawudp,
-        },
-        payload,
-    )
-}
 
 /// Префикс отказов обнаружения и ARP в форме C (`[-] FAIL: …` и подсказки); [`crate::error_text`] не оборачивает их.
 pub const REFUSAL_PREFIX: &str = "[-] ";
@@ -1108,7 +1095,8 @@ pub fn run_live_conf(
     // выдаёт баннеры; без них очередь, события и кадры прежние.
     options.banners = cfg.banners.then_some(BannerOptions {
         rawudp: cfg.rawudp,
-        udp_parser: udp_banners,
+        // `handle_udp` (`src/proto-udp.c:54-132`): движок от `rmasscan-proto` не зависит (Р11), разбор передаёт CLI.
+        udp_parser: rmasscan_proto::udp_banner_parser,
     });
     // Решение 4: те же часы, что у резолвера; в `OsBackend` это `SystemClock`, то есть поведение `Engine::start`.
     let started = clock.now_micros();
@@ -1238,7 +1226,7 @@ pub fn run_live_conf(
             // Баннеры ответа идут сразу за пачкой, которая кончается этим ответом (`Output`): время записи то же, что
             // у его записи статуса. Ошибка приёмника останавливает скан, как у записи статуса.
             Ok(Output::Banner(b)) => {
-                if let Err(e) = sink.report_reply_banner(&b) {
+                if let Err(e) = sink.report_reply_banner(b) {
                     sink_error = Some(e);
                     handle.stop();
                     break 'events;

@@ -314,7 +314,7 @@ impl Queue {
             }
         }
         if !st.results.is_empty() {
-            let mut replies = Vec::new();
+            let mut replies = Vec::with_capacity(st.results.len().min(self.batch_limit));
             while replies.len() < self.batch_limit {
                 match st.results.front() {
                     Some(Entry::Reply(_)) => {
@@ -1399,12 +1399,15 @@ impl EngineHandle {
             .then(|| self.shared.resume_base())
     }
 
+    /// Следующее событие без ожидания. С `banners: Some` баннер, стоящий в очереди на пути события, этот вызов
+    /// ОТБРАСЫВАЕТ: он не возвращается и нигде не учитывается. Баннеры читает только [`Self::recv_output_timeout`].
     pub fn try_event(&self) -> Result<Event, TryRecvError> {
         self.shared.queue.try_pop()
     }
 
-    /// Ждёт событие не дольше `timeout`; `Err(Empty)` по таймауту. Баннеры ([`EngineOptions::banners`]) этот вызов
-    /// пропускает: их читает [`Self::recv_output_timeout`].
+    /// Ждёт событие не дольше `timeout`; `Err(Empty)` по таймауту. С `banners: Some` ([`EngineOptions::banners`]) баннеры,
+    /// встреченные по пути, этот вызов ОТБРАСЫВАЕТ: они не возвращаются и нигде не учитываются. Потребитель баннеров
+    /// читает очередь только [`Self::recv_output_timeout`].
     pub fn recv_event_timeout(&self, timeout: Duration) -> Result<Event, TryRecvError> {
         self.shared.queue.pop_timeout(timeout)
     }
@@ -1412,6 +1415,8 @@ impl EngineHandle {
     /// Как [`Self::recv_event_timeout`], но отдаёт и баннеры, по порядку очереди: баннеры ответа идут сразу после
     /// пачки [`Event::Results`], которая этим ответом кончается, и раньше записи любого более позднего ответа. При
     /// `banners: None` выдаёт ровно те же события, что [`Self::recv_event_timeout`], и ни одного [`Output::Banner`].
+    /// Время записи баннера (`BannerRecord::timestamp`) движок не знает и ставит 0: у [`rmasscan_core::receive::Reply`]
+    /// времени нет, потребитель ставит баннеру время записи статуса его ответа.
     pub fn recv_output_timeout(&self, timeout: Duration) -> Result<Output, TryRecvError> {
         self.shared.queue.pop_output_timeout(timeout)
     }
@@ -1440,7 +1445,8 @@ impl EngineHandle {
 
     /// Как [`Self::join`], но возвращает ещё не прочитанные события (без
     /// `Finished`): итог не отбрасывает принятые результаты. Уже прочитанные
-    /// через `try_event`/`recv_event_timeout` события не повторяются.
+    /// через `try_event`/`recv_event_timeout` события не повторяются. Непрочитанные
+    /// баннеры (`banners: Some`) ОТБРАСЫВАЮТСЯ и нигде не учитываются.
     ///
     /// При панике рабочего потока принятые до неё результаты сохраняются, а
     /// итог это `Ok(Failed(WorkerPanicked))` с последним слепком счётчиков.

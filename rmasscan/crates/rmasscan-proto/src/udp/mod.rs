@@ -103,6 +103,24 @@ pub fn handle_udp(cx: &UdpContext, payload: &[u8]) -> Vec<(u16, Vec<u8>)> {
     out
 }
 
+/// [`handle_udp`] по полям [`UdpContext`]: форма `rmasscan_engine::UdpBannerParser`, которую движок получает в
+/// `BannerOptions::udp_parser` (от этого крейта он не зависит). Одна на CLI и тесты движка.
+pub fn udp_banner_parser(
+    port_them: u16,
+    cookie: u32,
+    rawudp: bool,
+    payload: &[u8],
+) -> Vec<(u16, Vec<u8>)> {
+    handle_udp(
+        &UdpContext {
+            port_them,
+            cookie,
+            rawudp,
+        },
+        payload,
+    )
+}
+
 /// `default_udp_parse` (`src/proto-udp.c:27-50`): первые 64 байта как `unknown`, возврат 0.
 fn default_udp_parse(px: &[u8], out: &mut Vec<(u16, Vec<u8>)>) -> Status {
     out.push((app_id::NONE, px.get(..64).unwrap_or(px).to_vec()));

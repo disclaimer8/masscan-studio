@@ -328,12 +328,10 @@ impl Sink for Pipeline<'_> {
         Pipeline::report_banner(self, b)
     }
 
-    /// Время записи статуса ответа, а не новое чтение часов: оно могло перейти на следующую секунду.
-    fn report_reply_banner(&mut self, b: &BannerRecord) -> Result<(), String> {
-        let b = BannerRecord {
-            timestamp: self.reply_time,
-            ..b.clone()
-        };
+    /// Время записи статуса ответа, а не новое чтение часов: оно могло перейти на следующую секунду. Запись приходит
+    /// по значению, поэтому время ставится без копии нагрузки.
+    fn report_reply_banner(&mut self, mut b: BannerRecord) -> Result<(), String> {
+        b.timestamp = self.reply_time;
         Pipeline::report_banner(self, &b)
     }
 
@@ -1156,7 +1154,8 @@ mod tests {
     }
 
     /// Живой скан: баннер ответа получает время записи статуса этого ответа (`Sink::report_reply_banner`), даже если
-    /// часы между ними ушли вперёд; запись файла `-oB` тоже. `report_banner` (`--readscan`) время записи не трогает.
+    /// часы между ними ушли вперёд; в `-oL` и в записях типа 9 `-oB`. `report_banner` (`--readscan`) время записи
+    /// не трогает.
     #[test]
     fn reply_banner_takes_the_time_of_its_status_record() {
         struct Ticking(std::cell::Cell<u64>);
@@ -1170,45 +1169,55 @@ mod tests {
                 0
             }
         }
-        let wall = Ticking(std::cell::Cell::new(1_800_000_000));
-        let mut out = Vec::new();
-        {
-            let env = OutputEnv {
-                wall: &wall,
-                services: services::empty(),
-                ports: Vec::new(),
-                scan_started: None,
-            };
-            let mut p = Pipeline::new(opts(Format::List, Some("-")), &mut out, env);
-            p.open().unwrap();
-            let reply = Reply {
-                remote_ip: 0xC000_0201,
-                remote_port: 53,
-                local_ip: 0xC000_0205,
-                local_port: 40000,
-                status: rmasscan_core::receive::PortStatus::Open,
-                tcp_flags: 0,
-                ttl: 57,
-                ip_proto: 17,
-                mac: None,
-                ip6: None,
-            };
-            p.report(&reply).unwrap();
-            let live = BannerRecord {
-                timestamp: 0,
-                ..dns_banner()
-            };
-            p.report_reply_banner(&live).unwrap();
-            p.report_reply_banner(&live).unwrap();
-            p.report_banner(&dns_banner()).unwrap();
-            p.finish().unwrap();
-        }
-        let out = String::from_utf8(out).unwrap();
-        let times: Vec<&str> = out.lines().filter_map(|l| l.split(' ').nth(4)).collect();
+        let run = |format: Format| {
+            let wall = Ticking(std::cell::Cell::new(1_800_000_000));
+            let mut out = Vec::new();
+            {
+                let env = OutputEnv {
+                    wall: &wall,
+                    services: services::empty(),
+                    ports: Vec::new(),
+                    scan_started: None,
+                };
+                let mut p = Pipeline::new(opts(format, Some("-")), &mut out, env);
+                p.open().unwrap();
+                let reply = Reply {
+                    remote_ip: 0xC000_0201,
+                    remote_port: 53,
+                    local_ip: 0xC000_0205,
+                    local_port: 40000,
+                    status: rmasscan_core::receive::PortStatus::Open,
+                    tcp_flags: 0,
+                    ttl: 57,
+                    ip_proto: 17,
+                    mac: None,
+                    ip6: None,
+                };
+                p.report(&reply).unwrap();
+                let live = BannerRecord {
+                    timestamp: 0,
+                    ..dns_banner()
+                };
+                p.report_reply_banner(live.clone()).unwrap();
+                p.report_reply_banner(live).unwrap();
+                p.report_banner(&dns_banner()).unwrap();
+                p.finish().unwrap();
+            }
+            out
+        };
+        let list = String::from_utf8(run(Format::List)).unwrap();
+        let times: Vec<&str> = list.lines().filter_map(|l| l.split(' ').nth(4)).collect();
         assert_eq!(
             times,
             ["1800000001", "1800000001", "1800000001", "1700000000"],
-            "{out}"
+            "{list}"
         );
+        // `-oB`: запись типа 9 (`binary_out_banner`, `src/out-binary.c:293-355`), длина тела 14 + 7, затем время BE.
+        let bin = run(Format::Binary);
+        let banner9 = |ts: u32| [&[9u8, 21][..], &ts.to_be_bytes(), &[192, 0, 2, 1]].concat();
+        let count = |rec: &[u8]| bin.windows(rec.len()).filter(|w| *w == rec).count();
+        assert_eq!(count(&banner9(1_800_000_001)), 2, "{bin:?}");
+        assert_eq!(count(&banner9(1_700_000_000)), 1, "{bin:?}");
+        assert_eq!(count(&banner9(0)), 0, "{bin:?}");
     }
 }

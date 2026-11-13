@@ -39,6 +39,8 @@ pub struct BannerOptions {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Output {
     Event(Event),
+    /// Баннер последнего ответа перед ним. `timestamp` всегда 0: у [`Reply`] времени нет, и потребитель ставит баннеру
+    /// время записи статуса его ответа (CLI: `Sink::report_reply_banner`); `ttl` уже как у ответа.
     Banner(BannerRecord),
 }
 

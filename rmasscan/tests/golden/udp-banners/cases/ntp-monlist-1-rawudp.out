@@ -1,0 +1,5 @@
+udp-oracle port=123 cookie=0x5eed1234 rawudp=1 mode=whole sections=1 framing=payload
+section len=80
+status open count=1
+banner 19 53 "XNTPD MON_GETLIST_1 response-size=72-bytes more=false"
+banner 0 80 =datagram

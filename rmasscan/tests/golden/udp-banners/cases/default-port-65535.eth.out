@@ -1,0 +1,5 @@
+udp-oracle port=65535 cookie=0x5eed1234 rawudp=0 mode=whole sections=1 framing=eth
+section len=3
+status open count=1
+banner 0 3 =datagram
+banner 0 3 "\xee\xee\xee"

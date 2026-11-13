@@ -1,0 +1,276 @@
+//! UDP-ответы, из которых C делает баннеры: `handle_udp` (`src/proto-udp.c:54-132`) и парсеры портов 53, 123, 137
+//! и 161 (`src/proto-dns.c`, `src/proto-ntp.c`, `src/proto-netbios.c`, `src/proto-snmp.c`). Задача 5 добавит 500,
+//! 5683, 11211 и ZeroAccess; пока они идут веткой `default`.
+//!
+//! Все парсеры работают с полезной нагрузкой датаграммы (у C `px + parsed->app_offset`, `parsed->app_length`).
+//! Четыре парсера C получают весь кадр и абсолютные смещения; здесь смещения считаются от начала датаграммы, а её
+//! длина ограничивает всё чтение. Отличия от C (Р1 классы а и в, Р2), каждое с эталоном в
+//! `tests/golden/udp-banners`:
+//! - сырой баннер на 11211 и портах без парсера: у C чтение за концом датаграммы (`src/proto-udp.c:97-101, 108-112,
+//!   129`), у нас сама датаграмма;
+//! - указатель сжатия DNS/NBNS адресует у C кадр (Ethernet, IP, UDP), у нас сообщение DNS (`src/proto-dns.c:69`);
+//! - TXT и NBSTAT C читает против длины кадра (`src/proto-dns.c:420-434`, `src/proto-netbios.c:145-166`), у нас против
+//!   длины датаграммы. Дополнение Ethernet до 60 байт на результат не влияет (запись начинается не раньше байта 54
+//!   кадра, и `offset + 10 >= length` срабатывает раньше), а хвост за IP-датаграммой (FCS, если захват его
+//!   оставляет) C читает в текст dns-ver и в MAC NBSTAT;
+//! - неинициализированные `id` и `rr_offset[]` у C (`src/proto-dns.c:205-206, 419`, `src/proto-netbios.c:144`): у нас
+//!   короткая датаграмма не совпадает с cookie, а отсутствующая запись даёт сырой баннер;
+//! - `dns_extract_name` (`src/proto-dns.c:318`) не переносится: её результат никто не читает, а у C она читает
+//!   неинициализированный `rr_offset[0]` ответа без записей (ASan: чтение за буфером);
+//! - `asn1_integer` у C читает байт тега без проверки границы (`src/proto-snmp.c:151`, на 1 байт за датаграммой); вывод
+//!   от этого байта не зависит.
+
+mod dns;
+mod netbios;
+mod ntp;
+mod snmp;
+
+use crate::app::app_id;
+
+/// Один UDP-ответ глазами парсеров C.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct UdpContext {
+    /// Порт источника ответа: парсер выбирается только по нему (`src/proto-udp.c:76`).
+    pub port_them: u16,
+    /// `(unsigned)syn_cookie(ip_them, port_them | Templ_UDP, ip_me, port_me, entropy)` (`src/proto-dns.c:369`,
+    /// справка B10): его вычисляет приём, маску протокола (`& 0xFFFF`, `& 0x7FFFFFFF`) накладывает парсер.
+    pub cookie: u32,
+    /// `--rawudp` (`out->is_banner_rawudp`, `src/proto-udp.c:120`).
+    pub rawudp: bool,
+}
+
+/// Что парсер вернул в `status` (`src/proto-udp.c:61`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Status {
+    /// 0: следом сырой баннер.
+    Fallback,
+    /// 1: разобрано или отброшено по cookie; сырой баннер только с `--rawudp`.
+    Handled,
+}
+
+/// Баннеры одного ответа в порядке C (справка B0): `(номер приложения, байты)`. Запись статуса `open udp` сюда не
+/// входит, её пишет движок (`src/proto-udp.c:63-73`).
+pub fn handle_udp(cx: &UdpContext, payload: &[u8]) -> Vec<(u16, Vec<u8>)> {
+    let mut out = Vec::new();
+    // src/proto-udp.c:76-113
+    let status = match cx.port_them {
+        53 => dns::handle_dns(cx, payload, &mut out),
+        123 => ntp::ntp_handle_response(payload, &mut out),
+        137 => netbios::handle_nbtstat(cx, payload, &mut out),
+        161 => snmp::handle_snmp(cx, payload, &mut out),
+        _ => default_udp_parse(payload, &mut out),
+    };
+    // src/proto-udp.c:120-131: вся датаграмма (у C на 11211 и в default чтение за её концом, Р2).
+    if status == Status::Fallback || cx.rawudp {
+        out.push((app_id::NONE, payload.to_vec()));
+    }
+    out
+}
+
+/// `default_udp_parse` (`src/proto-udp.c:27-50`): первые 64 байта как `unknown`, возврат 0.
+fn default_udp_parse(px: &[u8], out: &mut Vec<(u16, Vec<u8>)>) -> Status {
+    out.push((app_id::NONE, px.get(..64).unwrap_or(px).to_vec()));
+    Status::Fallback
+}
+
+/// Байт по смещению или `None` за концом.
+fn byte(px: &[u8], at: usize) -> Option<u8> {
+    px.get(at).copied()
+}
+
+/// Big-endian u16 по смещению или `None`, если не помещается.
+fn be16(px: &[u8], at: usize) -> Option<u16> {
+    Some(u16::from(byte(px, at)?) << 8 | u16::from(byte(px, at.checked_add(1)?)?))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::app_name;
+
+    const COOKIE: u32 = 0x5EED_1234;
+
+    fn cx(port_them: u16, rawudp: bool) -> UdpContext {
+        UdpContext {
+            port_them,
+            cookie: COOKIE,
+            rawudp,
+        }
+    }
+
+    /// Номера и имена приложений UDP-баннеров (`src/masscan-app.h:8-49`): они пишутся в `-oB`.
+    #[test]
+    fn udp_app_ids_are_pinned() {
+        for (id, want, name) in [
+            (app_id::NONE, 0, "unknown"),
+            (app_id::DNS_VERSIONBIND, 6, "dns-ver"),
+            (app_id::SNMP, 7, "snmp"),
+            (app_id::NBTSTAT, 8, "nbtstat"),
+            (app_id::ZEROACCESS, 14, "zeroaccess"),
+            (app_id::NTP, 19, "ntp"),
+            (app_id::MEMCACHED, 25, "memcached"),
+            (app_id::COAP, 28, "coap"),
+            (app_id::ISAKMP, 35, "isakmp"),
+        ] {
+            assert_eq!(id, want, "{name}");
+            assert_eq!(app_name(id), name);
+        }
+    }
+
+    #[test]
+    fn default_port_gives_def64_and_raw() {
+        let px: Vec<u8> = (0..100u8).collect();
+        let got = handle_udp(&cx(9999, false), &px);
+        assert_eq!(got, vec![(0, px[..64].to_vec()), (0, px.clone())]);
+        // --rawudp ничего не добавляет: status уже 0.
+        assert_eq!(handle_udp(&cx(9999, true), &px), got);
+        assert_eq!(
+            handle_udp(&cx(0, false), &[]),
+            vec![(0, vec![]), (0, vec![])]
+        );
+    }
+
+    /// Детерминированный xorshift64*: тест не зависит от внешних крейтов и воспроизводим.
+    struct Rng(u64);
+
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 >> 12;
+            self.0 ^= self.0 << 25;
+            self.0 ^= self.0 >> 27;
+            self.0.wrapping_mul(0x2545_F491_4F6C_DD1D)
+        }
+        fn below(&mut self, n: usize) -> usize {
+            usize::try_from(self.next() % u64::try_from(n).expect("n")).expect("index")
+        }
+        fn byte(&mut self) -> u8 {
+            self.next().to_le_bytes()[0]
+        }
+    }
+
+    /// Правдоподобные ответы для мутаций: вектор selftest SNMP (`src/proto-snmp.c:630-644`), ответ CHAOS TXT, NBSTAT
+    /// и MON_GETLIST_1.
+    fn seeds() -> Vec<(u16, Vec<u8>)> {
+        let hex = |s: &str| -> Vec<u8> {
+            let s: String = s.split_whitespace().collect();
+            (0..s.len())
+                .step_by(2)
+                .map(|i| u8::from_str_radix(&s[i..i + 2], 16).expect("hex"))
+                .collect()
+        };
+        vec![
+            (
+                161,
+                hex("3039020100 04067075626c6963 a22c 020126 020100 020100 3021 301f 06092b0601800201010200
+                     06122b06010401 8f5101010182295d011b020201"),
+            ),
+            (
+                53,
+                hex("1234 8400 0001 0001 0000 0000 0776657273696f6e 0462696e64 00 0010 0003
+                     c00c 0010 0003 00000000 0008 07 392e31382e3234"),
+            ),
+            (
+                137,
+                hex("1234 8400 0000 0001 0000 0000 0141 00 0021 0001 00000000 0019
+                     01 484f53543120202020202020202020 20 0400 525400123456"),
+            ),
+            (123, hex("97 00 03 2a 00 01 00 08 0102030405060708")),
+        ]
+    }
+
+    /// Р1 класс б и задача: случайные датаграммы 0..2000 байт на каждом порту и мутации правдоподобных ответов не
+    /// роняют ни один парсер, а сырой баннер всегда равен датаграмме.
+    #[test]
+    fn udp_parsers_never_panic() {
+        let mut rng = Rng(0x9E37_79B9_7F4A_7C15);
+        let ports = [53u16, 123, 137, 161, 7, 500, 5683, 11211, 16464];
+        for &port in &ports {
+            for _ in 0..3000 {
+                let len = rng.below(2001);
+                let px: Vec<u8> = (0..len).map(|_| rng.byte()).collect();
+                for rawudp in [false, true] {
+                    let c = UdpContext {
+                        port_them: port,
+                        cookie: u32::try_from(rng.next() >> 32).expect("u32"),
+                        rawudp,
+                    };
+                    check_invariants(&c, &px);
+                }
+            }
+        }
+        for (port, seed) in seeds() {
+            // Cookie, с которым seed проходит проверку: 0x26 у вектора selftest, 0x5EED1234 у остальных.
+            let cookie = if port == 161 { 0x26 } else { COOKIE };
+            // Досягаемость: сколько мутаций дошло до баннера парсера (не только сырого).
+            let mut reached = 0u32;
+            let rounds = 20_000u32;
+            for _ in 0..rounds {
+                let mut px = seed.clone();
+                for _ in 0..=rng.below(4) {
+                    match rng.below(4) {
+                        0 if !px.is_empty() => {
+                            let i = rng.below(px.len());
+                            px[i] = rng.byte();
+                        }
+                        1 => px.truncate(rng.below(px.len() + 1)),
+                        2 => {
+                            let i = rng.below(px.len() + 1);
+                            px.insert(i, rng.byte());
+                        }
+                        _ => {
+                            let n = rng.below(64);
+                            px.extend((0..n).map(|_| rng.byte()));
+                        }
+                    }
+                }
+                let c = UdpContext {
+                    port_them: port,
+                    cookie,
+                    rawudp: rng.below(2) == 1,
+                };
+                check_invariants(&c, &px);
+                if handle_udp(&c, &px)
+                    .iter()
+                    .any(|(app, _)| *app != app_id::NONE)
+                {
+                    reached += 1;
+                }
+            }
+            // Мутации не превращаются в один шум: заметная доля доходит до текста парсера.
+            eprintln!("port {port}: {reached} of {rounds} mutations reached the parser text");
+            assert!(
+                reached * 5 > rounds,
+                "port {port}: only {reached} of {rounds} mutations reached the parser text"
+            );
+        }
+    }
+
+    fn check_invariants(c: &UdpContext, px: &[u8]) {
+        let got = handle_udp(c, px);
+        // Сырой баннер, если есть, последний и равен датаграмме; кроме него не больше двух баннеров.
+        assert!(got.len() <= 3, "{got:?}");
+        if c.rawudp {
+            assert_eq!(got.last(), Some(&(app_id::NONE, px.to_vec())));
+        }
+        for (app, bytes) in &got {
+            assert!(
+                [
+                    app_id::NONE,
+                    app_id::DNS_VERSIONBIND,
+                    app_id::SNMP,
+                    app_id::NBTSTAT,
+                    app_id::NTP
+                ]
+                .contains(app),
+                "app {app}"
+            );
+            // Текст парсера не длиннее, чем позволяет датаграмма (OID: до 4 символов на байт и имена MIB).
+            assert!(
+                bytes.len() <= 8 * px.len() + 64,
+                "{} > {}",
+                bytes.len(),
+                px.len()
+            );
+        }
+    }
+}

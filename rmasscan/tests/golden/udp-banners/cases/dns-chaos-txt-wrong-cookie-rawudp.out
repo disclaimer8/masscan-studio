@@ -1,0 +1,4 @@
+udp-oracle port=53 cookie=0x5eed1235 rawudp=1 mode=whole sections=1 framing=payload
+section len=50
+status open count=1
+banner 0 50 =datagram

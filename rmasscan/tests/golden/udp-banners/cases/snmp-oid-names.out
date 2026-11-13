@@ -1,0 +1,5 @@
+udp-oracle port=161 cookie=0x5eed1234 rawudp=0 mode=whole sections=1 framing=payload
+section len=510
+status open count=1
+banner 7 395 "iso.org:v0\x0adod:v1\x0ainet:v2\x0amgmt:v3\x0asys:v4\x0amib2.2.2:v5\x0amib2.1:v6\x0asysDescr:v7\x0asysObjectID:v8\x0asysUpTime:v9\x0asysContact:v10\x0asysName:v11\x0asysLocation:v12\x0asysServices:v13\x0amib2.1.8:v14\x0asysDescr.1:v15\x0asysDescr.0.5:v16\x0asysName.1:v17\x0asysDescr:v18\x0apriv:v19\x0aenterprise:v20\x0aokidata:v21\x0aokidata.1:v22\x0aenterprise.15:v23\x0aselftest:v24\x0aiso.org.1006:v25\x0a.42.840.113549:v26\x0adod:v27\x0apriv:v28\x0a:v29\x0a:v30\x0a.0.0:v31\x0a.127:v32"
+banner 0 510 =datagram

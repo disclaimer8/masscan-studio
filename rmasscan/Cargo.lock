@@ -446,6 +446,7 @@ dependencies = [
  "rmasscan-core",
  "rmasscan-engine",
  "rmasscan-net",
+ "rmasscan-proto",
  "serde",
  "serde_json",
  "sha2",

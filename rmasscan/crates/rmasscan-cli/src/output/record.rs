@@ -56,6 +56,16 @@ pub fn proto_str(p: Proto) -> &'static str {
     }
 }
 
+/// `name_from_ip_proto` (`src/output.c:71-82`) над любым байтом: у записи баннера `ip_proto` может быть любым
+/// (`--readscan` хранит его как есть), всё, кроме 0/1/6/17/132, печатается `err`. Для записи статуса это то же, что
+/// [`proto_str`].
+pub fn ip_proto_name(n: u8) -> &'static str {
+    match Proto::from_ip_proto(n) {
+        Some(p) => proto_str(p),
+        None => "err",
+    }
+}
+
 /// Адрес в тексте C: `ipaddress_fmt` (`massip-addr.c:191-216`). IPv4 это `a.b.c.d`; IPv6 это `ipv6address_fmt`
 /// (`massip-addr.c:33-109`, сжимается ПЕРВАЯ серия нулевых слов, `2a03:9060::400:0:0:0:2`, а не `Ipv6Addr::Display`)
 /// без скобок: ни один формат вывода C их не ставит.

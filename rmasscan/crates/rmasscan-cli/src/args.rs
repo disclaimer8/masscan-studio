@@ -9,7 +9,7 @@
 //! Опции вывода (`SET_output_*`, main-conf.c:1616–1806, `-o<буква>` :3401–3459) разбираются с семантикой C:
 //! `-o<буква> FILE` переводится в длинные опции до clap, повтор опции вывода побеждает последним (Р17), `--show`,
 //! `--noshow` и `--open` применяются в порядке командной строки. Отклонения от C: неизвестный `--output-format` -
-//! ошибка (Р6); redis, certs и ротация отклоняются с причиной (Р1).
+//! ошибка (Р6); redis и ротация отклоняются с причиной (Р1).
 
 use std::collections::HashMap;
 use std::fmt;
@@ -34,13 +34,11 @@ const NMAP_XSL: &str = "http://nmap.org/svn/docs/nmap.xsl";
 
 /// Допустимые значения `--output-format` в тексте отказа (Р6).
 const FORMAT_NAMES: &str =
-    "list, json, ndjson, grepable, xml, binary, hostonly, unicornscan, interactive, none";
+    "list, json, ndjson, grepable, xml, binary, hostonly, unicornscan, certs, interactive, none";
 
 /// Отказы Р1 с причиной.
 const REDIS_REFUSAL: &str =
     "--output-format redis is not supported (rmasscan writes results only to a file or stdout)";
-const CERTS_REFUSAL: &str =
-    "--output-format certs is not supported (it needs --banners, which rmasscan does not grab)";
 
 // Опции v1. Значения, у которых в C своя грамматика (`--rate`, `--shard`,
 // MAC, `--source-port`), хранятся строками и разбираются функциями ядра.
@@ -977,8 +975,9 @@ fn parse_format(name: &str) -> Result<Format, String> {
         "ndjson" => Format::Ndjson,
         "none" => Format::None,
         "hostonly" => Format::Hostonly,
+        // `main-conf.c:1701`: буквы `-o` у certs нет; баннеры печатаются PEM в stdout (`src/out-certs.c`).
+        "certs" => Format::Certs,
         "redis" => return Err(REDIS_REFUSAL.into()),
-        "certs" => return Err(CERTS_REFUSAL.into()),
         other => {
             return Err(format!(
                 "FAIL: unknown output-format: {other}\n  hint: {FORMAT_NAMES}"
@@ -1789,7 +1788,7 @@ mod tests {
             assert_eq!(opts(&["--output-format", name]).format, f, "{name}");
         }
         let want = "FAIL: unknown output-format: nmap\n  hint: list, json, ndjson, grepable, xml, binary, \
-                    hostonly, unicornscan, interactive, none";
+                    hostonly, unicornscan, certs, interactive, none";
         assert_eq!(masscan_err(&["--output-format", "nmap"]), want);
         // Каждое вхождение проверяется, даже перекрытое последним (Р6 при Р17).
         assert_eq!(masscan_err(&["--output-format", "nmap", "-oL", "x"]), want);
@@ -1797,11 +1796,25 @@ mod tests {
         assert_eq!(parse_format("nmap").unwrap_err(), want);
     }
 
+    /// `--output-format certs` (`main-conf.c:1701`, буквы `-o` нет) принимается: баннеры печатаются PEM в stdout
+    /// (`src/out-certs.c`).
     #[test]
-    fn redis_certs_rotate_are_refused() {
+    fn certs_format_is_accepted() {
+        let o = opts(&["--output-format", "certs", "--output-filename", "c.out"]);
+        assert_eq!(
+            (o.format, o.filename.as_deref()),
+            (Format::Certs, Some("c.out"))
+        );
+        assert_eq!(parse_format("certs"), Ok(Format::Certs));
+        assert!(
+            masscan_err(&["--output-format", "nmap"]).contains("unicornscan, certs, interactive")
+        );
+    }
+
+    #[test]
+    fn redis_and_rotate_are_refused() {
         for (a, name) in [
             (&["--output-format", "redis"][..], "--output-format redis"),
-            (&["--output-format", "certs"][..], "--output-format certs"),
             (&["--rotate", "3600"][..], "--rotate"),
             (&["--output-rotate", "hourly"][..], "--rotate"),
             (&["--rotate-dir", "x"][..], "--rotate-dir"),
@@ -1814,7 +1827,6 @@ mod tests {
                 "{a:?}: {e}"
             );
         }
-        assert!(masscan_err(&["--output-format", "certs"]).contains("--banners"));
         assert!(masscan_err(&["--rotate", "3600"]).contains("rotat"));
     }
 

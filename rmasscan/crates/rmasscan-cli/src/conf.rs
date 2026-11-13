@@ -100,6 +100,7 @@ fn format_name(f: Format) -> Option<&'static str> {
         Format::Binary => "binary",
         Format::Hostonly => "hostonly",
         Format::Unicornscan => "unicornscan",
+        Format::Certs => "certs",
         Format::None => "none",
     })
 }
@@ -168,7 +169,8 @@ fn parse_format(value: &str) -> Result<Format, String> {
         "ndjson" => Format::Ndjson,
         "none" => Format::None,
         "hostonly" => Format::Hostonly,
-        "certs" | "redis" => return Err(format!("unsupported output-format: {value}")),
+        "certs" => Format::Certs,
+        "redis" => return Err(format!("unsupported output-format: {value}")),
         _ => return Err(format!("FAIL: unknown output-format: {value}")),
     })
 }
@@ -494,6 +496,24 @@ mod tests {
 
     fn no_include(_: &Path) -> Result<String, String> {
         Err("no includes in this test".into())
+    }
+
+    /// `output-format = certs` читается (`main-conf.c:1701`) и пишется обратно (`main-conf.c:1676`); redis по-прежнему
+    /// отказывает.
+    #[test]
+    fn certs_output_format_roundtrips() {
+        let mut base = FullConf::default();
+        parse_conf_str(
+            "output-format = certs\noutput-filename = c.out\n",
+            &mut base,
+            &mut no_include,
+            0,
+        )
+        .unwrap();
+        assert_eq!(base.output.format, Some(Format::Certs));
+        assert!(output_section(&base.output).contains("output-format = certs\n"));
+        let mut other = FullConf::default();
+        assert!(parse_conf_str("output-format = redis\n", &mut other, &mut no_include, 0).is_err());
     }
 
     fn sample() -> FullConf {

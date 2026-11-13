@@ -37,6 +37,7 @@ use rmasscan_engine::{AdapterPair, FailReason, Outcome, Progress, Reason, RxHeal
 use rmasscan_net::arp_resolve::{ArpPolicy, arp_binding};
 use rmasscan_net::discover::{NextHopWhy, Source};
 use rmasscan_net::{Iface, Interfaces, NetError, NextHop, Route, RouteTable};
+use rmasscan_proto::BannerRecord;
 
 const IF_NAME: &str = "eth0";
 const IF_INDEX: u32 = 2;
@@ -1390,6 +1391,9 @@ impl Sink for FailingSink {
         }
         Ok(())
     }
+    fn report_banner(&mut self, _: &BannerRecord) -> Result<(), String> {
+        Ok(())
+    }
     fn finish(&mut self) -> Result<(), String> {
         assert!(
             self.on_finish,
@@ -2403,6 +2407,9 @@ impl Sink for PressOnFirstOpen<'_> {
         }
         self.reported.push(*reply);
         Ok(())
+    }
+    fn report_banner(&mut self, b: &BannerRecord) -> Result<(), String> {
+        self.pipeline.report_banner(b)
     }
     fn finish(&mut self) -> Result<(), String> {
         self.pipeline.finish()

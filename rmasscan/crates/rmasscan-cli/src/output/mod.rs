@@ -1,7 +1,8 @@
 //! Приёмник результатов скана (AGPL-3.0). Порт `output.c:781-795` masscan ©
 //! Robert David Graham: строка `Discovered open port N/tcp on IP`,
 //! дополненная пробелами до 79 символов, `\n`, flush на каждую строку.
-//! Closed не печатается (`is_show_closed = 0`).
+//! Closed не печатается (`is_show_closed = 0`). Записи баннеров печатаются строкой `Banner on port …`
+//! (`src/output.c:903-923`, [`banner_line`]).
 //!
 //! Модуль объединяет приёмник [`Sink`], записи ([`record`]), форматы ([`formats`]), имена сервисов ([`services`])
 //! и конвейер вывода [`pipeline`] (порт `output.c`).
@@ -17,11 +18,13 @@ use std::io::{self, Write};
 use std::net::Ipv4Addr;
 
 use rmasscan_core::receive::{PortStatus, Reply};
+use rmasscan_proto::BannerRecord;
 
 pub use formats::{Counts, FileCtx, Format, Formatter, formatter};
 pub use pipeline::{OPEN_FAILURE_PREFIX, OutputEnv, OutputOptions, Pipeline, Wall};
 pub use record::{
-    CIp, MASSCAN_VERSION, Proto, Record, Status, proto_str, reason_string, status_str,
+    CIp, MASSCAN_VERSION, Proto, Record, Status, ip_proto_name, proto_str, reason_string,
+    status_str,
 };
 pub use services::ServiceNames;
 
@@ -30,6 +33,8 @@ pub trait Sink {
     /// Открывает выходной файл до ARP и engine (Р8); ошибка значит «ни одного кадра».
     fn open(&mut self) -> Result<(), String>;
     fn report(&mut self, reply: &Reply) -> Result<(), String>;
+    /// Запись баннера (`output_report_banner`, `src/output.c:886-956`): без фильтра show и без счётчиков.
+    fn report_banner(&mut self, b: &BannerRecord) -> Result<(), String>;
     fn finish(&mut self) -> Result<(), String>;
 }
 
@@ -117,6 +122,21 @@ pub fn interactive_line(r: &Record) -> String {
     format!("{head:<79}\n")
 }
 
+/// Строка консоли записи баннера (`src/output.c:903-923`): `Banner on port %u/%s on %s: [%s] %s`, баннер через
+/// `normalize_string` (только ASCII, поэтому символы равны байтам `fprintf`), пробелы до 79 символов, если строка
+/// короче 80 байт, затем `\n`.
+pub fn banner_line(b: &BannerRecord) -> String {
+    let head = format!(
+        "Banner on port {}/{} on {}: [{}] {}",
+        b.port,
+        ip_proto_name(b.ip_proto),
+        CIp(b.ip),
+        rmasscan_proto::app_name(b.app),
+        rmasscan_proto::normalize_string(&b.payload)
+    );
+    format!("{head:<79}\n")
+}
+
 /// Интерактивный вывод masscan: строки open и ARP (`up`) по [`interactive_line`], closed не печатается
 /// (`is_show_closed = 0`), flush на строку.
 pub struct Interactive<W: Write> {
@@ -141,6 +161,15 @@ impl<W: Write> Sink for Interactive<W> {
         }
         let line = interactive_line(&Record::from_reply(reply, 0));
         self.out.write_all(line.as_bytes()).map_err(io_fail)?;
+        self.out.flush().map_err(io_fail)
+    }
+
+    fn report_banner(&mut self, b: &BannerRecord) -> Result<(), String> {
+        // Фильтра show у баннера нет (`src/output.c:886-956`). C не делает здесь `fflush(stdout)`, но его stdout у
+        // терминала построчный; flush даёт тот же момент вывода, байты те же.
+        self.out
+            .write_all(banner_line(b).as_bytes())
+            .map_err(io_fail)?;
         self.out.flush().map_err(io_fail)
     }
 
@@ -208,6 +237,29 @@ mod tests {
         let head = "Discovered open port 443/tcp on 198.18.0.2";
         assert_eq!(head.len(), 42);
         assert_eq!(l, format!("{head}{}\n", " ".repeat(37)));
+    }
+
+    /// Консольный приёмник печатает и баннеры: строка `src/output.c:903-923`, пробелы до 79, `\n`.
+    #[test]
+    fn interactive_sink_prints_banner_lines() {
+        let b = rmasscan_proto::BannerRecord {
+            timestamp: 1_700_000_000,
+            ip: Ipv4Addr::new(192, 0, 2, 1).into(),
+            ip_proto: 17,
+            port: 53,
+            app: rmasscan_proto::app_id::DNS_VERSIONBIND,
+            ttl: 57,
+            payload: b"9.18.24".to_vec(),
+        };
+        let head = "Banner on port 53/udp on 192.0.2.1: [dns-ver] 9.18.24";
+        assert_eq!(banner_line(&b), format!("{head:<79}\n"));
+        let mut buf = Vec::new();
+        {
+            let mut s = Interactive::new(&mut buf);
+            s.report_banner(&b).unwrap();
+            s.finish().unwrap();
+        }
+        assert_eq!(String::from_utf8(buf).unwrap(), format!("{head:<79}\n"));
     }
 
     #[test]

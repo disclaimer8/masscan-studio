@@ -2,17 +2,19 @@
 //! `:746–880`, `:247–269`) masscan © Robert David Graham: фильтр show, интерактивная строка, счётчики, ленивый
 //! заголовок при первой записи, запись, flush; подвал только если была хотя бы одна запись (Р7). Время записи это
 //! Unix-секунды в момент обработки пачки (Р9). Перевод строки никогда не превращается в `\r\n`: байты одинаковы
-//! на всех ОС.
+//! на всех ОС. Записи баннеров идут своим путём (`output_report_banner`, `output.c:886-956`,
+//! [`Pipeline::report_banner`]).
 
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufWriter, Write};
 
 use rmasscan_core::receive::Reply;
+use rmasscan_proto::BannerRecord;
 
 use super::formats::{Counts, FileCtx, Format, Formatter, formatter};
 use super::record::{Proto, Record, Status};
 use super::services::ServiceNames;
-use super::{Sink, WriteTarget, interactive_line, io_fail, write_failed};
+use super::{Sink, WriteTarget, banner_line, interactive_line, io_fail, write_failed};
 
 /// Начало отказа открытия файла (`output.c:180–239`, `open_rotate`); `crate::error_text` печатает его как есть.
 pub const OPEN_FAILURE_PREFIX: &str = "out: could not open file for ";
@@ -79,6 +81,18 @@ enum Target {
     File(BufWriter<File>),
 }
 
+/// Писатель файла формата: stdout для имени `-` или открытый файл; `None`, если файла нет (`out->fp == NULL`).
+fn file_writer<'b>(
+    target: &'b mut Target,
+    stdout: &'b mut dyn Write,
+) -> Option<(&'b mut dyn Write, WriteTarget)> {
+    match target {
+        Target::Closed => None,
+        Target::Stdout => Some((stdout, WriteTarget::Stdout)),
+        Target::File(f) => Some((f, WriteTarget::File)),
+    }
+}
+
 pub struct Pipeline<'a> {
     opts: OutputOptions,
     stdout: &'a mut dyn Write,
@@ -120,6 +134,57 @@ impl<'a> Pipeline<'a> {
 
     fn interactive_line(&self) -> bool {
         self.opts.interactive || matches!(self.opts.format, Format::Default | Format::Interactive)
+    }
+
+    /// `output_report_banner` (`output.c:886-956`, справка A1) для одной записи баннера. Флаг `is_banner`
+    /// (`:898-899`) проверяет вызывающий: конвейер получает только баннеры, которые надо вывести. Отличия от записи
+    /// статуса: нет фильтра show и счётчиков (`<hosts up=…>` `-oX` баннеры не считает), без файла запись молча
+    /// теряется, без строк `no output file` (`:926-927`). Ротации у rmasscan нет (`:934-938`).
+    pub fn report_banner(&mut self, b: &BannerRecord) -> Result<(), String> {
+        if self.interactive_line() {
+            // `:903-923`. C не делает здесь `fflush(stdout)`, но его stdout у терминала построчный, а наш stdout это
+            // `BufWriter`: flush даёт тот же момент появления строки, байты те же.
+            self.stdout
+                .write_all(banner_line(b).as_bytes())
+                .map_err(io_fail)?;
+            self.stdout.flush().map_err(io_fail)?;
+        }
+        let Some(fm) = self.formatter.as_mut() else {
+            return Ok(());
+        };
+        let now = self.env.wall.unix_time();
+        let cx = FileCtx {
+            now,
+            utc_offset_secs: self.env.wall.utc_offset_secs(now),
+            scan_started: self.scan_started,
+            file_opened: self.file_opened,
+            counts: self.counts,
+            stylesheet: self.opts.stylesheet.as_deref(),
+            ports: &self.env.ports,
+            services: &self.env.services,
+        };
+        let Some((w, to)) = file_writer(&mut self.target, &mut *self.stdout) else {
+            return Ok(());
+        };
+        // `:943-946`: баннер тоже может записать ленивый заголовок, и после него подвал будет при закрытии.
+        if self.virgin {
+            fm.header(w, &cx).map_err(|e| write_failed(to, e))?;
+            self.virgin = false;
+        }
+        if fm.banner_to_stdout() {
+            // `certs`: PEM через `printf` в stdout (`src/out-certs.c:72-79`), файл остаётся для подвала.
+            fm.banner(&mut *self.stdout, &cx, b).map_err(io_fail)?;
+            self.stdout.flush().map_err(io_fail)?;
+        } else {
+            fm.banner(w, &cx, b).map_err(|e| write_failed(to, e))?;
+        }
+        // `:954-955`: `if (out->is_output_flush) fflush(fp);`.
+        if self.opts.flush
+            && let Some((w, to)) = file_writer(&mut self.target, &mut *self.stdout)
+        {
+            w.flush().map_err(|e| write_failed(to, e))?;
+        }
+        Ok(())
     }
 
     /// `output.c:746–880` (справка §2) для одной записи.
@@ -226,6 +291,10 @@ impl Sink for Pipeline<'_> {
     fn report(&mut self, reply: &Reply) -> Result<(), String> {
         let r = Record::from_reply(reply, self.env.wall.unix_time());
         self.report_record(&r)
+    }
+
+    fn report_banner(&mut self, b: &BannerRecord) -> Result<(), String> {
+        Pipeline::report_banner(self, b)
     }
 
     /// `close_rotate` (`output.c:247–269`): подвал только если файл не пуст, затем flush и закрытие.
@@ -708,5 +777,318 @@ mod tests {
             String::from_utf8(out).unwrap(),
             "#masscan\nopen tcp 80 1.2.3.4 1700000042\n# end\n"
         );
+    }
+
+    // ---- Записи баннеров: путь `output_report_banner` (`src/output.c:886-956`, справка A1). ----
+
+    use rmasscan_proto::{BannerRecord, app_id};
+
+    fn dns_banner() -> BannerRecord {
+        BannerRecord {
+            timestamp: 1_700_000_000,
+            ip: Ipv4Addr::new(192, 0, 2, 1).into(),
+            ip_proto: 17,
+            port: 53,
+            app: app_id::DNS_VERSIONBIND,
+            ttl: 57,
+            payload: b"9.18.24".to_vec(),
+        }
+    }
+
+    fn http_banner() -> BannerRecord {
+        BannerRecord {
+            ip: Ipv4Addr::new(1, 2, 3, 4).into(),
+            ip_proto: 6,
+            port: 80,
+            app: app_id::HTTP,
+            payload: b"HTTP/1.0 200 OK".to_vec(),
+            ..dns_banner()
+        }
+    }
+
+    enum Item {
+        S(Record),
+        B(BannerRecord),
+    }
+
+    /// `open`, записи статуса и баннеров в порядке прихода, `finish`; возвращает stdout.
+    fn run_items(opts: OutputOptions, items: &[Item]) -> String {
+        let wall = FakeWall(1_700_000_100);
+        let mut out = Vec::new();
+        {
+            let mut p = Pipeline::new(opts, &mut out, env(&wall));
+            p.open().unwrap();
+            for i in items {
+                match i {
+                    Item::S(r) => p.report_record(r).unwrap(),
+                    Item::B(b) => p.report_banner(b).unwrap(),
+                }
+            }
+            p.finish().unwrap();
+        }
+        String::from_utf8(out).unwrap()
+    }
+
+    fn pad79(head: &str) -> String {
+        format!("{head:<79}\n")
+    }
+
+    /// `src/output.c:903-923`: `Banner on port %u/%s on %s: [%s] %s`, пробелы до 79 символов, если строка короче 80,
+    /// затем `\n`. Условие то же, что у статуса: формат по умолчанию, `interactive` или `--interactive`.
+    #[test]
+    fn console_banner_line_padded_to_79() {
+        let head = "Banner on port 53/udp on 192.0.2.1: [dns-ver] 9.18.24";
+        let out = run_items(OutputOptions::default(), &[Item::B(dns_banner())]);
+        assert_eq!(out, format!("{head}{}\n", " ".repeat(79 - head.len())));
+        assert_eq!(out.len(), 80);
+        // Строка ровно в 79 и в 80 символов не дополняется; экранирование `normalize_string`.
+        let base = "Banner on port 53/udp on 192.0.2.1: [dns-ver] ".len();
+        for n in [79 - base, 80 - base, 200] {
+            let b = BannerRecord {
+                payload: vec![b'x'; n],
+                ..dns_banner()
+            };
+            let out = run_items(OutputOptions::default(), &[Item::B(b)]);
+            assert_eq!(out.len(), base + n + 1, "{n}");
+            assert!(out.ends_with("x\n"), "{n}");
+        }
+        let odd = BannerRecord {
+            ip: std::net::IpAddr::V6("2001:db8::1".parse().unwrap()),
+            ip_proto: 99,
+            app: 40,
+            payload: b"\r\n".to_vec(),
+            ..dns_banner()
+        };
+        assert_eq!(
+            run_items(OutputOptions::default(), &[Item::B(odd)]),
+            pad79("Banner on port 53/err on 2001:db8::1: [(40)] \\x0d\\x0a")
+        );
+        // `--output-format interactive` печатает, `none` нет; формат файла печатает только с `--interactive`.
+        assert_eq!(
+            run_items(opts(Format::Interactive, None), &[Item::B(dns_banner())]),
+            pad79(head)
+        );
+        assert!(run_items(opts(Format::None, None), &[Item::B(dns_banner())]).is_empty());
+        let scratch = Scratch::new();
+        let path = scratch.path("console.list");
+        assert!(run_items(opts(Format::List, path.to_str()), &[Item::B(dns_banner())]).is_empty());
+        let mut o = opts(Format::List, path.to_str());
+        o.interactive = true;
+        assert_eq!(run_items(o, &[Item::B(dns_banner())]), pad79(head));
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "#masscan\nbanner udp 53 192.0.2.1 1700000000 dns-ver 9.18.24\n# end\n"
+        );
+        // Статус и баннер вперемешку в порядке прихода.
+        let out = run_items(
+            OutputOptions::default(),
+            &[Item::S(open_rec()), Item::B(http_banner())],
+        );
+        assert_eq!(
+            out,
+            [
+                discovered_line(Ipv4Addr::new(1, 2, 3, 4), 80),
+                pad79("Banner on port 80/tcp on 1.2.3.4: [http] HTTP/1.0 200 OK"),
+            ]
+            .concat()
+        );
+    }
+
+    /// Справка A1.3-4: у баннера нет фильтра show (`--noshow open` его не прячет) и нет счётчиков (`<hosts up=…>`
+    /// `-oX` баннеры не считает, даже TCP).
+    #[test]
+    fn banner_ignores_show_filter_and_counts() {
+        let noshow = |o: OutputOptions| OutputOptions {
+            show_open: false,
+            ..o
+        };
+        let out = run_items(
+            noshow(OutputOptions::default()),
+            &[Item::S(open_rec()), Item::B(dns_banner())],
+        );
+        assert_eq!(
+            out,
+            pad79("Banner on port 53/udp on 192.0.2.1: [dns-ver] 9.18.24")
+        );
+        let out = run_items(
+            noshow(opts(Format::Xml, Some("-"))),
+            &[
+                Item::S(open_rec()),
+                Item::B(dns_banner()),
+                Item::B(http_banner()),
+            ],
+        );
+        assert_eq!(out.matches("<host endtime=").count(), 2, "{out}");
+        assert!(!out.contains("reason_ttl=\"57\"/>"), "{out}");
+        assert!(
+            out.contains("<hosts up=\"0\" down=\"0\" total=\"0\" />"),
+            "{out}"
+        );
+        let out = run_items(
+            opts(Format::Xml, Some("-")),
+            &[
+                Item::S(open_rec()),
+                Item::B(http_banner()),
+                Item::B(http_banner()),
+            ],
+        );
+        assert_eq!(out.matches("<host endtime=").count(), 3, "{out}");
+        assert!(
+            out.contains("<hosts up=\"1\" down=\"0\" total=\"1\" />"),
+            "{out}"
+        );
+    }
+
+    /// Справка A1.7: без файла баннер молча теряется (`if (fp == NULL) return;`), без строк `no output file`.
+    #[test]
+    fn banner_without_file_is_silent() {
+        assert!(run_items(opts(Format::List, None), &[Item::B(dns_banner())]).is_empty());
+        assert!(run_items(opts(Format::Binary, None), &[Item::B(dns_banner())]).is_empty());
+        // Формат без файла (`null_output`) файл не открывает: только строка консоли.
+        let scratch = Scratch::new();
+        let path = scratch.path("default-banner");
+        assert_eq!(
+            run_items(
+                opts(Format::Default, path.to_str()),
+                &[Item::B(dns_banner())]
+            ),
+            pad79("Banner on port 53/udp on 192.0.2.1: [dns-ver] 9.18.24")
+        );
+        assert!(run_items(opts(Format::None, path.to_str()), &[Item::B(dns_banner())]).is_empty());
+        assert!(!path.exists());
+    }
+
+    /// Справка A1.9: баннер может открыть файл (ленивый заголовок) и делает его «не девственным», поэтому подвал
+    /// пишется, даже когда запись формата пуста или выброшена (`-oB` от 16 370 байт).
+    #[test]
+    fn banner_triggers_lazy_header() {
+        let scratch = Scratch::new();
+        let path = scratch.path("banner.list");
+        assert!(run_items(opts(Format::List, path.to_str()), &[Item::B(dns_banner())]).is_empty());
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "#masscan\nbanner udp 53 192.0.2.1 1700000000 dns-ver 9.18.24\n# end\n"
+        );
+        assert_eq!(
+            run_items(opts(Format::Json, Some("-")), &[Item::B(dns_banner())]),
+            "[\n{   \"ip\": \"192.0.2.1\",   \"timestamp\": \"1700000000\", \"ports\": [ {\"port\": 53, \"proto\": \"udp\", \"service\": {\"name\": \"dns-ver\", \"banner\": \"9.18.24\"} } ] }\n]\n"
+        );
+        let xml = run_items(opts(Format::Xml, Some("-")), &[Item::B(dns_banner())]);
+        assert!(xml.starts_with("<?xml version=\"1.0\"?>\r\n"), "{xml}");
+        assert!(
+            xml.contains("reason=\"syn-ack\" reason_ttl=\"57\" />"),
+            "{xml}"
+        );
+        assert!(
+            xml.ends_with(
+                "<hosts up=\"0\" down=\"0\" total=\"0\" />\r\n</runstats>\r\n</nmaprun>\r\n"
+            ),
+            "{xml}"
+        );
+        let bin_path = scratch.path("dropped.bin");
+        let huge = BannerRecord {
+            payload: vec![b'A'; 16_370],
+            ..dns_banner()
+        };
+        run_items(opts(Format::Binary, bin_path.to_str()), &[Item::B(huge)]);
+        let bin = std::fs::read(&bin_path).unwrap();
+        let mut want = b"masscan/1.1\ns:1700000100\n".to_vec();
+        want.resize(99, 0);
+        let mut foot = b"masscan/1.1".to_vec();
+        foot.resize(99, 0);
+        want.extend_from_slice(&foot);
+        assert_eq!(bin, want);
+    }
+
+    /// `src/out-unicornscan.c:61-79`: запись баннера пуста, но файл из одних баннеров получает заголовок и подвал.
+    #[test]
+    fn unicornscan_banner_only_file_is_header_footer() {
+        let scratch = Scratch::new();
+        let path = scratch.path("u.txt");
+        assert!(
+            run_items(
+                opts(Format::Unicornscan, path.to_str()),
+                &[Item::B(dns_banner()), Item::B(http_banner())]
+            )
+            .is_empty()
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "#masscan\n# end\n");
+    }
+
+    fn pem(body: &[u8]) -> String {
+        let mut s = String::from("-----BEGIN CERTIFICATE-----\n");
+        for c in body.chunks(72) {
+            s.push_str(std::str::from_utf8(c).unwrap());
+            s.push('\n');
+        }
+        s + "-----END CERTIFICATE-----\n"
+    }
+
+    /// `src/out-certs.c`: PEM каждого баннера (любого app) идёт в stdout, файл получает только `{finished: 1}\n` при
+    /// закрытии, если его коснулась хоть одна запись; статус ничего не пишет.
+    #[test]
+    fn certs_prints_pem_to_stdout_and_finished_to_file() {
+        let scratch = Scratch::new();
+        let path = scratch.path("certs.out");
+        let body: Vec<u8> = (0..100u32).map(|i| b'a' + (i % 26) as u8).collect();
+        let mut payload = b"cert:".to_vec();
+        payload.extend_from_slice(&body);
+        let cert = BannerRecord {
+            ip_proto: 6,
+            port: 443,
+            app: app_id::X509_CERT,
+            payload,
+            ..dns_banner()
+        };
+        let o = opts(Format::Certs, path.to_str());
+        let out = run_items(
+            o.clone(),
+            &[
+                Item::S(open_rec()),
+                Item::B(cert.clone()),
+                Item::B(dns_banner()),
+            ],
+        );
+        assert_eq!(out, pem(&body) + &pem(b"9.18.24"));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "{finished: 1}\n");
+        // Только статус: stdout пуст (формат не консольный), файл тронут, подвал есть.
+        assert!(run_items(o.clone(), &[Item::S(open_rec())]).is_empty());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "{finished: 1}\n");
+        // Ни одной записи: файл пуст.
+        assert!(run_items(o.clone(), &[]).is_empty());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "");
+        // `--interactive`: строка консоли раньше PEM (`src/output.c:903-952`).
+        let mut oi = o;
+        oi.interactive = true;
+        assert_eq!(
+            run_items(oi, &[Item::B(dns_banner())]),
+            pad79("Banner on port 53/udp on 192.0.2.1: [dns-ver] 9.18.24") + &pem(b"9.18.24")
+        );
+        // Файл `-` это тот же stdout: PEM, затем подвал.
+        assert_eq!(
+            run_items(opts(Format::Certs, Some("-")), &[Item::B(cert)]),
+            pem(&body) + "{finished: 1}\n"
+        );
+    }
+
+    /// `if (out->is_output_flush) fflush(fp);` (`src/output.c:954-955`): flush файла после каждой записи баннера.
+    #[test]
+    fn banner_flushes_file_with_output_flush() {
+        let wall = FakeWall(1_700_000_100);
+        for (flush, expect) in [(true, 2), (false, 0)] {
+            let mut w = Counting {
+                bytes: Vec::new(),
+                flushes: 0,
+            };
+            let mut o = opts(Format::Hostonly, Some("-"));
+            o.flush = flush;
+            let mut p = Pipeline::new(o, &mut w, env(&wall));
+            p.open().unwrap();
+            p.report_banner(&dns_banner()).unwrap();
+            Sink::report_banner(&mut p, &http_banner()).unwrap();
+            drop(p);
+            assert_eq!(w.flushes, expect);
+            assert_eq!(w.bytes, b"192.0.2.1\n1.2.3.4\n");
+        }
     }
 }

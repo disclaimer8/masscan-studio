@@ -3,7 +3,7 @@
 //! :2434) из masscan © Robert David Graham
 //! (github.com/robertdavidgraham/masscan, HEAD 8e6b3b0).
 //!
-//! Любая опция вне подмножества v1 (например `--banners`) - ошибка clap,
+//! Любая опция вне подмножества (например `--heartbleed` или `--hello`) - ошибка clap,
 //! а не молчаливый пропуск (Review Focus №5).
 //!
 //! Опции вывода (`SET_output_*`, main-conf.c:1616–1806, `-o<буква>` :3401–3459) разбираются с семантикой C:
@@ -48,7 +48,7 @@ const REDIS_REFUSAL: &str =
     version,
     about = "Rust port of masscan: TCP SYN scan with adapter and gateway auto-detection, masscan output formats, --readscan, --offline, -sL, --echo and --iflist",
     disable_help_subcommand = true,
-    after_help = "Examples:\n  sudo rmasscan 198.51.100.0/24 -p80,443\n  rmasscan --offline 198.51.100.0/24 -p80 --seed 1\n  rmasscan --iflist\n  rmasscan -sL 10.0.0.0/24 -p80,443 --seed 1\n  rmasscan --echo 10.0.0.0/24 -p80 --seed 1\n  rmasscan --offline --packet-trace 10.0.0.0/30 -p80 --seed 1 \\\n    --adapter-ip 10.255.0.1 --adapter-mac 00-11-22-33-44-55 --source-port 40000-40003\n  sudo rmasscan 198.51.100.0/24 -p80 -oB scan.bin\n  rmasscan -p80 --readscan scan.bin -oJ scan.json\n\nOutput (scan and --readscan only): -oL list, -oJ json, -oD ndjson, -oG grepable, -oX xml, -oB binary,\n-oH hostonly, -oU unicornscan, each followed by FILE (- is stdout). With a file format stdout is silent\nunless --interactive is given.\n\nWithout an operation flag rmasscan scans: it picks the interface that routes to the targets, its first IPv4\naddress and MAC, resolves the next hop with ARP (unless --router-mac is given) and needs root/Administrator\nonly to open the adapter. IPv6 targets (TCP only) take the source address and next hop of the IPv6 route,\nresolved with an NDP neighbor solicitation (unless --router-mac-ipv6 is given). Detection, --offline and\n--iflist only read the OS and never transmit.\nOperations: -sL, --echo, --echo-all, --offline [--packet-trace], --iflist, --readscan (mutually exclusive).\n--seed is required (and must be non-zero) for -sL, --echo and --offline; a live scan without --seed uses\nOS entropy and prints it. [+] lines go to stderr. Any other masscan option is an error."
+    after_help = "Examples:\n  sudo rmasscan 198.51.100.0/24 -p80,443\n  rmasscan --offline 198.51.100.0/24 -p80 --seed 1\n  rmasscan --iflist\n  rmasscan -sL 10.0.0.0/24 -p80,443 --seed 1\n  rmasscan --echo 10.0.0.0/24 -p80 --seed 1\n  rmasscan --offline --packet-trace 10.0.0.0/30 -p80 --seed 1 \\\n    --adapter-ip 10.255.0.1 --adapter-mac 00-11-22-33-44-55 --source-port 40000-40003\n  sudo rmasscan 198.51.100.0/24 -p80 -oB scan.bin\n  rmasscan -p80 --readscan scan.bin -oJ scan.json\n  sudo rmasscan 198.51.100.0/24 -pU:53,123,161 --banners -oB udp.bin\n\nOutput (scan and --readscan only): -oL list, -oJ json, -oD ndjson, -oG grepable, -oX xml, -oB binary,\n-oH hostonly, -oU unicornscan, each followed by FILE (- is stdout); --output-format certs\n--output-filename FILE prints banners as PEM certificates on stdout. With a file format stdout is silent\nunless --interactive is given. --banners (UDP ports only in this version) adds banner records.\n\nWithout an operation flag rmasscan scans: it picks the interface that routes to the targets, its first IPv4\naddress and MAC, resolves the next hop with ARP (unless --router-mac is given) and needs root/Administrator\nonly to open the adapter. IPv6 targets (TCP only) take the source address and next hop of the IPv6 route,\nresolved with an NDP neighbor solicitation (unless --router-mac-ipv6 is given). Detection, --offline and\n--iflist only read the OS and never transmit.\nOperations: -sL, --echo, --echo-all, --offline [--packet-trace], --iflist, --readscan (mutually exclusive).\n--seed is required (and must be non-zero) for -sL, --echo and --offline; a live scan without --seed uses\nOS entropy and prints it. [+] lines go to stderr. Any other masscan option is an error."
 )]
 pub struct Cli {
     // Цели: IP, CIDR, `a.b.c.d-e.f.g.h`, списки через запятую.
@@ -401,13 +401,76 @@ pub struct Cli {
         help = "With --readscan: keep only banner records of this application (http, ssl, dns-ver, ...; repeatable, one name each) and drop every status record"
     )]
     pub banner_types: Vec<String>,
+    // `banners` и синоним `banner` (`F_BOOL`, `src/main-conf.c:1106-1116`, таблица :2377): голый флаг это `true`,
+    // `=<bool>` по `parseBoolean`; следующее слово не забирается (`is_singleton`, :3083-3094). `--nobanners`,
+    // `--rawudp`, `--capture`, `--nocapture`, `--hello-timeout` и файлы `-c` применяются вместе в порядке argv
+    // ([`Cli::banner_steps`]).
+    #[arg(
+        long = "banners",
+        alias = "banner",
+        num_args = 0..=1,
+        require_equals = true,
+        default_missing_value = "",
+        action = clap::ArgAction::Append,
+        value_name = "BOOL",
+        help = "Report banners of UDP replies (dns-ver, ntp, nbtstat, snmp, isakmp, coap, memcached, zeroaccess and raw); TCP banners arrive in the next sub-stage, so TCP ports are refused (alias: --banner)"
+    )]
+    pub banners: Vec<String>,
+    // `nobanners`/`nobanner` (`F_BOOL`, `src/main-conf.c:1546-1554`, :2379): `is_banners = !parseBoolean(value)`.
+    #[arg(
+        long = "nobanners",
+        alias = "nobanner",
+        num_args = 0..=1,
+        require_equals = true,
+        default_missing_value = "",
+        action = clap::ArgAction::Append,
+        value_name = "BOOL",
+        help = "Undo --banners (alias: --nobanner)"
+    )]
+    pub nobanners: Vec<String>,
+    // `rawudp` (`F_BOOL`, `src/main-conf.c:1118-1130`, :2378): включает и `banners`.
+    #[arg(
+        long = "rawudp",
+        num_args = 0..=1,
+        require_equals = true,
+        default_missing_value = "",
+        action = clap::ArgAction::Append,
+        value_name = "BOOL",
+        help = "Also report every UDP reply as a raw banner (the whole datagram); implies --banners"
+    )]
+    pub rawudp: Vec<String>,
+    // `capture` и `nocapture`/`no-capture` (`src/main-conf.c:1132-1180`, :2402-2403): значение следующим словом или
+    // после `=`. В 4a только разбор и `--echo`: их читают TCP-баннеры.
+    #[arg(
+        long = "capture",
+        value_name = "TYPE",
+        action = clap::ArgAction::Append,
+        help = "TCP banner capture: cert (default on), servername, html, heartbleed or ticketbleed; parsed and echoed, used once TCP banners arrive"
+    )]
+    pub capture: Vec<String>,
+    #[arg(
+        long = "nocapture",
+        alias = "no-capture",
+        value_name = "TYPE",
+        action = clap::ArgAction::Append,
+        help = "Undo --capture TYPE (alias: --no-capture)"
+    )]
+    pub nocapture: Vec<String>,
+    // `hello-timeout` (`src/main-conf.c:1288-1298`): принимается и, как у C, ни на что не влияет (Р1, Р17).
+    #[arg(
+        long = "hello-timeout",
+        value_name = "SECONDS",
+        action = clap::ArgAction::Append,
+        help = "Accepted for masscan compatibility; like masscan it has no effect"
+    )]
+    pub hello_timeout: Vec<String>,
     // Каждое вхождение проверяется (Р6), побеждает последнее (Р17).
     #[arg(
         long = "output-format",
         value_name = "FORMAT",
         value_parser = output_format_value,
         overrides_with = "output_format",
-        help = "list, json, ndjson, grepable, xml, binary, hostonly, unicornscan, interactive or none"
+        help = "list, json, ndjson, grepable, xml, binary, hostonly, unicornscan, certs, interactive or none"
     )]
     pub output_format: Option<String>,
     // main-conf.c:1643–1657: без формата значит XML.
@@ -556,6 +619,11 @@ pub struct Cli {
     /// Ключи `имя[i]=значение` массива адаптеров и позиции clap.
     #[arg(skip)]
     nic_pos: Vec<(usize, String)>,
+    /// Опции баннеров (`--banners`, `--nobanners`, `--rawudp`, `--capture`, `--nocapture`, `--hello-timeout`) по
+    /// порядку argv: позиция clap, ключ ядра и значение. Они меняют одни и те же флаги (`--rawudp --nobanners`), поэтому
+    /// применяются одной последовательностью, а не «последним вхождением» каждой.
+    #[arg(skip)]
+    banner_steps: Vec<(usize, &'static str, String)>,
     /// Позиция clap последнего появления каждой группы опций вывода (`format`, `filename`, `append`, `flush`,
     /// `style`, `show`).
     #[arg(skip)]
@@ -616,6 +684,16 @@ const POSITIONAL_KEYS: [&str; 28] = [
     "tcp_sackok",
     "tcp_wscale",
     "tcp_tsecho",
+];
+
+/// Опции баннеров: идентификатор clap и ключ `masscan_set_parameter` (`src/main-conf.c:2377-2403`).
+const BANNER_KEYS: [(&str, &str); 6] = [
+    ("banners", "banners"),
+    ("nobanners", "nobanners"),
+    ("rawudp", "rawudp"),
+    ("capture", "capture"),
+    ("nocapture", "nocapture"),
+    ("hello_timeout", "hello-timeout"),
 ];
 
 /// Одиночные опции адаптера, которые идут по порядку `argv` вместе с `--adapter[i]` и т.п.
@@ -800,11 +878,46 @@ where
                 .ok_or_else(|| "missing output filename".to_string())?;
             out.push(format!("--output-format={format}"));
             out.push(format!("--output-filename={file}"));
+        } else if let Some(canon) = equals_banner_option(&a) {
+            out.push(canon);
         } else {
             out.push(a);
         }
     }
     Ok(out)
+}
+
+/// Опции баннеров подэтапа 4a (`config_parameters[]`, `src/main-conf.c:2377-2403`): имя после `normalize_key` и имя
+/// clap.
+const EQUALS_OPTIONS: [(&str, &str); 8] = [
+    ("banners", "banners"),
+    ("banner", "banner"),
+    ("nobanners", "nobanners"),
+    ("nobanner", "nobanner"),
+    ("rawudp", "rawudp"),
+    ("capture", "capture"),
+    ("nocapture", "nocapture"),
+    ("hellotimeout", "hello-timeout"),
+];
+
+/// Р17: имя опции баннеров сравнивается как `EQUALS` C (`src/main-conf.c:833-849`: регистр и `-`, `.`, `_` не важны,
+/// `--No-Banners`, `--raw_udp`) и переписывается в имя clap; значение после `=`, иначе после `:`, остаётся
+/// (`masscan_command_line`, :3279-3289). `None` для всех остальных аргументов: прочие опции clap сверяет точно.
+fn equals_banner_option(a: &str) -> Option<String> {
+    let rest = a.strip_prefix("--")?;
+    let (name, value) = match rest.find('=').or_else(|| rest.find(':')) {
+        Some(i) => (&rest[..i], Some(&rest[i + 1..])),
+        None => (rest, None),
+    };
+    if name.contains('[') {
+        return None;
+    }
+    let key = normalize_key(name);
+    let (_, canon) = EQUALS_OPTIONS.iter().find(|(k, _)| *k == key)?;
+    Some(match value {
+        Some(v) => format!("--{canon}={v}"),
+        None => format!("--{canon}"),
+    })
 }
 
 /// Ключи, которые C хранит в `nic[i]` (`masscan_set_parameter`, main-conf.c:2470-2641), в нормализованном виде.
@@ -1078,6 +1191,13 @@ impl Cli {
             }
         }
         cli.port_events.sort_by_key(|(pos, _)| *pos);
+        for (id, key) in BANNER_KEYS {
+            if let (Some(values), Some(indices)) = (m.get_many::<String>(id), m.indices_of(id)) {
+                cli.banner_steps
+                    .extend(indices.zip(values).map(|(pos, v)| (pos, key, v.clone())));
+            }
+        }
+        cli.banner_steps.sort_by_key(|(pos, _, _)| *pos);
         let last = |id: &str| m.indices_of(id).and_then(Iterator::max);
         cli.key_pos = POSITIONAL_KEYS
             .iter()
@@ -1448,6 +1568,12 @@ impl Cli {
         }
         if take("badsum") && self.badsum {
             cfg.badsum = true;
+        }
+        // Опции баннеров (`src/main-conf.c:1106-1180`, :1288-1298, :1546-1554) по порядку argv внутри сегмента.
+        for (pos, key, value) in &self.banner_steps {
+            if self.segment_of(*pos) == seg {
+                apply_core_kv(cfg, key, value).map_err(|e| e.to_string())?;
+            }
         }
         for (id, key, values) in [
             ("noreset", "noreset", &self.noreset),
@@ -2824,7 +2950,7 @@ adapter-ip = 198.18.0.9\noutput-filename = base.xml\n",
             .unwrap_err();
         assert!(e.contains("x.conf"), "{e}");
         let bad = dir
-            .write("bad.conf", b"banners = true\n")
+            .write("bad.conf", b"hello-string[80] = x\n")
             .to_str()
             .unwrap()
             .to_string();

@@ -81,6 +81,27 @@ enum Target {
     File(BufWriter<File>),
 }
 
+/// Контекст файла формата в момент вызова (`time(0)` C): общий у записи статуса, баннера и подвала.
+fn file_ctx<'b>(
+    opts: &'b OutputOptions,
+    env: &'b OutputEnv<'_>,
+    counts: Counts,
+    scan_started: u64,
+    file_opened: u64,
+) -> FileCtx<'b> {
+    let now = env.wall.unix_time();
+    FileCtx {
+        now,
+        utc_offset_secs: env.wall.utc_offset_secs(now),
+        scan_started,
+        file_opened,
+        counts,
+        stylesheet: opts.stylesheet.as_deref(),
+        ports: &env.ports,
+        services: &env.services,
+    }
+}
+
 /// Писатель файла формата: stdout для имени `-` или открытый файл; `None`, если файла нет (`out->fp == NULL`).
 fn file_writer<'b>(
     target: &'b mut Target,
@@ -103,6 +124,9 @@ pub struct Pipeline<'a> {
     counts: Counts,
     scan_started: u64,
     file_opened: u64,
+    /// Время последней записи статуса ([`Sink::report`]): его получают баннеры этого ответа
+    /// ([`Sink::report_reply_banner`]).
+    reply_time: u64,
 }
 
 impl<'a> Pipeline<'a> {
@@ -117,6 +141,7 @@ impl<'a> Pipeline<'a> {
             virgin: true,
             counts: Counts::default(),
             file_opened: 0,
+            reply_time: 0,
         }
     }
 
@@ -161,17 +186,17 @@ impl<'a> Pipeline<'a> {
         let Some(fm) = self.formatter.as_mut() else {
             return Ok(());
         };
-        let now = self.env.wall.unix_time();
-        let cx = FileCtx {
-            now,
-            utc_offset_secs: self.env.wall.utc_offset_secs(now),
-            scan_started: self.scan_started,
-            file_opened: self.file_opened,
-            counts: self.counts,
-            stylesheet: self.opts.stylesheet.as_deref(),
-            ports: &self.env.ports,
-            services: &self.env.services,
-        };
+        // `:926-927`: без файла запись молча теряется (контекст файла тогда не нужен).
+        if matches!(self.target, Target::Closed) {
+            return Ok(());
+        }
+        let cx = file_ctx(
+            &self.opts,
+            &self.env,
+            self.counts,
+            self.scan_started,
+            self.file_opened,
+        );
         let Some((w, to)) = file_writer(&mut self.target, &mut *self.stdout) else {
             return Ok(());
         };
@@ -229,17 +254,13 @@ impl<'a> Pipeline<'a> {
                 Status::Arp => {}
             }
         }
-        let now = self.env.wall.unix_time();
-        let cx = FileCtx {
-            now,
-            utc_offset_secs: self.env.wall.utc_offset_secs(now),
-            scan_started: self.scan_started,
-            file_opened: self.file_opened,
-            counts: self.counts,
-            stylesheet: self.opts.stylesheet.as_deref(),
-            ports: &self.env.ports,
-            services: &self.env.services,
-        };
+        let cx = file_ctx(
+            &self.opts,
+            &self.env,
+            self.counts,
+            self.scan_started,
+            self.file_opened,
+        );
         let (w, to): (&mut dyn Write, WriteTarget) = match &mut self.target {
             Target::Stdout => (&mut *self.stdout, WriteTarget::Stdout),
             Target::File(f) => (f, WriteTarget::File),
@@ -298,7 +319,8 @@ impl Sink for Pipeline<'_> {
     }
 
     fn report(&mut self, reply: &Reply) -> Result<(), String> {
-        let r = Record::from_reply(reply, self.env.wall.unix_time());
+        self.reply_time = self.env.wall.unix_time();
+        let r = Record::from_reply(reply, self.reply_time);
         self.report_record(&r)
     }
 
@@ -306,19 +328,24 @@ impl Sink for Pipeline<'_> {
         Pipeline::report_banner(self, b)
     }
 
+    /// Время записи статуса ответа, а не новое чтение часов: оно могло перейти на следующую секунду.
+    fn report_reply_banner(&mut self, b: &BannerRecord) -> Result<(), String> {
+        let b = BannerRecord {
+            timestamp: self.reply_time,
+            ..b.clone()
+        };
+        Pipeline::report_banner(self, &b)
+    }
+
     /// `close_rotate` (`output.c:247–269`): подвал только если файл не пуст, затем flush и закрытие.
     fn finish(&mut self) -> Result<(), String> {
-        let now = self.env.wall.unix_time();
-        let cx = FileCtx {
-            now,
-            utc_offset_secs: self.env.wall.utc_offset_secs(now),
-            scan_started: self.scan_started,
-            file_opened: self.file_opened,
-            counts: self.counts,
-            stylesheet: self.opts.stylesheet.as_deref(),
-            ports: &self.env.ports,
-            services: &self.env.services,
-        };
+        let cx = file_ctx(
+            &self.opts,
+            &self.env,
+            self.counts,
+            self.scan_started,
+            self.file_opened,
+        );
         let virgin = std::mem::replace(&mut self.virgin, true);
         self.counts = Counts::default();
         match std::mem::replace(&mut self.target, Target::Closed) {
@@ -1099,5 +1126,89 @@ mod tests {
             assert_eq!(w.flushes, expect);
             assert_eq!(w.bytes, b"192.0.2.1\n1.2.3.4\n");
         }
+    }
+
+    /// Тот же `fflush(fp)` (`src/output.c:954-955`) для настоящего файла (`BufWriter`): с `--output-flush` запись
+    /// баннера на диске сразу, до `finish`; без него она ждёт в буфере.
+    #[test]
+    fn banner_flushes_a_real_file_with_output_flush() {
+        let wall = FakeWall(1_700_000_100);
+        let scratch = Scratch::new();
+        for flush in [true, false] {
+            let path = scratch.path(if flush { "flush.txt" } else { "buffered.txt" });
+            let mut o = opts(Format::List, Some(path.to_str().unwrap()));
+            o.flush = flush;
+            let mut out = Vec::new();
+            let mut p = Pipeline::new(o, &mut out, env(&wall));
+            p.open().unwrap();
+            Sink::report_banner(&mut p, &dns_banner()).unwrap();
+            let line = "#masscan\nbanner udp 53 192.0.2.1 1700000000 dns-ver 9.18.24\n";
+            let on_disk = std::fs::read_to_string(&path).unwrap();
+            assert_eq!(on_disk, if flush { line } else { "" }, "flush {flush}");
+            p.finish().unwrap();
+            drop(p);
+            assert_eq!(
+                std::fs::read_to_string(&path).unwrap(),
+                format!("{line}# end\n")
+            );
+            assert!(out.is_empty());
+        }
+    }
+
+    /// Живой скан: баннер ответа получает время записи статуса этого ответа (`Sink::report_reply_banner`), даже если
+    /// часы между ними ушли вперёд; запись файла `-oB` тоже. `report_banner` (`--readscan`) время записи не трогает.
+    #[test]
+    fn reply_banner_takes_the_time_of_its_status_record() {
+        struct Ticking(std::cell::Cell<u64>);
+        impl Wall for Ticking {
+            fn unix_time(&self) -> u64 {
+                let t = self.0.get();
+                self.0.set(t + 1);
+                t
+            }
+            fn utc_offset_secs(&self, _: u64) -> i32 {
+                0
+            }
+        }
+        let wall = Ticking(std::cell::Cell::new(1_800_000_000));
+        let mut out = Vec::new();
+        {
+            let env = OutputEnv {
+                wall: &wall,
+                services: services::empty(),
+                ports: Vec::new(),
+                scan_started: None,
+            };
+            let mut p = Pipeline::new(opts(Format::List, Some("-")), &mut out, env);
+            p.open().unwrap();
+            let reply = Reply {
+                remote_ip: 0xC000_0201,
+                remote_port: 53,
+                local_ip: 0xC000_0205,
+                local_port: 40000,
+                status: rmasscan_core::receive::PortStatus::Open,
+                tcp_flags: 0,
+                ttl: 57,
+                ip_proto: 17,
+                mac: None,
+                ip6: None,
+            };
+            p.report(&reply).unwrap();
+            let live = BannerRecord {
+                timestamp: 0,
+                ..dns_banner()
+            };
+            p.report_reply_banner(&live).unwrap();
+            p.report_reply_banner(&live).unwrap();
+            p.report_banner(&dns_banner()).unwrap();
+            p.finish().unwrap();
+        }
+        let out = String::from_utf8(out).unwrap();
+        let times: Vec<&str> = out.lines().filter_map(|l| l.split(' ').nth(4)).collect();
+        assert_eq!(
+            times,
+            ["1800000001", "1800000001", "1800000001", "1700000000"],
+            "{out}"
+        );
     }
 }

@@ -19,6 +19,7 @@
 //! вычисляется тем из `2n` рабочих потоков, который завершается последним
 //! (`ExitGuard`), то есть уже после остановки всех; он хранится отдельно от очереди результатов.
 
+pub mod banners;
 pub mod checkpoint;
 pub mod engine;
 pub mod events;
@@ -26,6 +27,7 @@ pub mod fake;
 pub mod identity;
 pub mod io;
 
+pub use banners::{BannerOptions, Output, UdpBannerParser, udp_reply_banners};
 pub use checkpoint::{CHECKPOINT_FORMAT_VERSION, Checkpoint, CheckpointError};
 pub use engine::{
     CancelHandle, DEFAULT_TX_STALL_TIMEOUT, DedupCache, Engine, EngineError, EngineHandle,

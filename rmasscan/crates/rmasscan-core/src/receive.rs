@@ -219,6 +219,42 @@ pub fn parse_reply_with(
     parse_ipv4_tcp(ip, plan, policy)
 }
 
+/// Полезная нагрузка UDP-датаграммы кадра (`px + parsed->app_offset`, `parsed->app_length`,
+/// `src/proto-preprocess.c:165-174`): то, что UDP-парсеры баннеров получают в C (`src/proto-udp.c:76-131`).
+///
+/// Разбор канального уровня и IP общий с [`parse_reply`] (`locate_ipv4`/`locate_ipv6`, `ipv4_packet`, `ipv6_packet`),
+/// поэтому для кадра, который [`parse_reply`] принял как ответ UDP, это нагрузка того же кадра. Конец нагрузки, как у C,
+/// конец IP-пакета (полная длина IPv4, `payload_length` IPv6), а не поле длины UDP: C его не читает
+/// (`length = offset + total_length`, `src/proto-preprocess.c:109`, затем `app_length = length - app_offset`, `:173`).
+/// `None`: кадр не UDP (ARP, TCP, ICMP, ...), искажён или длиннее [`MAX_FRAME_LEN`]. Для IPv6 ответ есть, хотя
+/// [`parse_reply`] UDP поверх IPv6 пока не принимает (R3 этапа IPv6).
+pub fn udp_payload(frame: &[u8], link: LinkType) -> Option<&[u8]> {
+    if frame.len() > MAX_FRAME_LEN {
+        return None;
+    }
+    if link == LinkType::Ethernet && be16(frame, 12) == Some(0x0806) {
+        return None;
+    }
+    let seg = match locate_ipv4(frame, link).ok()? {
+        Some(ip) => {
+            let p = ipv4_packet(ip).ok()?;
+            if p.proto != 17 {
+                return None;
+            }
+            p.ip.get(p.header_len..)?
+        }
+        None => {
+            let p = ipv6_packet(locate_ipv6(frame, link).ok()??).ok()?;
+            if p.next != 17 {
+                return None;
+            }
+            p.ip.get(p.offset..)?
+        }
+    };
+    // proto-preprocess.c:167: заголовок UDP 8 байт (`VERIFY_REMAINING(8, FOUND_UDP)`).
+    seg.get(8..)
+}
+
 /// Ответ на входящий Neighbor Solicitation для `source_ipv6` адаптера `nic[0]` (`main.c:829-840` и `:859`,
 /// `stack_ndpv6_incoming_request`, `stack-ndpv6.c:95-182`): готовый кадр Neighbor Advertisement (86 байт,
 /// `payload_length` 32) или `None`. `None` для плана без `source_ipv6` (IPv4 и Студия), для не Ethernet, для кадра
@@ -308,12 +344,20 @@ fn in_sorted_ranges(list: &RangeList, value: u32) -> bool {
         .is_some_and(|r| value <= r.end)
 }
 
-fn parse_ipv4_tcp(
-    ip: &[u8],
-    plan: &ReadyPlan,
-    policy: ChecksumPolicy,
-) -> Result<Option<Reply>, ParseError> {
-    // proto-preprocess.c:104-146.
+/// Проверенный пакет IPv4: обрезан по полю полной длины, заголовок и его поля прочитаны.
+struct Ipv4Packet<'a> {
+    /// Пакет до `total_length` (трейлер Ethernet отброшен).
+    ip: &'a [u8],
+    header_len: usize,
+    ttl: u8,
+    proto: u8,
+    ip_them: u32,
+    ip_me: u32,
+}
+
+/// Заголовок IPv4 (proto-preprocess.c:104-146): общий разбор [`parse_reply`] и [`udp_payload`], поэтому оба видят
+/// один и тот же пакет.
+fn ipv4_packet(ip: &[u8]) -> Result<Ipv4Packet<'_>, ParseError> {
     let b0 = *ip.first().ok_or(ParseError::Truncated("ipv4 header"))?;
     if ip.len() < 20 {
         return Err(ParseError::Truncated("ipv4 header"));
@@ -348,10 +392,30 @@ fn parse_ipv4_tcp(
     }
     // Трейлер Ethernet (padding) отбрасывается: "length = offset + total_length".
     let ip = &ip[..usize::from(total)];
-    let ttl = ip[8];
-    let proto = ip[9];
-    let ip_them = be32(ip, 12).ok_or(ParseError::Truncated("ipv4 header"))?;
-    let ip_me = be32(ip, 16).ok_or(ParseError::Truncated("ipv4 header"))?;
+    Ok(Ipv4Packet {
+        ip,
+        header_len,
+        ttl: ip[8],
+        proto: ip[9],
+        ip_them: be32(ip, 12).ok_or(ParseError::Truncated("ipv4 header"))?,
+        ip_me: be32(ip, 16).ok_or(ParseError::Truncated("ipv4 header"))?,
+    })
+}
+
+fn parse_ipv4_tcp(
+    ip: &[u8],
+    plan: &ReadyPlan,
+    policy: ChecksumPolicy,
+) -> Result<Option<Reply>, ParseError> {
+    // proto-preprocess.c:104-146.
+    let Ipv4Packet {
+        ip,
+        header_len,
+        ttl,
+        proto,
+        ip_them,
+        ip_me,
+    } = ipv4_packet(ip)?;
     match proto {
         1 => return parse_icmp(ip, header_len, (ip_them, ip_me, ttl), plan, policy),
         17 => return parse_udp_reply(ip, header_len, (ip_them, ip_me, ttl), plan, policy),
@@ -475,6 +539,37 @@ fn parse_ipv6_tcp(
     plan: &ReadyPlan,
     policy: ChecksumPolicy,
 ) -> Result<Option<Reply>, ParseError> {
+    let Ipv6Packet {
+        ip,
+        offset,
+        next,
+        hop_limit,
+        ip_them,
+        ip_me,
+    } = ipv6_packet(ip)?;
+    // proto-preprocess.c:285-296: TCP разбирается, всё остальное не наш SYN-ответ (R3).
+    if next != 6 {
+        return Ok(None);
+    }
+    parse_ipv6_segment(&ip[offset..], (ip_them, ip_me, hop_limit), plan, policy)
+}
+
+/// Проверенный пакет IPv6: обрезан по `payload_length`, цепочка Hop-by-Hop пройдена.
+struct Ipv6Packet<'a> {
+    /// Пакет до `40 + payload_length` (трейлер Ethernet отброшен).
+    ip: &'a [u8],
+    /// Смещение транспортного заголовка в `ip` (после расширений Hop-by-Hop).
+    offset: usize,
+    /// Next Header транспорта: первый заголовок цепочки, который не Hop-by-Hop.
+    next: u8,
+    hop_limit: u8,
+    ip_them: u128,
+    ip_me: u128,
+}
+
+/// Заголовок IPv6 и цепочка Hop-by-Hop (proto-preprocess.c:215-312): общий разбор [`parse_reply`] и
+/// [`udp_payload`].
+fn ipv6_packet(ip: &[u8]) -> Result<Ipv6Packet<'_>, ParseError> {
     let b0 = *ip.first().ok_or(ParseError::Truncated("ipv6 header"))?;
     if ip.len() < 40 {
         return Err(ParseError::Truncated("ipv6 header"));
@@ -497,28 +592,37 @@ fn parse_ipv6_tcp(
     // proto-preprocess.c:285-309.
     let mut next = ip[6];
     let mut offset = 40usize;
-    loop {
-        match next {
-            6 => break,
-            0 => {
-                let ext = ip
-                    .get(offset..offset + 8)
-                    .ok_or(ParseError::Truncated("ipv6 hop-by-hop header"))?;
-                next = ext[0];
-                // RFC 8200 §4.3: `Hdr Ext Len` это число 8-байтовых единиц ПОСЛЕ первых 8 байт. C считает
-                // `px[offset+1] + 8` БАЙТ (proto-preprocess.c:306); при 0 это совпадает (8 байт), при n > 0 C
-                // недоскочил бы до TCP и потерял ответ. Порт берёт длину по RFC.
-                let len = (usize::from(ext[1]) + 1) * 8;
-                if offset + len > ip.len() {
-                    return Err(ParseError::Truncated("ipv6 hop-by-hop header"));
-                }
-                offset += len;
-            }
-            _ => return Ok(None),
+    while next == 0 {
+        let ext = ip
+            .get(offset..offset + 8)
+            .ok_or(ParseError::Truncated("ipv6 hop-by-hop header"))?;
+        next = ext[0];
+        // RFC 8200 §4.3: `Hdr Ext Len` это число 8-байтовых единиц ПОСЛЕ первых 8 байт. C считает
+        // `px[offset+1] + 8` БАЙТ (proto-preprocess.c:306); при 0 это совпадает (8 байт), при n > 0 C
+        // недоскочил бы до TCP и потерял ответ. Порт берёт длину по RFC.
+        let len = (usize::from(ext[1]) + 1) * 8;
+        if offset + len > ip.len() {
+            return Err(ParseError::Truncated("ipv6 hop-by-hop header"));
         }
+        offset += len;
     }
+    Ok(Ipv6Packet {
+        ip,
+        offset,
+        next,
+        hop_limit,
+        ip_them,
+        ip_me,
+    })
+}
 
-    let seg = &ip[offset..];
+/// Сегмент TCP поверх IPv6 после [`ipv6_packet`]: правило приёма [`parse_ipv6_tcp`].
+fn parse_ipv6_segment(
+    seg: &[u8],
+    (ip_them, ip_me, hop_limit): (u128, u128, u8),
+    plan: &ReadyPlan,
+    policy: ChecksumPolicy,
+) -> Result<Option<Reply>, ParseError> {
     if seg.len() < 20 {
         return Err(ParseError::Truncated("tcp header"));
     }

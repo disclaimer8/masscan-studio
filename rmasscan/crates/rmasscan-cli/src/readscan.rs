@@ -1754,6 +1754,60 @@ mod tests {
         assert_eq!(out.lines().count(), 7, "{out}");
     }
 
+    /// Сторона «оставляет» у названных отличий фильтра баннеров (Р5 этапа протоколов, R14 этапа IPv6): `-pU:53`
+    /// оставляет баннер UDP 53 (у C порт без сдвига не совпадает со сдвинутым диапазоном, `src/in-filter.c:14-17`,
+    /// и не остаётся ничего) и отбрасывает TCP 53; баннер с протоколом без своего пространства портов (не 1, 6, 17,
+    /// 132) под фильтром `-p` не проходит никогда, без `-p` проходит; фильтр из одних диапазонов IPv6 оставляет
+    /// баннеры IPv6 внутри них (у C такой фильтр не действует, `src/in-filter.c:10`).
+    #[test]
+    fn banner_filters_keep_the_shifted_port_and_the_ipv6_range() {
+        let items = [
+            Item::Banner(banner(1_700_000_001, "192.0.2.1", 17, 53, 6, 64, b"udp53")),
+            Item::Banner(banner(1_700_000_002, "192.0.2.1", 6, 53, 6, 64, b"tcp53")),
+            Item::Banner(banner(1_700_000_003, "192.0.2.1", 99, 53, 6, 64, b"odd53")),
+            Item::Banner(banner(1_700_000_004, "2001:db8::5", 17, 53, 6, 64, b"v6in")),
+            Item::Banner(banner(
+                1_700_000_005,
+                "2001:db8:1::5",
+                17,
+                53,
+                6,
+                64,
+                b"v6out",
+            )),
+        ];
+        let scratch = Scratch::new();
+        let path = tmp_file(&scratch, "keep", &make_bin_items(&items));
+        let kept = |targets: &[&str], ports: &str| -> Vec<String> {
+            let mut cfg = ScanConfig::default();
+            for t in targets {
+                cfg.targets.add_target_string(t).unwrap();
+            }
+            if !ports.is_empty() {
+                parse_ports(cfg.targets.ports_mut(), ports).unwrap();
+            }
+            let (out, _, res) = list_of(&path, &ReadFilter::from_config(&cfg));
+            res.unwrap();
+            out.lines()
+                .filter(|l| l.starts_with("banner "))
+                .filter_map(|l| l.rsplit(' ').next().map(str::to_string))
+                .collect()
+        };
+        assert_eq!(kept(&[], ""), ["udp53", "tcp53", "odd53", "v6in", "v6out"]);
+        assert_eq!(kept(&[], "U:53"), ["udp53", "v6in", "v6out"]);
+        assert_eq!(kept(&[], "53"), ["tcp53"]);
+        assert_eq!(
+            kept(&[], "0-65535,U:0-65535,S:0-65535,I:0-65535"),
+            ["udp53", "tcp53", "v6in", "v6out"]
+        );
+        assert_eq!(kept(&["2001:db8::/64"], ""), ["v6in"]);
+        assert_eq!(kept(&["2001:db8::/64"], "U:53"), ["v6in"]);
+        assert_eq!(
+            kept(&["2001:db8::/64", "192.0.2.0/24"], "U:53"),
+            ["udp53", "v6in"]
+        );
+    }
+
     /// `-oB` пишет устаревшие баннеры типом 9 (`binary_out_banner`, `out-binary.c:293-355`): они только IPv4, TTL 0, у
     /// типа 3 протокол TCP.
     #[test]

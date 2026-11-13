@@ -34,6 +34,7 @@ use output::{
 };
 use rmasscan_core::config::{ConfigError, EchoExtras, Operation, ScanConfig, echo_with, validate};
 use rmasscan_core::scan::{format_list_line_v46, list_scan_v46};
+use rmasscan_core::targets::TEMPL_TCP_LAST;
 
 /// Ошибка [`run`], строки которой уже записаны в `log` (`[-] FAIL: --readscan`, `[-] <файл>: …`, `[-] file
 /// corrupt`, `in-binary.c`): exit 1 без второй копии. [`error_text`] даёт для неё пустую строку.
@@ -68,6 +69,32 @@ fn refuse_arp_with_ports(cfg: &ScanConfig) -> Result<(), String> {
     Ok(())
 }
 
+/// Подэтап 4a: баннеры только UDP. TCP-баннерам нужен собственный стек TCP (`src/stack-tcp-core.c`), он появится в
+/// подэтапе 4b; без него скан `--banners -p80` молча дал бы меньше записей, чем C.
+const TCP_BANNERS_REFUSAL: &str = "--banners with TCP ports is not supported yet: TCP banners need the \
+     user-mode TCP stack, which arrives in the next sub-stage (4b); UDP ports (-pU:53) are supported now";
+
+/// Отказ 4a: `--banners` (или `--rawudp`, который его включает) вместе с портом TCP в скане (живом и `--offline`),
+/// до обнаружения адаптера и до первого кадра. `-sL`, `--echo` и `--readscan` ничего не сканируют и не отказывают.
+fn refuse_tcp_banners(cfg: &ScanConfig) -> Result<(), String> {
+    let tcp = cfg
+        .targets
+        .ports()
+        .as_slice()
+        .iter()
+        .any(|r| r.begin <= TEMPL_TCP_LAST);
+    if cfg.banners && tcp {
+        return Err(TCP_BANNERS_REFUSAL.into());
+    }
+    Ok(())
+}
+
+/// `FAIL: <значение>: unknown capture type` и `… nocapture type` (`src/main-conf.c:1159`, `:1174`): строка C.
+fn is_capture_refusal(msg: &str) -> bool {
+    msg.starts_with("FAIL: ")
+        && (msg.ends_with(": unknown capture type") || msg.ends_with(": unknown nocapture type"))
+}
+
 /// R3: поверх IPv6 только TCP SYN. Живой скан и `--offline --packet-trace` с целью IPv6 и портом не TCP (`U:`, `S:`,
 /// `I:`, `O:`, `--arp`) отказывают до обнаружения адаптера и до кадра (C шлёт их и по IPv6; здесь отложено). `-sL`,
 /// `--echo`/`--echo-all`, `--iflist`, `--readscan` и `--offline` без трассировки ничего не строят и принимают любые
@@ -100,8 +127,8 @@ fn refuse_ipv6_non_tcp(cli: &Cli, cfg: &ScanConfig) -> Result<(), String> {
 
 /// Текст stderr для ошибки [`run`]: отказы обнаружения и ARP (`[-] FAIL: …` и подсказки C), отказ `ExcludeRequired`
 /// (три строки `main.c:1236-1238`), плохое имя `banner-types` файла конфигурации (`FAIL: bad banner app: …` и `err`,
-/// `src/main-conf.c:2694-2695`) и отказ открытия файла
-/// вывода (`out: could not open file for …`) как есть, [`LOGGED`] пусто (уже в `log`), прочие ошибки с обёрткой
+/// `src/main-conf.c:2694-2695`), неизвестное значение `--capture`/`--nocapture` (`FAIL: …: unknown capture type`,
+/// `src/main-conf.c:1159`, `:1174`) и отказ открытия файла вывода (`out: could not open file for …`) как есть, [`LOGGED`] пусто (уже в `log`), прочие ошибки с обёрткой
 /// `rmasscan: error:`. Любая ошибка даёт exit 1.
 pub fn error_text(msg: &str) -> String {
     if msg == LOGGED {
@@ -109,6 +136,7 @@ pub fn error_text(msg: &str) -> String {
     } else if msg.starts_with(live::REFUSAL_PREFIX)
         || msg.starts_with(OPEN_FAILURE_PREFIX)
         || msg.starts_with(conf::BAD_BANNER_APP)
+        || is_capture_refusal(msg)
         || msg == ARP_PORTSCAN_REFUSAL
         || msg == ConfigError::ExcludeRequired.to_string()
     {
@@ -302,6 +330,7 @@ pub fn run(
         if validate(&probe, Operation::Scan).is_ok() {
             refuse_arp_with_ports(&cfg)?;
         }
+        refuse_tcp_banners(&cfg)?;
         live::run_offline(&cfg, backend, cli.packet_trace, out, log)?;
         return finish(out);
     }
@@ -316,6 +345,7 @@ pub fn run(
     }
     // main.c:1224-1229: сразу после проверок пустых целей и портов, до вывода и адаптера.
     refuse_arp_with_ports(&cfg)?;
+    refuse_tcp_banners(&cfg)?;
     // Опции проверяются до обнаружения: отказ не стоит ни строки `[+]`, ни кадра. Начало скана - момент `open`.
     let opts = checked_output_options(cli)?;
     // Файл `-` это stdout C (`output.c:216`), и `close_rotate` закрывает его (`output.c:268`) до `printf` времени
@@ -523,7 +553,9 @@ mod tests {
 
     #[test]
     fn unsupported_option_errors() {
-        assert!(Cli::try_parse_masscan(["rmasscan", "--banners", "10.0.0.0/24", "-p80"]).is_err());
+        assert!(
+            Cli::try_parse_masscan(["rmasscan", "--heartbleed", "10.0.0.0/24", "-p80"]).is_err()
+        );
         assert!(Cli::try_parse_masscan(["rmasscan", "--nonsense"]).is_err());
         // `-oX FILE` разбирается; без целей `run` отказывает раньше, чем тронет файл.
         let scratch = Scratch::new();
@@ -531,6 +563,290 @@ mod tests {
         let e = run_args(&["rmasscan", "-oX", path.to_str().unwrap()]).unwrap_err();
         assert!(e.contains("target IP address list empty"), "{e}");
         assert!(!path.exists());
+    }
+
+    fn echo_of(extra: &[&str]) -> String {
+        let base = ["rmasscan", "--echo", "10.0.0.0/30", "-p80", "--seed", "1"];
+        run_args(&[&base[..], extra].concat()).unwrap()
+    }
+
+    fn scan_config(extra: &[&str]) -> ScanConfig {
+        let base = ["rmasscan", "10.0.0.0/30", "-pU:53"];
+        Cli::try_parse_masscan([&base[..], extra].concat())
+            .unwrap()
+            .to_config()
+            .unwrap()
+    }
+
+    /// Задача 6, шаг 2: в 4a `--banners` (и `--rawudp`, который его включает) с портом TCP отказывает с кодом 1 до
+    /// обнаружения и любого кадра (живой скан и `--offline`): TCP-баннерам нужен стек TCP, он придёт в 4b. `-pU:53`
+    /// проходит; `--nobanners` правее снимает отказ; `-sL` и `--echo` ничего не сканируют и принимают любые порты.
+    #[test]
+    fn banners_with_tcp_ports_is_refused_in_4a() {
+        for extra in [
+            &["-p80", "--banners"][..],
+            &["-p80,U:53", "--rawudp"],
+            &["--banners", "-pU:53,T:443"],
+            &["-pU:53", "--top-ports", "5", "--banner"],
+        ] {
+            // `FakeBackend::open` и `interrupts` паникуют: отказ раньше обнаружения и Ctrl-C.
+            for op in [&["rmasscan"][..], &["rmasscan", "--offline", "--seed", "1"]] {
+                let e = run_args(&[op, &["198.51.100.1"], extra].concat()).unwrap_err();
+                assert!(
+                    e.contains("TCP banners") && e.contains("next sub-stage"),
+                    "{extra:?}: {e}"
+                );
+                assert_eq!(error_text(&e), format!("rmasscan: error: {e}"));
+            }
+        }
+        for ok in [
+            &[
+                "--offline",
+                "198.51.100.1",
+                "-pU:53",
+                "--banners",
+                "--seed",
+                "1",
+            ][..],
+            &[
+                "--offline",
+                "198.51.100.1",
+                "-pU:53,S:2905,I:0",
+                "--rawudp",
+                "--seed",
+                "1",
+            ],
+            &[
+                "--offline",
+                "198.51.100.1",
+                "-p80",
+                "--banners",
+                "--nobanners",
+                "--seed",
+                "1",
+            ],
+            &["--echo", "198.51.100.1", "-p80", "--banners", "--seed", "1"],
+            &["-sL", "198.51.100.1", "-p80", "--rawudp", "--seed", "1"],
+        ] {
+            run_args(&[&["rmasscan"][..], ok].concat()).unwrap();
+        }
+    }
+
+    /// `--banners`/`--banner` (`src/main-conf.c:1106-1116`) и `--rawudp` (`:1118-1130`, ставит и `banners`) в `--echo`
+    /// как у C: после `shard` (таблица `:2377-2378`), только когда включены; `--hello-timeout N` (`:1288-1298`, после
+    /// `pcap-payloads`, `:2390`) только когда не 0. `F_BOOL`: голый флаг это `true`, следующее слово не забирается.
+    #[test]
+    fn banners_echo_like_c() {
+        let plain = echo_of(&[]);
+        let with =
+            |lines: &str| plain.replacen("shard = 1/1\n", &format!("shard = 1/1\n{lines}"), 1);
+        assert_eq!(echo_of(&["--banners"]), with("banners = true\n"));
+        assert_eq!(echo_of(&["--banner"]), with("banners = true\n"));
+        assert_eq!(echo_of(&["--banners=yes"]), with("banners = true\n"));
+        assert_eq!(
+            echo_of(&["--rawudp"]),
+            with("banners = true\nrawudp = true\n")
+        );
+        assert_eq!(echo_of(&["--banners=false"]), plain);
+        assert_eq!(echo_of(&["--rawudp=0"]), plain);
+        // Флаг перед целью не забирает её как значение.
+        let e = run_args(&[
+            "rmasscan",
+            "--echo",
+            "--banners",
+            "10.0.0.0/30",
+            "-p80",
+            "--seed",
+            "1",
+        ]);
+        assert_eq!(e.unwrap(), with("banners = true\n"));
+        assert_eq!(
+            echo_of(&["--hello-timeout", "7"]),
+            plain.replacen(
+                "nocapture = servername\n",
+                "hello-timeout = 7\nnocapture = servername\n",
+                1
+            )
+        );
+        assert_eq!(echo_of(&["--hello-timeout=0"]), plain);
+        assert!(
+            run_args(&[
+                "rmasscan",
+                "--echo",
+                "10.0.0.0/30",
+                "-p80",
+                "--seed",
+                "1",
+                "--hello-timeout",
+                "x"
+            ])
+            .is_err()
+        );
+        // `--echo-all` у C тот же `masscan_echo(.., 0)`.
+        let all = run_args(&[
+            "rmasscan",
+            "--echo-all",
+            "10.0.0.0/30",
+            "-p80",
+            "--seed",
+            "1",
+            "--rawudp",
+        ]);
+        assert_eq!(all.unwrap(), with("banners = true\nrawudp = true\n"));
+        // `paused.conf` пишет те же ключи и читает их обратно.
+        let scratch = Scratch::new();
+        let conf = scratch.write(
+            "b.conf",
+            echo_of(&["--rawudp", "--hello-timeout", "3"]).as_bytes(),
+        );
+        let c = scan_config(&["-c", conf.to_str().unwrap()]);
+        assert_eq!((c.banners, c.rawudp, c.hello_timeout), (true, true, 3));
+    }
+
+    /// `--nobanners`/`--nobanner` (`src/main-conf.c:1546-1554`: `is_banners = !parseBoolean(value)`) и прочие ключи
+    /// баннеров применяются в порядке argv, вместе с файлами `-c`: побеждает правый. `--rawudp --nobanners` оставляет
+    /// `rawudp`, но без баннеров; в эхо тогда только `rawudp = true`.
+    #[test]
+    fn nobanners_after_banners() {
+        let flags = |extra: &[&str]| {
+            let c = scan_config(extra);
+            (c.banners, c.rawudp)
+        };
+        assert_eq!(flags(&[]), (false, false));
+        assert_eq!(flags(&["--banners", "--nobanners"]), (false, false));
+        assert_eq!(flags(&["--nobanners", "--banners"]), (true, false));
+        assert_eq!(flags(&["--rawudp", "--nobanners"]), (false, true));
+        assert_eq!(flags(&["--nobanners", "--rawudp"]), (true, true));
+        assert_eq!(flags(&["--banners", "--nobanner=false"]), (true, false));
+        assert_eq!(flags(&["--rawudp", "--rawudp=false"]), (true, false));
+        // Р17: имена по `EQUALS` C (`src/main-conf.c:833-849`): регистр и `-`, `.`, `_` не важны, `:` как `=`.
+        assert_eq!(flags(&["--BANNERS", "--No-Banners"]), (false, false));
+        assert_eq!(flags(&["--No_Banner:false", "--raw.udp"]), (true, true));
+        assert_eq!(flags(&["--Raw_UDP=0", "--Banner"]), (true, false));
+        let scratch = Scratch::new();
+        let f = scratch.write("on.conf", b"banners = true\nrawudp = 1\n");
+        let f = f.to_str().unwrap();
+        assert_eq!(flags(&["-c", f, "--nobanners"]), (false, true));
+        assert_eq!(flags(&["--nobanners", "-c", f]), (true, true));
+        let off = scratch.write("off.conf", b"nobanners = true\n");
+        let off = off.to_str().unwrap();
+        assert_eq!(flags(&["--banners", "-c", off]), (false, false));
+        assert_eq!(flags(&["-c", off, "--banner"]), (true, false));
+        let plain = echo_of(&[]);
+        assert_eq!(
+            echo_of(&["--rawudp", "--nobanners"]),
+            plain.replacen("shard = 1/1\n", "shard = 1/1\nrawudp = true\n", 1)
+        );
+        assert_eq!(echo_of(&["--banners", "--nobanners"]), plain);
+    }
+
+    /// `--capture`/`--nocapture`/`--no-capture` (`src/main-conf.c:1132-1180`): значение по `EQUALS` (регистр и `-._`
+    /// не важны), в порядке argv и файлов. В 4a только разбор и `--echo`: блок печатается дважды (ключи `capture` и
+    /// `nocapture` таблицы, `:2402-2403`), cert и servername когда выключены, остальные когда включены.
+    #[test]
+    fn capture_values_parse_and_echo() {
+        let plain = echo_of(&[]);
+        let twice = "nocapture = servername\nnocapture = servername\n";
+        assert!(plain.contains(twice), "{plain}");
+        let block = |lines: &str| plain.replacen(twice, &lines.repeat(2), 1);
+        assert_eq!(echo_of(&["--capture", "servername"]), block(""));
+        assert_eq!(
+            echo_of(&["--nocapture", "cert"]),
+            block("nocapture = cert\nnocapture = servername\n")
+        );
+        assert_eq!(
+            echo_of(&[
+                "--capture",
+                "HTML",
+                "--capture=heart_bleed",
+                "--no-capture",
+                "html",
+                "--capture",
+                "Ticket-Bleed",
+            ]),
+            block("nocapture = servername\ncapture = heartbleed\ncapture = ticketbleed\n")
+        );
+        let c = scan_config(&["--capture", "html", "--nocapture=cert"]).capture;
+        assert_eq!(
+            (c.cert, c.servername, c.html, c.heartbleed, c.ticketbleed),
+            (false, false, true, false, false)
+        );
+        let scratch = Scratch::new();
+        let f = scratch.write("cap.conf", b"capture = html\nno-capture = cert\n");
+        let f = f.to_str().unwrap();
+        assert_eq!(
+            echo_of(&["-c", f]),
+            block("nocapture = cert\nnocapture = servername\ncapture = html\n")
+        );
+        assert_eq!(
+            echo_of(&["-c", f, "--capture", "cert", "--nocapture", "html"]),
+            plain
+        );
+        // Имена опций по `EQUALS`, значение после `:`.
+        assert_eq!(
+            echo_of(&["--Capture:html", "--NO_CAPTURE", "cert"]),
+            block("nocapture = cert\nnocapture = servername\ncapture = html\n")
+        );
+        assert_eq!(
+            echo_of(&["--Hello.Timeout", "9"]),
+            plain.replacen("nocapture", "hello-timeout = 9\nnocapture", 1)
+        );
+    }
+
+    /// Неизвестное значение `--capture`/`--nocapture`: строка C (`src/main-conf.c:1159`, `:1174`) как есть и код 1
+    /// (Р17; у C разбор идёт дальше); так же из файла `-c`. Без значения это ошибка разбора.
+    #[test]
+    fn capture_bad_value_fails() {
+        let e = run_args(&[
+            "rmasscan",
+            "--echo",
+            "10.0.0.0/30",
+            "-p80",
+            "--seed",
+            "1",
+            "--capture",
+            "bogus",
+        ])
+        .unwrap_err();
+        assert_eq!(e, "FAIL: bogus: unknown capture type");
+        assert_eq!(error_text(&e), e);
+        let e = run_args(&[
+            "rmasscan",
+            "--echo",
+            "10.0.0.0/30",
+            "-p80",
+            "--seed",
+            "1",
+            "--nocapture=x",
+        ])
+        .unwrap_err();
+        assert_eq!(e, "FAIL: x: unknown nocapture type");
+        let scratch = Scratch::new();
+        let f = scratch.write("bad.conf", b"capture = everything\n");
+        let e = run_args(&[
+            "rmasscan",
+            "--echo",
+            "10.0.0.0/30",
+            "-p80",
+            "--seed",
+            "1",
+            "-c",
+            f.to_str().unwrap(),
+        ])
+        .unwrap_err();
+        assert_eq!(e, "FAIL: everything: unknown capture type");
+        assert!(Cli::try_parse_masscan(["rmasscan", "10.0.0.0/30", "-p80", "--capture"]).is_err());
+    }
+
+    /// Справка `--help` называет формат `certs` (баннеры X.509 PEM в stdout, `src/out-certs.c`).
+    #[test]
+    fn help_names_the_certs_format() {
+        use clap::CommandFactory;
+        let help = Cli::command()
+            .get_after_help()
+            .map(ToString::to_string)
+            .unwrap_or_default();
+        assert!(help.contains("--output-format certs"), "{help}");
     }
 
     /// Р19: флаги вывода и статуса вне живого скана и `--readscan` отклоняются до любого вывода и любого файла.

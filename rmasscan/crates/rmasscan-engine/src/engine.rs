@@ -24,12 +24,14 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
+use rmasscan_core::banner::BannerRecord;
 use rmasscan_core::ndp::NDP_FRAME_LEN;
 use rmasscan_core::packet::LinkType;
 use rmasscan_core::probe::{NicBinding, PlanError, ProbeCursor, ReadyPlan};
 use rmasscan_core::receive::{PortStatus, Reply, ndp_reply_for, parse_reply};
 use rmasscan_core::throttle::{Clock, SystemClock, Throttler};
 
+use crate::banners::{BannerOptions, Output, udp_reply_banners};
 use crate::checkpoint::{CHECKPOINT_FORMAT_VERSION, Checkpoint, CheckpointError};
 use crate::events::{Event, FailReason, Outcome, Progress, Reason};
 use crate::identity::{ENGINE_ALGORITHM_VERSION, job_digest};
@@ -74,7 +76,8 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 pub struct EngineOptions {
     pub scan_id: [u8; 16],
     pub attempt_id: [u8; 16],
-    /// Сколько принятых ответов может ждать потребителя.
+    /// Сколько элементов (принятых ответов и, с [`Self::banners`], их баннеров) может ждать потребителя. Ответ
+    /// принимается, пока очередь не полна, и встаёт вместе со своими баннерами.
     pub result_capacity: usize,
     /// Максимум ответов в одном `Event::Results`.
     pub event_batch_limit: usize,
@@ -87,6 +90,10 @@ pub struct EngineOptions {
     /// engine (по умолчанию 10 с, ноль запрещён). Политика времени выполнения:
     /// не влияет на порядок probe, checkpoint и job digest.
     pub tx_stall_timeout: Duration,
+    /// Баннеры UDP-ответов (`--banners`, `--rawudp`). `None` (по умолчанию, так у Studio): ни одна датаграмма не
+    /// разбирается, кадры, события и [`EngineHandle::recv_event_timeout`] побайтно прежние, а
+    /// [`EngineHandle::recv_output_timeout`] не выдаёт [`Output::Banner`].
+    pub banners: Option<BannerOptions>,
 }
 
 impl EngineOptions {
@@ -100,6 +107,7 @@ impl EngineOptions {
             io_timeout: MAX_IO_TIMEOUT,
             dedup_capacity: MAX_DEDUP_ENTRIES,
             tx_stall_timeout: DEFAULT_TX_STALL_TIMEOUT,
+            banners: None,
         }
     }
 }
@@ -210,10 +218,17 @@ impl DedupCache {
 
 // ---------------------------------------------------------------- queue ---
 
+/// Элемент очереди результатов: принятый ответ или баннер ответа, стоящего перед ним. Одна очередь на все RX-потоки:
+/// ответ и его баннеры кладутся под одной блокировкой ([`Queue::push_result`]), поэтому между ними ничего не встаёт.
+enum Entry {
+    Reply(Reply),
+    Banner(Box<BannerRecord>),
+}
+
 #[derive(Default)]
 struct QState {
     started: Option<u64>,
-    results: VecDeque<Reply>,
+    results: VecDeque<Entry>,
     progress: Option<Progress>,
     outcome: Option<Outcome>,
     checkpoint: Option<u64>,
@@ -239,8 +254,11 @@ impl Queue {
         }
     }
 
-    /// Не блокирует. `false` = очередь переполнена, ответ НЕ принят.
-    fn push_result(&self, r: Reply) -> bool {
+    /// Не блокирует. `false` = очередь переполнена, ответ НЕ принят (и его баннеры тоже). Ёмкость считается по
+    /// элементам очереди, ответам и баннерам: ответ принимается, если очередь не полна, и встаёт под той же блокировкой
+    /// вместе со своими баннерами (очередь превышает ёмкость не больше чем на баннеры одного ответа). Без баннеров
+    /// проверка прежняя.
+    fn push_result(&self, r: Reply, banners: Vec<BannerRecord>) -> bool {
         let mut st = lock(&self.st);
         if st.closed {
             return true; // потребителя нет: молча не храним
@@ -248,7 +266,9 @@ impl Queue {
         if st.results.len() >= self.capacity {
             return false;
         }
-        st.results.push_back(r);
+        st.results.push_back(Entry::Reply(r));
+        st.results
+            .extend(banners.into_iter().map(|b| Entry::Banner(Box::new(b))));
         drop(st);
         self.cv.notify_all();
         true
@@ -279,17 +299,39 @@ impl Queue {
         st.progress = None;
     }
 
-    fn pop_locked(&self, st: &mut QState) -> Result<Event, TryRecvError> {
+    /// Следующий элемент. [`Want::Events`] (прежний API) выбрасывает баннеры, поэтому без баннеров и для потребителя
+    /// событий порядок и пачки прежние; [`Want::Outputs`] отдаёт баннер отдельным элементом и обрывает на нём пачку
+    /// ответов (гарантия порядка [`Output`]).
+    fn pop_locked(&self, st: &mut QState, want: Want) -> Result<Output, TryRecvError> {
         if let Some(range) = st.started.take() {
-            return Ok(Event::Started { range });
+            return Ok(Output::Event(Event::Started { range }));
+        }
+        while let Some(Entry::Banner(_)) = st.results.front() {
+            if let Some(Entry::Banner(b)) = st.results.pop_front()
+                && want == Want::Outputs
+            {
+                return Ok(Output::Banner(*b));
+            }
         }
         if !st.results.is_empty() {
-            let n = st.results.len().min(self.batch_limit);
-            let replies: Vec<Reply> = st.results.drain(..n).collect();
-            return Ok(Event::Results { replies });
+            let mut replies = Vec::new();
+            while replies.len() < self.batch_limit {
+                match st.results.front() {
+                    Some(Entry::Reply(_)) => {
+                        if let Some(Entry::Reply(r)) = st.results.pop_front() {
+                            replies.push(r);
+                        }
+                    }
+                    Some(Entry::Banner(_)) if want == Want::Events => {
+                        st.results.pop_front();
+                    }
+                    _ => break,
+                }
+            }
+            return Ok(Output::Event(Event::Results { replies }));
         }
         if let Some(p) = st.progress.take() {
-            return Ok(Event::Progress(p));
+            return Ok(Output::Event(Event::Progress(p)));
         }
         let Some(outcome) = st.outcome.as_ref() else {
             return Err(TryRecvError::Empty);
@@ -298,27 +340,51 @@ impl Queue {
             && !st.checkpoint_taken
         {
             st.checkpoint_taken = true;
-            return Ok(Event::CheckpointReady { next_index });
+            return Ok(Output::Event(Event::CheckpointReady { next_index }));
         }
         if st.finished_taken {
             return Err(TryRecvError::Disconnected);
         }
         st.finished_taken = true;
-        Ok(Event::Finished {
+        Ok(Output::Event(Event::Finished {
             reason: outcome.reason.clone(),
-        })
+        }))
+    }
+
+    /// Только события: [`Want::Events`] баннер не возвращает, повтор лишь страховка тотальности.
+    fn pop_event_locked(&self, st: &mut QState) -> Result<Event, TryRecvError> {
+        loop {
+            if let Output::Event(e) = self.pop_locked(st, Want::Events)? {
+                return Ok(e);
+            }
+        }
     }
 
     fn try_pop(&self) -> Result<Event, TryRecvError> {
         let mut st = lock(&self.st);
-        self.pop_locked(&mut st)
+        self.pop_event_locked(&mut st)
     }
 
     fn pop_timeout(&self, timeout: Duration) -> Result<Event, TryRecvError> {
+        match self.wait_pop(timeout, Want::Events)? {
+            Output::Event(e) => Ok(e),
+            Output::Banner(_) => Err(TryRecvError::Empty),
+        }
+    }
+
+    fn pop_output_timeout(&self, timeout: Duration) -> Result<Output, TryRecvError> {
+        self.wait_pop(timeout, Want::Outputs)
+    }
+
+    fn wait_pop(&self, timeout: Duration, want: Want) -> Result<Output, TryRecvError> {
         let deadline = std::time::Instant::now() + timeout;
         let mut st = lock(&self.st);
         loop {
-            match self.pop_locked(&mut st) {
+            let got = match want {
+                Want::Events => self.pop_event_locked(&mut st).map(Output::Event),
+                Want::Outputs => self.pop_locked(&mut st, want),
+            };
+            match got {
                 Err(TryRecvError::Empty) => {}
                 other => return other,
             }
@@ -333,6 +399,14 @@ impl Queue {
                 .0;
         }
     }
+}
+
+/// Что читает потребитель: только события ([`EngineHandle::recv_event_timeout`], [`EngineHandle::try_event`]) или
+/// события и баннеры ([`EngineHandle::recv_output_timeout`]).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Want {
+    Events,
+    Outputs,
 }
 
 // --------------------------------------------------------------- shared ---
@@ -373,6 +447,8 @@ struct Shared {
     io_timeout: Duration,
     wait_micros: u64,
     progress_micros: u64,
+    /// [`EngineOptions::banners`]: RX разбирает датаграмму ответа, прошедшего дедуп.
+    banners: Option<BannerOptions>,
 }
 
 /// Сводка итогов потоков: "идёт", если хоть один идёт; "естественный конец",
@@ -896,9 +972,22 @@ fn run_rx(
                     match parse_reply(frame, link, &plan) {
                         Ok(Some(reply)) => {
                             let fresh = lock(&dedup).insert(&reply);
+                            // `handle_udp` (`src/main.c:909-916`, `src/proto-udp.c:54-132`) только за ответом,
+                            // прошедшим дедуп: повтор датаграммы не даёт ни записи статуса, ни баннеров (у C даёт
+                            // оба, справка C1.3). Баннеры встают в очередь сразу за своим ответом.
+                            let banners = match (&shared.banners, fresh) {
+                                (Some(o), true) => udp_reply_banners(
+                                    o,
+                                    frame,
+                                    link,
+                                    &reply,
+                                    plan.effective().seed(),
+                                ),
+                                _ => Vec::new(),
+                            };
                             if !fresh {
                                 shared.duplicates.fetch_add(1, Ordering::Relaxed);
-                            } else if shared.queue.push_result(reply) {
+                            } else if shared.queue.push_result(reply, banners) {
                                 shared.received.fetch_add(1, Ordering::Relaxed);
                             } else {
                                 // Ответ потерян, молча не теряем: останавливаем TX
@@ -1134,6 +1223,7 @@ impl Engine {
             wait_micros: u64::from(plan.effective().wait_secs()) * 1_000_000,
             progress_micros: u64::try_from(options.progress_interval.as_micros())
                 .unwrap_or(u64::MAX),
+            banners: options.banners,
         });
 
         let dedup = Arc::new(Mutex::new(DedupCache::new(options.dedup_capacity)));
@@ -1313,9 +1403,17 @@ impl EngineHandle {
         self.shared.queue.try_pop()
     }
 
-    /// Ждёт событие не дольше `timeout`; `Err(Empty)` по таймауту.
+    /// Ждёт событие не дольше `timeout`; `Err(Empty)` по таймауту. Баннеры ([`EngineOptions::banners`]) этот вызов
+    /// пропускает: их читает [`Self::recv_output_timeout`].
     pub fn recv_event_timeout(&self, timeout: Duration) -> Result<Event, TryRecvError> {
         self.shared.queue.pop_timeout(timeout)
+    }
+
+    /// Как [`Self::recv_event_timeout`], но отдаёт и баннеры, по порядку очереди: баннеры ответа идут сразу после
+    /// пачки [`Event::Results`], которая этим ответом кончается, и раньше записи любого более позднего ответа. При
+    /// `banners: None` выдаёт ровно те же события, что [`Self::recv_event_timeout`], и ни одного [`Output::Banner`].
+    pub fn recv_output_timeout(&self, timeout: Duration) -> Result<Output, TryRecvError> {
+        self.shared.queue.pop_output_timeout(timeout)
     }
 
     /// Терминальный итог, если оба потока уже остановились. Не расходует

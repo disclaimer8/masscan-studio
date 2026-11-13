@@ -468,6 +468,7 @@ name = "rmasscan-engine"
 version = "0.1.0"
 dependencies = [
  "rmasscan-core",
+ "rmasscan-proto",
  "sha2",
  "thiserror",
 ]
@@ -501,6 +502,9 @@ dependencies = [
 [[package]]
 name = "rmasscan-proto"
 version = "0.1.0"
+dependencies = [
+ "rmasscan-core",
+]
 
 [[package]]
 name = "rustix"

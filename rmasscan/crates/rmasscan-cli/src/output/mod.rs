@@ -35,6 +35,13 @@ pub trait Sink {
     fn report(&mut self, reply: &Reply) -> Result<(), String>;
     /// Запись баннера (`output_report_banner`, `src/output.c:886-956`): без фильтра show и без счётчиков.
     fn report_banner(&mut self, b: &BannerRecord) -> Result<(), String>;
+    /// Баннер ответа, который последним прошёл через [`Sink::report`] (живой скан: движок выдаёт баннеры ответа сразу
+    /// за ним, `rmasscan_engine::Output`). Время записи то же, что у записи статуса этого ответа: у C оба получают
+    /// `secs` одного кадра (`src/main.c:915`, справка A0), у rmasscan время статуса это момент обработки (Р9 этапа
+    /// вывода). По умолчанию как [`Sink::report_banner`] (у приёмника без времени записи разницы нет).
+    fn report_reply_banner(&mut self, b: &BannerRecord) -> Result<(), String> {
+        self.report_banner(b)
+    }
     fn finish(&mut self) -> Result<(), String>;
 }
 

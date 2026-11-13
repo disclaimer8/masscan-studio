@@ -98,8 +98,9 @@ ISAKMP и ZeroAccess, плюс хвосты этапа IPv6.
 - [ ] **Step 1: тесты** `app_names_match_c_table` (все 0..=36, 37 → `(37)`, 65535 → `(65535)`, 2 и 3 → `ssh`,
   23 и 33 → `vnc`); `app_from_name_matches_c` (`ssh1`→2, `ssh`→3, `x509`→15, `vnc-old`→23, `vnc`→33, `unknown` и
   `error` → `None`, `HTTP` → `None`); `normalize_string_escapes_c_set` (0x00..=0xFF: печатные 0x20..=0x7E кроме
-  `" & ' < > \` как есть, остальное `\xNN` строчными); `normalize_string_holes_near_8190` (8186 печатных + `\x01` +
-  `abc` даёт 8186 символов, затем `abc` до 8190, без `\x01`); `normalize_json_string_latin1` (`\xC3\xA9` →
+  `" & ' < > \` как есть, остальное `\xNN` строчными); `normalize_string_holes_near_8190` (8187 печатных + `\x01` +
+  `abc` даёт 8187 символов и `abc`, всего 8190, без `\x01`; 8186 печатных + `\x01` + `a` даёт 8186 символов и `\x01`,
+  всего 8190, без `a`); `normalize_json_string_latin1` (`\xC3\xA9` →
   `Ã©`); `normalize_json_truncates_at_65536_rule`.
 - [ ] **Step 2: FAIL** → реализация побайтно по A2 (условия `offset + 2 < len` и `offset + 5 < len` / `offset + 7 < len`).
 - [ ] **Step 3: PASS**, clippy; **коммит** `feat(rmasscan-proto): app table, C string normalisers, banner record`.

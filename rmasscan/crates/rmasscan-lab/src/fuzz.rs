@@ -3,14 +3,15 @@
 //! parser family per sub-stage.
 //!
 //! ```text
-//! rmasscan-lab fuzz udp --seed N (--duration D | --count N) [--port P] [--corpus DIR]... [--pcap FILE]...
+//! rmasscan-lab fuzz udp --seed N (--duration D | --count N) [--port P] [--corpus DIR...] [--pcap FILE...]
 //!                       [--out FILE]
 //! ```
 //!
 //! - The corpus: the stand's scenario replies (`banners_verify::scenario_reply` to each built-in probe, the replies the
-//!   banners window puts on the wire) always; `--corpus DIR`: a UDP golden directory (`tests/golden/udp-banners`: its
-//!   `manifest.json` names each case's port and cookie, `cases/<case>.bin` the datagram), the C goldens of tasks 4 and
-//!   5; `--pcap FILE`: every IPv4 UDP datagram from one of the fuzzed ports in a classic pcap (the window's captures).
+//!   banners window puts on the wire) always; `--corpus DIR...`: UDP golden directories (`tests/golden/udp-banners`:
+//!   its `manifest.json` names each case's port and cookie, `cases/<case>.bin` the datagram), the C goldens of tasks 4
+//!   and 5; `--pcap FILE...`: every IPv4 UDP datagram from one of the fuzzed ports in classic pcaps (the window's
+//!   captures). Several directories or captures follow one flag; a repeated flag is refused.
 //!   A seed keeps the cookie that makes its reply pass the parser's check ([`banners_verify::probe_cookie`]).
 //! - An input: a seed of the port's family, one to four mutations (bit flips, random and boundary bytes and 16-bit
 //!   words, truncation, insertion, deletion, duplication of a range, a splice with another seed of the family, a
@@ -620,8 +621,9 @@ pub fn parse_duration(s: &str) -> Option<Duration> {
     n.parse::<u64>().ok().map(|v| Duration::from_secs(v * mul))
 }
 
-const USAGE: &str = "fuzz udp --seed N (--duration D | --count N) [--port P] [--corpus DIR]... [--pcap FILE]... [--out FILE]
-  D: seconds, or with s/m/h; P: one of 53 123 137 161 500 5683 11211 16464 (default: all, round robin)
+const USAGE: &str = "fuzz udp --seed N (--duration D | --count N) [--port P] [--corpus DIR...] [--pcap FILE...] [--out FILE]
+  D: seconds, or with s/m/h; P: one of 53 123 137 161 500 5683 11211 16464 (default: all, round robin); several
+  directories or captures follow one --corpus or --pcap
   exit 0 nothing found, 1 a crash, a slow input (over 100 ms), an invariant failure or memory growth, 2 a refused argument";
 
 /// `fuzz udp ...`.

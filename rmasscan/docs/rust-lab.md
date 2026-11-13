@@ -877,6 +877,9 @@ target/release/rmasscan-lab ipv6-verify --dir "$OUT" --out "$OUT/verdict.json"
 
 ## Banners suite
 
+Принято живьём 2026-11-13 на коде `39ba251e`: `linux-banners-r1` **PASS 3/3** (два кейса и манифест, 228 проверок) с первого
+прогона, вердикт и регрессии в `docs/experiments/2026-11-13-rmasscan-banners-4a-acceptance.md`.
+
 Живой паритет UDP-баннеров подэтапа 4a (`--banners`, `--rawudp`; спека `2026-11-13-rmasscan-banners-design.md` §7, Р14)
 идёт на стенде протоколов: `wire-lab.sh --suite banners` поднимает его так же, как `--suite protocols` (стенд autodetect,
 печать, `lab_id`, `teardown.json`, отказ от `--out` прежней лаборатории, ловушка очистки, `net.ipv4.icmp_ratemask=0`
@@ -936,10 +939,11 @@ target/release/rmasscan-lab banners-verify --dir "$OUT" --out "$OUT/verdict.json
 
 ## Fuzzing the UDP banner parsers (`fuzz udp`)
 
-`rmasscan-lab fuzz udp --seed N (--duration D | --count N) [--port P] [--corpus DIR]... [--pcap FILE]... [--out FILE]` —
+`rmasscan-lab fuzz udp --seed N (--duration D | --count N) [--port P] [--corpus DIR...] [--pcap FILE...] [--out FILE]` —
 фаззер мутаций Р15 на чистом Rust (`fuzz.rs`), без сети и без root. Корпус: ответы сценариев стенда всегда, эталоны C
 задач 4–5 (`--corpus rmasscan/tests/golden/udp-banners`: порт и cookie каждого кейса из `manifest.json`), датаграммы ответов
-из захватов окна (`--pcap runs/<tag>/<step>/peer.pcap`). Вход: семя семейства порта, одна–четыре мутации (биты, граничные
+из захватов окна (`--pcap runs/<tag>/<step>/peer.pcap ...`; несколько каталогов или захватов идут после одного флага,
+повтор флага — отказ). Вход: семя семейства порта, одна–четыре мутации (биты, граничные
 байты и 16-битные слова, обрезка, вставка, удаление и дублирование участка, склейка с другим семенем, хвост), иногда
 случайная датаграмма; семена ZeroAccess половину раз мутируются как открытый текст и запечатываются заново с верной
 CRC. Длина не больше 1472 байт (больше путь приёма не пропускает: кадры длиннее 1514 отбрасываются до разбора). Cookie
@@ -951,12 +955,12 @@ RSS процесса (`/proc/self/status` на Linux, `ps -o rss=` на macOS) �
 нарушения инвариантов по портам, первые находки (вход в hex), замеры RSS, SHA-256 потока входов (два прогона с одним seed и
 `--count` тянут одни входы). Код выхода: 0 без находок, 1 с находкой, 2 при неверном аргументе. Короткий режим
 (10 с по всем восьми портам) идёт в `cargo test`. Живой прогон подэтапа — не меньше часа на каждый из восьми портов,
-параллельно под `nice -n 19`:
+параллельно под `nice -n 19` (прогон 4a на `39ba251e`: 50,9 млрд входов, 0 находок, отчёт приёмки, раздел 5):
 
 ```sh
 for p in 53 123 137 161 500 5683 11211 16464; do
   nice -n 19 target/release/rmasscan-lab fuzz udp --seed 4$p --duration 3700 --port $p \
-    --corpus tests/golden/udp-banners --pcap "$WINDOW/runs/b01_banners/binary/peer.pcap" --out "$FUZZ/fuzz-$p.json" &
+    --corpus tests/golden/udp-banners --pcap "$WINDOW"/runs/*/*/peer.pcap --out "$FUZZ/fuzz-$p.json" &
 done; wait
 ```
 

@@ -566,6 +566,11 @@ SCTP и ICMP Echo, ARP, смесь; пиры отвечают сокетами �
 Живой паритет IPv6 (TCP SYN, NDP, смешанный скан) идёт на том же стенде с IPv6 только на паре veth: `scripts/wire-lab.sh --suite ipv6`
 (случаи `v01`–`v03`), офлайн-вердикт `rmasscan-lab ipv6-verify --dir DIR`; подробности: [раздел «IPv6 suite»](docs/rust-lab.md).
 
+Живой паритет UDP-баннеров (`--banners`, `--rawudp`) идёт на стенде протоколов: `scripts/wire-lab.sh --suite banners` (случаи
+`b01`, `b02`, 36 сценариев ответчика на восьми портах UDP-парсеров и порту без парсера), офлайн-вердикт
+`rmasscan-lab banners-verify --dir DIR`; фаззер UDP-парсеров `rmasscan-lab fuzz udp`; подробности: [разделы «Banners suite» и
+«Fuzzing the UDP banner parsers»](docs/rust-lab.md).
+
 `examples/wire_scan.rs` это лабораторный harness (`ReadyPlan` + `Engine` + `open_explicit`,
 `--pause-after N`, `--resume-checkpoint FILE`), а не CLI. Тесты `linux_wire.rs` с `--ignored`
 без каталога результатов падают с «NOT RUN», пропуск никогда не PASS.
@@ -623,6 +628,17 @@ masscan `8e6b3b0`). **Windows IPv6 не снимался (NOT RUN):** на lab-N
 `utun`, скан LAN на `en0` получает `NoGateway` вместо шлюза `en0`. В обоих случаях шлюз задают явно, `--router-ip`.
 
 ## Статус
+
+Баннеры, подэтап 4a (код `39ba251e`, 2026-11-13, ветка `feat/rmasscan-banners`, база `719603b2`): записи баннеров (`-oB` типы 9 и
+13 и их формы во всех форматах, `--readscan` типов 3/4/5/9/13, `--banner-types`) и `--banners`/`--rawudp` для UDP с восемью
+парсерами C в крейте `rmasscan-proto`. Живая приёмка: Linux `banners` PASS 3/3 (36 сценариев, статусы и баннеры `-oB` и `-oL`
+равны C-оракулу; сырой баннер C на 11211 и портах без парсера по наличию и длине), регрессии IPv6 Linux PASS 4/4, протоколов
+Linux PASS 6/6, управления сканом Linux PASS 7/7, вывода Linux PASS 18/18, автоопределения Linux PASS 13/13 и Windows VM
+PASS 10/10; фаззинг UDP-парсеров по часу на каждый из восьми портов (50,9 млрд входов, 0 падений,
+0 медленных, 0 нарушений инвариантов). Тесты: Mac 2349/0, хост стенда Linux 2232/0, гость Windows 2121/0. Живые UDP-баннеры
+по IPv6 (R3 этапа IPv6), macOS живой, Windows IPv6 и физические NIC: NOT RUN. Сырые данные:
+`../docs/experiments/2026-11-13-rmasscan-banners-4a-raw/` (evidence `ee599cb4`); отчёт:
+`../docs/experiments/2026-11-13-rmasscan-banners-4a-acceptance.md`.
 
 IPv6 (код `0ce2a9e8`, evidence `f05e93df`, 2026-11-12, ветка `feat/rmasscan-ipv6`, база `fdd18b37`): TCP SYN поверх IPv6,
 `syn_cookie_ipv6`, NDP (Neighbor Solicitation резолвера и ответы на NS пира), смешанная индексация IPv4 и IPv6, записи типов 10 и

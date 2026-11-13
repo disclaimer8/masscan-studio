@@ -773,3 +773,13 @@ Handle::pause(), Handle::stop(), Handle::join()
   перечень в `rmasscan/README.md`, «Отличия от masscan»). Решения и границы:
   [спека этапа](2026-11-08-rmasscan-scan-control-design.md) (Р1–Р9, отличия от C в §8); приёмка:
   [отчёт](../../experiments/2026-11-08-rmasscan-scan-control-acceptance.md).
+- **(i) Баннеры переносятся подэтапами, начиная с записей баннеров и UDP.** §3 и §9 ставили `--banners` одним этапом 4
+  (TCP-стек, разбор ответов, записи). Этап делится на 4a–4d ([спека этапа](2026-11-13-rmasscan-banners-design.md) §3, Р1–Р17).
+  Подэтап 4a переносит записи баннеров (`-oB` типы 9 и 13 и их текстовые формы во всех форматах, `--readscan` типов
+  3/4/5/9/13, `--banner-types`) и `--banners`/`--rawudp` для UDP с восемью парсерами C (DNS, NTP, NetBIOS, SNMP, ISAKMP,
+  CoAP, memcached, ZeroAccess) в новом крейте `rmasscan-proto` (`#![forbid(unsafe_code)]`); TCP-порты с `--banners`
+  отказывают до 4b. Отличия от C — исправления классов а–в Р1/Р2 (чтение за датаграммой, вечные циклы и квадратичный текст
+  ISAKMP, указатели сжатия DNS/NBNS по сообщению, а не по кадру), перечень в `rmasscan/README.md`. Живых UDP-баннеров по
+  IPv6 нет (R3 этапа IPv6 отказывает UDP поверх IPv6); они придут с TCP в 4b. Фаззер мутаций на чистом Rust
+  (`rmasscan-lab fuzz udp`, Р15) заменяет libFuzzer, который тянет C++. Изменения по итогам — §10 спеки этапа; приёмка:
+  [отчёт](../../experiments/2026-11-13-rmasscan-banners-4a-acceptance.md).

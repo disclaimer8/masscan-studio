@@ -1,0 +1,8 @@
+test start 2026-11-13T19:34:34.1753052Z
+TEST_WS_EXIT=0
+test end 2026-11-13T19:45:18.5906211Z
+CLIPPY_EXIT=0
+free C: 5.4 GB
+DONE
+
+[exited with code 0]

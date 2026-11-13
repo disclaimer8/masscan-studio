@@ -1,0 +1,4 @@
+2026-11-13T19:49:32Z windows-suite start (orchestrator on the Mac, --suite banners-windows-autodetect-r1 --plan autodetect)
+all planned runs executed; verify offline with rmasscan-lab windows-verify --dir $MACOUT/autodetect-out/windows-autodetect-r1 (it hands an autodetect directory to autodetect-verify)
+SUITE_RC=0
+2026-11-13T20:19:29Z

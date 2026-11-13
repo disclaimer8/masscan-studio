@@ -1,0 +1,20 @@
+window linux-banners-r1: wire-lab.sh --suite banners, code 39ba251ebfb020c1ff0b8b558c06169467b259d1
+out $R/out/banners-out/linux-banners-r1
+SigIgn:	0000000000000004
+SigIgn:	0000000000000000
+0d0ceb81a0707a6e5d77032c42355d08ce98c7da90ad3bfbfe16456a8f7c0cf5  target/release/rmasscan
+aaa7f226a482d4a68326457da9dca28e54aa8431bc490ac0b6c71367251d0c4f  target/release/rmasscan-lab
+8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e  $HOME/rmasscan-oracle/masscan/bin/masscan
+start 2026-11-13T19:26:52Z
+[wire-lab] suite banners finished rc=0 (see $R/out/banners-out/linux-banners-r1/suite.log)
+[wire-lab] done: $R/out/banners-out/linux-banners-r1
+[wire-lab] cleanup: rc=0 own_pids=0 stray_processes=0 namespaces_left=0
+wire-lab rc=0
+end 2026-11-13T19:28:34Z
+PASS     manifest 
+PASS     b01_banners 
+PASS     b02_rawudp 
+overall: PASS {"FAIL":0,"INVALID":0,"NOT RUN":0,"PASS":3}
+verify rc=0
+920c1d58c4fef4c3e46240e01b6bd621ff55bf815de46954bbf2551de6273607  verdict.json
+netns left: 0

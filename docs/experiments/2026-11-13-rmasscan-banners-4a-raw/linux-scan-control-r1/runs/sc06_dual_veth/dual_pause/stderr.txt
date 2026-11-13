@@ -1,0 +1,14 @@
+[+] interface = veth-a (given)
+[+] source-mac = 02-aa-00-00-00-01 (detected)
+[+] source-ip = 198.18.0.1 (detected)
+[+] router-mac = 02-aa-00-00-00-02 (given)
+[+] interface[1] = veth-a2 (given)
+[+] source-mac[1] = 02-aa-00-00-00-03 (given)
+[+] source-ip[1] = 198.18.0.6 (given)
+[+] router-mac[1] = 02-aa-00-00-00-04 (given)
+[+] seed = 1 (given)
+[+] source-port = 58643 (time)
+[+] source-port[1] = 58643 (time)
+rate:  0.01-kpps,  5.00% done,   0:00:38 remaining, found=1       rate:  0.01-kpps, 15.00% done,   0:00:20 remaining, found=1       rate:  0.01-kpps, 25.00% done,   0:00:13 remaining, found=1       rate:  0.01-kpps, 35.00% done,   0:00:09 remaining, found=1       waiting several seconds to exit...                                            
+                                                                      saving resume file to: paused.conf
+rate:  0.01-kpps, 42.50% done, waiting 2-secs, found=2       rate:  0.01-kpps, 42.50% done, waiting 2-secs, found=2       rate:  0.01-kpps, 42.50% done, waiting 2-secs, found=2       rate:  0.01-kpps, 42.50% done, waiting 2-secs, found=2       rate:  0.01-kpps, 42.50% done, waiting 1-secs, found=2       rate:  0.01-kpps, 42.50% done, waiting 1-secs, found=2       rate:  0.01-kpps, 42.50% done, waiting 1-secs, found=2       rate:  0.01-kpps, 42.50% done, waiting 1-secs, found=2                                                                                    [+] finished: Paused, sent 34, replies 34, open 2

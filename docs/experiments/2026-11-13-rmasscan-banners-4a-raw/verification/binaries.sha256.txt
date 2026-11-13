@@ -1,0 +1,7 @@
+# sha256 of the binaries of set r1, code C = 39ba251ebfb020c1ff0b8b558c06169467b259d1
+0d0ceb81a0707a6e5d77032c42355d08ce98c7da90ad3bfbfe16456a8f7c0cf5  rmasscan (Linux stand host, release, the windows' scanner)
+aaa7f226a482d4a68326457da9dca28e54aa8431bc490ac0b6c71367251d0c4f  rmasscan-lab (Linux stand host, release, wire-lab.sh and the verifiers there)
+8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e  masscan (C oracle 8e6b3b0, Linux stand host)
+84099c8a5bbfe0da57698665ea9d828a7d2490cf9ef729421ddba3dfa2185495  rmasscan-lab (Windows VM host, release, deploy-manifest)
+ff7ca27ffedfb7dbc35e4a6a7a0815dbee62d648d6c682be219b26cdb8737ca4  rmasscan.exe (Windows guest, release, static CRT, /DEPENDENTLOADFLAG:0x800)
+3c52d906b1f85776d9d431f27e369c812692e6829fdd47e049083ed48ac44d9e  rmasscan-lab (Mac, release: windows-suite orchestrator, verifiers, privacy-scan, fuzz udp)

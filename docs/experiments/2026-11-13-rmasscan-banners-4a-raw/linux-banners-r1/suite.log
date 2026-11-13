@@ -1,0 +1,3 @@
+done b01_banners -> runs/b01_banners
+done b02_rawudp -> runs/b02_rawudp
+all selected runs executed; verify offline with rmasscan-lab banners-verify --dir $OUT

@@ -1,0 +1,9 @@
+{
+  "signal": "INT",
+  "after_s": 3.0,
+  "signal_unix": 1794598646.8176377,
+  "exit_within_s": 30.0,
+  "killed": false,
+  "paused_seen_unix": 1794598647.021331,
+  "paused_conf_present": true
+}

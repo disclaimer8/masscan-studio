@@ -1,0 +1,9 @@
+# The verifiers (Mac build of C, sha256 3c52d906...) on the copies in the repository: each verdict equals the committed verdict.json byte for byte,
+# and every run's hashes-before-copy.txt still matches its files.
+linux-banners-r1: banners-verify same verdict 920c1d58c4fef4c3e46240e01b6bd621ff55bf815de46954bbf2551de6273607; runs with a hash mismatch: 0
+linux-ipv6-r1: ipv6-verify same verdict 8edd87fa5d6c8b6810c113e0d37acb78694595ac8493d47f5feeddf92f7b4a80; runs with a hash mismatch: 0
+linux-protocols-r1: protocols-verify same verdict a1d52ae409b9a8b52a6fe0fa748449cf1d96feac051d9d7ab944ead7f4bd60ba; runs with a hash mismatch: 0
+linux-scan-control-r1: scan-control-verify same verdict d52b3f389dc39f59d99b9e624cbc5ffa3c4a2015fd18fa2871437a2e5581e2ad; runs with a hash mismatch: 0
+linux-output-r1: output-verify same verdict 241c6a8004263565975916ac3057e1df144464392a8a88a82e4f11242e4e2768; runs with a hash mismatch: 0
+linux-autodetect-r1: autodetect-verify same verdict beb5b48ae589f4e30ee6c261f991db1c50603eb647b698899bcf0b5882111840; runs with a hash mismatch: 0
+windows-autodetect-r1: windows-verify same verdict c4d9396bd617eca6320de8ff3f0422303fcec3e193b55830500e2cd7df37f2f6; runs with a hash mismatch: 0

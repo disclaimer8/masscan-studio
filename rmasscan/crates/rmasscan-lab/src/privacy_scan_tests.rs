@@ -467,14 +467,16 @@ fn the_banners_stands_own_nbns_probes_and_replies_are_counted_not_hits_and_nothi
     off_stand[29] = 9;
     let mut other_port = stand_udp(2, false, &reply);
     other_port[37] = 1;
-    let others = [stand_udp(2, false, &renamed), off_stand, other_port];
+    let mut tagged = stand_udp(2, false, &reply);
+    tagged.splice(12..14, [0x81, 0x00, 0, 5, 8, 0]);
+    let others = [stand_udp(2, false, &renamed), off_stand, other_port, tagged];
     for f in &others {
         assert!(!stand_nbns(f));
     }
     write_pcap(&d, "other.pcap", &others);
     let (hits, stand) = scan_counted(&d, &[]).unwrap();
     assert_eq!(stand, 8);
-    assert_eq!(hits.len(), 3, "{hits:?}");
+    assert_eq!(hits.len(), 4, "{hits:?}");
     assert!(
         hits.iter()
             .all(|h| h.file == "other.pcap" && h.what.starts_with("NBNS frame"))

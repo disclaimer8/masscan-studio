@@ -125,6 +125,10 @@ fn refuse_ipv6_non_tcp(cli: &Cli, cfg: &ScanConfig) -> Result<(), String> {
     Ok(())
 }
 
+/// Три строки `LOG(0, ...)` отказа `ExcludeRequired`, `src/main.c:1236-1238` дословно (подсказки с одним пробелом
+/// впереди, без префикса `[-]`). Ядро держит однострочный `Display` (его печатает и Studio).
+pub const EXCLUDE_REQUIRED_TEXT: &str = "FAIL: range too big, need confirmation\n [hint] to prevent accidents, at least one --exclude must be specified\n [hint] use \"--exclude 255.255.255.255\" as a simple confirmation";
+
 /// Текст stderr для ошибки [`run`]: отказы обнаружения и ARP (`[-] FAIL: …` и подсказки C), отказ `ExcludeRequired`
 /// (три строки `main.c:1236-1238`), плохое имя `banner-types` файла конфигурации (`FAIL: bad banner app: …` и `err`,
 /// `src/main-conf.c:2694-2695`), неизвестное значение `--capture`/`--nocapture` (`FAIL: …: unknown capture type`,
@@ -138,9 +142,10 @@ pub fn error_text(msg: &str) -> String {
         || msg.starts_with(conf::BAD_BANNER_APP)
         || is_capture_refusal(msg)
         || msg == ARP_PORTSCAN_REFUSAL
-        || msg == ConfigError::ExcludeRequired.to_string()
     {
         msg.to_string()
+    } else if msg == ConfigError::ExcludeRequired.to_string() {
+        EXCLUDE_REQUIRED_TEXT.to_string()
     } else {
         format!("rmasscan: error: {msg}")
     }
@@ -376,6 +381,20 @@ pub fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Core держит однострочный `Display` (его печатает Studio), CLI подменяет его тремя строками C
+    /// (`src/main.c:1236-1238`).
+    #[test]
+    fn exclude_required_prints_three_c_lines_in_cli() {
+        let msg = ConfigError::ExcludeRequired.to_string();
+        assert_eq!(error_text(&msg), EXCLUDE_REQUIRED_TEXT);
+        assert_eq!(
+            EXCLUDE_REQUIRED_TEXT,
+            "FAIL: range too big, need confirmation\n\
+             \x20[hint] to prevent accidents, at least one --exclude must be specified\n\
+             \x20[hint] use \"--exclude 255.255.255.255\" as a simple confirmation"
+        );
+    }
     use std::net::Ipv4Addr;
     use std::sync::Arc;
 
@@ -1277,6 +1296,25 @@ mod tests {
             "#masscan\nbanner tcp 80 192.0.2.1 1700000004 http HTTP/1.1\n\
              banner tcp 80 192.0.2.1 1700000009 ssl TLS\n# end\n"
         );
+        // Р17: `banner-types` и три синонима сравниваются по `EQUALS` C (`src/main-conf.c:2683-2697`), значение
+        // следующим словом, как у `--capture`.
+        for spelling in [
+            "--Banner-Types",
+            "--banner_type",
+            "--BANNER.APPS",
+            "--banner-app",
+        ] {
+            let (r, out, _) = readscan_run(
+                &FakeBackend::default(),
+                &[spelling, "dns-ver", "--readscan", input, "-oL", "-"],
+            );
+            r.unwrap();
+            assert_eq!(
+                String::from_utf8(out).unwrap(),
+                "#masscan\nbanner tcp 80 192.0.2.1 1700000006 dns-ver 9.18\n# end\n",
+                "{spelling}"
+            );
+        }
         // Без `--banner-types` и без `-o`: строки `Discovered` и `Banner on port` в stdout (`output.c:903-923`).
         let (r, out, _) = readscan_run(&FakeBackend::default(), &["--readscan", input]);
         r.unwrap();

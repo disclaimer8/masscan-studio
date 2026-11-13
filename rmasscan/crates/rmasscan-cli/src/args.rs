@@ -887,9 +887,9 @@ where
     Ok(out)
 }
 
-/// Опции баннеров подэтапа 4a (`config_parameters[]`, `src/main-conf.c:2377-2403`): имя после `normalize_key` и имя
-/// clap.
-const EQUALS_OPTIONS: [(&str, &str); 8] = [
+/// Опции баннеров подэтапа 4a (`config_parameters[]`, `src/main-conf.c:2377-2403`; `banner-types` и три синонима,
+/// `:2683-2697`): имя после `normalize_key` и имя clap.
+const EQUALS_OPTIONS: [(&str, &str); 12] = [
     ("banners", "banners"),
     ("banner", "banner"),
     ("nobanners", "nobanners"),
@@ -898,6 +898,10 @@ const EQUALS_OPTIONS: [(&str, &str); 8] = [
     ("capture", "capture"),
     ("nocapture", "nocapture"),
     ("hellotimeout", "hello-timeout"),
+    ("bannertypes", "banner-types"),
+    ("bannertype", "banner-types"),
+    ("bannerapps", "banner-types"),
+    ("bannerapp", "banner-types"),
 ];
 
 /// Р17: имя опции баннеров сравнивается как `EQUALS` C (`src/main-conf.c:833-849`: регистр и `-`, `.`, `_` не важны,

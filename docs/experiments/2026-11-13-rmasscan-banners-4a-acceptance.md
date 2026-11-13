@@ -44,6 +44,8 @@ FAIL / INVALID / NOT RUN / OPEN / PENDING, никогда не повышают�
 Windows: `manifest.json` и `deploy/preflight-*.json` несут `code_commit`, `orchestrator.build_commit` и
 `orchestrator.git_commit`, все равные C, `git_dirty: false`.
 
+Коммиты после приёмки (после `84e86597`) меняют только однострочный `Display` `ExcludeRequired` в ядре (stderr CLI прежний, три строки C из `src/main.c:1236-1238`), принимают больше написаний `--banner-types` (`EQUALS` C) и правят комментарии и README: кадров, записей и путей по умолчанию они не меняют, поэтому живые окна на `39ba251e` остаются в силе.
+
 ## 3. Результаты окон (все на C = `39ba251e`)
 
 | Каталог | Стенд | Кейсы | Вердикт | Окно (UTC) | sha256 `verdict.json` |

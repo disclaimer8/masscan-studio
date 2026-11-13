@@ -60,11 +60,9 @@ pub enum ConfigError {
     /// Больше 63 бит (main.c:1698-1704).
     #[error(transparent)]
     RangeOverflow(#[from] RangeOverflow),
-    /// Больше 1e9 адресов без единого `--exclude` (main.c:1235-1239). Текст это три строки `LOG(0, ...)` из
-    /// main.c:1236-1238 дословно (подсказки с одним пробелом впереди, без префикса `[-]`); CLI выводит его как есть.
-    #[error(
-        "FAIL: range too big, need confirmation\n [hint] to prevent accidents, at least one --exclude must be specified\n [hint] use \"--exclude 255.255.255.255\" as a simple confirmation"
-    )]
+    /// Больше 1e9 адресов без единого `--exclude` (main.c:1235-1239). Однострочный текст общий с Studio; три строки
+    /// `LOG(0, ...)` из main.c:1236-1238 печатает CLI (`rmasscan_cli::EXCLUDE_REQUIRED_TEXT`).
+    #[error("range too big, need confirmation: at least one --exclude must be specified")]
     ExcludeRequired,
     /// `blackrock_rounds >= 64`: в C это UB-сдвиг (crypto-blackrock.c),
     /// C такое значение принимает.
@@ -2775,14 +2773,12 @@ mod tests {
         }
     }
 
-    /// main.c:1236-1238: C печатает три строки LOG(0, ...), а не одну. Отказ показывается как есть, без обёртки.
+    /// Display общий с Studio и остаётся однострочным; три строки C (main.c:1236-1238) печатает CLI.
     #[test]
-    fn exclude_required_prints_c_second_hint() {
+    fn exclude_required_display_is_one_line() {
         assert_eq!(
             ConfigError::ExcludeRequired.to_string(),
-            "FAIL: range too big, need confirmation\n\
-             \x20[hint] to prevent accidents, at least one --exclude must be specified\n\
-             \x20[hint] use \"--exclude 255.255.255.255\" as a simple confirmation"
+            "range too big, need confirmation: at least one --exclude must be specified"
         );
     }
 

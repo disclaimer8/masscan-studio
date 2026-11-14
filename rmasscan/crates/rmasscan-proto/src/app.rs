@@ -204,4 +204,103 @@ mod tests {
         assert_eq!(app_from_name("error"), None);
         assert_eq!(app_from_name("HTTP"), None);
     }
+
+    /// Все 37 `app_id::*` против `enum ApplicationProtocol` (`src/masscan-app.h:8-49`), `app_name` по
+    /// `masscan_app_to_string` (`src/masscan-app.c:12-57`) и `app_from_name` для каждого ключа
+    /// `masscan_string_to_app` (`src/masscan-app.c:61-112`), включая TCP-имена.
+    #[test]
+    fn app_ids_and_names_pinned() {
+        // (id у rmasscan, значение у C по порядку enum, имя `masscan_app_to_string`).
+        let ids: [(u16, u16, &str); 37] = [
+            (app_id::NONE, 0, "unknown"),
+            (app_id::HEUR, 1, "unknown"),
+            (app_id::SSH1, 2, "ssh"),
+            (app_id::SSH2, 3, "ssh"),
+            (app_id::HTTP, 4, "http"),
+            (app_id::FTP, 5, "ftp"),
+            (app_id::DNS_VERSIONBIND, 6, "dns-ver"),
+            (app_id::SNMP, 7, "snmp"),
+            (app_id::NBTSTAT, 8, "nbtstat"),
+            (app_id::SSL3, 9, "ssl"),
+            (app_id::SMB, 10, "smb"),
+            (app_id::SMTP, 11, "smtp"),
+            (app_id::POP3, 12, "pop"),
+            (app_id::IMAP4, 13, "imap"),
+            (app_id::ZEROACCESS, 14, "zeroaccess"),
+            (app_id::X509_CERT, 15, "X509"),
+            (app_id::X509_CACERT, 16, "X509CA"),
+            (app_id::HTML_TITLE, 17, "title"),
+            (app_id::HTML_FULL, 18, "html"),
+            (app_id::NTP, 19, "ntp"),
+            (app_id::VULN, 20, "vuln"),
+            (app_id::HEARTBLEED, 21, "heartbleed"),
+            (app_id::TICKETBLEED, 22, "ticketbleed"),
+            (app_id::VNC_OLD, 23, "vnc"),
+            (app_id::SAFE, 24, "safe"),
+            (app_id::MEMCACHED, 25, "memcached"),
+            (app_id::SCRIPTING, 26, "scripting"),
+            (app_id::VERSIONING, 27, "versioning"),
+            (app_id::COAP, 28, "coap"),
+            (app_id::TELNET, 29, "telnet"),
+            (app_id::RDP, 30, "rdp"),
+            (app_id::HTTP_SERVER, 31, "http.server"),
+            (app_id::MC, 32, "minecraft"),
+            (app_id::VNC_RFB, 33, "vnc"),
+            (app_id::VNC_INFO, 34, "vnc-info"),
+            (app_id::ISAKMP, 35, "isakmp"),
+            (app_id::ERROR, 36, "error"),
+        ];
+        for (got, want, name) in ids {
+            assert_eq!(got, want, "app_id for C value {want}");
+            assert_eq!(app_name(want), name, "app_name({want})");
+        }
+        assert_eq!(app_name(37), "(37)");
+        // Ключи `masscan_string_to_app` (`src/masscan-app.c:68-103`) по порядку списка C.
+        let keys: [(&str, u16); 35] = [
+            ("ssh1", 2),
+            ("ssh2", 3),
+            ("ssh", 3),
+            ("http", 4),
+            ("ftp", 5),
+            ("dns-ver", 6),
+            ("snmp", 7),
+            ("nbtstat", 8),
+            ("ssl", 9),
+            ("smtp", 11),
+            ("smb", 10),
+            ("pop", 12),
+            ("imap", 13),
+            ("x509", 15),
+            ("x509ca", 16),
+            ("zeroaccess", 14),
+            ("title", 17),
+            ("html", 18),
+            ("ntp", 19),
+            ("vuln", 20),
+            ("heartbleed", 21),
+            ("ticketbleed", 22),
+            ("vnc-old", 23),
+            ("safe", 24),
+            ("memcached", 25),
+            ("scripting", 26),
+            ("versioning", 27),
+            ("coap", 28),
+            ("telnet", 29),
+            ("rdp", 30),
+            ("http.server", 31),
+            ("minecraft", 32),
+            ("vnc", 33),
+            ("vnc-info", 34),
+            ("isakmp", 35),
+        ];
+        for (key, want) in keys {
+            assert_eq!(app_from_name(key), Some(want), "app_from_name({key})");
+        }
+        // Не ключи: ни имя из `masscan_app_to_string` без ключа, ни другой регистр (`strcmp`).
+        for bad in [
+            "", "unknown", "error", "X509", "X509CA", "HTTP", "Http", "vnc-rfb",
+        ] {
+            assert_eq!(app_from_name(bad), None, "app_from_name({bad:?})");
+        }
+    }
 }

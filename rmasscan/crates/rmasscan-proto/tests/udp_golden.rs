@@ -24,6 +24,13 @@ mod udp_golden_inputs;
 
 use udp_golden_inputs::{Case, cases};
 
+// Манифест эталонов проверяется общим кодом rmasscan-core (без serde): сумма файла, `golden.rs` берёт `super::sha256`.
+#[path = "../../rmasscan-core/tests/common/sha256.rs"]
+mod sha256;
+
+#[path = "../../rmasscan-core/tests/common/golden.rs"]
+mod golden;
+
 const DIR: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../tests/golden/udp-banners"
@@ -761,4 +768,76 @@ fn udp_golden_mutations_never_panic() {
             }
         }
     }
+}
+
+/// Каждые `input_sha256` и `output_sha256` манифеста равны sha256 файла: 204 кейса, 408 файлов.
+#[test]
+fn manifest_hashes_match_files() {
+    let manifest = String::from_utf8(read(&Path::new(DIR).join("manifest.json"))).expect("utf-8");
+    let n =
+        golden::check_manifest_hashes(Path::new(DIR), &manifest).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(n, 408, "408 = 204 кейса x (вход + вывод)");
+}
+
+/// Временный каталог, удаляется при выходе из области видимости (в том числе при панике).
+struct TempDir(std::path::PathBuf);
+
+impl TempDir {
+    fn new() -> Self {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos());
+        let dir =
+            std::env::temp_dir().join(format!("rmasscan-golden-{}-{nanos}", std::process::id()));
+        fs::create_dir_all(&dir).expect("create temp dir");
+        Self(dir)
+    }
+}
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+/// Подмена одного байта в одном `.out` во временной копии: ошибка называет файл и обе суммы, а нетронутая
+/// копия проходит (подмена в самом деле ловится, а не проверка пропускает всё).
+#[test]
+fn manifest_check_names_the_tampered_file() {
+    let src = Path::new(DIR);
+    let tmp = TempDir::new();
+    fs::create_dir_all(tmp.0.join("cases")).expect("mkdir");
+    for e in fs::read_dir(src.join("cases")).expect("read cases") {
+        let e = e.expect("entry");
+        fs::copy(e.path(), tmp.0.join("cases").join(e.file_name())).expect("copy");
+    }
+    let manifest = String::from_utf8(read(&src.join("manifest.json"))).expect("utf-8");
+    assert_eq!(
+        golden::check_manifest_hashes(&tmp.0, &manifest),
+        Ok(408),
+        "untouched copy"
+    );
+
+    let victim = "cases/dns-chaos-txt.out";
+    let path = tmp.0.join(victim);
+    let mut bytes = fs::read(&path).expect("read victim");
+    let want = {
+        let mut h = sha256::Sha256::new();
+        h.update(&bytes);
+        h.finish()
+    };
+    bytes[0] ^= 0x01;
+    fs::write(&path, &bytes).expect("tamper");
+    let got = {
+        let mut h = sha256::Sha256::new();
+        h.update(&bytes);
+        h.finish()
+    };
+    let err = golden::check_manifest_hashes(&tmp.0, &manifest).expect_err("tamper must be caught");
+    assert!(err.contains(victim), "names the file: {err}");
+    assert!(
+        err.contains(&want) && err.contains(&got),
+        "both sums: {err}"
+    );
+    assert_ne!(want, got);
 }

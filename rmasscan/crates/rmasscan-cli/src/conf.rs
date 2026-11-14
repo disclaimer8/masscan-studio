@@ -208,6 +208,26 @@ pub fn banner_app(value: &str) -> Result<u16, String> {
     rmasscan_proto::app_from_name(value).ok_or_else(|| format!("{BAD_BANNER_APP}{value}\nerr"))
 }
 
+/// Индекс имени `ключ[N]` по правилу C: `masscan_set_parameter` (`src/main-conf.c:2437-2441`) берёт `ARRAY(name)`
+/// (:881-890: цифры сразу за первой `[`, `parseInt` без знака с переносом по модулю 2^64, затем `unsigned`) и при
+/// значении от 65536 печатает `"%s: bad index\n"` и выходит с кодом 1, до сравнения имени, то есть у любого ключа.
+/// Имя без `[` и `[` без цифр это индекс 0, как у C.
+pub(crate) fn check_c_index(name: &str) -> Result<(), String> {
+    let Some((_, rest)) = name.split_once('[') else {
+        return Ok(());
+    };
+    let n = rest
+        .bytes()
+        .take_while(u8::is_ascii_digit)
+        .fold(0u64, |n, d| {
+            n.wrapping_mul(10).wrapping_add(u64::from(d - b'0'))
+        });
+    if n % (1u64 << 32) >= 65536 {
+        return Err(format!("{name}: bad index"));
+    }
+    Ok(())
+}
+
 /// Применяет одну пару `name = value` в позиции разбора (ключи правее
 /// переопределяют ключи левее, как в `masscan_set_parameter`, main-conf.c:2429).
 /// Отличия от C: неизвестный ключ и нечитаемый файл возвращают `Err` (C на
@@ -219,6 +239,7 @@ pub fn apply_conf_key(
     include_loader: &mut dyn FnMut(&Path) -> Result<String, String>,
     depth: usize,
 ) -> Result<(), String> {
+    check_c_index(name)?;
     let o = &mut base.output;
     match normalize_key(name).as_str() {
         "conf" | "config" => {

@@ -19,7 +19,8 @@ fn main() -> std::process::ExitCode {
     let cli = match Cli::try_parse_masscan(std::env::args()) {
         Ok(c) => c,
         // Не `e.exit()`: он выходит с кодом 2. Ошибки clap это код 1, как `exit(1)` C на неизвестное имя
-        // (`src/main-conf.c:3036`); справка и версия печатаются в stdout с кодом 0. Мёртвый поток не роняет выход.
+        // (`src/main-conf.c:3036`); справка и версия печатаются в stdout с кодом 0 (у C код 1, :3225-3227, :3010-3012).
+        // Мёртвый поток не роняет выход.
         Err(ParseError::Clap(e)) => {
             let _ = e.print();
             return std::process::ExitCode::from(clap_exit_code(e.kind()));

@@ -25,7 +25,7 @@ use rmasscan_core::targets::{
     TEMPL_ICMP_ECHO, TEMPL_SCTP, TEMPL_UDP, add_top_ports, parse_ports_with, range_parse_ipv4,
 };
 
-use crate::conf::{FullConf, OutputConfPatch, apply_conf_key, banner_app};
+use crate::conf::{FullConf, OutputConfPatch, apply_conf_key, banner_app, check_c_index};
 use crate::output::{Format, OutputOptions};
 use crate::status::StatusMode;
 
@@ -57,9 +57,11 @@ pub struct Cli {
         help = "Targets: IPv4 or IPv6 address, CIDR, a.b.c.d-e.f.g.h, or comma-separated list"
     )]
     pub targets: Vec<String>,
-    // `--range` (main-conf.c:2729): то же, что позиционная цель.
+    // `--range` (main-conf.c:2730-2734, синонимы C `ranges`, `ip`, `ipv4`, `dst-ip`, `dest-ip`, `destination-ip`,
+    // `target-ip`): то же, что позиционная цель.
     #[arg(
         long = "range",
+        aliases = ["ranges", "ip", "ipv4", "dst-ip", "dest-ip", "destination-ip", "target-ip"],
         value_name = "RANGE",
         help = "Target range (same as a positional target)"
     )]
@@ -88,10 +90,12 @@ pub struct Cli {
         help = "Read UDP probe payloads from the packets of a .pcap capture (read before --nmap-payloads)"
     )]
     pub pcap_payloads: Option<String>,
-    // `-p80,443`, `-p0-65535`, `--ports 22,80`.
+    // `-p80,443`, `-p0-65535`, `--ports 22,80` (main-conf.c:2663-2666, синонимы C `port`, `dst-port`, `dest-port`,
+    // `destination-port`, `target-port`).
     #[arg(
         short = 'p',
         long = "ports",
+        aliases = ["port", "dst-port", "dest-port", "destination-port", "target-port"],
         value_name = "PORTS",
         help = "Ports to scan, e.g. -p80,443 or -p0-65535; prefixes T: U: S: I: O: stay in effect until the next one, e.g. -pU:53,161,T:80,I:0"
     )]
@@ -134,8 +138,10 @@ pub struct Cli {
         help = "Also scan the N most common ports (default 20); with -sU the UDP table, with -sS -sU both"
     )]
     pub top_ports: Vec<String>,
+    // main-conf.c:2744-2750: синонимы C `exclude-range`, `exclude-ranges`, `exclude-ip`, `exclude-ipv4`.
     #[arg(
         long,
+        aliases = ["exclude-range", "exclude-ranges", "exclude-ip", "exclude-ipv4"],
         value_name = "RANGE",
         help = "Address range to exclude (repeatable)"
     )]
@@ -152,7 +158,13 @@ pub struct Cli {
         help = "Randomization seed, non-zero (required for -sL, --echo and --offline; a live scan defaults to OS entropy)"
     )]
     pub seed: Option<u64>,
-    #[arg(long, value_name = "PPS", help = "Packets per second (default 100)")]
+    // main-conf.c:2375: синоним C `max-rate`.
+    #[arg(
+        long,
+        alias = "max-rate",
+        value_name = "PPS",
+        help = "Packets per second (default 100)"
+    )]
     pub rate: Option<String>,
     // Р4, main-conf.c:3028-3032: число секунд или `forever` (`INT_MAX`); разбирает ключ ядра `wait`, как в файле.
     #[arg(
@@ -161,14 +173,18 @@ pub struct Cli {
         help = "Seconds to wait for replies after the scan, or forever (default 10)"
     )]
     pub wait: Option<String>,
+    // main-conf.c:2380: синонимы C `retry`, `max-retries`, `max-retry`.
     #[arg(
         long,
+        aliases = ["retry", "max-retries", "max-retry"],
         value_name = "N",
         help = "Number of retries (default 0, below 1000)"
     )]
     pub retries: Option<u32>,
+    // main-conf.c:2376: синоним C `shards`.
     #[arg(
         long,
+        alias = "shards",
         value_name = "ONE/OF",
         help = "Scan only shard ONE of OF, e.g. 2/3"
     )]
@@ -220,12 +236,12 @@ pub struct Cli {
         help = "File of targets: addresses, CIDRs and ranges separated by whitespace or commas, # starts a comment (alias: -iL)"
     )]
     pub includefile: Vec<String>,
-    // main-conf.c:2486-2550: `source-ip` - синоним `adapter-ip`; диапазон `A-B` степени двойки (Р6); адрес IPv6
-    // (main-conf.c:2508-2512) идёт в `nics[0].adapter_ipv6`. Одно значение на командную строку: второе семейство
-    // задаёт `--adapter-ip[0]` или файл `-c`.
+    // main-conf.c:2486-2550: `source-ip`, `source-address`, `spoof-ip`, `spoof-address`, `src-ip` - синонимы
+    // `adapter-ip`; диапазон `A-B` степени двойки (Р6); адрес IPv6 (main-conf.c:2508-2512) идёт в
+    // `nics[0].adapter_ipv6`. Одно значение на командную строку: второе семейство задаёт `--adapter-ip[0]` или файл `-c`.
     #[arg(
         long = "adapter-ip",
-        alias = "source-ip",
+        aliases = ["source-ip", "source-address", "spoof-ip", "spoof-address", "src-ip"],
         value_name = "IP",
         help = "Source IPv4 address, or a range A-B / CIDR of 1, 2, 4, 8, ... addresses, or the source IPv6 address (alias: --source-ip; the other family: --adapter-ip[0])"
     )]
@@ -296,10 +312,10 @@ pub struct Cli {
         help = "Add the TCP timestamp option with this 32-bit value (default 0x12345678)"
     )]
     pub tcp_tsecho: Vec<String>,
-    // main-conf.c:2556: `source-mac` - синоним `adapter-mac`.
+    // main-conf.c:2556-2557: `spoof-mac`, `source-mac`, `src-mac` - синонимы `adapter-mac`.
     #[arg(
         long = "adapter-mac",
-        alias = "source-mac",
+        aliases = ["spoof-mac", "source-mac", "src-mac"],
         value_name = "MAC",
         help = "Source MAC address (alias: --source-mac)"
     )]
@@ -311,13 +327,24 @@ pub struct Cli {
         help = "Router (next hop) IPv4 address to resolve with ARP, or IPv6 address to resolve with NDP (single address; default: route gateway)"
     )]
     pub router_ip: Option<String>,
-    // main-conf.c:2587-2600: `--router-mac` ставит MAC шлюза и IPv4, и IPv6.
+    // main-conf.c:2587-2600: `--router-mac` (синонимы C `router`, `dest-mac`, `destination-mac`, `dst-mac`,
+    // `target-mac`) ставит MAC шлюза и IPv4, и IPv6.
     #[arg(
         long = "router-mac",
+        aliases = ["router", "dest-mac", "destination-mac", "dst-mac", "target-mac"],
         value_name = "MAC",
         help = "Router (next hop) MAC address for IPv4 and IPv6: skips ARP and NDP (ignored by --offline, which uses 66-55-44-33-22-11)"
     )]
     pub router_mac: Option<String>,
+    // main-conf.c:2602-2612: `router-mac-ipv4` / `router-ipv4` (синоним C, тоже MAC): только MAC шлюза IPv4, как ключ
+    // файла и `--router-mac-ipv4[i]`.
+    #[arg(
+        long = "router-mac-ipv4",
+        alias = "router-ipv4",
+        value_name = "MAC",
+        help = "Router (next hop) MAC address for IPv4 only: skips ARP (alias: --router-ipv4)"
+    )]
+    pub router_mac_ipv4: Option<String>,
     // main-conf.c:2614-2624: `router-mac-ipv6` / `router-ipv6` (синоним C, тоже MAC): только MAC шлюза IPv6.
     #[arg(
         long = "router-mac-ipv6",
@@ -326,24 +353,28 @@ pub struct Cli {
         help = "Router (next hop) MAC address for IPv6 only: skips NDP (alias: --router-ipv6)"
     )]
     pub router_mac_ipv6: Option<String>,
-    // Одиночный порт или диапазон степени двойки (main-conf.c:2523).
+    // Одиночный порт или диапазон степени двойки (main-conf.c:2523-2524, синонимы C `adapter-port`, `src-port`;
+    // `sourceport` с :2979 даёт тот же ключ `EQUALS`, что `source-port`).
     #[arg(
         long = "source-port",
-        alias = "adapter-port",
+        aliases = ["adapter-port", "src-port"],
         value_name = "PORT",
         help = "Source port, or a range whose size is a power of two (default: one port 40000 + time % 20000)"
     )]
     pub source_port: Option<String>,
+    // main-conf.c:2474: синонимы C `adapter`, `if`.
     #[arg(
         short = 'e',
         long = "interface",
-        alias = "adapter",
+        aliases = ["adapter", "if"],
         value_name = "IFACE",
         help = "Network interface (alias: --adapter): its name; on Windows \\Device\\NPF_{GUID} or the adapter name (default: the interface of the route to the targets)"
     )]
     pub interface: Option<String>,
+    // main-conf.c:2384: синонимы C `notransmit`, `nosend`, `dry-run`.
     #[arg(
         long,
+        aliases = ["notransmit", "nosend", "dry-run"],
         help = "Do not transmit: detect read-only and print the [+] lines (fake router MAC 66-55-44-33-22-11)"
     )]
     pub offline: bool,
@@ -354,8 +385,10 @@ pub struct Cli {
         help = "Scan the range again and again (seed + 1 each pass) until Ctrl-C; no paused.conf is written"
     )]
     pub infinite: bool,
+    // main-conf.c:2876: синоним C `trace-packet`.
     #[arg(
         long = "packet-trace",
+        alias = "trace-packet",
         requires = "offline",
         help = "With --offline: print one SENT line per SYN (values not given are detected read-only)"
     )]
@@ -656,7 +689,7 @@ fn port_default(udp: bool, sctp: bool) -> u32 {
 
 /// Идентификаторы clap опций, которые кладутся в `ScanConfig` позиционно (ключи правее `--resume` переопределяют
 /// файл, ключи левее переопределяются им, `masscan_set_parameter` вызывается в порядке argv).
-const POSITIONAL_KEYS: [&str; 28] = [
+const POSITIONAL_KEYS: [&str; 29] = [
     "pcap",
     "nmap_payloads",
     "pcap_payloads",
@@ -675,6 +708,7 @@ const POSITIONAL_KEYS: [&str; 28] = [
     "adapter_mac",
     "router_ip",
     "router_mac",
+    "router_mac_ipv4",
     "router_mac_ipv6",
     "source_port",
     "interface",
@@ -698,11 +732,12 @@ const BANNER_KEYS: [(&str, &str); 6] = [
 ];
 
 /// Одиночные опции адаптера, которые идут по порядку `argv` вместе с `--adapter[i]` и т.п.
-const NIC_PLAIN: [&str; 7] = [
+const NIC_PLAIN: [&str; 8] = [
     "adapter_ip",
     "adapter_mac",
     "router_ip",
     "router_mac",
+    "router_mac_ipv4",
     "router_mac_ipv6",
     "source_port",
     "interface",
@@ -824,9 +859,11 @@ fn dash_o_format(arg: &str) -> Result<&'static str, String> {
 // Причуды masscan, которые clap не выражает.
 //
 // 0. Имя `--опции` сравнивается как `EQUALS` C ([`equals_option`]) и переписывается в длинное имя clap раньше всех
-//    остальных правил, поэтому они видят только каноническое имя. Слово, которое правило ниже забирает как значение
-//    (`it.next()`), уже не переписывается; значение, которое берёт сам clap, не начинается с `--` (иначе clap его не
-//    примет), поэтому переписывание его не задевает. Короткие опции не трогаются.
+//    остальных правил, поэтому они видят только каноническое имя. Значения не переписываются: слово, которое правило
+//    ниже забирает как значение (`it.next()`), уже не попадает в цикл; значение после `=` или `:` остаётся как есть;
+//    отдельное слово, которое начинается с `--`, clap значением не берёт (ни у одной опции нет `allow_hyphen_values`,
+//    тест `no_option_takes_hyphen_values`), а другие слова [`equals_option`] не трогает. Голое `--` clap понимает как
+//    конец опций: оно и всё правее идут в clap как есть, это цели. Короткие опции не трогаются.
 // 1. `-sL` (nmap-стиль) - это один флаг, а
 //    clap прочёл бы его как `-s L`. Заменяется на `--list`.
 // 2. `-o<буква> FILE` (main-conf.c:3401–3459): буква слитно с `-o`, файл следующим argv (`-` значит stdout, иное
@@ -843,6 +880,11 @@ where
     let mut it = args.into_iter().map(Into::into).peekable();
     let mut out: Vec<String> = it.next().into_iter().collect();
     while let Some(raw) = it.next() {
+        if raw == "--" {
+            out.push(raw);
+            out.extend(it.by_ref());
+            break;
+        }
         let a = equals_option(&raw)?.unwrap_or(raw);
         if let Some((name, inline)) = numable_split(&a) {
             // main-conf.c:3236-3260 (`F_NUMABLE`): `--name=v`, `--name:v` или следующее слово, если оно целое или
@@ -937,9 +979,10 @@ fn has_index_meaning(key: &str) -> bool {
 /// переписывается в длинное имя clap. Значение идёт после первого `=`, иначе после первого `:` (`masscan_command_line`,
 /// :3279-3289) и остаётся как есть, `:` становится `=`. Закрытый суффикс `[…]` у имени без индексного смысла
 /// отбрасывается, как у C (`EQUALS` истинно на `[`, :840-841); имя с индексным смыслом остаётся своему разбору
-/// ([`indexed_nic_key`]). Незакрытая `[` это ошибка у любого имени (Р17, «непарный индекс»; у C индекс читает
-/// `parseInt`, `ARRAY` :881-890). `None`: не `--опция`, ключ адаптера с индексом или имени нет в таблице (тогда его
-/// отклонит clap, как C отклоняет неизвестное имя, :3036).
+/// ([`indexed_nic_key`]). Индекс от 65536 это `bad index` C у любого имени ([`check_c_index`], :2437-2441). Незакрытая
+/// `[` это ошибка у любого имени (Р17, «непарный индекс»; у C индекс читает `parseInt`, `ARRAY` :881-890). `None`: не
+/// `--опция`, ключ адаптера с индексом или имени нет в таблице (тогда его отклонит clap, как C отклоняет неизвестное
+/// имя, :3036).
 fn equals_option(a: &str) -> Result<Option<String>, String> {
     let Some(rest) = a.strip_prefix("--") else {
         return Ok(None);
@@ -950,6 +993,7 @@ fn equals_option(a: &str) -> Result<Option<String>, String> {
     };
     let key = normalize_key(name);
     if let Some(open) = name.find('[') {
+        check_c_index(name)?;
         if !name[open..].contains(']') {
             return Err(format!("--{name}: unclosed '[' in the option name"));
         }
@@ -967,7 +1011,8 @@ fn equals_option(a: &str) -> Result<Option<String>, String> {
 }
 
 /// Код выхода ошибки clap: справка и версия 0, любая ошибка разбора 1, как `exit(1)` C на неизвестное имя
-/// (`src/main-conf.c:3036`), а не 2 clap. C печатает справку с кодом 1 (:3225-3227); здесь `--help` это успех.
+/// (`src/main-conf.c:3036`), а не 2 clap. C печатает справку и версию с кодом 1 (:3225-3227, :3010-3012); здесь
+/// `--help` и `--version` это успех.
 pub fn clap_exit_code(kind: clap::error::ErrorKind) -> u8 {
     use clap::error::ErrorKind;
     match kind {
@@ -1705,6 +1750,14 @@ impl Cli {
                 set_nic0(cfg, |n| {
                     (n.router_mac_ipv4, n.router_mac_ipv6) = (Some(mac), Some(mac));
                 });
+            }
+            "router_mac_ipv4" => {
+                let Some(m) = &self.router_mac_ipv4 else {
+                    return Ok(());
+                };
+                // Ключ C `router-mac-ipv4` (main-conf.c:2602-2612): MAC шлюза IPv4 в `nics[0]`, IPv6 не трогается.
+                parse_mac(m).map_err(|e| e.to_string())?;
+                apply_core_kv(cfg, "router-mac-ipv4", m).map_err(|e| e.to_string())?;
             }
             "router_mac_ipv6" => {
                 let Some(m) = &self.router_mac_ipv6 else {
@@ -3480,5 +3533,257 @@ adapter-ip = 198.18.0.9\noutput-filename = base.xml\n",
                 other => panic!("{argv}: {other:?}"),
             }
         }
+    }
+
+    /// `masscan_set_parameter` (`src/main-conf.c:2437-2441`): индекс от 65536 это `"<имя>: bad index"` и код 1 у любого
+    /// ключа, раньше сравнения имени, в том числе там, где закрытый суффикс иначе отбрасывается. Индекс читает `ARRAY`
+    /// (:881-890): цифры сразу за `[`, по модулю 2^32; без цифр это 0. Так же в файле конфигурации.
+    #[test]
+    fn bad_index_fails_like_c() {
+        for (bad, name) in [
+            (&["--rate[70000]", "9"][..], "rate[70000]"),
+            (&["--rate[65536]=9"][..], "rate[65536]"),
+            (
+                &["--Banner-Types[99999]", "dns-ver"][..],
+                "Banner-Types[99999]",
+            ),
+            (
+                &["--adapter-ip[70000]", "10.0.0.1"][..],
+                "adapter-ip[70000]",
+            ),
+            (&["--bogus[70000]"][..], "bogus[70000]"),
+            // C печатает `bad index` и у незакрытой скобки: проверка индекса идёт первой.
+            (&["--rate[70000", "9"][..], "rate[70000"),
+        ] {
+            assert_eq!(
+                masscan_err(&[bad, &["10.0.0.0/30"][..]].concat()),
+                format!("{name}: bad index"),
+                "{bad:?}"
+            );
+        }
+        for ok in [
+            "--rate[65535]",
+            "--rate[4294967296]",
+            "--rate[x]",
+            "--rate[-1]",
+        ] {
+            assert_eq!(
+                parse(&[ok, "9"]).unwrap().rate.as_deref(),
+                Some("9"),
+                "{ok}"
+            );
+        }
+        let dir = crate::scratch::Scratch::new();
+        let f = dir.write("idx.conf", b"rate[70000] = 5\n");
+        let e = parse(&["-c", f.to_str().unwrap()])
+            .unwrap()
+            .to_config()
+            .unwrap_err();
+        assert_eq!(e, "rate[70000]: bad index");
+    }
+
+    /// Голое `--` clap понимает как конец опций, поэтому слова правее него идут в clap как есть: их не переписывает и
+    /// не отклоняет ни `EQUALS`, ни другие правила `preprocess_args`. `--`, которое правило забрало значением, концом
+    /// опций не считается (C тоже берёт его значением, `src/main-conf.c:3293`).
+    #[test]
+    fn words_after_double_dash_reach_clap_untouched() {
+        assert_eq!(
+            pre(&[
+                "--Rate",
+                "5",
+                "--",
+                "--Rate",
+                "--rate[",
+                "-sL",
+                "--x[70000]"
+            ]),
+            [
+                "rmasscan",
+                "--rate",
+                "5",
+                "--",
+                "--Rate",
+                "--rate[",
+                "-sL",
+                "--x[70000]"
+            ]
+        );
+        assert_eq!(parse(&["--", "--Rate"]).unwrap().targets, ["--Rate"]);
+        assert_eq!(
+            pre(&["--adapter-ip[1]", "--", "--Rate", "5"]),
+            ["rmasscan", "--rmasscan-nic=adapter-ip[1]=--", "--rate", "5"]
+        );
+    }
+
+    /// Правило 0 `preprocess_args`: значение, которое берёт clap, не переписывается. После `=` или `:` оно идёт как есть,
+    /// даже если похоже на опцию с `[`, `=` и `:`; слово, которое забрало правило `preprocess_args`, тоже; отдельное
+    /// слово с `--` clap значением не берёт, переписано оно или нет.
+    #[test]
+    fn clap_bound_values_are_never_rewritten() {
+        assert_eq!(
+            pre(&["--exclude=--Rate[1]:x=y"]),
+            ["rmasscan", "--exclude=--Rate[1]:x=y"]
+        );
+        assert_eq!(
+            parse(&["--exclude=--Rate[1]:x=y"]).unwrap().exclude,
+            ["--Rate[1]:x=y"]
+        );
+        assert_eq!(
+            parse(&["--Exclude:--Rate[1"]).unwrap().exclude,
+            ["--Rate[1"]
+        );
+        assert_eq!(
+            parse(&["--Stylesheet=--Rate:1["]).unwrap().stylesheet,
+            ["--Rate:1["]
+        );
+        assert_eq!(
+            pre(&["--adapter-ip[1]", "--Rate[1"]),
+            ["rmasscan", "--rmasscan-nic=adapter-ip[1]=--Rate[1"]
+        );
+        for argv in [
+            &["--exclude", "--Rate", "5"][..],
+            &["-p", "--Rate", "5"][..],
+        ] {
+            match parse(argv) {
+                Err(ParseError::Clap(e)) => assert!(
+                    e.to_string().contains("a value is required for"),
+                    "{argv:?}: {e}"
+                ),
+                other => panic!("{argv:?}: {other:?}"),
+            }
+        }
+    }
+
+    /// Правило 0 держится на том, что clap не берёт отдельное слово с `--` значением опции. Задача 13
+    /// (`--hello-string`, `--http-*`) обязана сохранить это или научить `preprocess_args` пропускать значение опции,
+    /// которое переписывать нельзя.
+    #[test]
+    fn no_option_takes_hyphen_values() {
+        let mut cmd = Cli::command();
+        cmd.build();
+        for arg in cmd.get_arguments() {
+            let id = arg.get_id();
+            assert!(!arg.is_allow_hyphen_values_set(), "{id}");
+            assert!(!arg.is_trailing_var_arg_set(), "{id}");
+            assert!(!arg.is_last_set(), "{id}");
+        }
+    }
+
+    /// Синонимы C (`config_parameters[]`, `src/main-conf.c:2369-2427`, и цепочка `masscan_set_parameter`,
+    /// :2470-3037) у опций, которые есть в rmasscan, ведут к той же опции, что у C. Каждое имя ключа адаптера
+    /// ([`NIC_KEYS`]) работает и без индекса, как у C (индекс 0).
+    #[test]
+    fn c_aliases_reach_the_same_option() {
+        let long_to_id: HashMap<String, String> = clap_long_names().into_iter().collect();
+        let id_of = |name: &str| {
+            equals_table()
+                .long_of(&normalize_key(name))
+                .map(|l| long_to_id[l].clone())
+        };
+        for (alias, id) in [
+            ("max-rate", "rate"),
+            ("shards", "shard"),
+            ("retry", "retries"),
+            ("max-retries", "retries"),
+            ("max-retry", "retries"),
+            ("notransmit", "offline"),
+            ("nosend", "offline"),
+            ("dry-run", "offline"),
+            ("port", "ports"),
+            ("dst-port", "ports"),
+            ("dest-port", "ports"),
+            ("destination-port", "ports"),
+            ("target-port", "ports"),
+            ("ranges", "range"),
+            ("ip", "range"),
+            ("ipv4", "range"),
+            ("dst-ip", "range"),
+            ("dest-ip", "range"),
+            ("destination-ip", "range"),
+            ("target-ip", "range"),
+            ("exclude-range", "exclude"),
+            ("exclude-ranges", "exclude"),
+            ("exclude-ip", "exclude"),
+            ("exclude-ipv4", "exclude"),
+            ("trace-packet", "packet_trace"),
+            ("if", "interface"),
+            ("source-address", "adapter_ip"),
+            ("spoof-ip", "adapter_ip"),
+            ("spoof-address", "adapter_ip"),
+            ("src-ip", "adapter_ip"),
+            ("src-port", "source_port"),
+            ("sourceport", "source_port"),
+            ("spoof-mac", "adapter_mac"),
+            ("src-mac", "adapter_mac"),
+            ("router", "router_mac"),
+            ("dest-mac", "router_mac"),
+            ("destination-mac", "router_mac"),
+            ("dst-mac", "router_mac"),
+            ("target-mac", "router_mac"),
+            ("router-mac-ipv4", "router_mac_ipv4"),
+            ("router-ipv4", "router_mac_ipv4"),
+            ("tcpmss", "tcp_mss"),
+            ("top-port", "top_ports"),
+        ] {
+            assert_eq!(id_of(alias).as_deref(), Some(id), "{alias}");
+        }
+        for key in NIC_KEYS {
+            assert!(equals_table().long_of(key).is_some(), "{key}");
+        }
+        let cfg = |a: &[&str]| parse(a).unwrap().to_config().unwrap();
+        assert_eq!(
+            cfg(&["--spoof-ip", "198.18.0.9"]).adapter_ip,
+            Some(0xc612_0009)
+        );
+        assert_eq!(
+            cfg(&["--If", "veth9"]).adapter_name.as_deref(),
+            Some("veth9")
+        );
+        assert_eq!(
+            cfg(&["--src-port", "40001"]).source_port,
+            Some((40001, 40001))
+        );
+        assert_eq!(
+            cfg(&["--SRC_MAC", "02-00-00-00-00-01"]).adapter_mac,
+            Some([2, 0, 0, 0, 0, 1])
+        );
+        assert_eq!(
+            cfg(&["--router", "02-00-00-00-00-04"]).router_mac,
+            Some([2, 0, 0, 0, 0, 4])
+        );
+        // `--router-mac-ipv4` без индекса это то же, что `--router-mac-ipv4[0]`: только MAC шлюза IPv4.
+        for argv in [
+            &["--router-mac-ipv4", "02-00-00-00-00-05"][..],
+            &["--Router-IPv4=02-00-00-00-00-05"][..],
+            &["--router-mac-ipv4[0]", "02-00-00-00-00-05"][..],
+        ] {
+            let c = cfg(argv);
+            assert_eq!(c.router_mac, Some([2, 0, 0, 0, 0, 5]), "{argv:?}");
+            assert_eq!(
+                (c.nics[0].router_mac_ipv4, c.nics[0].router_mac_ipv6),
+                (Some([2, 0, 0, 0, 0, 5]), None),
+                "{argv:?}"
+            );
+        }
+        assert!(
+            parse(&["--router-mac-ipv4", "nope"])
+                .unwrap()
+                .to_config()
+                .is_err()
+        );
+        let cli = parse(&[
+            "--max-rate",
+            "50",
+            "--Dry-Run",
+            "--IP",
+            "10.0.0.1",
+            "--Max_Retries",
+            "2",
+        ])
+        .unwrap();
+        assert_eq!(cli.rate.as_deref(), Some("50"));
+        assert!(cli.offline);
+        assert_eq!(cli.range, ["10.0.0.1"]);
+        assert_eq!(cli.retries, Some(2));
     }
 }

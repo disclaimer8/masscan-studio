@@ -1,0 +1,12 @@
+#masscan
+banner tcp 22 10.3.0.1 1700028800 ssh SSH-2.0-OpenSSH_9.6
+banner tcp 80 10.3.0.2 1700028801 http 
+banner udp 53 10.4.0.1 1700028802 dns-ver 9.18.24
+banner tcp 443 10.4.0.2 1700028803 ssl 
+banner udp 161 10.5.0.1 1700028804 snmp sysDescr:Linux
+banner err 7 10.5.0.2 1700028805 (37) x
+banner sctp 2905 10.5.0.3 1700028806 (65535) zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz
+open tcp 80 192.0.2.40 1700028807
+banner tcp 80 192.0.2.40 1700028807 http HTTP/1.0 200
+banner tcp 443 10.3.0.3 1700028808 X509 cert:MIIB
+# end

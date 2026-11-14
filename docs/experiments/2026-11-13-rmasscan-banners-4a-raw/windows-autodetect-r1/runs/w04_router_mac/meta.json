@@ -1,0 +1,19 @@
+{
+  "argv_file": "runner-argv.json",
+  "capture_started_utc": 1794600126.96007,
+  "capture_stopped_utc": 1794600177.338426,
+  "end_marker_seen": true,
+  "exe_sha256": "ff7ca27ffedfb7dbc35e4a6a7a0815dbee62d648d6c682be219b26cdb8737ca4",
+  "guest_exit": 0,
+  "guest_finished_utc": 1794600144.292696,
+  "guest_ssh_rc": 0,
+  "guest_started_utc": 1794600132.567681,
+  "guest_times": {
+    "finished_utc": 1794600144.134,
+    "started_utc": 1794600140.93
+  },
+  "guest_verify_exit": 0,
+  "invocation_nonce": "r7ef398a202627d43b0a532712def2060-95bf7fd2e8c63f49",
+  "kind": "scan",
+  "tag": "w04_router_mac"
+}

@@ -1,0 +1,10 @@
+Banner on port 22/tcp on 10.3.0.1: [ssh] SSH-2.0-OpenSSH_9.6                   
+Banner on port 80/tcp on 10.3.0.2: [http]                                      
+Banner on port 53/udp on 10.4.0.1: [dns-ver] 9.18.24                           
+Banner on port 443/tcp on 10.4.0.2: [ssl]                                      
+Banner on port 161/udp on 10.5.0.1: [snmp] sysDescr:Linux                      
+Banner on port 7/err on 10.5.0.2: [(37)] x                                     
+Banner on port 2905/sctp on 10.5.0.3: [(65535)] zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz
+Discovered open port 80/tcp on 192.0.2.40                                      
+Banner on port 80/tcp on 192.0.2.40: [http] HTTP/1.0 200                       
+Banner on port 443/tcp on 10.3.0.3: [X509] cert:MIIB                           

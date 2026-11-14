@@ -1,0 +1,20 @@
+# The live fuzz run of sub-stage 4a (design R15), on the Mac, code C = 39ba251ebfb020c1ff0b8b558c06169467b259d1:
+# rmasscan-lab built at C (release, sha256 3c52d906...), run from the repository root at C. Eight processes in parallel,
+# one per parser family, each under nice -n 19 for 3700 s. $MACOUT is the neutral evidence directory of the set;
+# the eight captures are the peer.pcap of every step of linux-banners-r1 (copied in this directory's sibling).
+for p in 53 123 137 161 500 5683 11211 16464; do
+  ( nice -n 19 $MACOUT/bin/rmasscan-lab fuzz udp --seed 4$p --duration 3700 --port $p \
+      --corpus rmasscan/tests/golden/udp-banners \
+      --pcap $MACOUT/linux-banners-r1/runs/b01_banners/binary/peer.pcap \
+             $MACOUT/linux-banners-r1/runs/b01_banners/list/peer.pcap \
+             $MACOUT/linux-banners-r1/runs/b01_banners/oracle-binary/peer.pcap \
+             $MACOUT/linux-banners-r1/runs/b01_banners/oracle-list/peer.pcap \
+             $MACOUT/linux-banners-r1/runs/b02_rawudp/binary/peer.pcap \
+             $MACOUT/linux-banners-r1/runs/b02_rawudp/list/peer.pcap \
+             $MACOUT/linux-banners-r1/runs/b02_rawudp/oracle-binary/peer.pcap \
+             $MACOUT/linux-banners-r1/runs/b02_rawudp/oracle-list/peer.pcap \
+      --out $MACOUT/fuzz/fuzz-$p.json > $MACOUT/fuzz/fuzz-$p.log 2>&1; echo $? > $MACOUT/fuzz/fuzz-$p.rc ) &
+done
+wait
+# A first start at 19:29:20Z gave --pcap once per capture and every process refused at once (exit 2, no input drawn:
+# "option --pcap given more than once"); this run started at 19:29:43Z.

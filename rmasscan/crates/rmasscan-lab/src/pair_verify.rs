@@ -135,6 +135,12 @@ pub(crate) trait PairPlan {
     -> Vec<(Self::Rec, f64)>;
     /// A document's record as its own wire is judged against it (time aside, and what the plan masks).
     fn doc_record(x: &Self::Rec, who: Who) -> Self::Rec;
+    /// The records of a document that its own wire is judged against, in document order: every record through
+    /// [`Self::doc_record`] unless the plan judges some kinds of record elsewhere (the banners plan: its banner
+    /// records, which no wire reply predicts without a parser; it judges them against the stand's replies and C).
+    fn own_wire_records(records: &[Self::Rec], who: Who) -> Vec<Self::Rec> {
+        records.iter().map(|x| Self::doc_record(x, who)).collect()
+    }
     /// rmasscan's probe and C's are the same probe: `Some(true)` when only a named rule made them equal.
     fn same_probe(rm: &[u8], c: &[u8]) -> Option<bool>;
     /// rmasscan's records and C's as they are compared, how many of C's were collapsed, the check name's suffix.
@@ -490,11 +496,7 @@ fn judge<P: PairPlan>(r: &mut Run, c: &P::Case, sides: &[Side<P::View>]) {
         }
         if let (Some(v), Some(d)) = (&s.view, &d) {
             let want = P::wire_records_at(c, v, s.spec.who, s.spec.out);
-            let got: Vec<P::Rec> = d
-                .records
-                .iter()
-                .map(|x| P::doc_record(x, s.spec.who))
-                .collect();
+            let got: Vec<P::Rec> = P::own_wire_records(&d.records, s.spec.who);
             let order = in_reply_order(&got, &want);
             if let Ok(n) = order {
                 swaps.insert(

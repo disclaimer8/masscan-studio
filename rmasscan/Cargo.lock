@@ -446,6 +446,7 @@ dependencies = [
  "rmasscan-core",
  "rmasscan-engine",
  "rmasscan-net",
+ "rmasscan-proto",
  "serde",
  "serde_json",
  "sha2",
@@ -467,6 +468,7 @@ name = "rmasscan-engine"
 version = "0.1.0"
 dependencies = [
  "rmasscan-core",
+ "rmasscan-proto",
  "sha2",
  "thiserror",
 ]
@@ -480,6 +482,7 @@ dependencies = [
  "rmasscan-core",
  "rmasscan-engine",
  "rmasscan-net",
+ "rmasscan-proto",
  "serde",
  "serde_json",
  "sha2",
@@ -495,6 +498,13 @@ dependencies = [
  "sha2",
  "thiserror",
  "windows-sys",
+]
+
+[[package]]
+name = "rmasscan-proto"
+version = "0.1.0"
+dependencies = [
+ "rmasscan-core",
 ]
 
 [[package]]

@@ -1,0 +1,5 @@
+udp-oracle port=16464 cookie=0x00000000 rawudp=1 mode=whole sections=1 framing=payload
+section len=40
+status open count=1
+banner 14 49 "ZeroAccess:192.0.2.10 198.51.100.20 203.0.113.30 "
+banner 0 40 =datagram

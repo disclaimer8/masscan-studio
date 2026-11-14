@@ -1,0 +1,31 @@
+# rmasscan-lab privacy-scan (Mac build of C, sha256 3c52d906...) with --forbid for 8 identifying names of at least 4 bytes
+# (printed as their numbers by the tool; roles in the README); run on the copy in the repository, $DST = this directory
+privacy-scan: 0 hits in $DST/linux-banners-r1 (64 frames were the banners stand's own NBNS probes and replies)
+rc=0
+privacy-scan: 0 hits in $DST/linux-ipv6-r1 (0 frames were the banners stand's own NBNS probes and replies)
+rc=0
+privacy-scan: 0 hits in $DST/linux-protocols-r1 (0 frames were the banners stand's own NBNS probes and replies)
+rc=0
+privacy-scan: 0 hits in $DST/linux-scan-control-r1 (0 frames were the banners stand's own NBNS probes and replies)
+rc=0
+privacy-scan: 0 hits in $DST/linux-output-r1 (0 frames were the banners stand's own NBNS probes and replies)
+rc=0
+privacy-scan: 0 hits in $DST/linux-autodetect-r1 (0 frames were the banners stand's own NBNS probes and replies)
+rc=0
+privacy-scan: 0 hits in $DST/windows-autodetect-r1 (0 frames were the banners stand's own NBNS probes and replies)
+rc=0
+privacy-scan: 0 hits in $DST/fuzz-udp-r1 (0 frames were the banners stand's own NBNS probes and replies)
+rc=0
+privacy-scan: 0 hits in $DST/verification (0 frames were the banners stand's own NBNS probes and replies)
+rc=0
+privacy-scan: 0 hits in $DST/. (64 frames were the banners stand's own NBNS probes and replies)
+rc=0
+# positive control: a temporary directory with token #4 in a text file
+HIT control.txt: line 1: forbidden token #4
+privacy-scan: 1 hits in $CONTROL (0 frames were the banners stand's own NBNS probes and replies)
+rc=1
+# a token shorter than 4 bytes is refused (rc 2), the token is not printed
+  NOT RUN: --forbid #1 is shorter than 4 bytes: a short token matches unrelated bytes; use a longer one
+rc=2
+# grep -ralwE over the names of all hosts and accounts (short ones included) and _tcp/_udp .local, every file with -a: 0 files
+# grep -ral personal paths (/Users/, /home/), 192.168., agent scratch root, macOS user temp root: 0 files

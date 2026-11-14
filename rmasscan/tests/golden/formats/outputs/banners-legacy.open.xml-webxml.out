@@ -1,0 +1,20 @@
+<?xml version="1.0"?>
+<!-- masscan v1.0 scan -->
+<?xml-stylesheet href="http://nmap.org/svn/docs/nmap.xsl" type="text/xsl"?>
+<nmaprun scanner="masscan" start="1794575308" version="1.0-BETA"  xmloutputversion="1.03">
+<scaninfo type="syn" protocol="tcp" />
+<host endtime="1700028800"><address addr="10.3.0.1" addrtype="ipv4"/><ports><port protocol="tcp" portid="22"><state state="open" reason="response" reason_ttl="0" /><service name="ssh" banner="SSH-2.0-OpenSSH_9.6"></service></port></ports></host>
+<host endtime="1700028801"><address addr="10.3.0.2" addrtype="ipv4"/><ports><port protocol="tcp" portid="80"><state state="open" reason="response" reason_ttl="0" /><service name="http" banner=""></service></port></ports></host>
+<host endtime="1700028802"><address addr="10.4.0.1" addrtype="ipv4"/><ports><port protocol="udp" portid="53"><state state="open" reason="syn-ack" reason_ttl="0" /><service name="dns-ver" banner="9.18.24"></service></port></ports></host>
+<host endtime="1700028803"><address addr="10.4.0.2" addrtype="ipv4"/><ports><port protocol="tcp" portid="443"><state state="open" reason="response" reason_ttl="0" /><service name="ssl" banner=""></service></port></ports></host>
+<host endtime="1700028804"><address addr="10.5.0.1" addrtype="ipv4"/><ports><port protocol="udp" portid="161"><state state="open" reason="response" reason_ttl="0" /><service name="snmp" banner="sysDescr:Linux"></service></port></ports></host>
+<host endtime="1700028805"><address addr="10.5.0.2" addrtype="ipv4"/><ports><port protocol="err" portid="7"><state state="open" reason="response" reason_ttl="0" /><service name="(37)" banner="x"></service></port></ports></host>
+<host endtime="1700028806"><address addr="10.5.0.3" addrtype="ipv4"/><ports><port protocol="sctp" portid="2905"><state state="open" reason="response" reason_ttl="0" /><service name="(65535)" banner="zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"></service></port></ports></host>
+<host endtime="1700028807"><address addr="192.0.2.40" addrtype="ipv4"/><ports><port protocol="tcp" portid="80"><state state="open" reason="syn-ack" reason_ttl="64"/></port></ports></host>
+<host endtime="1700028807"><address addr="192.0.2.40" addrtype="ipv4"/><ports><port protocol="tcp" portid="80"><state state="open" reason="response" reason_ttl="64" /><service name="http" banner="HTTP/1.0 200"></service></port></ports></host>
+<host endtime="1700028808"><address addr="10.3.0.3" addrtype="ipv4"/><ports><port protocol="tcp" portid="443"><state state="open" reason="response" reason_ttl="0" /><service name="X509" banner="cert:MIIB"></service></port></ports></host>
+<runstats>
+<finished time="1794575308" timestr="2026-11-13 13:08:28" elapsed="0" />
+<hosts up="1" down="0" total="1" />
+</runstats>
+</nmaprun>

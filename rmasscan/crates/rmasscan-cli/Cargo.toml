@@ -20,6 +20,7 @@ workspace = true
 rmasscan-core = { path = "../rmasscan-core" }
 rmasscan-engine = { path = "../rmasscan-engine" }
 rmasscan-net = { path = "../rmasscan-net" }
+rmasscan-proto = { path = "../rmasscan-proto" }
 clap.workspace = true
 getrandom = "=0.4.3"
 

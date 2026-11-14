@@ -270,3 +270,74 @@ fn only_the_target_is_ever_solicited() {
         assert_eq!(ns.eth_src, MY_MAC);
     }
 }
+
+fn run_policy(
+    fake: &FakeAdapter,
+    clock: &Arc<ManualClock>,
+    policy: NdpPolicy,
+) -> Result<NdpReport, NdpResolveError> {
+    let mut io = fake.pair();
+    resolve_next_hop_v6(
+        &mut io,
+        "veth-a",
+        MY_MAC,
+        MY_IP,
+        ROUTER,
+        NextHopKind::Router,
+        &policy,
+        &**clock,
+    )
+}
+
+#[test]
+fn ndp_policy_zero_interval_is_invalid() {
+    for interval in [
+        Duration::ZERO,
+        Duration::from_nanos(1),
+        Duration::from_nanos(999),
+    ] {
+        let (fake, clock) = setup();
+        // Прервать первую отправку старой реализации вместо зависания цикла с нулевым шагом.
+        fake.script_tx([TxStep::Uncertain]);
+        let result = run_policy(
+            &fake,
+            &clock,
+            NdpPolicy {
+                interval,
+                ..NdpPolicy::default()
+            },
+        );
+        assert!(
+            matches!(result, Err(NdpResolveError::InvalidPolicy(_))),
+            "{interval:?}: {result:?}"
+        );
+        assert_eq!(fake.send_calls(), 0, "{interval:?} дошёл до ввода-вывода");
+    }
+}
+
+#[test]
+fn ndp_policy_huge_timeout_is_invalid() {
+    for policy in [
+        NdpPolicy {
+            interval: Duration::MAX,
+            ..NdpPolicy::default()
+        },
+        NdpPolicy {
+            timeout: Duration::MAX,
+            ..NdpPolicy::default()
+        },
+        NdpPolicy {
+            timeout: Duration::from_micros(u64::MAX),
+            ..NdpPolicy::default()
+        },
+    ] {
+        let (fake, clock) = setup();
+        fake.script_tx([TxStep::Uncertain]);
+        let result = run_policy(&fake, &clock, policy);
+        assert!(
+            matches!(result, Err(NdpResolveError::InvalidPolicy(_))),
+            "{policy:?}: {result:?}"
+        );
+        assert_eq!(fake.send_calls(), 0, "{policy:?} дошёл до ввода-вывода");
+    }
+}

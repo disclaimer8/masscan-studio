@@ -1,16 +1,20 @@
-//! Форматы вывода (AGPL-3.0). Порт `out-text.c`, `out-json.c`, `out-ndjson.c`, `out-hostonly.c`, `out-xml.c` и
-//! `out-binary.c` masscan © Robert David Graham. Байты сверены с C: пробелы в JSON, `\r\n` в XML, 99-байтовые
-//! заголовок и подвал бинарного файла. Форматтер ничего не знает о файлах: он пишет в `&mut dyn Write`, а заголовок,
-//! подвал и счётчики ведёт конвейер ([`super::pipeline`]).
+//! Форматы вывода (AGPL-3.0). Порт `out-text.c`, `out-json.c`, `out-ndjson.c`, `out-hostonly.c`, `out-xml.c`,
+//! `out-binary.c` и `out-certs.c` masscan © Robert David Graham. Байты сверены с C: пробелы в JSON, `\r\n` в XML,
+//! 99-байтовые заголовок и подвал бинарного файла. Форматтер ничего не знает о файлах: он пишет в `&mut dyn Write`, а
+//! заголовок, подвал и счётчики ведёт конвейер ([`super::pipeline`]). У каждого формата две записи: статуса
+//! ([`Formatter::record`], `*_out_status`) и баннера ([`Formatter::banner`], `*_out_banner`).
 
 use std::io::{self, Write};
 use std::net::IpAddr;
 
 use super::grepable::{Grepable, Unicornscan};
-use super::record::{CIp, Record, Status, civil, proto_str, reason_string, status_str};
+use super::record::{
+    CIp, Record, Status, civil, ip_proto_name, proto_str, reason_string, status_str,
+};
 use super::services::ServiceNames;
+use rmasscan_proto::{BannerRecord, app_name, normalize_json_string, normalize_string};
 
-/// `--output-format` и `-o?` (`masscan.h:50–65`, нужное подмножество).
+/// `--output-format` и `-o?` (`masscan.h:50–65`, нужное подмножество; у `Certs` буквы `-o` нет, `main-conf.c:1701`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Format {
     Default,
@@ -23,6 +27,7 @@ pub enum Format {
     Binary,
     Hostonly,
     Unicornscan,
+    Certs,
     None,
 }
 
@@ -51,7 +56,14 @@ pub struct FileCtx<'a> {
 pub trait Formatter {
     fn header(&mut self, w: &mut dyn Write, cx: &FileCtx) -> io::Result<()>;
     fn record(&mut self, w: &mut dyn Write, cx: &FileCtx, r: &Record) -> io::Result<()>;
+    /// Запись баннера (`out->funcs->banner`, `src/output.c:952`). Время берётся из записи, а не из `cx.now`.
+    fn banner(&mut self, w: &mut dyn Write, cx: &FileCtx, b: &BannerRecord) -> io::Result<()>;
     fn footer(&mut self, w: &mut dyn Write, cx: &FileCtx) -> io::Result<()>;
+    /// `true`, если запись баннера идёт в stdout процесса, а не в файл формата: так только у `certs`, который
+    /// печатает PEM через `printf` (`src/out-certs.c:72-79`). Заголовок, подвал и flush остаются у файла.
+    fn banner_to_stdout(&self) -> bool {
+        false
+    }
 }
 
 /// `None` для `Default`/`Interactive`/`None` (это `null_output` C).
@@ -65,6 +77,7 @@ pub fn formatter(f: Format) -> Option<Box<dyn Formatter>> {
         Format::Hostonly => Some(Box::new(Hostonly)),
         Format::Grepable => Some(Box::new(Grepable)),
         Format::Unicornscan => Some(Box::new(Unicornscan)),
+        Format::Certs => Some(Box::new(Certs)),
         Format::Default | Format::Interactive | Format::None => None,
     }
 }
@@ -77,6 +90,11 @@ fn ts_u32(r: &Record) -> u32 {
 /// `%d` над `(int)timestamp`.
 fn ts_i32(r: &Record) -> i32 {
     r.timestamp as u32 as i32
+}
+
+/// `name_from_ip_version` (`output.c:89-96`).
+fn addrtype(ip: IpAddr) -> &'static str {
+    if ip.is_ipv6() { "ipv6" } else { "ipv4" }
 }
 
 /// `-oL`, `out-text.c`.
@@ -97,15 +115,39 @@ impl Formatter for List {
             ts_u32(r)
         )
     }
+    /// `text_out_banner` (`src/out-text.c:51-73`): `"%s %s %u %s %u %s %s\n"`, TTL не печатается.
+    fn banner(&mut self, w: &mut dyn Write, _: &FileCtx, b: &BannerRecord) -> io::Result<()> {
+        writeln!(
+            w,
+            "banner {} {} {} {} {} {}",
+            ip_proto_name(b.ip_proto),
+            b.port,
+            CIp(b.ip),
+            b.timestamp as u32,
+            app_name(b.app),
+            normalize_string(&b.payload)
+        )
+    }
     fn footer(&mut self, w: &mut dyn Write, _: &FileCtx) -> io::Result<()> {
         w.write_all(b"# end\n")
     }
 }
 
-/// `-oJ`, `out-json.c`: запятая ставится перед каждой записью, кроме первой.
+/// `-oJ`, `out-json.c`: запятая ставится перед каждой записью, кроме первой, статуса или баннера.
 #[derive(Default)]
 struct Json {
     seen: bool,
+}
+
+impl Json {
+    /// `is_first_record_seen` (`src/out-json.c:42-45`, `:116-119`): `,\n` перед каждой записью, кроме первой.
+    fn separate(&mut self, w: &mut dyn Write) -> io::Result<()> {
+        if self.seen {
+            w.write_all(b",\n")?;
+        }
+        self.seen = true;
+        Ok(())
+    }
 }
 
 impl Formatter for Json {
@@ -113,10 +155,7 @@ impl Formatter for Json {
         w.write_all(b"[\n")
     }
     fn record(&mut self, w: &mut dyn Write, _: &FileCtx, r: &Record) -> io::Result<()> {
-        if self.seen {
-            w.write_all(b",\n")?;
-        }
-        self.seen = true;
+        self.separate(w)?;
         writeln!(
             w,
             "{{   \"ip\": \"{}\",   \"timestamp\": \"{}\", \"ports\": [ {{\"port\": {}, \"proto\": \"{}\", \
@@ -128,6 +167,22 @@ impl Formatter for Json {
             status_str(r.status),
             reason_string(r.reason),
             r.ttl
+        )
+    }
+    /// `json_out_banner` (`src/out-json.c:101-134`): флаг первой записи общий с записью статуса, после `service`
+    /// стоит `} } ]` (у статуса `} ]`), TTL не печатается.
+    fn banner(&mut self, w: &mut dyn Write, _: &FileCtx, b: &BannerRecord) -> io::Result<()> {
+        self.separate(w)?;
+        writeln!(
+            w,
+            "{{   \"ip\": \"{}\",   \"timestamp\": \"{}\", \"ports\": [ {{\"port\": {}, \"proto\": \"{}\", \
+             \"service\": {{\"name\": \"{}\", \"banner\": \"{}\"}} }} ] }}",
+            CIp(b.ip),
+            b.timestamp as u32 as i32,
+            b.port,
+            ip_proto_name(b.ip_proto),
+            app_name(b.app),
+            normalize_json_string(&b.payload)
         )
     }
     fn footer(&mut self, w: &mut dyn Write, _: &FileCtx) -> io::Result<()> {
@@ -156,6 +211,21 @@ impl Formatter for Ndjson {
             r.ttl
         )
     }
+    /// `ndjson_out_banner` (`src/out-ndjson.c:97-153`): `normalize_ndjson_string` (`:64-93`) побайтово равен
+    /// `normalize_json_string`, TTL не печатается.
+    fn banner(&mut self, w: &mut dyn Write, _: &FileCtx, b: &BannerRecord) -> io::Result<()> {
+        writeln!(
+            w,
+            "{{\"ip\":\"{}\",\"timestamp\":\"{}\",\"port\":{},\"proto\":\"{}\",\"rec_type\":\"banner\",\
+             \"data\":{{\"service_name\":\"{}\",\"banner\":\"{}\"}}}}",
+            CIp(b.ip),
+            b.timestamp as u32 as i32,
+            b.port,
+            ip_proto_name(b.ip_proto),
+            app_name(b.app),
+            normalize_json_string(&b.payload)
+        )
+    }
     fn footer(&mut self, _: &mut dyn Write, _: &FileCtx) -> io::Result<()> {
         Ok(())
     }
@@ -170,6 +240,10 @@ impl Formatter for Hostonly {
     }
     fn record(&mut self, w: &mut dyn Write, _: &FileCtx, r: &Record) -> io::Result<()> {
         writeln!(w, "{}", CIp(r.ip))
+    }
+    /// `hostonly_out_banner` (`src/out-hostonly.c:45-65`): ещё одна строка адреса.
+    fn banner(&mut self, w: &mut dyn Write, _: &FileCtx, b: &BannerRecord) -> io::Result<()> {
+        writeln!(w, "{}", CIp(b.ip))
     }
     fn footer(&mut self, _: &mut dyn Write, _: &FileCtx) -> io::Result<()> {
         Ok(())
@@ -200,13 +274,33 @@ impl Formatter for Xml {
              </port></ports></host>\r\n",
             ts_u32(r),
             CIp(r.ip),
-            // `name_from_ip_version` (`output.c:89-96`).
-            if r.ip.is_ipv6() { "ipv6" } else { "ipv4" },
+            addrtype(r.ip),
             proto_str(r.proto),
             r.port,
             status_str(r.status),
             reason_string(r.reason),
             r.ttl
+        )
+    }
+    /// `xml_out_banner` (`src/out-xml.c:95-132`): `reason` выбирается `switch (proto)` по номеру ПРИЛОЖЕНИЯ
+    /// (`:106-109`; в C, видимо, имелся в виду `ip_proto`): app 6 (`dns-ver`) даёт `syn-ack`, всё остальное, в том
+    /// числе любой TCP-баннер, `response`. У `<state … />` пробел перед `/>` (у записи статуса его нет).
+    fn banner(&mut self, w: &mut dyn Write, _: &FileCtx, b: &BannerRecord) -> io::Result<()> {
+        let reason = if b.app == 6 { "syn-ack" } else { "response" };
+        write!(
+            w,
+            "<host endtime=\"{}\"><address addr=\"{}\" addrtype=\"{}\"/><ports>\
+             <port protocol=\"{}\" portid=\"{}\"><state state=\"open\" reason=\"{}\" reason_ttl=\"{}\" />\
+             <service name=\"{}\" banner=\"{}\"></service></port></ports></host>\r\n",
+            b.timestamp as u32,
+            CIp(b.ip),
+            addrtype(b.ip),
+            ip_proto_name(b.ip_proto),
+            b.port,
+            reason,
+            b.ttl,
+            app_name(b.app),
+            normalize_string(&b.payload)
         )
     }
     fn footer(&mut self, w: &mut dyn Write, cx: &FileCtx) -> io::Result<()> {
@@ -277,10 +371,93 @@ impl Formatter for Binary {
         b[14] = r.ttl;
         w.write_all(&b)
     }
+    /// `binary_out_banner` (`src/out-binary.c:293-355`, тип 9 `Out_Banner9`) и `binary_out_banner_ipv6` (`:216-289`,
+    /// тип 13 `Out_Banner6`, `src/out-record.h`). Длина записи `n + 14` (IPv6 `n + 27`): один байт, пока
+    /// `n < 128 - заголовок`, иначе два, `((n+h)>>7)|0x80` и `(n+h)&0x7F`; от `n >= 128*128 - заголовок` запись молча
+    /// не пишется (`:232-233`, `:313-314`), хотя ленивый заголовок файла уже записан. Время это младшие 32 бита,
+    /// полезная нагрузка сырая.
+    fn banner(&mut self, w: &mut dyn Write, _: &FileCtx, b: &BannerRecord) -> io::Result<()> {
+        let (ty, head) = match b.ip {
+            IpAddr::V4(_) => (9u8, 14usize),
+            IpAddr::V6(_) => (13, 14 + 13),
+        };
+        let n = b.payload.len();
+        if n >= 128 * 128 - head {
+            return Ok(());
+        }
+        let len = n + head;
+        let mut rec = Vec::with_capacity(3 + len);
+        rec.push(ty);
+        if n < 128 - head {
+            rec.push(len as u8);
+        } else {
+            rec.push((len >> 7) as u8 | 0x80);
+            rec.push((len & 0x7F) as u8);
+        }
+        rec.extend_from_slice(&(b.timestamp as u32).to_be_bytes());
+        match b.ip {
+            IpAddr::V4(a) => {
+                // `:324-346`: время, адрес, протокол, порт, app, TTL.
+                rec.extend_from_slice(&a.octets());
+                rec.push(b.ip_proto);
+                rec.extend_from_slice(&b.port.to_be_bytes());
+                rec.extend_from_slice(&b.app.to_be_bytes());
+                rec.push(b.ttl);
+            }
+            IpAddr::V6(a) => {
+                // `:243-280`: время, протокол, порт, app, TTL, версия 6, `hi`, `lo`.
+                rec.push(b.ip_proto);
+                rec.extend_from_slice(&b.port.to_be_bytes());
+                rec.extend_from_slice(&b.app.to_be_bytes());
+                rec.push(b.ttl);
+                rec.push(6);
+                rec.extend_from_slice(&a.octets());
+            }
+        }
+        rec.extend_from_slice(&b.payload);
+        w.write_all(&rec)
+    }
     fn footer(&mut self, w: &mut dyn Write, _: &FileCtx) -> io::Result<()> {
         let mut buf = [0u8; BINARY_BLOCK];
         buf[..11].copy_from_slice(b"masscan/1.1");
         w.write_all(&buf)
+    }
+}
+
+/// `--output-format certs`, `src/out-certs.c`: заголовок и запись статуса пусты (`:10-15`, `:29-44`), подвал
+/// `{finished: 1}\n` (`:21-25`), то есть файл, которого коснулась хоть одна запись, содержит только эту строку.
+struct Certs;
+
+impl Formatter for Certs {
+    fn header(&mut self, _: &mut dyn Write, _: &FileCtx) -> io::Result<()> {
+        Ok(())
+    }
+    fn record(&mut self, _: &mut dyn Write, _: &FileCtx, _: &Record) -> io::Result<()> {
+        Ok(())
+    }
+    /// `cert_out_banner` (`src/out-certs.c:49-80`): все поля, кроме полезной нагрузки, не используются, проверки
+    /// app нет. `cert:` в начале снимается только при длине больше 5; затем PEM-обёртка и строки по 72 байта через
+    /// `printf("%.*s\n")`, который останавливается на первом NUL строки.
+    fn banner(&mut self, w: &mut dyn Write, _: &FileCtx, b: &BannerRecord) -> io::Result<()> {
+        let mut px = b.payload.as_slice();
+        if px.len() > 5
+            && let Some(rest) = px.strip_prefix(b"cert:")
+        {
+            px = rest;
+        }
+        w.write_all(b"-----BEGIN CERTIFICATE-----\n")?;
+        for line in px.chunks(72) {
+            let text = line.split(|&c| c == 0).next().unwrap_or_default();
+            w.write_all(text)?;
+            w.write_all(b"\n")?;
+        }
+        w.write_all(b"-----END CERTIFICATE-----\n")
+    }
+    fn footer(&mut self, w: &mut dyn Write, _: &FileCtx) -> io::Result<()> {
+        w.write_all(b"{finished: 1}\n")
+    }
+    fn banner_to_stdout(&self) -> bool {
+        true
     }
 }
 
@@ -771,5 +948,436 @@ mod tests {
         assert_eq!(bin[99 + 2..99 + 6], 5u32.to_be_bytes());
         assert_eq!(bin[99 + 11..99 + 15], [0, 0, 0, 0]);
         assert_eq!(bin[114 + 11..114 + 15], [0xFF, 0xFF, 0xFF, 255]);
+    }
+}
+
+/// Записи баннеров (справка A4 `docs/superpowers/specs/2026-11-13-rmasscan-banners-c-reference-output-udp.md`): байты
+/// сверены с `out-*.c` masscan `8e6b3b0`.
+#[cfg(test)]
+mod banner_tests {
+    use super::*;
+    use crate::output::record::Proto;
+    use crate::output::services;
+    use rmasscan_proto::{BannerRecord, app_id};
+    use std::net::{IpAddr, Ipv4Addr};
+
+    /// Пример справки A4: IPv4 udp/53, TTL 57, app 6 (`dns-ver`), время 0x6553F100, `9.18.24`.
+    fn dns() -> BannerRecord {
+        BannerRecord {
+            timestamp: 0x6553_F100,
+            ip: Ipv4Addr::new(192, 0, 2, 1).into(),
+            ip_proto: 17,
+            port: 53,
+            app: app_id::DNS_VERSIONBIND,
+            ttl: 57,
+            payload: b"9.18.24".to_vec(),
+        }
+    }
+
+    fn v6(payload: &[u8]) -> BannerRecord {
+        BannerRecord {
+            ip: IpAddr::V6("2001:db8::1".parse().unwrap()),
+            payload: payload.to_vec(),
+            ..dns()
+        }
+    }
+
+    fn open_rec() -> Record {
+        Record {
+            timestamp: 1_700_000_000,
+            ip: Ipv4Addr::new(1, 2, 3, 4).into(),
+            port: 80,
+            proto: Proto::Tcp,
+            status: Status::Open,
+            reason: 0x12,
+            ttl: 57,
+            mac: None,
+        }
+    }
+
+    fn cx(services: &ServiceNames) -> FileCtx<'_> {
+        FileCtx {
+            now: 1_700_000_005,
+            utc_offset_secs: 0,
+            scan_started: 1_700_000_000,
+            file_opened: 1_700_000_000,
+            counts: Counts::default(),
+            stylesheet: None,
+            ports: &[],
+            services,
+        }
+    }
+
+    enum Item<'r> {
+        S(&'r Record),
+        B(&'r BannerRecord),
+    }
+
+    /// Заголовок, записи статуса и баннеров в порядке прихода, подвал.
+    fn render(f: Format, items: &[Item]) -> Vec<u8> {
+        let sv = services::empty();
+        let c = cx(&sv);
+        let mut fm = formatter(f).expect("formatter");
+        let mut out = Vec::new();
+        fm.header(&mut out, &c).unwrap();
+        for i in items {
+            match i {
+                Item::S(r) => fm.record(&mut out, &c, r).unwrap(),
+                Item::B(b) => fm.banner(&mut out, &c, b).unwrap(),
+            }
+        }
+        fm.footer(&mut out, &c).unwrap();
+        out
+    }
+
+    /// Только байты одной записи баннера (без заголовка и подвала).
+    fn one(f: Format, b: &BannerRecord) -> Vec<u8> {
+        let sv = services::empty();
+        let c = cx(&sv);
+        let mut out = Vec::new();
+        formatter(f)
+            .expect("formatter")
+            .banner(&mut out, &c, b)
+            .unwrap();
+        out
+    }
+
+    fn s(b: &[u8]) -> String {
+        String::from_utf8(b.to_vec()).unwrap()
+    }
+
+    /// `text_out_banner` (`src/out-text.c:51-73`): `"%s %s %u %s %u %s %s\n"`, TTL не печатается; пустой баннер
+    /// оставляет пробел-разделитель; незнакомый `ip_proto` это `err` (`src/output.c:71-82`), незнакомый app `(N)`.
+    #[test]
+    fn list_banner_bytes() {
+        let b = BannerRecord {
+            timestamp: 1_700_000_000,
+            ..dns()
+        };
+        assert_eq!(
+            s(&one(Format::List, &b)),
+            "banner udp 53 192.0.2.1 1700000000 dns-ver 9.18.24\n"
+        );
+        let ntp = BannerRecord {
+            port: 123,
+            app: app_id::NTP,
+            payload: Vec::new(),
+            ..b.clone()
+        };
+        assert_eq!(
+            s(&one(Format::List, &ntp)),
+            "banner udp 123 192.0.2.1 1700000000 ntp \n"
+        );
+        let odd = BannerRecord {
+            timestamp: 4_294_967_296 + 5,
+            ip_proto: 99,
+            app: 37,
+            payload: b"a\r\n<\"'&\\>\x7f\xff z".to_vec(),
+            ..b.clone()
+        };
+        assert_eq!(
+            s(&one(Format::List, &odd)),
+            "banner err 53 192.0.2.1 5 (37) a\\x0d\\x0a\\x3c\\x22\\x27\\x26\\x5c\\x3e\\x7f\\xff z\n"
+        );
+        for (p, name) in [
+            (0u8, "arp"),
+            (1, "icmp"),
+            (6, "tcp"),
+            (17, "udp"),
+            (132, "sctp"),
+            (255, "err"),
+        ] {
+            let r = BannerRecord {
+                ip_proto: p,
+                ..b.clone()
+            };
+            assert!(
+                s(&one(Format::List, &r)).starts_with(&format!("banner {name} 53 ")),
+                "{p}"
+            );
+        }
+        // Адрес IPv6 в форме `ipv6address_fmt` C, без скобок.
+        assert_eq!(
+            s(&one(Format::List, &v6(b"x"))),
+            "banner udp 53 2001:db8::1 1700000000 dns-ver x\n"
+        );
+    }
+
+    /// `json_out_banner` (`src/out-json.c:101-134`): общий с записью статуса флаг первой записи (`,\n` перед каждой,
+    /// кроме первой), `} } ]` в конце, `\u00XX` строчными, `%d` над `(int)timestamp`, TTL не печатается.
+    #[test]
+    fn json_banner_bytes_and_shared_comma() {
+        let b = dns();
+        let status = open_rec();
+        let out = s(&render(Format::Json, &[Item::S(&status), Item::B(&b)]));
+        let expect = concat!(
+            "[\n",
+            "{   \"ip\": \"1.2.3.4\",   \"timestamp\": \"1700000000\", \"ports\": [ {\"port\": 80, \"proto\": \"tcp\", \"status\": \"open\", \"reason\": \"syn-ack\", \"ttl\": 57} ] }\n",
+            ",\n",
+            "{   \"ip\": \"192.0.2.1\",   \"timestamp\": \"1700000000\", \"ports\": [ {\"port\": 53, \"proto\": \"udp\", \"service\": {\"name\": \"dns-ver\", \"banner\": \"9.18.24\"} } ] }\n",
+            "]\n"
+        );
+        assert_eq!(out, expect);
+        // Баннер первым: запятая уходит к следующей записи статуса.
+        let out = s(&render(
+            Format::Json,
+            &[Item::B(&b), Item::S(&status), Item::B(&b)],
+        ));
+        assert_eq!(out.matches(",\n").count(), 2, "{out}");
+        assert!(out.starts_with("[\n{   \"ip\": \"192.0.2.1\""), "{out}");
+        let odd = BannerRecord {
+            timestamp: 0x8000_0000,
+            payload: b"a\"b\n\xc3\xa9".to_vec(),
+            ..dns()
+        };
+        assert_eq!(
+            s(&one(Format::Json, &odd)),
+            "{   \"ip\": \"192.0.2.1\",   \"timestamp\": \"-2147483648\", \"ports\": [ {\"port\": 53, \"proto\": \"udp\", \"service\": {\"name\": \"dns-ver\", \"banner\": \"a\\u0022b\\u000a\\u00c3\\u00a9\"} } ] }\n"
+        );
+    }
+
+    /// `ndjson_out_banner` (`src/out-ndjson.c:97-153`): одна строка, `rec_type` `banner`, нормализатор как у JSON.
+    #[test]
+    fn ndjson_banner_bytes() {
+        assert_eq!(
+            s(&one(Format::Ndjson, &dns())),
+            "{\"ip\":\"192.0.2.1\",\"timestamp\":\"1700000000\",\"port\":53,\"proto\":\"udp\",\"rec_type\":\"banner\",\"data\":{\"service_name\":\"dns-ver\",\"banner\":\"9.18.24\"}}\n"
+        );
+        let odd = BannerRecord {
+            app: 65535,
+            payload: b"<\x00>".to_vec(),
+            ..v6(b"")
+        };
+        assert_eq!(
+            s(&one(Format::Ndjson, &odd)),
+            "{\"ip\":\"2001:db8::1\",\"timestamp\":\"1700000000\",\"port\":53,\"proto\":\"udp\",\"rec_type\":\"banner\",\"data\":{\"service_name\":\"(65535)\",\"banner\":\"\\u003c\\u0000\\u003e\"}}\n"
+        );
+        // Без заголовка и подвала, как у записи статуса.
+        assert_eq!(
+            render(Format::Ndjson, &[Item::B(&dns())]),
+            one(Format::Ndjson, &dns())
+        );
+    }
+
+    /// `xml_out_banner` (`src/out-xml.c:95-132`): `reason` выбирается по номеру ПРИЛОЖЕНИЯ (`case 6`, баг C: имелся
+    /// в виду `ip_proto`), поэтому `dns-ver` даёт `syn-ack`, а HTTP по TCP `response`; ` />` с пробелом.
+    #[test]
+    fn xml_banner_reason_by_app_id() {
+        assert_eq!(
+            s(&one(Format::Xml, &dns())),
+            "<host endtime=\"1700000000\"><address addr=\"192.0.2.1\" addrtype=\"ipv4\"/><ports><port protocol=\"udp\" portid=\"53\"><state state=\"open\" reason=\"syn-ack\" reason_ttl=\"57\" /><service name=\"dns-ver\" banner=\"9.18.24\"></service></port></ports></host>\r\n"
+        );
+        let http = BannerRecord {
+            ip_proto: 6,
+            port: 80,
+            app: app_id::HTTP,
+            ttl: 64,
+            payload: b"HTTP/1.1 200 OK\r\nServer: <x>".to_vec(),
+            ..dns()
+        };
+        assert_eq!(
+            s(&one(Format::Xml, &http)),
+            "<host endtime=\"1700000000\"><address addr=\"192.0.2.1\" addrtype=\"ipv4\"/><ports><port protocol=\"tcp\" portid=\"80\"><state state=\"open\" reason=\"response\" reason_ttl=\"64\" /><service name=\"http\" banner=\"HTTP/1.1 200 OK\\x0d\\x0aServer: \\x3cx\\x3e\"></service></port></ports></host>\r\n"
+        );
+        let x6 = s(&one(Format::Xml, &v6(b"v")));
+        assert!(
+            x6.starts_with(
+                "<host endtime=\"1700000000\"><address addr=\"2001:db8::1\" addrtype=\"ipv6\"/>"
+            ),
+            "{x6}"
+        );
+        // Запись статуса рядом остаётся без пробела перед `/>`.
+        let mixed = s(&render(
+            Format::Xml,
+            &[Item::S(&open_rec()), Item::B(&dns())],
+        ));
+        assert!(mixed.contains("reason_ttl=\"57\"/></port>"), "{mixed}");
+        assert!(mixed.contains("reason_ttl=\"57\" /><service"), "{mixed}");
+    }
+
+    /// `grepable_out_banner` (`src/out-grepable.c:178-202`): без `Timestamp:`, без протокола и без поиска сервиса.
+    #[test]
+    fn grepable_banner_bytes() {
+        assert_eq!(
+            s(&one(Format::Grepable, &dns())),
+            "Host: 192.0.2.1 ()\tPort: 53\tService: dns-ver\tBanner: 9.18.24\n"
+        );
+        let sv = ServiceNames::parse("domain 53/udp\n");
+        let c = cx(&sv);
+        let mut out = Vec::new();
+        formatter(Format::Grepable)
+            .unwrap()
+            .banner(&mut out, &c, &v6(b"\t"))
+            .unwrap();
+        assert_eq!(
+            s(&out),
+            "Host: 2001:db8::1 ()\tPort: 53\tService: dns-ver\tBanner: \\x09\n"
+        );
+    }
+
+    /// `binary_out_banner` (`src/out-binary.c:293-355`): тип 9, длина `7 + 14`, всё в сетевом порядке байт.
+    #[test]
+    fn binary_banner_type9_example() {
+        assert_eq!(
+            one(Format::Binary, &dns()),
+            [
+                0x09, 0x15, 0x65, 0x53, 0xF1, 0x00, 0xC0, 0x00, 0x02, 0x01, 0x11, 0x00, 0x35, 0x00,
+                0x06, 0x39, 0x39, 0x2E, 0x31, 0x38, 0x2E, 0x32, 0x34
+            ]
+        );
+        // Время режется до младших 32 бит; полезная нагрузка сырая, без экранирования.
+        let raw = BannerRecord {
+            timestamp: 0x1_0000_0002,
+            app: 0x1234,
+            payload: vec![0x00, 0xFF, b'<'],
+            ..dns()
+        };
+        assert_eq!(
+            one(Format::Binary, &raw),
+            [
+                9, 17, 0, 0, 0, 2, 192, 0, 2, 1, 17, 0, 53, 0x12, 0x34, 57, 0x00, 0xFF, b'<'
+            ]
+        );
+    }
+
+    /// `binary_out_banner_ipv6` (`src/out-binary.c:216-289`): тип 13, длина `n + 27`; время, протокол, порт, app,
+    /// TTL, версия 6, `hi`, `lo`, полезная нагрузка (адрес после TTL, а не в начале, как у типа 9).
+    #[test]
+    fn binary_banner_type13_layout() {
+        let b = BannerRecord {
+            ip: IpAddr::V6("2a03:9060:0:400::2".parse().unwrap()),
+            ..dns()
+        };
+        let mut want = vec![13u8, 7 + 27];
+        want.extend_from_slice(&0x6553_F100u32.to_be_bytes());
+        want.push(17);
+        want.extend_from_slice(&53u16.to_be_bytes());
+        want.extend_from_slice(&6u16.to_be_bytes());
+        want.push(57);
+        want.push(6);
+        want.extend_from_slice(&0x2a03_9060_0000_0400u64.to_be_bytes());
+        want.extend_from_slice(&2u64.to_be_bytes());
+        want.extend_from_slice(b"9.18.24");
+        assert_eq!(one(Format::Binary, &b), want);
+        // Тип 9 и тип 13 в одном файле между записями статуса.
+        let bin = render(
+            Format::Binary,
+            &[Item::S(&open_rec()), Item::B(&b), Item::B(&dns())],
+        );
+        assert_eq!(bin.len(), 99 + 15 + want.len() + 23 + 99);
+        assert_eq!(bin[114..114 + want.len()], want[..]);
+        assert_eq!(bin[114 + want.len()], 9);
+    }
+
+    /// Граница длины `-oB` (Review Focus 1): однобайтовая длина до `128 - header` (113 у IPv4, 100 у IPv6),
+    /// затем `((n+h)>>7)|0x80, (n+h)&0x7F`; от `128*128 - header` байт (16 370 / 16 357) запись молча не пишется
+    /// (`src/out-binary.c:232-241`, `:313-322`).
+    #[test]
+    fn binary_banner_length_boundaries() {
+        let v4 = |n: usize| BannerRecord {
+            payload: vec![b'A'; n],
+            ..dns()
+        };
+        let v6n = |n: usize| v6(&vec![b'B'; n]);
+        for (b, head, total) in [
+            (v4(113), vec![9u8, 127], 2 + 14 + 113),
+            (v4(114), vec![9, 0x81, 0x00], 3 + 14 + 114),
+            (v4(16_369), vec![9, 0xFF, 0x7F], 3 + 14 + 16_369),
+            (v6n(100), vec![13, 127], 2 + 27 + 100),
+            (v6n(101), vec![13, 0x81, 0x00], 3 + 27 + 101),
+            (v6n(16_356), vec![13, 0xFF, 0x7F], 3 + 27 + 16_356),
+        ] {
+            let out = one(Format::Binary, &b);
+            assert_eq!(out.len(), total, "{}", b.payload.len());
+            assert_eq!(out[..head.len()], head[..], "{}", b.payload.len());
+            assert!(out.ends_with(&b.payload), "{}", b.payload.len());
+        }
+        // Слишком длинные записи выбрасываются целиком, без ошибки.
+        for b in [v4(16_370), v4(65_536), v6n(16_357)] {
+            assert!(one(Format::Binary, &b).is_empty(), "{}", b.payload.len());
+        }
+        // Длина 0 пишется: только заголовок записи.
+        assert_eq!(one(Format::Binary, &v4(0))[..2], [9, 14]);
+        assert_eq!(one(Format::Binary, &v6n(0))[..2], [13, 27]);
+    }
+
+    /// `hostonly_out_banner` (`src/out-hostonly.c:45-65`): ещё одна строка адреса на каждую запись баннера.
+    #[test]
+    fn hostonly_banner_adds_ip_line() {
+        let out = s(&render(
+            Format::Hostonly,
+            &[Item::S(&open_rec()), Item::B(&dns()), Item::B(&v6(b""))],
+        ));
+        assert_eq!(out, "1.2.3.4\n192.0.2.1\n2001:db8::1\n");
+    }
+
+    /// `unicornscan_out_banner` (`src/out-unicornscan.c:61-79`): пустая; заголовок и подвал ведёт конвейер.
+    #[test]
+    fn unicornscan_banner_writes_nothing() {
+        assert!(one(Format::Unicornscan, &dns()).is_empty());
+        assert_eq!(
+            s(&render(Format::Unicornscan, &[Item::B(&dns())])),
+            "#masscan\n# end\n"
+        );
+    }
+
+    /// `src/out-certs.c`: заголовок и запись статуса пусты, подвал `{finished: 1}\n`; баннер это PEM (байты
+    /// [`Formatter::banner`] конвейер отдаёт в stdout, [`Formatter::banner_to_stdout`]).
+    #[test]
+    fn certs_banner_is_pem_in_72_byte_lines() {
+        let mut fm = formatter(Format::Certs).expect("certs formatter");
+        assert!(fm.banner_to_stdout());
+        let sv = services::empty();
+        let c = cx(&sv);
+        let mut out = Vec::new();
+        fm.header(&mut out, &c).unwrap();
+        fm.record(&mut out, &c, &open_rec()).unwrap();
+        assert!(out.is_empty());
+        fm.footer(&mut out, &c).unwrap();
+        assert_eq!(s(&out), "{finished: 1}\n");
+        let pem = |payload: &[u8]| {
+            let b = BannerRecord {
+                payload: payload.to_vec(),
+                ..dns()
+            };
+            let mut out = Vec::new();
+            formatter(Format::Certs)
+                .unwrap()
+                .banner(&mut out, &c, &b)
+                .unwrap();
+            out
+        };
+        let body: Vec<u8> = (0..150u32).map(|i| b'A' + (i % 26) as u8).collect();
+        let mut with_prefix = b"cert:".to_vec();
+        with_prefix.extend_from_slice(&body);
+        let mut want = b"-----BEGIN CERTIFICATE-----\n".to_vec();
+        for chunk in body.chunks(72) {
+            want.extend_from_slice(chunk);
+            want.push(b'\n');
+        }
+        want.extend_from_slice(b"-----END CERTIFICATE-----\n");
+        assert_eq!(pem(&with_prefix), want);
+        assert_eq!(pem(&body), want, "без `cert:` печатается как есть");
+        // `length > 5`: ровно `cert:` не снимается; `cert:X` снимается.
+        assert_eq!(
+            s(&pem(b"cert:")),
+            "-----BEGIN CERTIFICATE-----\ncert:\n-----END CERTIFICATE-----\n"
+        );
+        assert_eq!(
+            s(&pem(b"cert:X")),
+            "-----BEGIN CERTIFICATE-----\nX\n-----END CERTIFICATE-----\n"
+        );
+        assert_eq!(
+            s(&pem(b"")),
+            "-----BEGIN CERTIFICATE-----\n-----END CERTIFICATE-----\n"
+        );
+        // `printf("%.*s\n")` останавливается на NUL внутри строки из 72 байт.
+        let mut nul = vec![b'a'; 10];
+        nul.push(0);
+        nul.extend_from_slice(&[b'b'; 70]);
+        assert_eq!(
+            s(&pem(&nul)),
+            "-----BEGIN CERTIFICATE-----\naaaaaaaaaa\nbbbbbbbbb\n-----END CERTIFICATE-----\n"
+        );
     }
 }

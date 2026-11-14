@@ -1,0 +1,15 @@
+# Linux stand host
+7.0.0-38-generic
+tcpdump version 4.99.6
+ip utility, iproute2-6.19.0, libbpf 1.6.3
+SCTP lines in /proc/net/protocols: 0
+/etc/masscan: absent
+# Windows VM host
+7.3.0-10-generic
+QEMU emulator version 10.2.1 (Debian 1:10.2.1+ds-1ubuntu3.3)
+tcpdump version 4.99.6
+# Windows guest
+Windows 10.0.26300 (guest-exits: os Microsoft Windows NT 10.0.26300.0), Npcap AdminOnly=1, pwsh 7.6.10, rustc 1.99.1
+# Mac
+macOS 27.2.1
+rustc 1.99.1 (58cf8f9c3 2026-10-13) (Homebrew)

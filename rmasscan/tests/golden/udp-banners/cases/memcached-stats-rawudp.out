@@ -1,0 +1,5 @@
+udp-oracle port=11211 cookie=0x5eed1234 rawudp=1 mode=whole sections=1 framing=payload
+section len=193
+status open count=1
+banner 25 44 "uptime=12345 time=1700000000 version=1.6.21 "
+banner 0 193 =datagram

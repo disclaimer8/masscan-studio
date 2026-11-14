@@ -1,0 +1,5 @@
+udp-oracle port=137 cookie=0x5eed1234 rawudp=0 mode=whole sections=1 framing=payload
+section len=145
+status open count=1
+banner 8 57 "HOST1          <00>\x0aWORKGROUP      <00>\x0a52-52-52-52-52-52"
+banner 0 145 =datagram

@@ -1,0 +1,5 @@
+udp-oracle port=9999 cookie=0x5eed1234 rawudp=0 mode=whole sections=1 framing=payload
+section len=0
+status open count=1
+banner 0 0 -
+banner 0 0 -

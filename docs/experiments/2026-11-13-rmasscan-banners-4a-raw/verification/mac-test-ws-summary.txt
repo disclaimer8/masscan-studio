@@ -1,0 +1,115 @@
+# Mac, code C = 39ba251e (worktree clean), CARGO_TARGET_DIR outside the tree
+cargo test --workspace --locked --no-fail-fast: rc 0
+test result lines (^test result:): 55
+passed 2349 failed 0 ignored 23
+cargo clippy --workspace --all-targets --locked -- -D warnings: rc 0
+cargo fmt --all --check: rc 0
+scripts/language-guard.sh: language guard: PASS (16389 tracked files checked)
+studio: cargo check --locked --workspace: studio check rc=0
+rmasscan/target present after the task: no
+
+# per binary
+     Running unittests src/lib.rs ($TARGET/debug/deps/rmasscan_cli-f14909db11b9166a)
+test result: ok. 208 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+     Running unittests src/main.rs ($TARGET/debug/deps/rmasscan-0d6c9537d8dce8b4)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/detect_readonly.rs ($TARGET/debug/deps/detect_readonly-16dfd47b61cc3119)
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.42s
+     Running tests/differential.rs ($TARGET/debug/deps/differential-4247adda40a70839)
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.42s
+     Running tests/formats_golden.rs ($TARGET/debug/deps/formats_golden-5466dfff3cc0ddea)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.56s
+     Running tests/live_fake.rs ($TARGET/debug/deps/live_fake-7a830d9b2ab8f494)
+test result: ok. 86 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.31s
+     Running tests/live_fake_ipv6.rs ($TARGET/debug/deps/live_fake_ipv6-cd0fe9fc2458f8c5)
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+     Running tests/readscan_binary.rs ($TARGET/debug/deps/readscan_binary-5449b12e3b34607a)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/spawn_guard.rs ($TARGET/debug/deps/spawn_guard-da802a55d7469e5f)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running unittests src/lib.rs ($TARGET/debug/deps/rmasscan_core-fc935c392b9090d1)
+test result: ok. 284 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.61s
+     Running tests/blackrock_golden.rs ($TARGET/debug/deps/blackrock_golden-2caa37ea87a382ef)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/echo_golden.rs ($TARGET/debug/deps/echo_golden-534217fae4758a19)
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/no_c_in_build.rs ($TARGET/debug/deps/no_c_in_build-5914933e7738e633)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+     Running tests/offline_gen.rs ($TARGET/debug/deps/offline_gen-097903f4fb1fe4e8)
+test result: ok. 1 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/probe_cursor.rs ($TARGET/debug/deps/probe_cursor-c6812b9a72e761c7)
+test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/proptest_order.rs ($TARGET/debug/deps/proptest_order-0f28628c9f84f75d)
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+     Running tests/receive.rs ($TARGET/debug/deps/receive-8c4d2b41ff13d669)
+test result: ok. 68 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+     Running tests/scan_golden.rs ($TARGET/debug/deps/scan_golden-ed21c68ef536520c)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.33s
+     Running tests/selftest_parity.rs ($TARGET/debug/deps/selftest_parity-7fbfea8248a2caf6)
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/sha256_vectors.rs ($TARGET/debug/deps/sha256_vectors-75920214ab449224)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running unittests src/lib.rs ($TARGET/debug/deps/rmasscan_engine-54f5c6e1ec299a26)
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.61s
+     Running tests/backpressure.rs ($TARGET/debug/deps/backpressure-de804881ce0121b2)
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+     Running tests/bounded_memory.rs ($TARGET/debug/deps/bounded_memory-bc83c526edd7e65d)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.44s
+     Running tests/icmp_echo.rs ($TARGET/debug/deps/icmp_echo-3f3600d0b155e3cd)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+     Running tests/identity.rs ($TARGET/debug/deps/identity-91de5a1498c79e72)
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+     Running tests/lifecycle.rs ($TARGET/debug/deps/lifecycle-69d3344a100f5afe)
+test result: ok. 37 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.16s
+     Running tests/pause_resume.rs ($TARGET/debug/deps/pause_resume-d61297970fa7bc39)
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.26s
+     Running tests/probe_build_failure.rs ($TARGET/debug/deps/probe_build_failure-c1ccec795d9191f5)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/rx_integrity.rs ($TARGET/debug/deps/rx_integrity-c12d09c9b013cdea)
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+     Running tests/tx_batch.rs ($TARGET/debug/deps/tx_batch-498558a663c1646e)
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.18s
+     Running tests/tx_stall.rs ($TARGET/debug/deps/tx_stall-dfb16b7ddf3d4edd)
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/udp_banners.rs ($TARGET/debug/deps/udp_banners-96a4b91c896d2c5e)
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+     Running tests/udp_scan.rs ($TARGET/debug/deps/udp_scan-92199944d8f74fde)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+     Running unittests src/lib.rs ($TARGET/debug/deps/rmasscan_lab-26bf4b2502d8b191)
+test result: ok. 1041 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 39.01s
+     Running unittests src/main.rs ($TARGET/debug/deps/rmasscan_lab-399c1a03901d1a78)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/capture.rs ($TARGET/debug/deps/capture-fd1abba9df3809b6)
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/oracle_util.rs ($TARGET/debug/deps/oracle_util-1522c752d8d20f00)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/process_group.rs ($TARGET/debug/deps/process_group-5951299a2d635961)
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/rust_only.rs ($TARGET/debug/deps/rust_only-b69fea00b4424db7)
+test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.67s
+     Running tests/windows_evidence.rs ($TARGET/debug/deps/windows_evidence-da1b457157656750)
+test result: ok. 1 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running unittests src/lib.rs ($TARGET/debug/deps/rmasscan_net-6dc91ea62c161fc2)
+test result: ok. 345 passed; 0 failed; 9 ignored; 0 measured; 0 filtered out; finished in 15.84s
+     Running tests/interrupt.rs ($TARGET/debug/deps/interrupt-a5a51ef38e4c5bbb)
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/linux_io.rs ($TARGET/debug/deps/linux_io-3bb9cdfb50083e1f)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/linux_wire.rs ($TARGET/debug/deps/linux_wire-ed28fbfec1ef5879)
+test result: ok. 6 passed; 0 failed; 6 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/macos_live.rs ($TARGET/debug/deps/macos_live-ce27f37c1c84cacd)
+test result: ok. 0 passed; 0 failed; 6 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/windows_io.rs ($TARGET/debug/deps/windows_io-0c00d4cbccbc310b)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running tests/windows_live.rs ($TARGET/debug/deps/windows_live-26bb4ee48b79a768)
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+     Running unittests src/lib.rs ($TARGET/debug/deps/rmasscan_proto-0851c8e11b3e3b77)
+test result: ok. 43 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.23s
+     Running tests/udp_golden.rs ($TARGET/debug/deps/udp_golden-89d99a768991969f)
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s

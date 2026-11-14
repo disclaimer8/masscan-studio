@@ -1,0 +1,5 @@
+udp-oracle port=123 cookie=0x5eed1234 rawudp=0 mode=whole sections=1 framing=payload
+section len=12
+status open count=1
+banner 19 70 "XNTPD MON_GETLIST_1Response was NTP Error Code 15 - \x22Bogus Error Code\x22"
+banner 0 12 =datagram

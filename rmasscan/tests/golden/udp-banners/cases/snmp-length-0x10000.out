@@ -1,0 +1,5 @@
+udp-oracle port=161 cookie=0x5eed1234 rawudp=0 mode=whole sections=1 framing=payload
+section len=85
+status open count=1
+banner 7 43 "sysDescr:Linux router 6.1.0\x0asysName:router1"
+banner 0 85 =datagram

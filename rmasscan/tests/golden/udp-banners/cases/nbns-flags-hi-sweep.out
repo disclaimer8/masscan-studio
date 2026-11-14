@@ -1,0 +1,897 @@
+udp-oracle port=137 cookie=0x5eed1234 rawudp=0 mode=sweep:2 sections=256 framing=payload
+section len=50 byte[2]=0
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=1
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=2
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=3
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=4
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=5
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=6
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=7
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=8
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=9
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=10
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=11
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=12
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=13
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=14
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=15
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=16
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=17
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=18
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=19
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=20
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=21
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=22
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=23
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=24
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=25
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=26
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=27
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=28
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=29
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=30
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=31
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=32
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=33
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=34
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=35
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=36
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=37
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=38
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=39
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=40
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=41
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=42
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=43
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=44
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=45
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=46
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=47
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=48
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=49
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=50
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=51
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=52
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=53
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=54
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=55
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=56
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=57
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=58
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=59
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=60
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=61
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=62
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=63
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=64
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=65
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=66
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=67
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=68
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=69
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=70
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=71
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=72
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=73
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=74
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=75
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=76
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=77
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=78
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=79
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=80
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=81
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=82
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=83
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=84
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=85
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=86
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=87
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=88
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=89
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=90
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=91
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=92
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=93
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=94
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=95
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=96
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=97
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=98
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=99
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=100
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=101
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=102
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=103
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=104
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=105
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=106
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=107
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=108
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=109
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=110
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=111
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=112
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=113
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=114
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=115
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=116
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=117
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=118
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=119
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=120
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=121
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=122
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=123
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=124
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=125
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=126
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=127
+status open count=1
+banner 0 50 =datagram
+section len=50 byte[2]=128
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=129
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=130
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=131
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=132
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=133
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=134
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=135
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=136
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=137
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=138
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=139
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=140
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=141
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=142
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=143
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=144
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=145
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=146
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=147
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=148
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=149
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=150
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=151
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=152
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=153
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=154
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=155
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=156
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=157
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=158
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=159
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=160
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=161
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=162
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=163
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=164
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=165
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=166
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=167
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=168
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=169
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=170
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=171
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=172
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=173
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=174
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=175
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=176
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=177
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=178
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=179
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=180
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=181
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=182
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=183
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=184
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=185
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=186
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=187
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=188
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=189
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=190
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=191
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=192
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=193
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=194
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=195
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=196
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=197
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=198
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=199
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=200
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=201
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=202
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=203
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=204
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=205
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=206
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=207
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=208
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=209
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=210
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=211
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=212
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=213
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=214
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=215
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=216
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=217
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=218
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=219
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=220
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=221
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=222
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=223
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=224
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=225
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=226
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=227
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=228
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=229
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=230
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=231
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=232
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=233
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=234
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=235
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=236
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=237
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=238
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=239
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=240
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=241
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=242
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=243
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=244
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=245
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=246
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=247
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=248
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=249
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=250
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=251
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=252
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=253
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=254
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram
+section len=50 byte[2]=255
+status open count=1
+banner 8 37 "HOST1          <20>\x0a52-52-52-52-52-52"
+banner 0 50 =datagram

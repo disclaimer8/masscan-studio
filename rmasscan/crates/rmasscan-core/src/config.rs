@@ -4,8 +4,8 @@
 //! `src/main.c:1595-1733` из masscan © Robert David Graham
 //! (github.com/robertdavidgraham/masscan, HEAD 8e6b3b0).
 //!
-//! Что здесь НЕ перенесено: IPv6 и опции баннеров (`--top-ports` разбирает CLI,
-//! таблицы лежат в [`crate::top_ports`]). Ключи
+//! Что здесь НЕ перенесено: опции TCP-баннеров кроме `capture`/`nocapture` и `hello-timeout` (`--top-ports`
+//! разбирает CLI, таблицы лежат в [`crate::top_ports`]). Ключи
 //! вывода, `pcap-filename` и `ndjson-status` принадлежат слою CLI и
 //! подмешиваются через [`EchoExtras`]; остальные ключи `config_parameters[]`
 //! печатает `echo` из `ScanConfig` (адаптеры `nic[0..8)`, `noreset`, `ttl`,
@@ -17,6 +17,7 @@
 //! с `is_echo_all = 0` и для `--echo-all` (main.c:1803-1805), поэтому CLI
 //! обязан передавать `false` в обоих случаях.
 
+use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use std::net::Ipv4Addr;
 
@@ -59,7 +60,8 @@ pub enum ConfigError {
     /// Больше 63 бит (main.c:1698-1704).
     #[error(transparent)]
     RangeOverflow(#[from] RangeOverflow),
-    /// Больше 1e9 адресов без единого `--exclude` (main.c:1235-1239).
+    /// Больше 1e9 адресов без единого `--exclude` (main.c:1235-1239). Однострочный текст общий с Studio; три строки
+    /// `LOG(0, ...)` из main.c:1236-1238 печатает CLI (`rmasscan_cli::EXCLUDE_REQUIRED_TEXT`).
     #[error("range too big, need confirmation: at least one --exclude must be specified")]
     ExcludeRequired,
     /// `blackrock_rounds >= 64`: в C это UB-сдвиг (crypto-blackrock.c),
@@ -92,6 +94,10 @@ pub enum ConfigError {
     /// Ключ, которого нет в v1.
     #[error("unsupported config key {0:?}")]
     UnknownKey(String),
+    /// `--capture`/`--nocapture` с неизвестным значением (`src/main-conf.c:1159`, `:1174`): C печатает строку
+    /// и разбор идёт дальше (`CONF_ERR` отбрасывается), здесь это отказ с кодом 1 (Р17).
+    #[error("FAIL: {value}: unknown {kind} type")]
+    UnknownCapture { kind: &'static str, value: String },
     #[error("{0}")]
     Parse(#[from] ParseError),
 }
@@ -177,6 +183,46 @@ pub struct ScanConfig {
     pub nmap_payloads: Option<String>,
     /// `--pcap-payloads FILE` (main-conf.c:1832): нагрузки UDP из захвата pcap. Читает слой CLI.
     pub pcap_payloads: Option<String>,
+    /// `--banner-types` и синонимы `banner-type`, `banner-apps`, `banner-app` (`masscan->banner_types`,
+    /// `src/main-conf.c:2683-2697`): номера приложений, которые оставляет `--readscan` (`src/in-binary.c:684`), её
+    /// единственный потребитель. Имена разбирает слой CLI (`masscan_string_to_app` живёт в `rmasscan-proto`, ядро от
+    /// него не зависит); `--echo` и `paused.conf` C их не пишут.
+    pub banner_types: BTreeSet<u16>,
+    /// `--banners`/`--banner` (`is_banners`, `src/main-conf.c:1106-1116`), снимает `--nobanners`/`--nobanner`
+    /// (`:1546-1554`), ставит и `--rawudp` (`:1118-1130`). Без него баннеров нет (`src/output.c:898-899`); в 4a
+    /// баннеры только UDP. На зонды и `job_digest` не влияет.
+    pub banners: bool,
+    /// `--rawudp` (`is_banners_rawudp`, `src/main-conf.c:1118-1130`): сырой баннер за каждым UDP-ответом
+    /// (`src/proto-udp.c:120`).
+    pub rawudp: bool,
+    /// `--capture`/`--nocapture` (`src/main-conf.c:1132-1180`): настройки TCP-баннеров; в 4a только разбор и `--echo`.
+    pub capture: Capture,
+    /// `--hello-timeout` (`tcp_hello_timeout`, `src/main-conf.c:1288-1298`): принимается и, как у C, ни на что не
+    /// влияет (Р1, Р17).
+    pub hello_timeout: u32,
+}
+
+/// Что захватывают TCP-баннеры (`is_capture_*`, `src/main-conf.c:1132-1180`). Умолчание C: только `cert`
+/// (`src/main.c:1610`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Capture {
+    pub cert: bool,
+    pub servername: bool,
+    pub html: bool,
+    pub heartbleed: bool,
+    pub ticketbleed: bool,
+}
+
+impl Default for Capture {
+    fn default() -> Self {
+        Capture {
+            cert: true,
+            servername: false,
+            html: false,
+            heartbleed: false,
+            ticketbleed: false,
+        }
+    }
 }
 
 impl Default for ScanConfig {
@@ -209,6 +255,11 @@ impl Default for ScanConfig {
             tcp_opts: TcpHeaderOptions::default(),
             nmap_payloads: None,
             pcap_payloads: None,
+            banner_types: BTreeSet::new(),
+            banners: false,
+            rawudp: false,
+            capture: Capture::default(),
+            hello_timeout: 0,
         }
     }
 }
@@ -776,7 +827,7 @@ pub struct EchoExtras<'a> {
 /// новых полей вывод побайтно прежний.
 ///
 /// Порядок как у `config_parameters[]` (main-conf.c:2369-2422): resume,
-/// seed, rate, shard, retries, `noreset`, offline, `pcap-filename`,
+/// seed, rate, shard, `banners`, `rawudp`, retries, `noreset`, offline, `pcap-filename`, `hello-timeout`,
 /// `ndjson-status`, двойной capture, `SPACE`, секция вывода, `SPACE`,
 /// затем `ttl`, `badsum` (их C не печатает, это расширение rmasscan, читаемое
 /// и C: `masscan_set_parameter` знает оба ключа) и `tcp-mss`, `tcp-wscale`,
@@ -803,6 +854,14 @@ pub fn echo_with(cfg: &ScanConfig, echo_all: bool, extras: &EchoExtras<'_>, out:
     if cfg.shard.of > 0 || echo_all {
         let _ = writeln!(out, "shard = {}/{}", cfg.shard.one, cfg.shard.of); // :2067
     }
+    // :1106-1130, место в таблице :2377-2379. Только когда включены (как `noreset` ниже: `echo_all` умолчание не
+    // печатает); `nobanners` в эхо ничего не пишет (:1546-1552).
+    if cfg.banners {
+        out.push_str("banners = true\n");
+    }
+    if cfg.rawudp {
+        out.push_str("rawudp = true\n");
+    }
     if cfg.retries != 0 || echo_all {
         let _ = writeln!(out, "retries = {}", cfg.retries); // :1936
     }
@@ -823,19 +882,29 @@ pub fn echo_with(cfg: &ScanConfig, echo_all: bool, extras: &EchoExtras<'_>, out:
     if let Some(name) = cfg.pcap_payloads.as_deref().filter(|n| !n.is_empty()) {
         let _ = writeln!(out, "pcap-payloads = {name}"); // :1832-1840
     }
+    // :1288-1298 (`hello-timeout`, место в таблице :2390, после `hello-string`), только когда задан.
+    if cfg.hello_timeout != 0 {
+        let _ = writeln!(out, "hello-timeout = {}", cfg.hello_timeout);
+    }
     if extras.ndjson_status {
         out.push_str("ndjson-status = true\n"); // :1507-1514
     }
-    // SET_capture (main-conf.c:1132) стоит в таблице дважды ("capture" и
-    // "nocapture"), поэтому блок печатается дважды. Умолчания C:
-    // cert захватывается, остальное нет (main.c:1611).
+    // SET_capture (main-conf.c:1132-1146) стоит в таблице дважды ("capture" и "nocapture", :2402-2403), поэтому
+    // блок печатается дважды. cert и servername печатаются, когда выключены, остальные, когда включены; умолчания C:
+    // cert захватывается, остальное нет (main.c:1610), то есть `nocapture = servername`.
+    let c = cfg.capture;
+    let word = |on: bool| if on { "capture" } else { "nocapture" };
     for _ in 0..2 {
-        if echo_all {
-            out.push_str("capture = cert\n");
-        }
-        out.push_str("nocapture = servername\n");
-        if echo_all {
-            out.push_str("nocapture = html\nnocapture = heartbleed\nnocapture = ticketbleed\n");
+        for (name, on, shown) in [
+            ("cert", c.cert, !c.cert),
+            ("servername", c.servername, !c.servername),
+            ("html", c.html, c.html),
+            ("heartbleed", c.heartbleed, c.heartbleed),
+            ("ticketbleed", c.ticketbleed, c.ticketbleed),
+        ] {
+            if shown || echo_all {
+                let _ = writeln!(out, "{} = {name}", word(on));
+            }
         }
     }
     out.push('\n'); // первая запись SPACE (:2048)
@@ -1118,7 +1187,7 @@ pub fn parse_bool(value: &str) -> bool {
 ///
 /// Отличия от C: неизвестный ключ — `UnknownKey` (C вызывает exit(1)),
 /// нечисловое значение — `BadValue` (C берёт 0). Строки `capture`/`nocapture`
-/// проверяются и пропускаются (на скан не влияют). `router-mac-ipv4` и
+/// проверяются и хранятся для `--echo` (на скан не влияют). `router-mac-ipv4` и
 /// `router-mac-ipv6` хранятся раздельно в `nics` (как в C).
 pub fn read_paused_conf(text: &str) -> Result<ScanConfig, ConfigError> {
     let mut cfg = ScanConfig::default();
@@ -1411,14 +1480,38 @@ pub fn apply_core_kv(cfg: &mut ScanConfig, key: &str, val: &str) -> Result<bool,
                 parse_u32(name, value)?
             };
         }
-        "capture" | "nocapture" => {
-            if !["cert", "servername", "html", "heartbleed", "ticketbleed"]
-                .iter()
-                .any(|k| k.eq_ignore_ascii_case(value))
-            {
-                return Err(bad());
+        // `SET_capture` (`src/main-conf.c:1132-1180`, ключи `capture` и `nocapture`/`no-capture`, :2402-2403): значение
+        // сравнивается `EQUALS` (регистр и `-`, `.`, `_` не важны). В 4a флаги только хранятся для `--echo`.
+        key @ ("capture" | "nocapture") => {
+            let on = key == "capture";
+            let c = &mut cfg.capture;
+            match normalize_key(value).as_str() {
+                "cert" => c.cert = on,
+                "servername" => c.servername = on,
+                "html" => c.html = on,
+                "heartbleed" => c.heartbleed = on,
+                "ticketbleed" => c.ticketbleed = on,
+                _ => {
+                    return Err(ConfigError::UnknownCapture {
+                        kind: if on { "capture" } else { "nocapture" },
+                        value: value.to_string(),
+                    });
+                }
             }
         }
+        // `SET_banners` (`src/main-conf.c:1106-1116`), `SET_nobanners` (:1546-1554), `SET_banners_rawudp`
+        // (:1118-1130): `F_BOOL`, порядок ключей решает (`--rawudp --nobanners` оставляет `rawudp`, но без баннеров).
+        "banners" | "banner" => cfg.banners = parse_bool(value),
+        "nobanners" | "nobanner" => cfg.banners = !parse_bool(value),
+        "rawudp" => {
+            cfg.rawudp = parse_bool(value);
+            if cfg.rawudp {
+                cfg.banners = true;
+            }
+        }
+        // `SET_hello_timeout` (`src/main-conf.c:1288-1298`): `(unsigned)parseInt(value)`; принимается и не действует
+        // (Р1). Не число или больше `u32` это отказ (Р17), у C 0 или усечение.
+        "hellotimeout" => cfg.hello_timeout = parse_u32(name, value)?,
         "adapter" | "if" | "interface" => {
             let idx = nic_index(name, value)?;
             nic_mut(cfg, idx).adapter_name = Some(value.to_string());
@@ -1593,6 +1686,8 @@ mod tests {
             (c.adapter_ip, c.adapter_mac, c.router_mac, c.source_port),
             (None, None, None, None)
         );
+        // `masscan->banner_types` пуст: `--readscan` пропускает все баннеры и читает статус (`in-binary.c:584`).
+        assert!(c.banner_types.is_empty());
     }
 
     // ---- parse_rate ----
@@ -2338,7 +2433,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(cfg.seed, 8);
-        for key in ["banners", "min-packet", "top-ports"] {
+        for key in ["hello", "min-packet", "top-ports"] {
             assert_eq!(
                 read_paused_conf(&format!("{key} = 1\n")).unwrap_err(),
                 ConfigError::UnknownKey(key.into())
@@ -2676,6 +2771,45 @@ mod tests {
                 1 << 62
             );
         }
+    }
+
+    /// Display общий с Studio и остаётся однострочным; три строки C (main.c:1236-1238) печатает CLI.
+    #[test]
+    fn exclude_required_display_is_one_line() {
+        assert_eq!(
+            ConfigError::ExcludeRequired.to_string(),
+            "range too big, need confirmation: at least one --exclude must be specified"
+        );
+    }
+
+    /// R24, граница main.c:1235 (`count_ips > 1000000000`): ровно 1e9 адресов подтверждения не требует, 1e9 + 1
+    /// требует; IPv6-исключение подтверждает только переполнение, вызванное целями IPv6 (R23).
+    #[test]
+    fn r24_boundary_exactly_1e9() {
+        // 0.0.0.0-59.154.201.255 = 0x3B9ACA00 = 1_000_000_000 адресов
+        let exactly = || cfg_v46("0.0.0.0-59.154.201.255", "80");
+        assert_eq!(
+            validate(&exactly(), Operation::Scan).unwrap().range(),
+            1_000_000_000
+        );
+        // 1e9 + 1 за счёт IPv4: нужен IPv4-exclude, IPv6-исключение не помогает
+        let over_v4 = || cfg_v46("0.0.0.0-59.154.202.0", "80");
+        assert_eq!(
+            err(&over_v4(), Operation::Scan),
+            ConfigError::ExcludeRequired
+        );
+        let mut cfg = over_v4();
+        cfg.excludes.add_target_string("2001:db8::1").unwrap();
+        assert_eq!(err(&cfg, Operation::Scan), ConfigError::ExcludeRequired);
+        let mut cfg = over_v4();
+        cfg.excludes.add_target_string("255.255.255.255").unwrap();
+        assert!(validate(&cfg, Operation::Scan).is_ok());
+        // 1e9 IPv4 + один адрес IPv6 = 1e9 + 1: требует подтверждения; IPv6-исключение подтверждает (R23)
+        let mut cfg = exactly();
+        cfg.targets.add_target_string("2001:db8::1").unwrap();
+        assert_eq!(err(&cfg, Operation::Scan), ConfigError::ExcludeRequired);
+        cfg.excludes.add_target_string("2001:db8::ff").unwrap();
+        assert!(validate(&cfg, Operation::Scan).is_ok());
     }
 
     /// R24. main.c:1235 confirms an over-1e9 scan only with an IPv4 exclude. rmasscan also accepts an IPv6

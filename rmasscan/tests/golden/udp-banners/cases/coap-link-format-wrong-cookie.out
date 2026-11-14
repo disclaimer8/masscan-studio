@@ -1,0 +1,5 @@
+udp-oracle port=5683 cookie=0x5eed1235 rawudp=0 mode=whole sections=1 framing=payload
+section len=147
+status open count=1
+banner 28 145 "rsp=2.5(Content) token=0x25157 /Content-Format/ application/link-format /.well-known/core /sensors/temp /sensors/light /firmware/v2.1 IP-MISMATCH"
+banner 0 147 =datagram

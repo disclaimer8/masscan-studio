@@ -1,0 +1,10 @@
+{
+  "tag": "o08_unicornscan",
+  "kind": "scan",
+  "format": "unicornscan",
+  "target": "file",
+  "show_closed": true,
+  "stdout": "silent",
+  "status": "text",
+  "oracle": true
+}

@@ -1,0 +1,6 @@
+#masscan
+TCP open	            http[   80]		from 192.0.2.20  ttl 64 
+Host: 192.0.2.21 ()	Ports: 53/open/udp////
+TCP open	           https[  443]		from 2001:db8::20  ttl 60 
+TCP open	         unknown[ 8443]		from 2001:db8::25  ttl 64 
+# end

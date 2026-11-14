@@ -1,0 +1,6 @@
+# Masscan 1.3.9-integration scan initiated Wed Nov 15 04:13:21 2023
+# Ports scanned: TCP(0;) UDP(0;) SCTP(0;) PROTOCOLS(0;)
+Host: 192.0.2.21 ()	Port: 53	Service: dns-ver	Banner: 9.18.24
+Host: 198.51.100.7 ()	Port: 1006	Service: dns-ver	Banner: banner-6
+Host: 2001:db8::53 ()	Port: 53	Service: dns-ver	Banner: 
+# Masscan done at Fri Nov 13 13:08:39 2026

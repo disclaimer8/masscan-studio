@@ -1,0 +1,5 @@
+udp-oracle port=161 cookie=0x5eed1234 rawudp=0 mode=whole sections=1 framing=payload
+section len=166
+status open count=1
+banner 7 93 "sysName:\xc0\x00\x02\x01\x0asysName:\x00\x00\x01\x00\x0asysName:\xff\x0asysName:\x01\x02\x03\x0asysName:op\x0asysName:\x01\x02\x03\x04\x05\x06\x07\x08\x0asysName:\x0asysName:"
+banner 0 166 =datagram

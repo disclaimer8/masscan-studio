@@ -1,4 +1,5 @@
-//! `-oG` и `-oU` (AGPL-3.0). Порт `out-grepable.c` и `out-unicornscan.c` masscan © Robert David Graham.
+//! `-oG` и `-oU` (AGPL-3.0). Порт `out-grepable.c` и `out-unicornscan.c` masscan © Robert David Graham, записи
+//! статуса и баннеров.
 //! Время в заголовке и подвале `-oG` всегда GMT в формате `%c` C-локали (masscan не вызывает `setlocale`).
 
 use std::io::{self, Write};
@@ -9,6 +10,7 @@ use rmasscan_core::targets::{
     TEMPL_OPROTO_FIRST, TEMPL_OPROTO_LAST, TEMPL_SCTP, TEMPL_SCTP_LAST, TEMPL_TCP, TEMPL_TCP_LAST,
     TEMPL_UDP, TEMPL_UDP_LAST,
 };
+use rmasscan_proto::{BannerRecord, app_name, normalize_string};
 
 /// `strftime("%c")` C-локали над GMT: `%a %b %e %H:%M:%S %Y`, день месяца дополнен пробелом до двух знаков.
 pub fn c_locale_ctime(unix: u64) -> String {
@@ -96,6 +98,19 @@ impl Formatter for Grepable {
         )
     }
 
+    /// `grepable_out_banner` (`src/out-grepable.c:178-202`): без `Timestamp:`, протокола и TTL, сервис это имя
+    /// приложения (а не поиск в services).
+    fn banner(&mut self, w: &mut dyn Write, _: &FileCtx, b: &BannerRecord) -> io::Result<()> {
+        writeln!(
+            w,
+            "Host: {} ()\tPort: {}\tService: {}\tBanner: {}",
+            CIp(b.ip),
+            b.port,
+            app_name(b.app),
+            normalize_string(&b.payload)
+        )
+    }
+
     fn footer(&mut self, w: &mut dyn Write, cx: &FileCtx) -> io::Result<()> {
         writeln!(w, "# Masscan done at {}", c_locale_ctime(cx.now))
     }
@@ -130,6 +145,12 @@ impl Formatter for Unicornscan {
             CIp(r.ip),
             r.ttl
         )
+    }
+
+    /// `unicornscan_out_banner` (`src/out-unicornscan.c:61-79`): пусто («SYN only - no banner»); заголовок и подвал
+    /// файла из одних баннеров всё равно пишутся (конвейер).
+    fn banner(&mut self, _: &mut dyn Write, _: &FileCtx, _: &BannerRecord) -> io::Result<()> {
+        Ok(())
     }
 
     fn footer(&mut self, w: &mut dyn Write, _: &FileCtx) -> io::Result<()> {

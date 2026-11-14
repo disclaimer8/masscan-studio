@@ -1,0 +1,35 @@
+window linux-output-r1: wire-lab.sh --suite output, code 39ba251ebfb020c1ff0b8b558c06169467b259d1
+out $R/out/output-out/linux-output-r1
+SigIgn:	0000000000000004
+SigIgn:	0000000000000000
+0d0ceb81a0707a6e5d77032c42355d08ce98c7da90ad3bfbfe16456a8f7c0cf5  target/release/rmasscan
+aaa7f226a482d4a68326457da9dca28e54aa8431bc490ac0b6c71367251d0c4f  target/release/rmasscan-lab
+8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e  $HOME/rmasscan-oracle/masscan/bin/masscan
+start 2026-11-13T19:37:47Z
+[wire-lab] suite output finished rc=0 (see $R/out/output-out/linux-output-r1/suite.log)
+[wire-lab] done: $R/out/output-out/linux-output-r1
+[wire-lab] cleanup: rc=0 own_pids=0 stray_processes=0 namespaces_left=0
+wire-lab rc=0
+end 2026-11-13T19:43:02Z
+PASS     manifest 
+PASS     o01_list 
+PASS     o02_json 
+PASS     o03_ndjson 
+PASS     o04_grepable 
+PASS     o05_xml 
+PASS     o06_binary 
+PASS     o07_hostonly 
+PASS     o08_unicornscan 
+PASS     o09_json_default_show 
+PASS     o10_list_stdout 
+PASS     o11_interactive 
+PASS     o12_nostatus 
+PASS     o13_open_fail 
+PASS     o14_interrupt_json 
+PASS     o15_interrupt_xml 
+PASS     o16_interrupt_binary 
+PASS     o17_readscan 
+overall: PASS {"FAIL":0,"INVALID":0,"NOT RUN":0,"PASS":18}
+verify rc=0
+241c6a8004263565975916ac3057e1df144464392a8a88a82e4f11242e4e2768  verdict.json
+netns left: 0

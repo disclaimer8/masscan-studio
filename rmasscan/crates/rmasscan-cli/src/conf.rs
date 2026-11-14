@@ -100,6 +100,7 @@ fn format_name(f: Format) -> Option<&'static str> {
         Format::Binary => "binary",
         Format::Hostonly => "hostonly",
         Format::Unicornscan => "unicornscan",
+        Format::Certs => "certs",
         Format::None => "none",
     })
 }
@@ -168,7 +169,8 @@ fn parse_format(value: &str) -> Result<Format, String> {
         "ndjson" => Format::Ndjson,
         "none" => Format::None,
         "hostonly" => Format::Hostonly,
-        "certs" | "redis" => return Err(format!("unsupported output-format: {value}")),
+        "certs" => Format::Certs,
+        "redis" => return Err(format!("unsupported output-format: {value}")),
         _ => return Err(format!("FAIL: unknown output-format: {value}")),
     })
 }
@@ -193,6 +195,17 @@ fn load(
     path: &str,
 ) -> Result<String, String> {
     loader(Path::new(path)).map_err(|e| format!("{path}: {e}"))
+}
+
+/// Начало текста отказа `--banner-types`: [`crate::error_text`] печатает его как есть.
+pub const BAD_BANNER_APP: &str = "FAIL: bad banner app: ";
+
+/// Значение `--banner-types` и ключей `banner-type(s)`, `banner-app(s)` (`src/main-conf.c:2683-2697`):
+/// `masscan_string_to_app` (`src/masscan-app.c:61-112`, регистр важен, одно имя). Неизвестное имя (и `unknown`,
+/// `error`, у которых номер 0 или нет имени в таблице разбора) это `LOG(0, "FAIL: bad banner app: %s\n", value);
+/// fprintf(stderr, "err\n"); exit(1);`: текст отказа это обе строки.
+pub fn banner_app(value: &str) -> Result<u16, String> {
+    rmasscan_proto::app_from_name(value).ok_or_else(|| format!("{BAD_BANNER_APP}{value}\nerr"))
 }
 
 /// Применяет одну пару `name = value` в позиции разбора (ключи правее
@@ -231,6 +244,9 @@ pub fn apply_conf_key(
                 .map_err(|e| ConfigError::from(e).to_string())?
         }
         "pcapfilename" | "pcap" => base.pcap_filename = Some(value.to_string()),
+        "bannertypes" | "bannertype" | "bannerapps" | "bannerapp" => {
+            base.scan.banner_types.insert(banner_app(value)?);
+        }
         "ndjsonstatus" | "statusndjson" => base.ndjson_status = parse_bool(value),
         "jsonstatus" | "statusjson" => {
             return Err(format!("{name} not supported, use --ndjson-status"));
@@ -494,6 +510,24 @@ mod tests {
 
     fn no_include(_: &Path) -> Result<String, String> {
         Err("no includes in this test".into())
+    }
+
+    /// `output-format = certs` читается (`main-conf.c:1701`) и пишется обратно (`main-conf.c:1676`); redis по-прежнему
+    /// отказывает.
+    #[test]
+    fn certs_output_format_roundtrips() {
+        let mut base = FullConf::default();
+        parse_conf_str(
+            "output-format = certs\noutput-filename = c.out\n",
+            &mut base,
+            &mut no_include,
+            0,
+        )
+        .unwrap();
+        assert_eq!(base.output.format, Some(Format::Certs));
+        assert!(output_section(&base.output).contains("output-format = certs\n"));
+        let mut other = FullConf::default();
+        assert!(parse_conf_str("output-format = redis\n", &mut other, &mut no_include, 0).is_err());
     }
 
     fn sample() -> FullConf {

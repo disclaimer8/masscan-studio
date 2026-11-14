@@ -1,0 +1,5 @@
+udp-oracle port=123 cookie=0x5eed1234 rawudp=0 mode=whole sections=1 framing=payload
+section len=12
+status open count=1
+banner 19 87 "XNTPD MON_GETLIST_1Response was NTP Error Code 1 - \x22Incompatible Implementation Number\x22"
+banner 0 12 =datagram

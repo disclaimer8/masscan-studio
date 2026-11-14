@@ -12,3 +12,8 @@ workspace = true
 rmasscan-core = { path = "../rmasscan-core" }
 thiserror.workspace = true
 sha2.workspace = true
+
+# Только тесты: настоящие UDP-парсеры баннеров (`handle_udp`). Обычной зависимости от `rmasscan-proto` у движка нет:
+# она изменила бы `Cargo.lock` Studio (`cargo xtask test --locked`), а dev-зависимости в него не попадают.
+[dev-dependencies]
+rmasscan-proto = { path = "../rmasscan-proto" }

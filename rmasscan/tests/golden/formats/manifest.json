@@ -11,6 +11,20 @@
   "store_max_bytes": 65536,
   "inputs": [
     {
+      "name": "banners-legacy.scan.bin",
+      "sha256": "f7aae805ff63e416711b9e346f0ca4d885d6409b049ea0c823bcf8eeac63bf8f",
+      "size_bytes": 529,
+      "records": 10,
+      "stored": true
+    },
+    {
+      "name": "banners.scan.bin",
+      "sha256": "78d49059789c34ac495f60aa88939afc4c3eb223e714ef560dac3dfdd5bee714",
+      "size_bytes": 19086,
+      "records": 61,
+      "stored": true
+    },
+    {
       "name": "basic.scan.bin",
       "sha256": "28ec1e2febbe54548d8f46f64d13b1c101f30bbb1a5af489d5f32b6b75d7e9ce",
       "size_bytes": 318,
@@ -2419,6 +2433,1038 @@
       "masks": [],
       "stdout": "",
       "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "banners-legacy.open.list",
+      "input": "banners-legacy.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oL",
+        "@OUTPUT@"
+      ],
+      "output": "outputs/banners-legacy.open.list.out",
+      "sha256": "8bdc84f1d432503c7186f1176ec6185d99f23e6081dca41cf939545f4aaac17d",
+      "masked_sha256": "8bdc84f1d432503c7186f1176ec6185d99f23e6081dca41cf939545f4aaac17d",
+      "size_bytes": 602,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "banners-legacy.open.json",
+      "input": "banners-legacy.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oJ",
+        "@OUTPUT@"
+      ],
+      "output": "outputs/banners-legacy.open.json.out",
+      "sha256": "d70fe1c98770211639cb739b5f58bde6ba10f6a10124408cbdbcd990fe4f4ee4",
+      "masked_sha256": "d70fe1c98770211639cb739b5f58bde6ba10f6a10124408cbdbcd990fe4f4ee4",
+      "size_bytes": 1613,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "banners-legacy.open.ndjson",
+      "input": "banners-legacy.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oD",
+        "@OUTPUT@"
+      ],
+      "output": "outputs/banners-legacy.open.ndjson.out",
+      "sha256": "6c235e2f573c301aa1d72575310b62f96e9e7b6c7409e23c18fbadd68677bc1a",
+      "masked_sha256": "6c235e2f573c301aa1d72575310b62f96e9e7b6c7409e23c18fbadd68677bc1a",
+      "size_bytes": 1505,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "banners-legacy.open.grepable",
+      "input": "banners-legacy.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oG",
+        "@OUTPUT@"
+      ],
+      "output": "outputs/banners-legacy.open.grepable.out",
+      "sha256": "cfccbdf6115bd52f5ae55de16ff0448f5b808c8453be062db7e930dd6cbecbe3",
+      "masked_sha256": "f4c749bcaa176d1fadedcfe3cf2aa9fbb96c98d8ae44962ed8a54dfaf16b8054",
+      "size_bytes": 878,
+      "masks": [
+        {
+          "kind": "grepable_done"
+        }
+      ],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "banners-legacy.open.xml",
+      "input": "banners-legacy.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oX",
+        "@OUTPUT@"
+      ],
+      "output": "outputs/banners-legacy.open.xml.out",
+      "sha256": "959775325bae3e3c834374c245cff03890c57ed44c258ac0d3a7026863553be9",
+      "masked_sha256": "5b37323411ff186373adfea8b4075f9763d681b6d704d9afcaa05436aabb7010",
+      "size_bytes": 2774,
+      "masks": [
+        {
+          "kind": "xml_start"
+        },
+        {
+          "kind": "xml_finished"
+        }
+      ],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "banners-legacy.open.binary",
+      "input": "banners-legacy.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oB",
+        "@OUTPUT@"
+      ],
+      "output": "outputs/banners-legacy.open.binary.out",
+      "sha256": "b40c4c456fe5e07d1aa0f6e0fa2736f91aad2b23dffabb88518960967ab1fe00",
+      "masked_sha256": "b40c4c456fe5e07d1aa0f6e0fa2736f91aad2b23dffabb88518960967ab1fe00",
+      "size_bytes": 540,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "banners-legacy.open.hostonly",
+      "input": "banners-legacy.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oH",
+        "@OUTPUT@"
+      ],
+      "output": "outputs/banners-legacy.open.hostonly.out",
+      "sha256": "4ff3cbacc9db8677fa77242afe65fb2b54c6a1f6e0b47c339dcb4751f9e3ddad",
+      "masked_sha256": "4ff3cbacc9db8677fa77242afe65fb2b54c6a1f6e0b47c339dcb4751f9e3ddad",
+      "size_bytes": 94,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "banners-legacy.open.unicornscan",
+      "input": "banners-legacy.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oU",
+        "@OUTPUT@"
+      ],
+      "output": "outputs/banners-legacy.open.unicornscan.out",
+      "sha256": "dde134dedeac14b843578da1b865371a2315da451df0558202d03c2d8b1a9e2e",
+      "masked_sha256": "dde134dedeac14b843578da1b865371a2315da451df0558202d03c2d8b1a9e2e",
+      "size_bytes": 74,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "banners-legacy.open.xml-webxml",
+      "input": "banners-legacy.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oX",
+        "@OUTPUT@",
+        "--webxml"
+      ],
+      "output": "outputs/banners-legacy.open.xml-webxml.out",
+      "sha256": "1fcd2c54d9276e268e1e0abdeeccfc1417186ebf41343b5bf29434fcf14d8efc",
+      "masked_sha256": "040e2365c163be936abf13b8965e08adddd978b56d3fca6c4ca7d00dbb078e61",
+      "size_bytes": 2851,
+      "masks": [
+        {
+          "kind": "xml_start"
+        },
+        {
+          "kind": "xml_finished"
+        }
+      ],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "banners-legacy.open-closed.list",
+      "input": "banners-legacy.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oL",
+        "@OUTPUT@",
+        "--show",
+        "open,closed"
+      ],
+      "output": "outputs/banners-legacy.open-closed.list.out",
+      "sha256": "8bdc84f1d432503c7186f1176ec6185d99f23e6081dca41cf939545f4aaac17d",
+      "masked_sha256": "8bdc84f1d432503c7186f1176ec6185d99f23e6081dca41cf939545f4aaac17d",
+      "size_bytes": 602,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "banners-legacy.open-closed.json",
+      "input": "banners-legacy.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oJ",
+        "@OUTPUT@",
+        "--show",
+        "open,closed"
+      ],
+      "output": "outputs/banners-legacy.open-closed.json.out",
+      "sha256": "d70fe1c98770211639cb739b5f58bde6ba10f6a10124408cbdbcd990fe4f4ee4",
+      "masked_sha256": "d70fe1c98770211639cb739b5f58bde6ba10f6a10124408cbdbcd990fe4f4ee4",
+      "size_bytes": 1613,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "banners-legacy.open-closed.ndjson",
+      "input": "banners-legacy.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oD",
+        "@OUTPUT@",
+        "--show",
+        "open,closed"
+      ],
+      "output": "outputs/banners-legacy.open-closed.ndjson.out",
+      "sha256": "6c235e2f573c301aa1d72575310b62f96e9e7b6c7409e23c18fbadd68677bc1a",
+      "masked_sha256": "6c235e2f573c301aa1d72575310b62f96e9e7b6c7409e23c18fbadd68677bc1a",
+      "size_bytes": 1505,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "banners-legacy.open-closed.grepable",
+      "input": "banners-legacy.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oG",
+        "@OUTPUT@",
+        "--show",
+        "open,closed"
+      ],
+      "output": "outputs/banners-legacy.open-closed.grepable.out",
+      "sha256": "0922d9425db4b4b108e3aaf22515006163ecd12c566f31915aa75a1aa2cf0515",
+      "masked_sha256": "f4c749bcaa176d1fadedcfe3cf2aa9fbb96c98d8ae44962ed8a54dfaf16b8054",
+      "size_bytes": 878,
+      "masks": [
+        {
+          "kind": "grepable_done"
+        }
+      ],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "banners-legacy.open-closed.xml",
+      "input": "banners-legacy.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oX",
+        "@OUTPUT@",
+        "--show",
+        "open,closed"
+      ],
+      "output": "outputs/banners-legacy.open-closed.xml.out",
+      "sha256": "cdc86b7afda9289da04d44bf54ba4a2a47f9d7d73c4c08580a1d6dd54cf5606b",
+      "masked_sha256": "5b37323411ff186373adfea8b4075f9763d681b6d704d9afcaa05436aabb7010",
+      "size_bytes": 2774,
+      "masks": [
+        {
+          "kind": "xml_start"
+        },
+        {
+          "kind": "xml_finished"
+        }
+      ],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "banners-legacy.open-closed.binary",
+      "input": "banners-legacy.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oB",
+        "@OUTPUT@",
+        "--show",
+        "open,closed"
+      ],
+      "output": "outputs/banners-legacy.open-closed.binary.out",
+      "sha256": "b40c4c456fe5e07d1aa0f6e0fa2736f91aad2b23dffabb88518960967ab1fe00",
+      "masked_sha256": "b40c4c456fe5e07d1aa0f6e0fa2736f91aad2b23dffabb88518960967ab1fe00",
+      "size_bytes": 540,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "banners-legacy.open-closed.hostonly",
+      "input": "banners-legacy.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oH",
+        "@OUTPUT@",
+        "--show",
+        "open,closed"
+      ],
+      "output": "outputs/banners-legacy.open-closed.hostonly.out",
+      "sha256": "4ff3cbacc9db8677fa77242afe65fb2b54c6a1f6e0b47c339dcb4751f9e3ddad",
+      "masked_sha256": "4ff3cbacc9db8677fa77242afe65fb2b54c6a1f6e0b47c339dcb4751f9e3ddad",
+      "size_bytes": 94,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "banners-legacy.open-closed.unicornscan",
+      "input": "banners-legacy.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oU",
+        "@OUTPUT@",
+        "--show",
+        "open,closed"
+      ],
+      "output": "outputs/banners-legacy.open-closed.unicornscan.out",
+      "sha256": "dde134dedeac14b843578da1b865371a2315da451df0558202d03c2d8b1a9e2e",
+      "masked_sha256": "dde134dedeac14b843578da1b865371a2315da451df0558202d03c2d8b1a9e2e",
+      "size_bytes": 74,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "banners-legacy.open-closed.xml-webxml",
+      "input": "banners-legacy.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oX",
+        "@OUTPUT@",
+        "--webxml",
+        "--show",
+        "open,closed"
+      ],
+      "output": "outputs/banners-legacy.open-closed.xml-webxml.out",
+      "sha256": "1fcd2c54d9276e268e1e0abdeeccfc1417186ebf41343b5bf29434fcf14d8efc",
+      "masked_sha256": "040e2365c163be936abf13b8965e08adddd978b56d3fca6c4ca7d00dbb078e61",
+      "size_bytes": 2851,
+      "masks": [
+        {
+          "kind": "xml_start"
+        },
+        {
+          "kind": "xml_finished"
+        }
+      ],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "banners.open.list",
+      "input": "banners.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oL",
+        "@OUTPUT@"
+      ],
+      "output": "outputs/banners.open.list.out",
+      "sha256": "497dec3c4818f82e0ad4f8bbe55fa1c3412d54cae0fb2ee5c4b52e49e07f8e4c",
+      "masked_sha256": "497dec3c4818f82e0ad4f8bbe55fa1c3412d54cae0fb2ee5c4b52e49e07f8e4c",
+      "size_bytes": 13483,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "banners.open.json",
+      "input": "banners.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oJ",
+        "@OUTPUT@"
+      ],
+      "output": "outputs/banners.open.json.out",
+      "sha256": "301b01deae9e731c0189e94cb7d430c617388757865d7c0d15205496eed8bdc2",
+      "masked_sha256": "301b01deae9e731c0189e94cb7d430c617388757865d7c0d15205496eed8bdc2",
+      "size_bytes": 77627,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "banners.open.ndjson",
+      "input": "banners.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oD",
+        "@OUTPUT@"
+      ],
+      "output": "outputs/banners.open.ndjson.out",
+      "sha256": "47fb9969b29a1f024602f2dd65dcc811a3bd711104f4032f7aa2fde193963d50",
+      "masked_sha256": "47fb9969b29a1f024602f2dd65dcc811a3bd711104f4032f7aa2fde193963d50",
+      "size_bytes": 76981,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "banners.open.grepable",
+      "input": "banners.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oG",
+        "@OUTPUT@"
+      ],
+      "output": "outputs/banners.open.grepable.out",
+      "sha256": "5aa35ac1a183765117fc7d1a57c90355b42ed2e16784f241525b4e786ed32e72",
+      "masked_sha256": "bffcee6dadff2492dd12e24fc9261cb4676d44028e093fa9f8edb6744b50eebf",
+      "size_bytes": 14326,
+      "masks": [
+        {
+          "kind": "grepable_done"
+        }
+      ],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "banners.open.xml",
+      "input": "banners.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oX",
+        "@OUTPUT@"
+      ],
+      "output": "outputs/banners.open.xml.out",
+      "sha256": "475ee099260d2dce617d9f41e8eebe5d82397fe738b27623da2b04b4513b7da3",
+      "masked_sha256": "228c7df997a6a93a26c4a51ff1784b71911da4e43383218bdf3c09e2d5b10105",
+      "size_bytes": 25043,
+      "masks": [
+        {
+          "kind": "xml_start"
+        },
+        {
+          "kind": "xml_finished"
+        }
+      ],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "banners.open.binary",
+      "input": "banners.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oB",
+        "@OUTPUT@"
+      ],
+      "output": "outputs/banners.open.binary.out",
+      "sha256": "314f14cbf44d3d6074a274030e83aa9108ff4caad64c2c061f92f338d9f7fa02",
+      "masked_sha256": "314f14cbf44d3d6074a274030e83aa9108ff4caad64c2c061f92f338d9f7fa02",
+      "size_bytes": 19071,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "banners.open.hostonly",
+      "input": "banners.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oH",
+        "@OUTPUT@"
+      ],
+      "output": "outputs/banners.open.hostonly.out",
+      "sha256": "e28e6536a22384b1bbbcc860dce4b0940ac8cea6723803b95715fd30ce44a0f5",
+      "masked_sha256": "e28e6536a22384b1bbbcc860dce4b0940ac8cea6723803b95715fd30ce44a0f5",
+      "size_bytes": 798,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "banners.open.unicornscan",
+      "input": "banners.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oU",
+        "@OUTPUT@"
+      ],
+      "output": "outputs/banners.open.unicornscan.out",
+      "sha256": "ca315fb87f7c70ed4facdf84092a2ad5fae02e06836b36ec2c3f8831afb7147d",
+      "masked_sha256": "ca315fb87f7c70ed4facdf84092a2ad5fae02e06836b36ec2c3f8831afb7147d",
+      "size_bytes": 239,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "banners.open.xml-webxml",
+      "input": "banners.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oX",
+        "@OUTPUT@",
+        "--webxml"
+      ],
+      "output": "outputs/banners.open.xml-webxml.out",
+      "sha256": "f6823c3c63e108608fc02d6b60b332dfd1b5818fc18b585b1a3e39f88fb22d83",
+      "masked_sha256": "83b06ce2338f7eeed3058eecd1ebdbed02cb1595886bfdc4081f0aae645db045",
+      "size_bytes": 25120,
+      "masks": [
+        {
+          "kind": "xml_start"
+        },
+        {
+          "kind": "xml_finished"
+        }
+      ],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "banners.open-closed.list",
+      "input": "banners.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oL",
+        "@OUTPUT@",
+        "--show",
+        "open,closed"
+      ],
+      "output": "outputs/banners.open-closed.list.out",
+      "sha256": "8eb7383e10a1b9c242c73dd0e61d4d17bbd45401f0f13bbf0406a608c04279bd",
+      "masked_sha256": "8eb7383e10a1b9c242c73dd0e61d4d17bbd45401f0f13bbf0406a608c04279bd",
+      "size_bytes": 13520,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "banners.open-closed.json",
+      "input": "banners.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oJ",
+        "@OUTPUT@",
+        "--show",
+        "open,closed"
+      ],
+      "output": "outputs/banners.open-closed.json.out",
+      "sha256": "bd5388498af08be34590576fe3e9c716f6cd71807cd9017af6b6a085836567d7",
+      "masked_sha256": "bd5388498af08be34590576fe3e9c716f6cd71807cd9017af6b6a085836567d7",
+      "size_bytes": 77780,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "banners.open-closed.ndjson",
+      "input": "banners.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oD",
+        "@OUTPUT@",
+        "--show",
+        "open,closed"
+      ],
+      "output": "outputs/banners.open-closed.ndjson.out",
+      "sha256": "b7d370e55cfde3cbb9c8bc59d21f5782230e2b3d8db37d6e10cc71274c03b1cb",
+      "masked_sha256": "b7d370e55cfde3cbb9c8bc59d21f5782230e2b3d8db37d6e10cc71274c03b1cb",
+      "size_bytes": 77127,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "banners.open-closed.grepable",
+      "input": "banners.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oG",
+        "@OUTPUT@",
+        "--show",
+        "open,closed"
+      ],
+      "output": "outputs/banners.open-closed.grepable.out",
+      "sha256": "35baddb7ed4d01023bc8d6bcf21bb24c18320f8a070dccc8cb12adc5afcc38e7",
+      "masked_sha256": "0b8f4d60cd0160d5013a248772c81cd223e1ace76d9ef838823d63c5a9ee91e6",
+      "size_bytes": 14399,
+      "masks": [
+        {
+          "kind": "grepable_done"
+        }
+      ],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "banners.open-closed.xml",
+      "input": "banners.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oX",
+        "@OUTPUT@",
+        "--show",
+        "open,closed"
+      ],
+      "output": "outputs/banners.open-closed.xml.out",
+      "sha256": "3c3829e80472aad4d4fbb3389429ac5adb31af3f39677a57e8dd3c8df2b177f1",
+      "masked_sha256": "7bf5933368349df075ca5e898728aef04b15b318b1cb7bd8138a4062b8121eba",
+      "size_bytes": 25236,
+      "masks": [
+        {
+          "kind": "xml_start"
+        },
+        {
+          "kind": "xml_finished"
+        }
+      ],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "banners.open-closed.binary",
+      "input": "banners.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oB",
+        "@OUTPUT@",
+        "--show",
+        "open,closed"
+      ],
+      "output": "outputs/banners.open-closed.binary.out",
+      "sha256": "78d49059789c34ac495f60aa88939afc4c3eb223e714ef560dac3dfdd5bee714",
+      "masked_sha256": "78d49059789c34ac495f60aa88939afc4c3eb223e714ef560dac3dfdd5bee714",
+      "size_bytes": 19086,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "banners.open-closed.hostonly",
+      "input": "banners.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oH",
+        "@OUTPUT@",
+        "--show",
+        "open,closed"
+      ],
+      "output": "outputs/banners.open-closed.hostonly.out",
+      "sha256": "ee93925570978dad0ea70473eb56a58b0985129f0dbd4584894db98715859601",
+      "masked_sha256": "ee93925570978dad0ea70473eb56a58b0985129f0dbd4584894db98715859601",
+      "size_bytes": 809,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "banners.open-closed.unicornscan",
+      "input": "banners.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oU",
+        "@OUTPUT@",
+        "--show",
+        "open,closed"
+      ],
+      "output": "outputs/banners.open-closed.unicornscan.out",
+      "sha256": "456a401cbe956a0d6adea1a5117149a0bdfa290aa975947265519d4cbd39d118",
+      "masked_sha256": "456a401cbe956a0d6adea1a5117149a0bdfa290aa975947265519d4cbd39d118",
+      "size_bytes": 300,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "banners.open-closed.xml-webxml",
+      "input": "banners.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "-oX",
+        "@OUTPUT@",
+        "--webxml",
+        "--show",
+        "open,closed"
+      ],
+      "output": "outputs/banners.open-closed.xml-webxml.out",
+      "sha256": "f2cfcbe3803fd58f619ef5abcaf1c14f90c83da114ef3ab1e025eb8114246c32",
+      "masked_sha256": "0ddbc18670412bd80c39596060af6b1c5278efff96d7ad7f4e3e9ba1cf2a4b47",
+      "size_bytes": 25313,
+      "masks": [
+        {
+          "kind": "xml_start"
+        },
+        {
+          "kind": "xml_finished"
+        }
+      ],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "banners.open.certs",
+      "input": "banners.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "--output-format",
+        "certs",
+        "--output-filename",
+        "@OUTPUT@"
+      ],
+      "output": "outputs/banners.open.certs.out",
+      "sha256": "60de5d41a0d771ba3edaa123d0ba0ebc3be88bb0be8bc9147a39742ae9583c48",
+      "masked_sha256": "60de5d41a0d771ba3edaa123d0ba0ebc3be88bb0be8bc9147a39742ae9583c48",
+      "size_bytes": 14,
+      "masks": [],
+      "stdout": null,
+      "stderr": "[+] --readscan @INPUT@\n",
+      "stdout_output": "outputs/banners.open.certs.stdout.out",
+      "stdout_sha256": "96fb1bfcd627f1628c11422afdf81728c620b5df4d702ca0e1964cff3b99dc2b"
+    },
+    {
+      "name": "banners.open.default",
+      "input": "banners.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@"
+      ],
+      "output": null,
+      "sha256": null,
+      "masked_sha256": null,
+      "size_bytes": null,
+      "masks": [],
+      "stdout": null,
+      "stderr": "[+] --readscan @INPUT@\n",
+      "stdout_output": "outputs/banners.open.default.stdout.out",
+      "stdout_sha256": "6d528d444a402b9dea3c4784c924c5db310c51a456c89911285146bf9dd5b5e7"
+    },
+    {
+      "name": "banners.open-closed.default",
+      "input": "banners.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "--show",
+        "open,closed"
+      ],
+      "output": null,
+      "sha256": null,
+      "masked_sha256": null,
+      "size_bytes": null,
+      "masks": [],
+      "stdout": null,
+      "stderr": "[+] --readscan @INPUT@\n",
+      "stdout_output": "outputs/banners.open-closed.default.stdout.out",
+      "stdout_sha256": "19492c09462abd160d9245a66ecff48337d89e734738ec9728cc8834d6777d26"
+    },
+    {
+      "name": "banners-legacy.open.certs",
+      "input": "banners-legacy.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "--output-format",
+        "certs",
+        "--output-filename",
+        "@OUTPUT@"
+      ],
+      "output": "outputs/banners-legacy.open.certs.out",
+      "sha256": "60de5d41a0d771ba3edaa123d0ba0ebc3be88bb0be8bc9147a39742ae9583c48",
+      "masked_sha256": "60de5d41a0d771ba3edaa123d0ba0ebc3be88bb0be8bc9147a39742ae9583c48",
+      "size_bytes": 14,
+      "masks": [],
+      "stdout": null,
+      "stderr": "[+] --readscan @INPUT@\n",
+      "stdout_output": "outputs/banners-legacy.open.certs.stdout.out",
+      "stdout_sha256": "b1a6bbea7b358ffa43199d8758e12a71da42955cb2165ac97c2d96100c01d2ff"
+    },
+    {
+      "name": "banners-legacy.open.default",
+      "input": "banners-legacy.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@"
+      ],
+      "output": null,
+      "sha256": null,
+      "masked_sha256": null,
+      "size_bytes": null,
+      "masks": [],
+      "stdout": null,
+      "stderr": "[+] --readscan @INPUT@\n",
+      "stdout_output": "outputs/banners-legacy.open.default.stdout.out",
+      "stdout_sha256": "02f3a2810938b18aca0f8ff0968983c92db5a4e76b80cbe1ddd8fce2796f9bfd"
+    },
+    {
+      "name": "banners-legacy.open-closed.default",
+      "input": "banners-legacy.scan.bin",
+      "args": [
+        "--readscan",
+        "@INPUT@",
+        "--show",
+        "open,closed"
+      ],
+      "output": null,
+      "sha256": null,
+      "masked_sha256": null,
+      "size_bytes": null,
+      "masks": [],
+      "stdout": null,
+      "stderr": "[+] --readscan @INPUT@\n",
+      "stdout_output": "outputs/banners-legacy.open-closed.default.stdout.out",
+      "stdout_sha256": "02f3a2810938b18aca0f8ff0968983c92db5a4e76b80cbe1ddd8fce2796f9bfd"
+    },
+    {
+      "name": "banner-types.dns-ver.list",
+      "input": "banners.scan.bin",
+      "args": [
+        "--banner-types",
+        "dns-ver",
+        "--readscan",
+        "@INPUT@",
+        "-oL",
+        "@OUTPUT@"
+      ],
+      "output": "outputs/banner-types.dns-ver.list.out",
+      "sha256": "c2d2a96272c8e2ae5b78ddd1c032049c006fa103acf975291b316ece79b5a8c4",
+      "masked_sha256": "c2d2a96272c8e2ae5b78ddd1c032049c006fa103acf975291b316ece79b5a8c4",
+      "size_bytes": 171,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "banner-types.ssl-http.list",
+      "input": "banners.scan.bin",
+      "args": [
+        "--banner-types",
+        "ssl",
+        "--banner-types",
+        "http",
+        "--readscan",
+        "@INPUT@",
+        "-oL",
+        "@OUTPUT@"
+      ],
+      "output": "outputs/banner-types.ssl-http.list.out",
+      "sha256": "4259fe8c9c3942626b1e355cd5052558926fda36600675ec6011b14b9eb6292f",
+      "masked_sha256": "4259fe8c9c3942626b1e355cd5052558926fda36600675ec6011b14b9eb6292f",
+      "size_bytes": 1820,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "banner-types.dns-ver.grepable",
+      "input": "banners.scan.bin",
+      "args": [
+        "--banner-types",
+        "dns-ver",
+        "--readscan",
+        "@INPUT@",
+        "-oG",
+        "@OUTPUT@"
+      ],
+      "output": "outputs/banner-types.dns-ver.grepable.out",
+      "sha256": "41b90a99330c0f24496a50313611aae06cd6249b1d26049b39b98ae04041d2f7",
+      "masked_sha256": "6ab98acc0d61271143b477dce0fb35325347b89ae57c7ea13a867eec2fd720dc",
+      "size_bytes": 353,
+      "masks": [
+        {
+          "kind": "grepable_done"
+        }
+      ],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "banner-types.ssl-http.grepable",
+      "input": "banners.scan.bin",
+      "args": [
+        "--banner-types",
+        "ssl",
+        "--banner-types",
+        "http",
+        "--readscan",
+        "@INPUT@",
+        "-oG",
+        "@OUTPUT@"
+      ],
+      "output": "outputs/banner-types.ssl-http.grepable.out",
+      "sha256": "104dcca03b242daeb05a08deb04dec733a63d55f7ebc1ecb35e490b1f3e29103",
+      "masked_sha256": "5af7074c280a4d63f7081c122ede09aac1831cbcd94cbea1fda5cfe9c2beaede",
+      "size_bytes": 2021,
+      "masks": [
+        {
+          "kind": "grepable_done"
+        }
+      ],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "banner-types.dns-ver.binary",
+      "input": "banners.scan.bin",
+      "args": [
+        "--banner-types",
+        "dns-ver",
+        "--readscan",
+        "@INPUT@",
+        "-oB",
+        "@OUTPUT@"
+      ],
+      "output": "outputs/banner-types.dns-ver.binary.out",
+      "sha256": "338baf108785d7785c53f38520cb2d765be0b10d005da188ca8b388dd0d403b6",
+      "masked_sha256": "338baf108785d7785c53f38520cb2d765be0b10d005da188ca8b388dd0d403b6",
+      "size_bytes": 274,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "banner-types.ssl-http.binary",
+      "input": "banners.scan.bin",
+      "args": [
+        "--banner-types",
+        "ssl",
+        "--banner-types",
+        "http",
+        "--readscan",
+        "@INPUT@",
+        "-oB",
+        "@OUTPUT@"
+      ],
+      "output": "outputs/banner-types.ssl-http.binary.out",
+      "sha256": "0d3bbab58f256f0f70504459115faa956ad9d78947b3f963a7720bfccbba3097",
+      "masked_sha256": "0d3bbab58f256f0f70504459115faa956ad9d78947b3f963a7720bfccbba3097",
+      "size_bytes": 855,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "filter.banners.list",
+      "input": "banners.scan.bin",
+      "args": [
+        "--range",
+        "192.0.2.0/24,2001:db8::/120",
+        "-p80,443",
+        "--readscan",
+        "@INPUT@",
+        "-oL",
+        "@OUTPUT@"
+      ],
+      "output": "outputs/filter.banners.list.out",
+      "sha256": "93a6453b4697cf72a98a2f6f88e5bc7615418a0af6e9d41e0314555930944b66",
+      "masked_sha256": "93a6453b4697cf72a98a2f6f88e5bc7615418a0af6e9d41e0314555930944b66",
+      "size_bytes": 981,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "filter.banners.grepable",
+      "input": "banners.scan.bin",
+      "args": [
+        "--range",
+        "192.0.2.0/24,2001:db8::/120",
+        "-p80,443",
+        "--readscan",
+        "@INPUT@",
+        "-oG",
+        "@OUTPUT@"
+      ],
+      "output": "outputs/filter.banners.grepable.out",
+      "sha256": "99b68e24a2366b4dc01ee8ec7eddbd71c2107c760237ecd7534829300e0cb7de",
+      "masked_sha256": "7a9ea78055ff2e9d83e8615e2bddceb9280548d7e3c59e66e83ece17d0be2cd1",
+      "size_bytes": 1237,
+      "masks": [
+        {
+          "kind": "grepable_done"
+        }
+      ],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
+    },
+    {
+      "name": "filter.banners-legacy.list",
+      "input": "banners-legacy.scan.bin",
+      "args": [
+        "--range",
+        "10.0.0.0/8",
+        "-p22",
+        "--banner-types",
+        "ssh",
+        "--readscan",
+        "@INPUT@",
+        "-oL",
+        "@OUTPUT@"
+      ],
+      "output": "outputs/filter.banners-legacy.list.out",
+      "sha256": "b969521497634de9e2308f100ce9b1ef24ee8f6137ba2a13a92713e5996e9e9f",
+      "masked_sha256": "b969521497634de9e2308f100ce9b1ef24ee8f6137ba2a13a92713e5996e9e9f",
+      "size_bytes": 514,
+      "masks": [],
+      "stdout": "",
+      "stderr": "[+] --readscan @INPUT@\n"
     }
   ],
   "protocols_source": "getent protocols <ip_proto> on the oracle host for the records that are neither TCP nor UDP",
@@ -2487,6 +3533,68 @@
         "filter.ipv6.mixedport.list"
       ],
       "note": "the ipv6 cases (records of types 10/11 mixed with IPv4 records, and the IPv6 read-filter cases) were captured later with the same oracle and script; every earlier case reproduced (masked_sha256, stdout, stderr; the raw sha256 of the 26 clock-masked outputs differs by the masked fields only) and was kept as committed; the IPv6-only read filter is not captured: C ignores it (in-binary.c:254), rmasscan filters (R14)"
+    },
+    {
+      "captured_at": "2026-11-13T13:08:40Z",
+      "host": "Ubuntu 26.04.1 LTS, kernel 7.0.0-38-generic, x86_64",
+      "inputs": [
+        "banners-legacy.scan.bin",
+        "banners.scan.bin"
+      ],
+      "cases": [
+        "banners-legacy.open.list",
+        "banners-legacy.open.json",
+        "banners-legacy.open.ndjson",
+        "banners-legacy.open.grepable",
+        "banners-legacy.open.xml",
+        "banners-legacy.open.binary",
+        "banners-legacy.open.hostonly",
+        "banners-legacy.open.unicornscan",
+        "banners-legacy.open.xml-webxml",
+        "banners-legacy.open-closed.list",
+        "banners-legacy.open-closed.json",
+        "banners-legacy.open-closed.ndjson",
+        "banners-legacy.open-closed.grepable",
+        "banners-legacy.open-closed.xml",
+        "banners-legacy.open-closed.binary",
+        "banners-legacy.open-closed.hostonly",
+        "banners-legacy.open-closed.unicornscan",
+        "banners-legacy.open-closed.xml-webxml",
+        "banners.open.list",
+        "banners.open.json",
+        "banners.open.ndjson",
+        "banners.open.grepable",
+        "banners.open.xml",
+        "banners.open.binary",
+        "banners.open.hostonly",
+        "banners.open.unicornscan",
+        "banners.open.xml-webxml",
+        "banners.open-closed.list",
+        "banners.open-closed.json",
+        "banners.open-closed.ndjson",
+        "banners.open-closed.grepable",
+        "banners.open-closed.xml",
+        "banners.open-closed.binary",
+        "banners.open-closed.hostonly",
+        "banners.open-closed.unicornscan",
+        "banners.open-closed.xml-webxml",
+        "banners.open.certs",
+        "banners.open.default",
+        "banners.open-closed.default",
+        "banners-legacy.open.certs",
+        "banners-legacy.open.default",
+        "banners-legacy.open-closed.default",
+        "banner-types.dns-ver.list",
+        "banner-types.ssl-http.list",
+        "banner-types.dns-ver.grepable",
+        "banner-types.ssl-http.grepable",
+        "banner-types.dns-ver.binary",
+        "banner-types.ssl-http.binary",
+        "filter.banners.list",
+        "filter.banners.grepable",
+        "filter.banners-legacy.list"
+      ],
+      "note": "the banner cases (records of types 9/13 mixed with status records, the legacy types 3/4/5, certs and the default format with C stdout kept as a file, --banner-types, an address and port filter on banners) were captured later with the same oracle and an extended script (walk_records reads varint types and lengths and the banner types; run_case keeps a raw stdout as a file); every earlier case reproduced (masked_sha256, stdout, stderr; the raw sha256 of the 35 clock-masked earlier outputs differs by the masked fields only) and was kept as committed"
     }
   ]
 }

@@ -1,0 +1,244 @@
+udp-oracle port=500 cookie=0xc11884da rawudp=0 mode=prefixes sections=81 framing=eth6
+section len=0
+status open count=1
+banner 0 0 -
+section len=1
+status open count=1
+banner 0 1 =datagram
+section len=2
+status open count=1
+banner 0 2 =datagram
+section len=3
+status open count=1
+banner 0 3 =datagram
+section len=4
+status open count=1
+banner 0 4 =datagram
+section len=5
+status open count=1
+banner 0 5 =datagram
+section len=6
+status open count=1
+banner 0 6 =datagram
+section len=7
+status open count=1
+banner 0 7 =datagram
+section len=8
+status open count=1
+banner 0 8 =datagram
+section len=9
+status open count=1
+banner 0 9 =datagram
+section len=10
+status open count=1
+banner 0 10 =datagram
+section len=11
+status open count=1
+banner 0 11 =datagram
+section len=12
+status open count=1
+banner 0 12 =datagram
+section len=13
+status open count=1
+banner 0 13 =datagram
+section len=14
+status open count=1
+banner 0 14 =datagram
+section len=15
+status open count=1
+banner 0 15 =datagram
+section len=16
+status open count=1
+banner 35 26 "v15.15 xchg=255 ENCRYPTED "
+section len=17
+status open count=1
+banner 35 26 "v15.15 xchg=255 ENCRYPTED "
+section len=18
+status open count=1
+banner 35 24 "v1.0 xchg=255 ENCRYPTED "
+section len=19
+status open count=1
+banner 35 28 "v1.0 xchg=id-prot ENCRYPTED "
+section len=20
+status open count=1
+banner 35 18 "v1.0 xchg=id-prot "
+section len=21
+status open count=1
+banner 35 18 "v1.0 xchg=id-prot "
+section len=22
+status open count=1
+banner 35 18 "v1.0 xchg=id-prot "
+section len=23
+status open count=1
+banner 35 18 "v1.0 xchg=id-prot "
+section len=24
+status open count=1
+banner 35 18 "v1.0 xchg=id-prot "
+section len=25
+status open count=1
+banner 35 18 "v1.0 xchg=id-prot "
+section len=26
+status open count=1
+banner 35 18 "v1.0 xchg=id-prot "
+section len=27
+status open count=1
+banner 35 18 "v1.0 xchg=id-prot "
+section len=28
+status open count=1
+banner 35 18 "v1.0 xchg=id-prot "
+section len=29
+status open count=1
+banner 35 18 "v1.0 xchg=id-prot "
+section len=30
+status open count=1
+banner 35 18 "v1.0 xchg=id-prot "
+section len=31
+status open count=1
+banner 35 18 "v1.0 xchg=id-prot "
+section len=32
+status open count=1
+banner 35 45 "v1.0 xchg=id-prot [SEC-ASSOC] DOI=4008636142 "
+section len=33
+status open count=1
+banner 35 43 "v1.0 xchg=id-prot [SEC-ASSOC] DOI=15658734 "
+section len=34
+status open count=1
+banner 35 40 "v1.0 xchg=id-prot [SEC-ASSOC] DOI=61166 "
+section len=35
+status open count=1
+banner 35 38 "v1.0 xchg=id-prot [SEC-ASSOC] DOI=238 "
+section len=36
+status open count=1
+banner 35 79 "v1.0 xchg=id-prot [SEC-ASSOC] DOI=ipsec SECRECY INTEGRITY 238 id=238 trans=238 "
+section len=37
+status open count=1
+banner 35 79 "v1.0 xchg=id-prot [SEC-ASSOC] DOI=ipsec SECRECY INTEGRITY 238 id=238 trans=238 "
+section len=38
+status open count=1
+banner 35 79 "v1.0 xchg=id-prot [SEC-ASSOC] DOI=ipsec SECRECY INTEGRITY 238 id=238 trans=238 "
+section len=39
+status open count=1
+banner 35 79 "v1.0 xchg=id-prot [SEC-ASSOC] DOI=ipsec SECRECY INTEGRITY 238 id=238 trans=238 "
+section len=40
+status open count=1
+banner 35 70 "v1.0 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 238 id=238 trans=238 "
+section len=41
+status open count=1
+banner 35 70 "v1.0 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 238 id=238 trans=238 "
+section len=42
+status open count=1
+banner 35 70 "v1.0 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 238 id=238 trans=238 "
+section len=43
+status open count=1
+banner 35 70 "v1.0 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 238 id=238 trans=238 "
+section len=44
+status open count=1
+banner 35 70 "v1.0 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 238 id=238 trans=238 "
+section len=45
+status open count=1
+banner 35 68 "v1.0 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=238 trans=238 "
+section len=46
+status open count=1
+banner 35 71 "v1.0 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=238 "
+section len=47
+status open count=1
+banner 35 71 "v1.0 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=238 "
+section len=48
+status open count=1
+banner 35 71 "v1.0 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=238 "
+section len=49
+status open count=1
+banner 35 71 "v1.0 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=238 "
+section len=50
+status open count=1
+banner 35 71 "v1.0 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=238 "
+section len=51
+status open count=1
+banner 35 71 "v1.0 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=238 "
+section len=52
+status open count=1
+banner 35 71 "v1.0 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=238 "
+section len=53
+status open count=1
+banner 35 71 "v1.0 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=238 "
+section len=54
+status open count=1
+banner 35 161 "v1.0 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE val=0x6eeeeeee val=0x6eeeeeee val=0x6eeeeeee val=0x6eeeeeee val=0x6eeeeeee val=0x6eeeeeee "
+section len=55
+status open count=1
+banner 35 161 "v1.0 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE val=0x6eeeeeee val=0x6eeeeeee val=0x6eeeeeee val=0x6eeeeeee val=0x6eeeeeee val=0x6eeeeeee "
+section len=56
+status open count=1
+banner 35 161 "v1.0 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE val=0x6eeeeeee val=0x6eeeeeee val=0x6eeeeeee val=0x6eeeeeee val=0x6eeeeeee val=0x6eeeeeee "
+section len=57
+status open count=1
+banner 35 161 "v1.0 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE val=0x00eeeeee val=0x6eeeeeee val=0x6eeeeeee val=0x6eeeeeee val=0x6eeeeeee val=0x6eeeeeee "
+section len=58
+status open count=1
+banner 35 161 "v1.0 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE encrypt=0xeeee val=0x6eeeeeee val=0x6eeeeeee val=0x6eeeeeee val=0x6eeeeeee val=0x6eeeeeee "
+section len=59
+status open count=1
+banner 35 159 "v1.0 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE encrypt=0xee val=0x6eeeeeee val=0x6eeeeeee val=0x6eeeeeee val=0x6eeeeeee val=0x6eeeeeee "
+section len=60
+status open count=1
+banner 35 155 "v1.0 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC val=0x6eeeeeee val=0x6eeeeeee val=0x6eeeeeee val=0x6eeeeeee val=0x6eeeeeee "
+section len=61
+status open count=1
+banner 35 155 "v1.0 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC val=0x00eeeeee val=0x6eeeeeee val=0x6eeeeeee val=0x6eeeeeee val=0x6eeeeeee "
+section len=62
+status open count=1
+banner 35 152 "v1.0 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC hash=0xeeee val=0x6eeeeeee val=0x6eeeeeee val=0x6eeeeeee val=0x6eeeeeee "
+section len=63
+status open count=1
+banner 35 150 "v1.0 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC hash=0xee val=0x6eeeeeee val=0x6eeeeeee val=0x6eeeeeee val=0x6eeeeeee "
+section len=64
+status open count=1
+banner 35 144 "v1.0 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA val=0x6eeeeeee val=0x6eeeeeee val=0x6eeeeeee val=0x6eeeeeee "
+section len=65
+status open count=1
+banner 35 144 "v1.0 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA val=0x00eeeeee val=0x6eeeeeee val=0x6eeeeeee val=0x6eeeeeee "
+section len=66
+status open count=1
+banner 35 129 "v1.0 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA val=0x6eeeeeee val=0x6eeeeeee val=0x6eeeeeee "
+section len=67
+status open count=1
+banner 35 129 "v1.0 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA val=0x6eeeeeee val=0x6eeeeeee val=0x6eeeeeee "
+section len=68
+status open count=1
+banner 35 129 "v1.0 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA val=0x6eeeeeee val=0x6eeeeeee val=0x6eeeeeee "
+section len=69
+status open count=1
+banner 35 129 "v1.0 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA val=0x00eeeeee val=0x6eeeeeee val=0x6eeeeeee "
+section len=70
+status open count=1
+banner 35 126 "v1.0 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA auth=0xeeee val=0x6eeeeeee val=0x6eeeeeee "
+section len=71
+status open count=1
+banner 35 124 "v1.0 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA auth=0xee val=0x6eeeeeee val=0x6eeeeeee "
+section len=72
+status open count=1
+banner 35 118 "v1.0 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK val=0x6eeeeeee val=0x6eeeeeee "
+section len=73
+status open count=1
+banner 35 118 "v1.0 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK val=0x00eeeeee val=0x6eeeeeee "
+section len=74
+status open count=1
+banner 35 103 "v1.0 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK val=0x6eeeeeee "
+section len=75
+status open count=1
+banner 35 103 "v1.0 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK val=0x6eeeeeee "
+section len=76
+status open count=1
+banner 35 103 "v1.0 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK val=0x6eeeeeee "
+section len=77
+status open count=1
+banner 35 103 "v1.0 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK val=0x00eeeeee "
+section len=78
+status open count=1
+banner 35 88 "v1.0 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=79
+status open count=1
+banner 35 88 "v1.0 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "
+section len=80
+status open count=1
+banner 35 88 "v1.0 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY 1 id=ISAKMP trans=IKE 3DES-CBC SHA PSK "

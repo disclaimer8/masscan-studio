@@ -1,0 +1,4 @@
+udp-oracle port=500 cookie=0x5eed1234 rawudp=0 mode=whole sections=1 framing=eth6
+section len=36
+status open count=1
+banner 35 79 "v1.0 xchg=id-prot [SEC-ASSOC] DOI=ipsec SECRECY INTEGRITY 238 id=238 trans=238 "

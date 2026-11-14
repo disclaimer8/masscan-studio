@@ -1,0 +1,49 @@
+udp-oracle port=123 cookie=0x5eed1234 rawudp=0 mode=prefixes sections=13 framing=payload
+section len=0
+status open count=1
+banner 0 0 -
+section len=1
+status open count=1
+banner 0 1 =datagram
+section len=2
+status open count=1
+banner 0 2 =datagram
+section len=3
+status open count=1
+banner 0 3 =datagram
+section len=4
+status open count=1
+banner 19 19 "XNTPD MON_GETLIST_1"
+banner 0 4 =datagram
+section len=5
+status open count=1
+banner 19 19 "XNTPD MON_GETLIST_1"
+banner 0 5 =datagram
+section len=6
+status open count=1
+banner 19 19 "XNTPD MON_GETLIST_1"
+banner 0 6 =datagram
+section len=7
+status open count=1
+banner 19 19 "XNTPD MON_GETLIST_1"
+banner 0 7 =datagram
+section len=8
+status open count=1
+banner 19 19 "XNTPD MON_GETLIST_1"
+banner 0 8 =datagram
+section len=9
+status open count=1
+banner 19 70 "XNTPD MON_GETLIST_1Response was NTP Error Code 4 - \x22No Data Available\x22"
+banner 0 9 =datagram
+section len=10
+status open count=1
+banner 19 70 "XNTPD MON_GETLIST_1Response was NTP Error Code 4 - \x22No Data Available\x22"
+banner 0 10 =datagram
+section len=11
+status open count=1
+banner 19 70 "XNTPD MON_GETLIST_1Response was NTP Error Code 4 - \x22No Data Available\x22"
+banner 0 11 =datagram
+section len=12
+status open count=1
+banner 19 70 "XNTPD MON_GETLIST_1Response was NTP Error Code 4 - \x22No Data Available\x22"
+banner 0 12 =datagram

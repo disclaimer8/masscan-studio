@@ -1,0 +1,5 @@
+udp-oracle port=11211 cookie=0x5eed1235 rawudp=0 mode=whole sections=1 framing=payload
+section len=193
+status open count=1
+banner 25 56 "uptime=12345 time=1700000000 version=1.6.21  IP-MISMATCH"
+banner 0 193 =datagram

@@ -1,0 +1,13 @@
+#masscan
+TCP open	            http[   80]		from 198.18.0.3  ttl 64 
+TCP open	            http[   80]		from 198.18.0.4  ttl 64 
+TCP open	            http[   80]		from 198.18.0.5  ttl 64 
+TCP closed	           https[  443]		from 198.18.0.2  ttl 64 
+TCP closed	           https[  443]		from 198.18.0.3  ttl 64 
+TCP closed	           https[  443]		from 198.18.0.4  ttl 64 
+TCP closed	           https[  443]		from 198.18.0.5  ttl 64 
+TCP open	        http-alt[ 8080]		from 198.18.0.2  ttl 64 
+TCP open	        http-alt[ 8080]		from 198.18.0.4  ttl 64 
+TCP open	        http-alt[ 8080]		from 198.18.0.5  ttl 64 
+TCP open	        http-alt[ 8080]		from 198.18.0.3  ttl 64 
+TCP open	            http[   80]		from 198.18.0.2  ttl 64 

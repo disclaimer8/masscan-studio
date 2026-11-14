@@ -1,0 +1,65 @@
+# Guest stand check for set r1 of sub-stage 4a (banners, dedicated lab VM n2), C = 39ba251ebfb020c1ff0b8b558c06169467b259d1
+# The stand fix (mDNS, LLMNR, DO off; lab-NIC IPv6 and NetBIOS off) was applied in the scan-control stage's r3
+# (snapshot: docs/experiments/2026-11-08-rmasscan-scan-control-acceptance-raw/verification/guest-stand-applied.txt) and
+# stayed applied. For this window it was only READ by a read-only pwsh 7 script file (C:\Users\lab\bn4a-<random>-stand.ps1,
+# removed afterwards) and compared with that snapshot; nothing was re-applied and nothing was reverted. The revert recipe
+# stays on the guest (C:\Users\lab\guest-stand-before.txt).
+#
+# Reading 1, first attempt (19:35:00Z): the script's helper was named R, which PowerShell resolves to its alias of
+# Invoke-History, so the four registry lines failed ("A positional parameter cannot be found that accepts argument ...");
+# the nic and service lines read the same as below. The helper was renamed and the reading repeated at 19:35:20Z.
+
+## Reading 1: before n2 up (no lab NIC backend since the previous stage's n2 down; the boot below is that stage's restart)
+utc 2026-11-13T19:35:20.7485215Z
+boot 2026-11-12T19:57:33.5000000Z
+reg HKLM:\SYSTEM\CurrentControlSet\Services\Dnscache\Parameters EnableMDNS = 0
+reg HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\DNSClient EnableMulticast = 0
+reg HKLM:\SOFTWARE\Policies\Microsoft\Windows\DeliveryOptimization DODownloadMode = 99
+reg NetBT Tcpip_{lab GUID} NetbiosOptions = 2   (0 default/DHCP, 1 on, 2 off)
+nic lab 'Ethernet 2' mac 52-54-00-04-80-A9 status Up: ms_tcpip6 enabled=False, ms_tcpip enabled=True, TcpipNetbiosOptions=2
+nic lab addresses: IPv4 198.18.0.1/30
+nic management 'Ethernet' mac 52-54-00-12-34-56 status Up: ms_tcpip6 enabled=True, ms_tcpip enabled=True, TcpipNetbiosOptions=0
+service Dnscache status Running start Automatic
+service DoSvc status Stopped start Manual
+service W32Time status Running start Manual
+
+## Reading 2: after the VM restart for the Windows window
+# vm-lab up 19:46:39Z (rc 0, lab.env written); guest shutdown /s /t 0 at 19:46:52Z; the old qemu was gone at 19:47:05Z (its pid
+# polled every 2 s); run.sh with lab.env at 19:47:15Z (the new qemu's command line carries
+# -netdev tap,id=lab0,ifname=wvt-n2,script=no,downscript=no and -device e1000e,netdev=lab0,mac=52:54:00:04:80:a9);
+# LastBootUpTime 19:47:19.6Z; guest ssh answered at 19:47:33Z; w32time was Stopped (start Manual) and was started, the first
+# w32tm /resync /force right after the start answered "no time data was available", this reading (19:47:50Z), a second
+# resync (19:48Z, "The command completed successfully"; the guest clock read inside two readings of the VM host clock 7 s
+# apart); windows-vm-lab.ps1 -Action Configure: a first call passed a stray ';' through cmd into -Action and did not run
+# (vm-lab record-guest then recorded the guest's previous n2.json.guest.json, 19:48:38Z, rc 0), the second ran (exit 0,
+# 19:48:54Z, lab NIC 'Ethernet 2' 198.18.0.1/30), record-guest with its fresh file (19:48:57Z, rc 0; same GUID, ifIndex,
+# MAC and address as the previous file).
+utc 2026-11-13T19:47:50.8320509Z
+boot 2026-11-13T19:47:19.5610340Z
+reg HKLM:\SYSTEM\CurrentControlSet\Services\Dnscache\Parameters EnableMDNS = 0
+reg HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\DNSClient EnableMulticast = 0
+reg HKLM:\SOFTWARE\Policies\Microsoft\Windows\DeliveryOptimization DODownloadMode = 99
+reg NetBT Tcpip_{lab GUID} NetbiosOptions = 2   (0 default/DHCP, 1 on, 2 off)
+nic lab 'Ethernet 2' mac 52-54-00-04-80-A9 status Up: ms_tcpip6 enabled=False, ms_tcpip enabled=True, TcpipNetbiosOptions=2
+nic lab addresses: IPv4 198.18.0.1/30
+nic management 'Ethernet' mac 52-54-00-12-34-56 status Up: ms_tcpip6 enabled=True, ms_tcpip enabled=True, TcpipNetbiosOptions=0
+service Dnscache status Running start Automatic
+service DoSvc status Stopped start Manual
+service W32Time status Running start Manual
+
+## Comparison with guest-stand-applied.txt (scan-control stage, verification/)
+setting                                                        applied   reading 1  reading 2  match
+Dnscache\Parameters EnableMDNS                                 0         0          0          yes
+Policies DNSClient EnableMulticast (LLMNR)                     0         0          0          yes
+Policies DeliveryOptimization DODownloadMode                   99        99         99         yes
+lab NIC 'Ethernet 2' NetBT NetbiosOptions                      2         2          2          yes
+lab NIC 'Ethernet 2' ms_tcpip6 binding                         False     False      False      yes
+lab NIC 'Ethernet 2' TcpipNetbiosOptions                       2         2          2          yes
+lab NIC addresses                                              IPv4 198.18.0.1/30 only (all three)   yes
+management NIC 'Ethernet' ms_tcpip6 / TcpipNetbiosOptions      True / 0 (all three, untouched)       yes
+Every 'reg' and 'nic' line of both readings equals guest-stand-applied.txt line for line (diff of the 7 lines without
+the CR line ends the guest's output carries: no difference).
+
+Not stand-fix settings (informational): service DoSvc reads 'Stopped, start Manual' in both readings, as in the previous
+stage. w32time read Running in reading 1 (started after the previous stage's restart, the guest stayed up since) and was
+Stopped (start Manual) after this restart; the operator started it for the clock resync (reading 2 shows it Running).

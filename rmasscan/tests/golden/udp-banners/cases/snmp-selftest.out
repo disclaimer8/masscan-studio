@@ -1,0 +1,205 @@
+udp-oracle port=161 cookie=0x00000026 rawudp=0 mode=prefixes sections=60 framing=payload
+section len=0
+status open count=1
+section len=1
+status open count=1
+section len=2
+status open count=1
+section len=3
+status open count=1
+section len=4
+status open count=1
+section len=5
+status open count=1
+section len=6
+status open count=1
+section len=7
+status open count=1
+section len=8
+status open count=1
+section len=9
+status open count=1
+section len=10
+status open count=1
+section len=11
+status open count=1
+section len=12
+status open count=1
+section len=13
+status open count=1
+section len=14
+status open count=1
+section len=15
+status open count=1
+section len=16
+status open count=1
+section len=17
+status open count=1
+section len=18
+status open count=1
+banner 7 0 -
+banner 0 18 =datagram
+section len=19
+status open count=1
+banner 7 0 -
+banner 0 19 =datagram
+section len=20
+status open count=1
+banner 7 0 -
+banner 0 20 =datagram
+section len=21
+status open count=1
+banner 7 0 -
+banner 0 21 =datagram
+section len=22
+status open count=1
+banner 7 0 -
+banner 0 22 =datagram
+section len=23
+status open count=1
+banner 7 0 -
+banner 0 23 =datagram
+section len=24
+status open count=1
+banner 7 0 -
+banner 0 24 =datagram
+section len=25
+status open count=1
+banner 7 0 -
+banner 0 25 =datagram
+section len=26
+status open count=1
+banner 7 0 -
+banner 0 26 =datagram
+section len=27
+status open count=1
+banner 7 0 -
+banner 0 27 =datagram
+section len=28
+status open count=1
+banner 7 0 -
+banner 0 28 =datagram
+section len=29
+status open count=1
+banner 7 0 -
+banner 0 29 =datagram
+section len=30
+status open count=1
+banner 7 0 -
+banner 0 30 =datagram
+section len=31
+status open count=1
+banner 7 0 -
+banner 0 31 =datagram
+section len=32
+status open count=1
+banner 7 0 -
+banner 0 32 =datagram
+section len=33
+status open count=1
+banner 7 0 -
+banner 0 33 =datagram
+section len=34
+status open count=1
+banner 7 0 -
+banner 0 34 =datagram
+section len=35
+status open count=1
+banner 7 0 -
+banner 0 35 =datagram
+section len=36
+status open count=1
+banner 7 0 -
+banner 0 36 =datagram
+section len=37
+status open count=1
+banner 7 0 -
+banner 0 37 =datagram
+section len=38
+status open count=1
+banner 7 0 -
+banner 0 38 =datagram
+section len=39
+status open count=1
+banner 7 0 -
+banner 0 39 =datagram
+section len=40
+status open count=1
+banner 7 0 -
+banner 0 40 =datagram
+section len=41
+status open count=1
+banner 7 0 -
+banner 0 41 =datagram
+section len=42
+status open count=1
+banner 7 0 -
+banner 0 42 =datagram
+section len=43
+status open count=1
+banner 7 0 -
+banner 0 43 =datagram
+section len=44
+status open count=1
+banner 7 0 -
+banner 0 44 =datagram
+section len=45
+status open count=1
+banner 7 0 -
+banner 0 45 =datagram
+section len=46
+status open count=1
+banner 7 0 -
+banner 0 46 =datagram
+section len=47
+status open count=1
+banner 7 0 -
+banner 0 47 =datagram
+section len=48
+status open count=1
+banner 7 0 -
+banner 0 48 =datagram
+section len=49
+status open count=1
+banner 7 0 -
+banner 0 49 =datagram
+section len=50
+status open count=1
+banner 7 0 -
+banner 0 50 =datagram
+section len=51
+status open count=1
+banner 7 0 -
+banner 0 51 =datagram
+section len=52
+status open count=1
+banner 7 0 -
+banner 0 52 =datagram
+section len=53
+status open count=1
+banner 7 0 -
+banner 0 53 =datagram
+section len=54
+status open count=1
+banner 7 0 -
+banner 0 54 =datagram
+section len=55
+status open count=1
+banner 7 0 -
+banner 0 55 =datagram
+section len=56
+status open count=1
+banner 7 0 -
+banner 0 56 =datagram
+section len=57
+status open count=1
+banner 7 0 -
+banner 0 57 =datagram
+section len=58
+status open count=1
+banner 7 0 -
+banner 0 58 =datagram
+section len=59
+status open count=1
+banner 7 43 "sysObjectID:okidata.1.1.1.297.93.1.27.2.2.1"
+banner 0 59 =datagram

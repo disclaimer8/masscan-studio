@@ -1,0 +1,5 @@
+#masscan
+banner udp 53 192.0.2.21 1700021601 dns-ver 9.18.24
+banner tcp 1006 198.51.100.7 1700021604 dns-ver banner-6
+banner udp 53 2001:db8::53 1700021611 dns-ver 
+# end

@@ -21,6 +21,11 @@
 //! `main-conf.c:395-416`); приёмник дописывает принятое и подвал, итог `Paused` (exit 0), либо `Completed`, если
 //! передача успела закончиться до нажатия. Второе нажатие завершает процесс с кодом 1 из самого обработчика, а
 //! `paused.conf` к этому времени уже на диске.
+//!
+//! Баннеры (`--banners`, `--rawudp`, подэтап 4a, только UDP): движок разбирает датаграмму ответа, прошедшего дедуп,
+//! функцией `rmasscan_proto::udp_banner_parser` (`handle_udp`) и выдаёт баннеры сразу за пачкой, которая этим ответом
+//! кончается (`rmasscan_engine::Output`); цикл событий пишет их в [`Sink::report_reply_banner`] со временем записи
+//! статуса того же ответа. Без `--banners` движок датаграммы не разбирает.
 
 #![forbid(unsafe_code)]
 
@@ -44,7 +49,8 @@ use rmasscan_core::ranges6::format_ipv6_c;
 use rmasscan_core::receive::PortStatus;
 use rmasscan_core::throttle::Clock;
 use rmasscan_engine::{
-    AdapterPair, Engine, EngineOptions, Event, Outcome, Progress, Reason, RxHealth,
+    AdapterPair, BannerOptions, Engine, EngineOptions, Event, Outcome, Output, Progress, Reason,
+    RxHealth,
 };
 use rmasscan_net::arp_resolve::{ArpPolicy, NextHopKind, arp_binding, resolve_next_hop_until};
 use rmasscan_net::discover::{NextHopWhy, Source, usable_source_mac};
@@ -1084,7 +1090,14 @@ pub fn run_live_conf(
     for (k, binding) in bindings.iter().enumerate() {
         ios.push(open(backend, p.detected(k).iface.name.as_str(), binding)?);
     }
-    let options = EngineOptions::new(ids(backend), ids(backend));
+    let mut options = EngineOptions::new(ids(backend), ids(backend));
+    // `--banners`/`--rawudp` (`out->is_banner`, `src/output.c:898-899`): только с ними движок разбирает датаграммы UDP и
+    // выдаёт баннеры; без них очередь, события и кадры прежние.
+    options.banners = cfg.banners.then_some(BannerOptions {
+        rawudp: cfg.rawudp,
+        // `handle_udp` (`src/proto-udp.c:54-132`): движок от `rmasscan-proto` не зависит (Р11), разбор передаёт CLI.
+        udp_parser: rmasscan_proto::udp_banner_parser,
+    });
     // Решение 4: те же часы, что у резолвера; в `OsBackend` это `SystemClock`, то есть поведение `Engine::start`.
     let started = clock.now_micros();
     // Конец передачи для строки статуса: `min_k effective_end(k)`, то есть эффективный конец самого медленного адаптера. При усечённом `resume-count`
@@ -1163,9 +1176,9 @@ pub fn run_live_conf(
             wait_started.get_or_insert(clock.now_micros());
             paused_error = save_paused(base, log);
         }
-        match handle.recv_event_timeout(Duration::from_millis(250)) {
-            Ok(Event::Started { range }) => max_count = range,
-            Ok(Event::Progress(prog)) => {
+        match handle.recv_output_timeout(Duration::from_millis(250)) {
+            Ok(Output::Event(Event::Started { range })) => max_count = range,
+            Ok(Output::Event(Event::Progress(prog))) => {
                 let now = clock.now_micros();
                 // Конец передачи это `tx_end` (самый медленный адаптер, `effective_end` = `(retries + 1) * range`, с
                 // усечённым `resume-count` тоже): от него engine отсчитывает `--wait`. Процент ниже остаётся от
@@ -1197,7 +1210,7 @@ pub fn run_live_conf(
                     )
                 };
             }
-            Ok(Event::Results { replies: batch }) => {
+            Ok(Output::Event(Event::Results { replies: batch })) => {
                 for r in &batch {
                     replies += 1;
                     if r.status == PortStatus::Open {
@@ -1210,15 +1223,24 @@ pub fn run_live_conf(
                     }
                 }
             }
+            // Баннеры ответа идут сразу за пачкой, которая кончается этим ответом (`Output`): время записи то же, что
+            // у его записи статуса. Ошибка приёмника останавливает скан, как у записи статуса.
+            Ok(Output::Banner(b)) => {
+                if let Err(e) = sink.report_reply_banner(b) {
+                    sink_error = Some(e);
+                    handle.stop();
+                    break 'events;
+                }
+            }
             // Страховка: событие пришло раньше, чем цикл увидел остановку передачи.
-            Ok(Event::CheckpointReady { next_index }) => {
+            Ok(Output::Event(Event::CheckpointReady { next_index })) => {
                 if !paused_saved {
                     paused_saved = true;
                     wait_started.get_or_insert(clock.now_micros());
                     paused_error = save_paused(next_index, log);
                 }
             }
-            Ok(Event::Finished { .. }) | Err(TryRecvError::Disconnected) => break,
+            Ok(Output::Event(Event::Finished { .. })) | Err(TryRecvError::Disconnected) => break,
             Err(TryRecvError::Empty) => {}
         }
     }

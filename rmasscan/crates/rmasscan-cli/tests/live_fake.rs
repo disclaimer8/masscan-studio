@@ -12,7 +12,7 @@ mod scratch;
 
 use std::collections::BTreeSet;
 use std::net::Ipv4Addr;
-use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use scratch::Scratch;
@@ -37,6 +37,7 @@ use rmasscan_engine::{AdapterPair, FailReason, Outcome, Progress, Reason, RxHeal
 use rmasscan_net::arp_resolve::{ArpPolicy, arp_binding};
 use rmasscan_net::discover::{NextHopWhy, Source};
 use rmasscan_net::{Iface, Interfaces, NetError, NextHop, Route, RouteTable};
+use rmasscan_proto::BannerRecord;
 
 const IF_NAME: &str = "eth0";
 const IF_INDEX: u32 = 2;
@@ -183,6 +184,12 @@ struct FakeBackend {
     /// Передача встаёт после этого кадра адаптера скана, пока цикл событий CLI не опросит `interrupts()` ещё
     /// [`STALL_POLLS`] раз: строка статуса видит позицию посреди передачи (приём и часы идут дальше).
     stall_tx_at: Option<usize>,
+    /// Ответы для баннеров UDP: `T1:53` отвечает DNS version.bind CHAOS TXT `9.18.24` с id зонда, `T1:9999` датаграммой
+    /// `hello`; остальное как обычно.
+    udp_banners: bool,
+    /// Каждое чтение `unix_time()` прибавляет секунду: время записи не может совпасть случайно.
+    tick_time: bool,
+    ticks: AtomicU64,
 }
 
 /// Сколько итераций цикла событий CLI переждать в сценарии `stall_tx_at`.
@@ -275,6 +282,9 @@ impl FakeBackend {
             pcap_opened: Mutex::new(Vec::new()),
             inject_noise: false,
             stall_tx_at: None,
+            udp_banners: false,
+            tick_time: false,
+            ticks: AtomicU64::new(0),
         }
     }
 
@@ -372,6 +382,9 @@ fn respond(frame: &[u8], neighbors: &[(Ipv4Addr, [u8; 6])]) -> Vec<Vec<u8>> {
 impl Wall for FakeBackend {
     fn unix_time(&self) -> u64 {
         assert!(!self.entropy_and_time_panic, "time must not be read");
+        if self.tick_time {
+            return self.unix_time + self.ticks.fetch_add(1, Ordering::SeqCst);
+        }
         self.unix_time
     }
     fn utc_offset_secs(&self, _: u64) -> i32 {
@@ -404,6 +417,7 @@ impl Backend for FakeBackend {
         let (presses, press_during_arp) = (self.presses.clone(), self.press_during_arp);
         let silent_targets = self.silent_targets;
         let inject_noise = self.inject_noise;
+        let udp_banners = self.udp_banners;
         // Сценарий действует на адаптер скана (не на ARP-адаптер, открытый первым).
         let scenario = self.press_in_tx.filter(|_| !opened.is_empty());
         let held: Arc<Mutex<Option<Vec<u8>>>> = Arc::new(Mutex::new(None));
@@ -423,6 +437,9 @@ impl Backend for FakeBackend {
             {
                 *held_r.lock().unwrap() = reply_to_syn(f, 0x12);
                 return vec![];
+            }
+            if let Some(replies) = udp_banners.then(|| banner_reply(f)).flatten() {
+                return replies;
             }
             let mut replies = respond(f, &neighbors);
             if inject_noise && is_syn(f) {
@@ -518,6 +535,31 @@ impl Backend for FakeBackend {
             .push((self.clock.now_micros(), content.to_string()));
         Ok(())
     }
+}
+
+/// Ответы режима `udp_banners`: зонд UDP к `T1:53` получает DNS version.bind CHAOS TXT с id зонда (`dns_set_cookie`
+/// вписал туда cookie), к `T1:9999` датаграмму `hello`. `None` для всего остального.
+fn banner_reply(frame: &[u8]) -> Option<Vec<Vec<u8>>> {
+    if frame.get(12..14) != Some(&[0x08, 0x00][..]) || frame.get(23) != Some(&17) {
+        return None;
+    }
+    let (ip, port) = syn_dst(frame);
+    if ip != T1 {
+        return None;
+    }
+    let payload = match port {
+        53 => {
+            let mut v = frame.get(42..44)?.to_vec();
+            v.extend([0x84, 0x00, 0, 1, 0, 1, 0, 0, 0, 0]);
+            v.extend(b"\x07version\x04bind\x00\x00\x10\x00\x03");
+            v.extend([0xC0, 0x0C, 0x00, 0x10, 0x00, 0x03, 0, 0, 0, 0, 0, 8, 7]);
+            v.extend(b"9.18.24");
+            v
+        }
+        9999 => b"hello".to_vec(),
+        _ => return None,
+    };
+    Some(reply_to_udp(frame, &payload).into_iter().collect())
 }
 
 /// Шум к SYN: RST на наш `ip:port` с испорченным ack (плохой SYN-cookie) и валидный ответ на чужой адрес.
@@ -1064,10 +1106,12 @@ fn internet_wide_range_without_exclude_is_refused_before_detection() {
     b.panic_on_open = true;
     let (r, out, log) = cli(&b, &["0.0.0.0/0", "-p80"]);
     let e = r.unwrap_err();
-    assert!(e.contains("range too big"), "{e}");
-    assert!(
-        rmasscan_cli::error_text(&e).starts_with("rmasscan: error: "),
-        "{e}"
+    // main.c:1236-1238: три строки C дословно, без обёртки `rmasscan: error:`.
+    assert_eq!(
+        rmasscan_cli::error_text(&e),
+        "FAIL: range too big, need confirmation\n \
+         [hint] to prevent accidents, at least one --exclude must be specified\n \
+         [hint] use \"--exclude 255.255.255.255\" as a simple confirmation"
     );
     assert!(out.is_empty() && log.is_empty());
     assert!(b.lookups().is_empty());
@@ -1373,6 +1417,9 @@ fn offline_zero_adapter_ip_is_detected_not_sent_from_zero() {
 struct FailingSink {
     reports: usize,
     on_finish: bool,
+    /// Падает запись баннера, а не статуса.
+    on_banner: bool,
+    banners: usize,
 }
 
 const SINK_ERROR: &str = "write failed: No space left on device (os error 28)";
@@ -1383,10 +1430,20 @@ impl Sink for FailingSink {
     }
     fn report(&mut self, reply: &Reply) -> Result<(), String> {
         self.reports += 1;
-        if reply.status == PortStatus::Open && !self.on_finish {
+        if reply.status == PortStatus::Open && !self.on_finish && !self.on_banner {
             return Err(SINK_ERROR.into());
         }
         Ok(())
+    }
+    fn report_banner(&mut self, _: &BannerRecord) -> Result<(), String> {
+        self.banners += 1;
+        if self.on_banner {
+            return Err(SINK_ERROR.into());
+        }
+        Ok(())
+    }
+    fn report_reply_banner(&mut self, b: BannerRecord) -> Result<(), String> {
+        self.report_banner(&b)
     }
     fn finish(&mut self) -> Result<(), String> {
         assert!(
@@ -1406,6 +1463,8 @@ fn sink_report_failure_still_prints_finished_with_the_engine_sent_count() {
     let mut sink = FailingSink {
         reports: 0,
         on_finish: false,
+        on_banner: false,
+        banners: 0,
     };
     let r = live::run_live(&config(&LIVE), &b, &mut sink, &mut log);
     let log = String::from_utf8(log).unwrap();
@@ -1444,6 +1503,8 @@ fn sink_finish_failure_still_prints_finished() {
     let mut sink = FailingSink {
         reports: 0,
         on_finish: true,
+        on_banner: false,
+        banners: 0,
     };
     let r = live::run_live(&config(&LIVE), &b, &mut sink, &mut log);
     let log = String::from_utf8(log).unwrap();
@@ -2401,6 +2462,12 @@ impl Sink for PressOnFirstOpen<'_> {
         }
         self.reported.push(*reply);
         Ok(())
+    }
+    fn report_banner(&mut self, b: &BannerRecord) -> Result<(), String> {
+        self.pipeline.report_banner(b)
+    }
+    fn report_reply_banner(&mut self, b: BannerRecord) -> Result<(), String> {
+        Sink::report_reply_banner(&mut self.pipeline, b)
     }
     fn finish(&mut self) -> Result<(), String> {
         self.pipeline.finish()
@@ -4086,4 +4153,145 @@ fn arpscan_key_and_echo_output_round_trip_through_a_conf_file() {
             "{name}: {out}"
         );
     }
+}
+
+/// Задача 6: живой скан UDP с `--banners`. Каждая запись `Discovered open port N/udp` идёт перед своими строками
+/// `Banner on port N/udp on IP: [app] текст` (`src/output.c:903-923`): `T1:53` даёт `dns-ver`, `T1:9999` (порт без
+/// парсера) первые 64 байта и сырой баннер. Без `--banners` тот же скан печатает только записи статуса
+/// (`out->is_banner`, `src/output.c:898-899`), с `--rawudp` у DNS добавляется сырой баннер.
+#[test]
+fn live_udp_banners_follow_their_discovered_line() {
+    let args = |extra: &[&'static str]| {
+        let mut v = vec!["198.51.100.1-198.51.100.2", "-pU:53,U:9999", "--wait", "1"];
+        v.extend_from_slice(extra);
+        v
+    };
+    let mut b = FakeBackend::new();
+    b.udp_banners = true;
+    let (r, out, log) = cli(&b, &args(&["--banners"]));
+    r.unwrap();
+    assert!(log.contains("finished: Completed"), "{log}");
+    let pad = |s: String| format!("{s:<79}\n");
+    let open = |port: u16| pad(format!("Discovered open port {port}/udp on {T1}"));
+    let banner = |port: u16, app: &str, text: &str| {
+        pad(format!("Banner on port {port}/udp on {T1}: [{app}] {text}"))
+    };
+    let dns = [open(53), banner(53, "dns-ver", "9.18.24")].concat();
+    let other = [
+        open(9999),
+        banner(9999, "unknown", "hello"),
+        banner(9999, "unknown", "hello"),
+    ]
+    .concat();
+    assert!(
+        out == [dns.clone(), other.clone()].concat() || out == [other.clone(), dns].concat(),
+        "{out}"
+    );
+
+    let b = {
+        let mut b = FakeBackend::new();
+        b.udp_banners = true;
+        b
+    };
+    let (r, out, _) = cli(&b, &args(&[]));
+    r.unwrap();
+    let mut lines: Vec<&str> = out.lines().collect();
+    lines.sort_unstable();
+    assert_eq!(lines.len(), 2, "{out}");
+    assert!(
+        lines.iter().all(|l| l.starts_with("Discovered open port")),
+        "{out}"
+    );
+
+    let b = {
+        let mut b = FakeBackend::new();
+        b.udp_banners = true;
+        b
+    };
+    let (r, out, _) = cli(&b, &args(&["--rawudp"]));
+    r.unwrap();
+    let dns_lines: Vec<&str> = out.lines().filter(|l| l.contains("53/udp")).collect();
+    assert_eq!(dns_lines.len(), 3, "{out}");
+    assert!(dns_lines[1].contains("[dns-ver] 9.18.24"), "{out}");
+    assert!(dns_lines[2].contains("[unknown] "), "{out}");
+}
+
+/// Время записи баннера равно времени её записи статуса (у C оба `secs` одного кадра, справка A0; у rmasscan время
+/// статуса это момент обработки пачки, Р9 этапа вывода). Часы фейка прибавляют секунду на каждое чтение, поэтому
+/// второе чтение для баннера дало бы другое число; записи статуса между собой различаются.
+#[test]
+fn timestamp_of_banner_equals_its_status() {
+    let mut b = FakeBackend::new();
+    b.udp_banners = true;
+    b.tick_time = true;
+    let (r, out, _) = cli(
+        &b,
+        &[
+            "198.51.100.1-198.51.100.2",
+            "-pU:53,U:9999",
+            "--wait",
+            "1",
+            "--banners",
+            "--seed",
+            "7",
+            "--source-port",
+            "40000",
+            "-oJ",
+            "-",
+        ],
+    );
+    r.unwrap();
+    let records: Vec<(bool, &str)> = out
+        .lines()
+        .filter_map(|l| {
+            let ts = l.split("\"timestamp\": \"").nth(1)?.split('"').next()?;
+            Some((l.contains("\"service\""), ts))
+        })
+        .collect();
+    assert_eq!(records.len(), 5, "{out}");
+    let mut status_times = Vec::new();
+    let mut last_status = None;
+    for (is_banner, ts) in &records {
+        if *is_banner {
+            assert_eq!(Some(*ts), last_status, "{out}");
+        } else {
+            last_status = Some(*ts);
+            status_times.push(*ts);
+        }
+    }
+    status_times.dedup();
+    assert_eq!(
+        status_times.len(),
+        2,
+        "the fake clock ticks between records: {out}"
+    );
+}
+
+/// Ошибка записи баннера (не EPIPE) останавливает скан так же, как ошибка записи статуса: `[+] finished` с `sent`
+/// движка, затем ошибка приёмника (код 1).
+#[test]
+fn banner_sink_error_stops_the_scan_and_fails() {
+    let mut b = FakeBackend::new();
+    b.udp_banners = true;
+    let mut log = Vec::new();
+    let mut sink = FailingSink {
+        reports: 0,
+        on_finish: false,
+        on_banner: true,
+        banners: 0,
+    };
+    let args = [
+        "198.51.100.1-198.51.100.2",
+        "-pU:53",
+        "--banners",
+        "--wait",
+        "1",
+    ];
+    let r = live::run_live(&config(&args), &b, &mut sink, &mut log);
+    let log = String::from_utf8(log).unwrap();
+    assert_eq!(r.unwrap_err(), SINK_ERROR);
+    assert_eq!(sink.banners, 1);
+    let fin = plus_lines(&log).last().copied().unwrap_or_default();
+    assert!(fin.starts_with("[+] finished: "), "{log}");
+    assert!(fin.ends_with(", open 1"), "{log}");
 }

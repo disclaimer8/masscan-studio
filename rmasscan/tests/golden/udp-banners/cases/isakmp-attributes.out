@@ -1,0 +1,4 @@
+udp-oracle port=500 cookie=0x5eed1234 rawudp=0 mode=whole sections=1 framing=payload
+section len=116
+status open count=1
+banner 35 173 "v1.0 xchg=id-prot [SEC-ASSOC] DOI=ipsec IDENTITY SECRECY INTEGRITY 7 id=3 trans=IKE 3DES-CBC AES-CBC encrypt=0x9 SHA hash=0x1 PSK PSK auth=0xfde9 key=256bits val=0x0022abcd "

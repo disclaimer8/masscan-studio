@@ -10,6 +10,7 @@
 #   wire-lab.sh --oracle BIN --out DIR --suite scan-control --rmasscan RMASSCAN_CLI
 #   wire-lab.sh --oracle BIN --out DIR --suite protocols --rmasscan RMASSCAN_CLI
 #   wire-lab.sh --oracle BIN --out DIR --suite ipv6 --rmasscan RMASSCAN_CLI
+#   wire-lab.sh --oracle BIN --out DIR --suite banners --rmasscan RMASSCAN_CLI
 #
 # Suite autodetect runs rmasscan-lab autodetect-suite linux inside the lab, with ONE controlled change to the
 # seal: the scanner namespace gets a default route via the peer (198.18.0.2) and permanent neighbours for
@@ -43,6 +44,11 @@
 # scanner and its link-local as permanent neighbours (a learnt link-local entry is probed by NUD, live 7b r1), and a
 # settle wait so that the kernels' MLD reports for the new groups are over before any capture.
 # Every setting dies with the namespaces; the seal is `capture isolation --mode ipv6`.
+#
+# Suite banners runs rmasscan-lab banners-suite linux on the protocols stand (the autodetect stand, same seal, lab id,
+# teardown record, kept work and refusal of an earlier lab's OUT, plus the same net.ipv4.icmp_ratemask=0 in the peer
+# namespace only): UDP banners (--banners, --rawudp) of the C oracle and rmasscan. Its own responder answers each UDP
+# probe with a scenario reply (capture responder --udp-answer banners); nothing else changes.
 #
 # Suites rust/perf run rmasscan-lab wire-suite inside the same sealed lab (same seal assertions,
 # same cleanup); `rust` ends by deleting the veth on purpose, so it is the last thing it does.
@@ -78,7 +84,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 [ -n "$ORACLE" ] && [ -n "$OUT" ] || { echo "usage: wire-lab.sh --oracle BIN --out DIR" >&2; exit 64; }
-case "$SUITE" in oracle) ;; rust|perf) [ -n "$RUST_BIN" ] || { echo "--suite $SUITE needs --rust-bin" >&2; exit 64; } ;; autodetect) [ -n "$RMASSCAN_BIN" ] || { echo "--suite autodetect needs --rmasscan" >&2; exit 64; } ;; output) [ -n "$RMASSCAN_BIN" ] || { echo "--suite output needs --rmasscan" >&2; exit 64; } ;; scan-control) [ -n "$RMASSCAN_BIN" ] || { echo "--suite scan-control needs --rmasscan" >&2; exit 64; } ;; protocols) [ -n "$RMASSCAN_BIN" ] || { echo "--suite protocols needs --rmasscan" >&2; exit 64; } ;; ipv6) [ -n "$RMASSCAN_BIN" ] || { echo "--suite ipv6 needs --rmasscan" >&2; exit 64; } ;; *) echo "unknown suite: $SUITE" >&2; exit 64 ;; esac
+case "$SUITE" in oracle) ;; rust|perf) [ -n "$RUST_BIN" ] || { echo "--suite $SUITE needs --rust-bin" >&2; exit 64; } ;; autodetect) [ -n "$RMASSCAN_BIN" ] || { echo "--suite autodetect needs --rmasscan" >&2; exit 64; } ;; output) [ -n "$RMASSCAN_BIN" ] || { echo "--suite output needs --rmasscan" >&2; exit 64; } ;; scan-control) [ -n "$RMASSCAN_BIN" ] || { echo "--suite scan-control needs --rmasscan" >&2; exit 64; } ;; protocols) [ -n "$RMASSCAN_BIN" ] || { echo "--suite protocols needs --rmasscan" >&2; exit 64; } ;; ipv6) [ -n "$RMASSCAN_BIN" ] || { echo "--suite ipv6 needs --rmasscan" >&2; exit 64; } ;; banners) [ -n "$RMASSCAN_BIN" ] || { echo "--suite banners needs --rmasscan" >&2; exit 64; } ;; *) echo "unknown suite: $SUITE" >&2; exit 64 ;; esac
 [ "$SUITE" != rust ] || [ -n "$FIXTURES" ] || { echo "--suite rust needs --fixtures" >&2; exit 64; }
 [ "$(uname -s)" = Linux ] || { echo "FATAL: Linux only" >&2; exit 2; }
 if [ "$(id -u)" != 0 ]; then
@@ -125,6 +131,8 @@ DEFAULT_VIA=""
 STAND_SUITE=0; case "$SUITE" in autodetect|output|scan-control|protocols) STAND_SUITE=1 ;; esac
 # ipv6: the same stand, IPv6 raised on its veth pair only (see the header)
 [ "$SUITE" != ipv6 ] || STAND_SUITE=1
+# banners: the same stand as protocols (see the header)
+[ "$SUITE" != banners ] || STAND_SUITE=1
 if [ "$STAND_SUITE" = 1 ]; then
   # Fixed stand of the autodetect and output suites (inside the script on purpose: no new variable crosses the sudo -n env re-exec).
   # The scanner's own address is assigned to veth-a, so the adapter IP is the link address.
@@ -264,6 +272,8 @@ nsa sysctl -qw "net.ipv6.conf.$IF_A.disable_ipv6=1"; nsb sysctl -qw "net.ipv6.co
 # protocols: the peer kernel sends every ICMP error it owes (no rate limit), in the peer namespace only.
 [ "$SUITE" != protocols ] || nsb sysctl -qw net.ipv4.icmp_ratemask=0
 [ "$SUITE" != protocols ] || note_cmd "ip netns exec \$NS_B sysctl -qw net.ipv4.icmp_ratemask=0   # protocols: every ICMP error of the peer kernel is sent"
+[ "$SUITE" != banners ] || nsb sysctl -qw net.ipv4.icmp_ratemask=0
+[ "$SUITE" != banners ] || note_cmd "ip netns exec \$NS_B sysctl -qw net.ipv4.icmp_ratemask=0   # banners: the protocols stand's setting"
 if [ "$SUITE" = scan-control ]; then
   ip -n "$NS_A" link set "$IF_A2" address "$MAC_A2"
   ip -n "$NS_B" link set "$IF_B2" address "$MAC_B2"
@@ -515,6 +525,16 @@ elif [ "$SUITE" = protocols ]; then
   # ---- protocols suite: the same driver on the same stand, ICMP Echo, UDP, SCTP and ARP of the C oracle and rmasscan
   note_cmd "rmasscan-lab protocols-suite linux ...   # runs everything through ip netns exec \$NS_A / \$NS_B"
   start_suite_group "$OUT/suite.log" "$LAB_BIN" protocols-suite linux --out "$OUT" --work "$WORK" \
+    --ns-a "$NS_A" --ns-b "$NS_B" --iface-a "$IF_A" --iface-b "$IF_B" --mac-a "$MAC_A" --mac-b "$MAC_B" \
+    --rmasscan "$RMASSCAN_BIN" --oracle "$ORACLE" --conf-masked "$CONF_MASKED" --lab-id "$LAB_ID"
+  SUITE_PID=$SUITE_PGID
+  SUITE_RC=0; wait "$SUITE_PID" || SUITE_RC=$?
+  stop_suite_group
+  log "suite $SUITE finished rc=$SUITE_RC (see $OUT/suite.log)"
+elif [ "$SUITE" = banners ]; then
+  # ---- banners suite: the same driver on the protocols stand, UDP banners of the C oracle and rmasscan
+  note_cmd "rmasscan-lab banners-suite linux ...   # runs everything through ip netns exec \$NS_A / \$NS_B"
+  start_suite_group "$OUT/suite.log" "$LAB_BIN" banners-suite linux --out "$OUT" --work "$WORK" \
     --ns-a "$NS_A" --ns-b "$NS_B" --iface-a "$IF_A" --iface-b "$IF_B" --mac-a "$MAC_A" --mac-b "$MAC_B" \
     --rmasscan "$RMASSCAN_BIN" --oracle "$ORACLE" --conf-masked "$CONF_MASKED" --lab-id "$LAB_ID"
   SUITE_PID=$SUITE_PGID

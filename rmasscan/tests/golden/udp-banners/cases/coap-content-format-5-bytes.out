@@ -1,0 +1,5 @@
+udp-oracle port=5683 cookie=0x5eed1234 rawudp=0 mode=whole sections=1 framing=payload
+section len=20
+status open count=1
+banner 28 63 "rsp=2.5(Content) /Content-Format/ application/link-format /a /b"
+banner 0 20 =datagram

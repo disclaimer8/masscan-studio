@@ -1,0 +1,5 @@
+udp-oracle port=53 cookie=0x5eed1234 rawudp=0 mode=whole sections=1 framing=rawip
+section len=61
+status open count=1
+banner 6 10 "3:NXDOMAIN"
+banner 0 61 =datagram

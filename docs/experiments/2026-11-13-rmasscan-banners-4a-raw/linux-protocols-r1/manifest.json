@@ -1,0 +1,38 @@
+{
+  "conf_masked": false,
+  "created_utc": 1794598333.084393,
+  "lab": {
+    "sha256": "aaa7f226a482d4a68326457da9dca28e54aa8431bc490ac0b6c71367251d0c4f",
+    "size": 7264952
+  },
+  "lab_id": "62fac0ee-c794-4d20-a00b-1428e2e2a808",
+  "oracle": {
+    "sha256": "8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e",
+    "size": 2106920
+  },
+  "protocols": "linux",
+  "rmasscan": {
+    "sha256": "0d0ceb81a0707a6e5d77032c42355d08ce98c7da90ad3bfbfe16456a8f7c0cf5",
+    "size": 2510784
+  },
+  "schema": 1,
+  "stand": {
+    "default_route": "via 198.18.0.2 dev veth-a (scanner namespace only)",
+    "open_ports": [
+      80,
+      8080
+    ],
+    "peer_if": "veth-b",
+    "peer_ips": [
+      "198.18.0.2",
+      "198.18.0.3",
+      "198.18.0.4",
+      "198.18.0.5"
+    ],
+    "peer_mac": "02:aa:00:00:00:02",
+    "scanner_if": "veth-a",
+    "scanner_ip": "198.18.0.1",
+    "scanner_mac": "02:aa:00:00:00:01"
+  },
+  "suite": "protocols-suite linux"
+}

@@ -1,0 +1,14 @@
+tcp-oracle v1 port=21 capture=none segments=1 bytes=19
+run whole calls=1
+app_proto 5
+action send flags=0 10 "AUTH TLS\x0d\x0a"
+action close
+record 5 13 "220 ab\x0a530 cd"
+end
+run bytewise calls=19
+app_proto 5
+action send flags=0 10 "AUTH TLS\x0d\x0a"
+action close
+record 1 3 =stream
+record 5 13 "220 ab\x0a530 cd"
+end

@@ -9,8 +9,12 @@
 pub(crate) mod banout;
 pub(crate) mod classify;
 mod driver;
+mod ftp;
 pub(crate) mod hello;
+mod imap4;
+mod pop3;
 pub(crate) mod session;
+mod smtp;
 
 use std::fmt;
 use std::sync::Arc;
@@ -57,6 +61,63 @@ pub fn tcp_stack_factory(
         cfg: Arc::new(BannerConfig::new(&s)),
         connection_timeout_secs,
     })
+}
+
+/// Детерминированный xorshift64* тестов парсеров (как `tcb_never_panics`).
+#[cfg(test)]
+pub(crate) struct TestRng(pub(crate) u64);
+
+#[cfg(test)]
+impl TestRng {
+    pub(crate) fn next(&mut self) -> u64 {
+        self.0 ^= self.0 >> 12;
+        self.0 ^= self.0 << 25;
+        self.0 ^= self.0 >> 27;
+        self.0.wrapping_mul(0x2545_F491_4F6C_DD1D)
+    }
+
+    pub(crate) fn below(&mut self, n: usize) -> usize {
+        usize::try_from(self.next() % u64::try_from(n.max(1)).expect("n")).expect("index")
+    }
+}
+
+/// Нарезки потока для тестов парсеров: по байту и 8 случайных (seed), каждая со своим именем.
+#[cfg(test)]
+pub(crate) fn test_splits(stream: &[u8], seed: u64) -> Vec<(String, Vec<&[u8]>)> {
+    let mut out = vec![("bytewise".to_owned(), stream.chunks(1).collect())];
+    let mut rng = TestRng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
+    for k in 0..8 {
+        let mut cuts: Vec<usize> = (0..1 + rng.below(stream.len().min(24)))
+            .map(|_| rng.below(stream.len() + 1))
+            .collect();
+        cuts.sort_unstable();
+        let mut segs = Vec::new();
+        let mut at = 0;
+        for c in cuts.into_iter().chain([stream.len()]) {
+            segs.push(&stream[at..c]);
+            at = c;
+        }
+        out.push((format!("random-{k}"), segs));
+    }
+    out
+}
+
+/// Поток через офлайн-драйвер с настройками по умолчанию целиком и в [`test_splits`]: записи, номер C и действия
+/// каждой нарезки равны целому (Р13; у текстовых парсеров и действия не зависят от нарезки). Итог целого.
+#[cfg(test)]
+pub(crate) fn stream_in_splits(
+    port: u16,
+    force: Option<u16>,
+    stream: &[u8],
+    seed: u64,
+) -> StreamResult {
+    let s = TcpBannerSettings::default();
+    let whole = banner_stream(&s, port, force, &[stream]);
+    for (name, segs) in test_splits(stream, seed) {
+        let r = banner_stream(&s, port, force, &segs);
+        assert_eq!(r, whole, "{name}: {stream:?}");
+    }
+    whole
 }
 
 #[cfg(test)]
@@ -217,5 +278,238 @@ mod tests {
                 "tick {t}"
             );
         }
+    }
+
+    /// Настоящий парсер за фабрикой: приветствие FTP на 21 получает в ответ `AUTH TLS` на проводе (действие парсера
+    /// уходит сегментом с данными, `src/proto-ftp.c:73`), а записи ждут сброса.
+    #[test]
+    fn ftp_greeting_gets_auth_tls_on_the_wire() {
+        let mut st = table(1 << 20);
+        let k = key(1, 21);
+        let mut out = StackOutput::default();
+        st.on_segment(T0, &seg(k, SYNACK, R0, S, b""), &mut out);
+        let greeting = b"220 lab FTP server ready\r\n";
+        let mut out = StackOutput::default();
+        st.on_segment(T0 + SEC / 2, &seg(k, PSHACK, R0 + 1, S, greeting), &mut out);
+        assert!(
+            out.segments
+                .iter()
+                .any(|s| s.flags == PSHACK && s.payload == b"AUTH TLS\r\n"),
+            "{:?}",
+            out.segments
+        );
+        assert!(out.banners.is_empty());
+    }
+
+    /// Согласие на STARTTLS (FTP 234, SMTP 220, POP3 `+OK`, справка B6): номер C SSL3 (9), как у C, hello TLS не
+    /// шлётся, запись парсера кончается строкой согласия (у FTP и SMTP без LF, у POP3 с LF), а каждый байт после неё в
+    /// одной записи `unknown`, в том же сегменте или в следующем, в любой нарезке. Байты, которые C в том же сегменте
+    /// разобрал бы как новое приветствие со вторым `AUTH TLS` (`src/proto-ftp.c:101`), здесь тоже `unknown`.
+    #[test]
+    fn starttls_success_switches_to_unported_tls() {
+        let tail: &[u8] = b"\x16\x03\x01\x00\x02\x02\x28220 again\r\n";
+        for (port, dialogue, app, rec, cmds) in [
+            (
+                21u16,
+                &b"220 lab FTP server ready\r\n234 AUTH TLS successful\r\n"[..],
+                app_id::FTP,
+                &b"220 lab FTP server ready\n234 AUTH TLS successful"[..],
+                &[&b"AUTH TLS\r\n"[..]][..],
+            ),
+            (
+                25,
+                b"220-mail.example.test\r\n220 ok\r\n234-go\r\n",
+                app_id::FTP,
+                b"220-mail.example.test\n220 ok\n234-go",
+                &[b"AUTH TLS\r\n"],
+            ),
+            (
+                25,
+                b"220 mail.example.test ESMTP\r\n250 STARTTLS\r\n220 2.0.0 Ready\r\n",
+                app_id::SMTP,
+                b"220 mail.example.test ESMTP\n250 STARTTLS\n220 2.0.0 Ready",
+                &[b"EHLO masscan\r\n", b"STARTTLS\r\n"],
+            ),
+            (
+                587,
+                b"220 x\r\n250 ok\r\n220-go\r\n",
+                app_id::SMTP,
+                b"220 x\n250 ok\n220-go",
+                &[b"EHLO masscan\r\n", b"STARTTLS\r\n"],
+            ),
+            (
+                110,
+                b"+OK lab ready\r\n+OK\r\nSTLS\r\n.\r\n+OK Begin TLS\r\n",
+                app_id::POP3,
+                b"+OK lab ready\n+OK\nSTLS\n.\n+OK Begin TLS\n",
+                &[b"CAPA\r\n", b"STLS\r\n"],
+            ),
+        ] {
+            let want_acts: Vec<StreamAction> = cmds
+                .iter()
+                .map(|c| StreamAction::Send(c.to_vec()))
+                .collect();
+            // Только строка согласия: запись парсера, номер 9, без hello TLS.
+            let r = stream_in_splits(port, None, dialogue, u64::from(port));
+            assert_eq!(r.app_proto, Some(app_id::SSL3), "{dialogue:?}");
+            assert_eq!(r.records, [(app, rec.to_vec())], "{dialogue:?}");
+            assert_eq!(r.actions, want_acts, "{dialogue:?}");
+            // С хвостом: целиком, по байту, случайно и ровно по строке согласия хвост это одна запись unknown.
+            let stream = [dialogue, tail].concat();
+            let r = stream_in_splits(port, None, &stream, u64::from(port) + 1);
+            let at = banner_stream(&TcpBannerSettings::default(), port, None, &[dialogue, tail]);
+            assert_eq!(r, at, "{dialogue:?}: split at the go-ahead");
+            assert_eq!(r.app_proto, Some(app_id::SSL3));
+            assert_eq!(
+                r.records,
+                [(app, rec.to_vec()), (app_id::HEUR, tail.to_vec())],
+                "{dialogue:?}"
+            );
+            assert_eq!(
+                r.actions, want_acts,
+                "{dialogue:?}: no TLS hello, no second command"
+            );
+        }
+    }
+
+    /// Р1 класс б: случайные потоки из обломков диалогов FTP, SMTP, POP3, IMAP4 (коды, разделители, CR, LF, TAB, NUL,
+    /// 0x7F, 0x80, точки, звёзды, целые диалоги со STARTTLS), мусора и изредка 66 000 байт текста, на портах 21, 25,
+    /// 587, 110, 143, 2525 и других, с классификатором и с принуждением каждого из четырёх парсеров, в случайных
+    /// нарезках: ни паники, записи не длиннее 65 536 байт и не пустые, записи только этих приложений, действия только
+    /// их команды и закрытие, hello TLS нет, записи, номер и действия не зависят от нарезки.
+    #[test]
+    fn text_parsers_never_panic() {
+        const FRAGS: &[&[u8]] = &[
+            b"220 ",
+            b"220-",
+            b"234 ",
+            b"234-",
+            b"530 ",
+            b"250-",
+            b"250 ",
+            b"521 ",
+            b"454 ",
+            b"+OK",
+            b"+OK ",
+            b"-ERR",
+            b".",
+            b".\r\n",
+            b"* OK ",
+            b"* ok ",
+            b"*",
+            b" ",
+            b"O",
+            b"K",
+            b"+",
+            b"-",
+            b"\r",
+            b"\n",
+            b"\r\n",
+            b"\t",
+            b"\x00",
+            b"\x7f",
+            b"\x80",
+            b"\xff",
+            b"ready",
+            b"x",
+            b"220 ok\r\n",
+            b"250 ok\r\n",
+            b"530 no\r\n",
+            b"+OK\r\n",
+            b"-ERR\r\n",
+            b"* OK x\r\n",
+            b"220 a\r\n234 b\r\n",
+            b"220 a\r\n250 b\r\n220 c\r\n",
+            b"+OK a\r\n+OK\r\n.\r\n+OK b\r\n",
+        ];
+        let commands: [&[u8]; 5] = [
+            b"AUTH TLS\r\n",
+            b"EHLO masscan\r\n",
+            b"STARTTLS\r\n",
+            b"CAPA\r\n",
+            b"STLS\r\n",
+        ];
+        let ports = [21u16, 25, 587, 110, 143, 2525, 9999];
+        let forced = [
+            None,
+            None,
+            None,
+            Some(app_id::FTP),
+            Some(app_id::SMTP),
+            Some(app_id::POP3),
+            Some(app_id::IMAP4),
+        ];
+        let s = TcpBannerSettings::default();
+        let mut rng = TestRng(0xC0FF_EE00_D15E_A5E5);
+        let (mut handoffs, mut sends, mut closes, mut long) = (0usize, 0usize, 0usize, 0usize);
+        for round in 0..10_000 {
+            let mut stream = Vec::new();
+            for _ in 0..1 + rng.below(12) {
+                match rng.below(20) {
+                    0..=13 => stream.extend_from_slice(FRAGS[rng.below(FRAGS.len())]),
+                    14..=17 => {
+                        stream.extend((0..rng.below(9)).map(|_| rng.next().to_le_bytes()[0]))
+                    }
+                    18 => {
+                        stream.extend((0..1 + rng.below(4)).map(|_| b'0' + (rng.next() % 10) as u8))
+                    }
+                    _ => {
+                        if rng.below(10) == 0 {
+                            long += 1;
+                            stream.extend(b"lab ".iter().copied().cycle().take(66_000));
+                        }
+                    }
+                }
+            }
+            let port = ports[rng.below(ports.len())];
+            let force = forced[rng.below(forced.len())];
+            let whole = banner_stream(&s, port, force, &[&stream]);
+            for k in 0..2 {
+                let mut cuts: Vec<usize> = (0..rng.below(stream.len().min(30) + 1))
+                    .map(|_| rng.below(stream.len() + 1))
+                    .collect();
+                cuts.sort_unstable();
+                let mut segs: Vec<&[u8]> = Vec::new();
+                let mut at = 0;
+                for c in cuts.into_iter().chain([stream.len()]) {
+                    segs.push(&stream[at..c]);
+                    at = c;
+                }
+                let r = banner_stream(&s, port, force, &segs);
+                assert_eq!(r, whole, "round {round} split {k}: port {port} {force:?}");
+            }
+            handoffs += usize::from(whole.app_proto == Some(app_id::SSL3));
+            for (app, b) in &whole.records {
+                assert!(
+                    [
+                        app_id::HEUR,
+                        app_id::FTP,
+                        app_id::SMTP,
+                        app_id::POP3,
+                        app_id::IMAP4
+                    ]
+                    .contains(app),
+                    "round {round}: app {app}"
+                );
+                assert!(
+                    !b.is_empty() && b.len() <= MAX_BANNER_BYTES,
+                    "round {round}"
+                );
+            }
+            for a in &whole.actions {
+                match a {
+                    StreamAction::Send(b) => {
+                        sends += 1;
+                        assert!(commands.contains(&b.as_slice()), "round {round}: {b:?}");
+                    }
+                    StreamAction::Close => closes += 1,
+                }
+            }
+        }
+        // Ход теста дошёл до передач, команд, закрытий и длинных строк.
+        assert!(handoffs > 150, "{handoffs}");
+        assert!(sends > 800, "{sends}");
+        assert!(closes > 3000, "{closes}");
+        assert!(long > 100, "{long}");
     }
 }

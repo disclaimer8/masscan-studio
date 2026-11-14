@@ -1,0 +1,14 @@
+tcp-oracle v1 port=110 capture=none segments=1 bytes=45
+run whole calls=1
+app_proto 12
+action send flags=0 6 "CAPA\x0d\x0a"
+action close
+record 12 43 "+OK POP3 server ready\x0a-ERR unknown command\x0a"
+end
+run bytewise calls=45
+app_proto 12
+action send flags=0 6 "CAPA\x0d\x0a"
+action close
+record 1 3 =stream
+record 12 43 "+OK POP3 server ready\x0a-ERR unknown command\x0a"
+end

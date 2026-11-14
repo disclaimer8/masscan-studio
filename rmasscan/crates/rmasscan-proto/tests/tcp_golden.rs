@@ -1,7 +1,8 @@
-//! Паритет каркаса баннеров TCP с C (AGPL-3.0, подэтап 4b, задача 8). Каждый кейс `tests/golden/tcp-banners` это
-//! поток сервера одного соединения и вывод C-оракула `tcp-oracle` (вне репозитория, Р14): настоящий `banner1_parse`
-//! masscan © Robert David Graham (HEAD 8e6b3b0, `src/proto-banner1.c:113-325`) с `banner1_create`, `banout` и
-//! парсерами C, `tcpapi_*` записывают действия (README эталонов). Эталон это прогон C на целом потоке (`run whole`,
+//! Паритет каркаса баннеров TCP и парсеров FTP, SMTP, POP3, IMAP4 с C (AGPL-3.0, подэтап 4b, задачи 8 и 9). Каждый
+//! кейс `tests/golden/tcp-banners` это поток сервера одного соединения и вывод C-оракула `tcp-oracle` (вне
+//! репозитория, Р14): настоящий `banner1_parse` masscan © Robert David Graham (HEAD 8e6b3b0,
+//! `src/proto-banner1.c:113-325`) с `banner1_create`, `banout` и парсерами C, `tcpapi_*` записывают действия (README
+//! эталонов). Эталон это прогон C на целом потоке (`run whole`,
 //! Р13); прогоны C по байту и по заданным сегментам хранятся как свидетельство зависимостей C от нарезки (справка
 //! E2).
 //!
@@ -9,9 +10,10 @@
 //! сравнивается с C по виду ожидания кейса ([`Expect`]):
 //! - `records`: записи в порядке C (каждая запись C обрезана до 65 536 байт, Р5) и `app_proto` в каждой нарезке,
 //!   действия только целиком;
-//! - `classification`: только `app_proto` (парсер приложения в задаче 8 ещё заглушка);
-//! - `declared-4b`: правило 4b, названное в кейсе (`unknown-stream`: весь поток одной записью `unknown`), и
-//!   `app_proto` C.
+//! - `classification`: только `app_proto` (парсер этого приложения ещё заглушка);
+//! - `declared-4b`: правило 4b, названное в кейсе, и `app_proto` C: `unknown-stream` (весь поток одной записью
+//!   `unknown`, без действий) или `starttls-unknown` (до строки согласия на STARTTLS как C, затем `unknown`, hello TLS
+//!   не шлётся; [`starttls_expect`]).
 //!
 //! Входы строит `tcp_golden/inputs.rs`; закоммиченные `cases/*.in.txt` обязаны с ним совпадать. С переменной
 //! `RMASSCAN_TCP_BANNERS_INPUTS=DIR` тест [`inputs_match_generator`] вместо сверки пишет `DIR/cases/*.in.txt` и
@@ -29,7 +31,7 @@ use rmasscan_proto::{
 #[path = "tcp_golden/inputs.rs"]
 mod inputs;
 
-use inputs::{Case, Expect, UNKNOWN_STREAM, cases};
+use inputs::{Case, Expect, STARTTLS_UNKNOWN, UNKNOWN_STREAM, cases};
 
 // Манифест эталонов проверяется общим кодом rmasscan-core (без serde): сумма файла, `golden.rs` берёт `super::sha256`.
 #[path = "../../rmasscan-core/tests/common/sha256.rs"]
@@ -45,7 +47,7 @@ const DIR: &str = concat!(
 const ORACLE_GIT_HEAD: &str = "8e6b3b0c07a81e8ea61d557c06134a21a6881614";
 
 /// Число кейсов по видам ожидания: `records`, `classification`, `declared-4b`.
-const COUNTS: (usize, usize, usize) = (20, 59, 11);
+const COUNTS: (usize, usize, usize) = (81, 48, 18);
 
 fn read(path: &Path) -> Vec<u8> {
     fs::read(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
@@ -255,6 +257,42 @@ fn c_app(r: &CRun) -> Option<u16> {
     (r.app_proto != 0).then_some(r.app_proto)
 }
 
+/// Приложения текстовых парсеров с передачей STARTTLS: их записи пишет только сам парсер (TLS C после передачи пишет
+/// свои приложения).
+const STARTTLS_APPS: [u16; 3] = [app_id::FTP, app_id::SMTP, app_id::POP3];
+
+/// Ожидание правила `starttls-unknown` (справка B6): первый сегмент кейса кончается строкой согласия на STARTTLS,
+/// второй (если есть) это хвост. Прогон C над первым сегментом (`given`, а без хвоста `whole`) даёт записи парсера и
+/// его действия до hello TLS (`tcpapi_send(banner_ssl.hello)`, `src/proto-ftp.c:103`, `src/proto-smtp.c:149`,
+/// `src/proto-pop3.c:131`; единственная отправка, которая начинается байтом записи TLS 0x16). В 4b hello не шлётся, а
+/// хвост это одна запись `unknown` за записью парсера (записи короче 200 байт, голова списка не переезжает).
+fn starttls_expect(c: &Case, cout: &COut) -> (Vec<(u16, Vec<u8>)>, Vec<StreamAction>) {
+    let segs = c.segment_bytes();
+    let run = match segs.len() {
+        1 => &cout.whole,
+        2 => cout.given.as_ref().expect("given run"),
+        n => panic!("{}: {n} segments, want 1 or 2", c.name),
+    };
+    let tls = |a: &StreamAction| matches!(a, StreamAction::Send(b) if b.first() == Some(&0x16));
+    let hello = run
+        .actions
+        .iter()
+        .position(tls)
+        .unwrap_or_else(|| panic!("{}: no TLS hello in C's run", c.name));
+    let mut records: Vec<(u16, Vec<u8>)> = run
+        .records
+        .iter()
+        .filter(|r| STARTTLS_APPS.contains(&r.0))
+        .cloned()
+        .collect();
+    assert_eq!(records.len(), 1, "{}: one parser record", c.name);
+    assert!(records.iter().all(|r| r.1.len() < 200), "{}", c.name);
+    if let Some(tail) = segs.get(1) {
+        records.push((app_id::HEUR, tail.clone()));
+    }
+    (records, run.actions[..hello].to_vec())
+}
+
 /// Записи и `app_proto` rmasscan в каждой нарезке равны C на целом потоке по виду ожидания кейса; действия
 /// сравниваются только целиком (Telnet отвечает на каждый сегмент по устройству, справка E2).
 #[test]
@@ -276,8 +314,7 @@ fn tcp_golden_matches_c() {
                     }
                 }
                 Expect::Classification => {}
-                Expect::Declared(rule) => {
-                    assert_eq!(rule, UNKNOWN_STREAM, "{at}: unknown rule");
+                Expect::Declared(UNKNOWN_STREAM) => {
                     assert_eq!(
                         got.records,
                         capped(&[(app_id::HEUR, stream.clone())]),
@@ -285,6 +322,14 @@ fn tcp_golden_matches_c() {
                     );
                     assert!(got.actions.is_empty(), "{at}: declared actions");
                 }
+                Expect::Declared(STARTTLS_UNKNOWN) => {
+                    let (records, actions) = starttls_expect(&c, &cout);
+                    assert_eq!(got.records, records, "{at}: declared records");
+                    if cut == "whole" {
+                        assert_eq!(got.actions, actions, "{at}: declared actions");
+                    }
+                }
+                Expect::Declared(rule) => panic!("{at}: unknown rule {rule}"),
             }
         }
         match c.expect {
@@ -328,6 +373,27 @@ fn c_split_evidence_matches_the_reference() {
     let (c, out) = by_name("no-match-70000");
     assert_eq!(out.whole.records, [(app_id::HEUR, c.stream())]);
     assert_eq!(c.stream().len(), 70_000);
+    // Правило `starttls-unknown`: после согласия на STARTTLS C ведёт остаток того же сегмента текстовым парсером с
+    // состояния 0 (`src/proto-ftp.c:101`, `src/proto-smtp.c:147`, `src/proto-pop3.c:129`, цикл продолжается), так что
+    // хвост целиком это новое приветствие со второй командой, а по сегментам он уходит в TLS. Справка E2 считает FTP,
+    // SMTP и POP3 независимыми от нарезки; в 4b хвост `unknown` в любой нарезке.
+    for (name, cmd) in [
+        ("ftp-auth-234-dash-25-tail", &b"AUTH TLS\r\n"[..]),
+        ("smtp-starttls-220-tail", b"EHLO masscan\r\n"),
+        ("pop3-stls-ok-tail", b"CAPA\r\n"),
+    ] {
+        let (_, out) = by_name(name);
+        let sent = |r: &CRun| {
+            r.actions
+                .iter()
+                .filter(|a| **a == StreamAction::Send(cmd.to_vec()))
+                .count()
+        };
+        assert_eq!(out.whole.app_proto, app_id::SSL3, "{name}");
+        assert_eq!(sent(&out.whole), 2, "{name}: whole");
+        assert_eq!(sent(out.given.as_ref().expect("given")), 1, "{name}: given");
+        assert_eq!(sent(&out.bytewise), 1, "{name}: bytewise");
+    }
 }
 
 #[test]

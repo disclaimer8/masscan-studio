@@ -22,7 +22,11 @@ use crate::tcp::app::{ByteBudget, Session, SessionAction, Sessions};
 
 use super::banout::Banout;
 use super::classify::{Classifier, PATTERNS, SearchState};
+use super::ftp::Ftp;
 use super::hello::{HelloTable, TcpBannerSettings};
+use super::imap4::Imap4;
+use super::pop3::Pop3;
+use super::smtp::Smtp;
 
 /// Парсер, который выбрал классификатор (ветки `switch (tcb_state->app_proto)`, `src/proto-banner1.c:187-316`), в
 /// границах 4b: SMB, TLS и всё после STARTTLS это [`AppProto::Unported`] (справка B6).
@@ -50,18 +54,20 @@ pub(crate) trait Parser: Send {
 }
 
 /// Что видит парсер: буферы баннеров и бюджет таблицы, действия (`tcpapi_send` и `tcpapi_close` по порядку), порт
-/// сервера (`tcb_state->port`), `--capture html`. `starttls` парсер ставит при передаче STARTTLS (у C
-/// `app_proto = PROTO_SSL3`, `src/proto-ftp.c:93-104`, `src/proto-smtp.c:139-150`, `src/proto-pop3.c:122-133`): со
-/// следующего сегмента поток идёт в `unknown`; остаток своего сегмента парсер решает сам.
+/// сервера (`tcb_state->port`), `--capture html`. `starttls` ставит передача STARTTLS (у C `app_proto =
+/// PROTO_SSL3`, `src/proto-ftp.c:93-104`, `src/proto-smtp.c:139-150`, `src/proto-pop3.c:122-133`): со следующего
+/// сегмента поток идёт в `unknown`; остаток своего сегмента парсер решает сам, текстовые парсеры отдают его в `unknown`
+/// ([`ParseCx::hand_off_starttls`]).
 pub(crate) struct ParseCx<'a> {
     pub(crate) banout: &'a mut Banout,
     pub(crate) budget: &'a mut ByteBudget,
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "шлют и закрывают парсеры задач 9-12")
-    )]
     pub(crate) acts: &'a mut Vec<SessionAction>,
-    #[expect(dead_code, reason = "порт читают парсеры задач 9-12 (SMTP, FTP)")]
+    /// Парсеры FTP и SMTP читают `pstate->port` только затем, чтобы вернуть его после `memset` передачи STARTTLS
+    /// (`src/proto-ftp.c:96-100`, `src/proto-smtp.c:142-146`); порт 25/587 решает классификатор (`classified`).
+    #[expect(
+        dead_code,
+        reason = "ни один парсер 4b порт не читает (`src/proto-*.c` задач 9-12)"
+    )]
     pub(crate) port: u16,
     #[expect(dead_code, reason = "`--capture html` читает парсер HTTP, задачи 9-12")]
     pub(crate) capture_html: bool,
@@ -73,6 +79,31 @@ impl ParseCx<'_> {
     /// отказали предел Р5 или бюджет, в неё больше ничего не пишется ([`Banout::append`]).
     pub(crate) fn append(&mut self, app: u16, px: &[u8]) {
         self.banout.append(self.budget, app, px);
+    }
+
+    /// `tcpapi_send(socket, bytes, length, 0)` парсера.
+    pub(crate) fn send(&mut self, bytes: &[u8]) {
+        self.acts.push(SessionAction::Send(bytes.to_vec()));
+    }
+
+    /// `tcpapi_close(socket)` парсера; C зовёт его и повторно (IMAP4 закрывает дважды), каждый вызов записан.
+    pub(crate) fn close(&mut self) {
+        self.acts.push(SessionAction::Close);
+    }
+
+    /// Согласие сервера на STARTTLS (FTP 234, SMTP 220, POP3 `+OK`). У C `memset` состояния потока, `app_proto =
+    /// PROTO_SSL3`, `is_sent_sslhello = 1` и `tcpapi_send(banner_ssl.hello)` (`src/proto-ftp.c:93-104`,
+    /// `src/proto-smtp.c:139-150`, `src/proto-pop3.c:122-133`). В 4b hello TLS не шлётся (справка B6): номер C
+    /// становится SSL3 ([`Banner1Session::run`]), а каждый байт после строки согласия, `rest` этого сегмента и все
+    /// следующие сегменты, это одна запись `unknown`. У C цикл парсера на этом не кончается (`state = 0`, затем
+    /// `break` из `switch`): `rest` идёт тем же текстовым парсером с состояния 0, как новое приветствие (с повтором
+    /// `AUTH TLS`, `EHLO` или `CAPA`), а следующий сегмент уже в TLS, так что у C итог тут зависит от нарезки
+    /// (эталоны `*-tail`); правило 4b от неё не зависит.
+    pub(crate) fn hand_off_starttls(&mut self, rest: &[u8]) {
+        self.starttls = true;
+        if !rest.is_empty() {
+            self.append(app_id::HEUR, rest);
+        }
     }
 }
 
@@ -88,11 +119,11 @@ impl Parser for Unported {
 /// Парсер приложения. Задачи 9-12 заменяют свою строку.
 pub(crate) fn parser_for(p: AppProto) -> Box<dyn Parser> {
     match p {
-        AppProto::Ftp
-        | AppProto::Smtp
-        | AppProto::Pop3
-        | AppProto::Imap4
-        | AppProto::Ssh
+        AppProto::Ftp => Box::<Ftp>::default(),
+        AppProto::Smtp => Box::<Smtp>::default(),
+        AppProto::Pop3 => Box::<Pop3>::default(),
+        AppProto::Imap4 => Box::<Imap4>::default(),
+        AppProto::Ssh
         | AppProto::Http
         | AppProto::Vnc(_)
         | AppProto::Memcached

@@ -1,0 +1,16 @@
+tcp-oracle v1 port=25 capture=none segments=1 bytes=154
+run whole calls=1
+app_proto 11
+action send flags=0 14 "EHLO masscan\x0d\x0a"
+action send flags=0 10 "STARTTLS\x0d\x0a"
+action close
+record 11 147 "220 mail.example.test ESMTP\x0a250-mail.example.test\x0a250-PIPELINING\x0a250-SIZE 10240000\x0a250 STARTTLS\x0a454 4.7.0 TLS not available due to temporary reason"
+end
+run bytewise calls=154
+app_proto 11
+action send flags=0 14 "EHLO masscan\x0d\x0a"
+action send flags=0 10 "STARTTLS\x0d\x0a"
+action close
+record 1 3 =stream
+record 11 147 "220 mail.example.test ESMTP\x0a250-mail.example.test\x0a250-PIPELINING\x0a250-SIZE 10240000\x0a250 STARTTLS\x0a454 4.7.0 TLS not available due to temporary reason"
+end

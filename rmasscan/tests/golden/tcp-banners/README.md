@@ -4,8 +4,9 @@ Offline parity of `rmasscan_proto::banner_stream` (`crates/rmasscan-proto/src/ba
 `banner1_parse` (`src/proto-banner1.c:113-325`, masscan `8e6b3b0c07a81e8ea61d557c06134a21a6881614`) for one TCP
 connection: the classifier (`patterns[]`, `src/proto-banner1.c:34-106`, compiled by smack, `src/smack1.c`), the HEUR
 record and its replay, the banner buffers (`src/proto-banout.c`) and the hello table of `banner1_create`. Banners
-sub-stage 4b, task 8 (`docs/superpowers/specs/2026-11-13-rmasscan-banners-c-reference-tcp.md` B1-B6, C2, C3, E2.1,
-E2.2, E4; design R5, R13, R14). The test `crates/rmasscan-proto/tests/tcp_golden.rs` replays every case; unit tests in
+sub-stage 4b, task 8, and the FTP, SMTP, POP3 and IMAP4 parsers of task 9 (`src/proto-{ftp,smtp,pop3,imap4}.c`)
+(`docs/superpowers/specs/2026-11-13-rmasscan-banners-c-reference-tcp.md` B1-B6, C2, C3, D2-D5, E2.1, E2.2, E3.3, E3.4,
+E4; design R1, R5, R13, R14). The test `crates/rmasscan-proto/tests/tcp_golden.rs` replays every case; unit tests in
 `banner1/classify.rs`, `banner1/hello.rs` and `banner1/banout.rs` read `patterns.out`, `hellos.out` and
 `banout.{in.txt,out}`.
 
@@ -85,19 +86,31 @@ at the pin or is dirty and copies the sources before compiling (the clone is nev
 Each case names how rmasscan is compared with C's `whole` run, in every split the test makes (whole, byte by byte, the
 given segments and 8 random splits):
 
-- `records` (20 cases): records in C's order, each C record cut at 65 536 bytes (R5), and `app_proto`; the actions too
-  on the whole stream. In task 8 these are the streams no ported parser handles: no match, 70 000 bytes without a
-  match, a byte before an anchored pattern, the SMB `*` with 0x7B or 0xFF, and an SSL3 record first.
-- `classification` (59 cases): only `app_proto`. Every non-SMB, non-SSL3 pattern (VNC versions, the 15 unanchored and
-  6 anchored Telnet patterns, both RDP prefixes, `"220 "` on 25 and 587 against other ports), upper and lower case, a
+- `records` (81 cases): records in C's order, each C record cut at 65 536 bytes (R5), and `app_proto`; the actions too
+  on the whole stream. From task 8 the streams no ported parser handles: no match, 70 000 bytes without a match, a
+  byte before an anchored pattern, the SMB `*` with 0x7B or 0xFF, and an SSL3 record first. From task 9 the FTP, SMTP,
+  POP3 and IMAP4 streams: the 11 classification cases of these parsers from task 8 (`ftp-220-dash-21`,
+  `ftp-220-space-21`, `ftp-220-space-2525`, `ftp-220-dash-25`, `smtp-220-space-25`, `smtp-220-space-587`, `smtp-521`,
+  `pop3`, `pop3-lowercase`, `imap4`, `imap4-lowercase`) and 50 new ones (greeting lines, the reply to
+  `AUTH TLS`, EHLO and STARTTLS, CAPA and STLS, TAB, NUL and other bytes outside `isprint`, a line without a code,
+  `"220-"` on 25, a 70 004-byte FTP greeting line, IMAP `* OK` and streams that only look like IMAP).
+- `classification` (48 cases): only `app_proto`. The patterns of the parsers not ported yet (SSH, HTTP, VNC versions,
+  memcached, the 15 unanchored and 6 anchored Telnet patterns, both RDP prefixes, Minecraft), upper and lower case, a
   match in the second segment. C's parsers ran and their records are kept as evidence; the parser tasks turn their
   cases into `records`.
-- `declared-4b` (11 cases): the named 4b rule and C's `app_proto`. `unknown-stream`: SMB is not ported in 4b
-  (reference B6), so the whole stream is one `unknown` record (app 1) and no action, while C ran its SMB parser.
+- `declared-4b` (18 cases): the named 4b rule and C's `app_proto`.
+  - `unknown-stream` (11): SMB is not ported in 4b (reference B6), so the whole stream is one `unknown` record (app 1)
+    and no action, while C ran its SMB parser.
+  - `starttls-unknown` (7): the server agrees to STARTTLS (FTP 234, SMTP 220, POP3 `+OK`). The first segment of the
+    case ends with that line. Expected: the text parser's record and the actions before the TLS hello of C's run over
+    that segment (the `given` run when the case has a second segment, else `whole`), no TLS hello, and the bytes of
+    the second segment as one `unknown` record after it; `app_proto` is C's, 9. C sends `banner_ssl.hello`
+    (`src/proto-ftp.c:103`, `src/proto-smtp.c:149`, `src/proto-pop3.c:131`; its bytes are in these outputs as an
+    `action send`) and parses what follows as TLS, which is 4c.
 
 ## What the goldens show (C at 8e6b3b0)
 
-90 cases. The classifier: patterns are anchored at stream offset 0 and partial anchored matches continue across
+147 cases. The classifier: patterns are anchored at stream offset 0 and partial anchored matches continue across
 segments; any leading byte that does not continue an anchored pattern ends anchoring for the rest of the stream; case
 matters only for A-Z; the first match by earliest end wins; the SMB `*` matches every byte except the first byte of an
 unanchored pattern, 0x7B (`{`) and 0xFF (`smb-star-7b-*`, `smb-star-ff-*`; `00 00 7b 22` is Minecraft); `"220 "` on 25
@@ -110,3 +123,21 @@ C depends on the split here, and rmasscan follows the whole stream:
 - E2.2: after a rejected SSL3 record (`ssl3-then-mc`, `ssl3-then-iac`) C keeps searching and its later segments match
   Minecraft or Telnet; on the whole stream the SSL3 match is the first and the stream is `unknown`, as in rmasscan.
 - R5: C keeps 70 000 bytes in one record (`no-match-70000`); rmasscan keeps the first 65 536.
+- STARTTLS: after the go-ahead line C keeps running the text parser over the rest of that segment from state 0
+  (`src/proto-ftp.c:101`, `src/proto-smtp.c:147`, `src/proto-pop3.c:129`; the loop goes on). On the whole stream a
+  tail is a new greeting with a second `AUTH TLS`, `EHLO` or `CAPA` (`ftp-auth-234-dash-25-tail`,
+  `smtp-starttls-220-tail`, `pop3-stls-ok-tail`); split at the go-ahead or byte by byte it goes to the TLS parser,
+  which records nothing for it. Reference E2 lists FTP, SMTP and POP3 as split-invariant in C; they are not here.
+  rmasscan records every byte after the go-ahead as `unknown` in any split (`starttls-unknown`).
+
+The text parsers (task 9), as C does on the whole stream:
+
+- FTP and SMTP lines: three digits, `' '` (last line) or `'-'`, text; CR is skipped only inside the text, so CR or any
+  other non-digit where a code digit is due closes; TAB, NUL and bytes outside 0x20-0x7E in the text close without
+  being recorded; the reply to `AUTH TLS` or `STARTTLS` is read up to its first LF, which is not recorded. `"220-"`
+  on 25 and `"220 "` on 2525 get `AUTH TLS` (E3.3); SMTP sends `STARTTLS` after the last EHLO line whatever the code.
+- POP3: CR is skipped everywhere and every other byte is recorded, with no `isprint` check; `+OK` is compared with
+  case, so `+ok` closes after `+o`; `-` to CAPA records the line and closes without `STLS`; the CAPA list ends only
+  at a line holding one dot.
+- IMAP4: every classified stream is `* OK` and two closes, nothing sent (`src/proto-imap4.c:49-66`, E3.4); `* ok`
+  gives `* o`. `*  OK`, `* BYE` and `* OK` followed by CRLF do not match `"* OK "` and stay `unknown`.

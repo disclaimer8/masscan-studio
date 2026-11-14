@@ -4,7 +4,7 @@
     "harness": "tcp_oracle.c + build.sh + run-goldens.sh (kept off the repository, R14)",
     "driver_sha256": "04c3af97a9e638f62e42077497e8d1e033254fde3c7c7806371c60a6132289c7",
     "build_script_sha256": "a311bba4f271923e32f338cdb5c00456819b8a69bcf383414b44c443d90c7542",
-    "runner_sha256": "219a9788050ca04694ebcf19f9ca68b8e9012c50660ba956d7f9cf0ed4edd78b",
+    "runner_sha256": "536f07858f7db122e34d2b82c45f53fc4589d52c60cc13a5df2b4f7cdd20b8f8",
     "binaries_sha256": {
       "default": "af4b2786bb37e8f550eef506b95109b3b5a4058e1089ebf63f3852bd4000968c",
       "asan": "208185354740c20052306481ffff7b6120f1e34af0b9c950520478efa3c26f90"
@@ -52,8 +52,8 @@
     "calls": "banner1_create once; per run a zeroed StreamState with the case's port, banout_init, banner1_parse per piece (whole stream, every byte, the given segments), then the records banner_flush reports (list order, length && protocol, app = protocol & 0x0FFFFFFF); each run in a forked child with a 2-second alarm"
   },
   "host": "Ubuntu 26.04.1 LTS, kernel 7.0.0-38-generic, x86_64",
-  "captured_at": "2026-11-14T13:56:48Z",
-  "expected": "rmasscan banner_stream on the whole stream, byte by byte, the given segments and 8 random splits: records (each C record cut at 65 536 bytes, R5) and app_proto equal C's whole run for expect=records, actions too on the whole stream; app_proto only for expect=classification; for expect=declared-4b the named 4b rule (unknown-stream: the whole stream as one unknown record) and C's app_proto",
+  "captured_at": "2026-11-14T15:28:46Z",
+  "expected": "rmasscan banner_stream on the whole stream, byte by byte, the given segments and 8 random splits: records (each C record cut at 65 536 bytes, R5) and app_proto equal C's whole run for expect=records, actions too on the whole stream; app_proto only for expect=classification; for expect=declared-4b the named 4b rule and C's app_proto: unknown-stream (the whole stream as one unknown record, no action) or starttls-unknown (the first segment ends with the STARTTLS go-ahead line: the text parser record and the actions before the TLS hello of C's run over that segment, the given run when there is a second segment, else the whole run; the bytes of the second segment as one unknown record; no TLS hello)",
   "tables": [
     {
       "name": "patterns",
@@ -643,7 +643,7 @@
     {
       "name": "ftp-220-dash-21",
       "about": "220- на 21: FTP",
-      "expect": "classification",
+      "expect": "records",
       "declared": "-",
       "port": 21,
       "capture": "none",
@@ -663,7 +663,7 @@
     {
       "name": "ftp-220-space-21",
       "about": "220 на 21: FTP",
-      "expect": "classification",
+      "expect": "records",
       "declared": "-",
       "port": 21,
       "capture": "none",
@@ -683,7 +683,7 @@
     {
       "name": "smtp-220-space-25",
       "about": "220 на 25: SMTP (src/proto-banner1.c:147-153)",
-      "expect": "classification",
+      "expect": "records",
       "declared": "-",
       "port": 25,
       "capture": "none",
@@ -703,7 +703,7 @@
     {
       "name": "smtp-220-space-587",
       "about": "220 на 587: SMTP",
-      "expect": "classification",
+      "expect": "records",
       "declared": "-",
       "port": 587,
       "capture": "none",
@@ -723,7 +723,7 @@
     {
       "name": "ftp-220-space-2525",
       "about": "220 на 2525: FTP (E3.3)",
-      "expect": "classification",
+      "expect": "records",
       "declared": "-",
       "port": 2525,
       "capture": "none",
@@ -743,7 +743,7 @@
     {
       "name": "ftp-220-dash-25",
       "about": "220- на 25: FTP (E3.3)",
-      "expect": "classification",
+      "expect": "records",
       "declared": "-",
       "port": 25,
       "capture": "none",
@@ -763,7 +763,7 @@
     {
       "name": "pop3",
       "about": "+OK",
-      "expect": "classification",
+      "expect": "records",
       "declared": "-",
       "port": 110,
       "capture": "none",
@@ -783,7 +783,7 @@
     {
       "name": "pop3-lowercase",
       "about": "+ok строчными",
-      "expect": "classification",
+      "expect": "records",
       "declared": "-",
       "port": 110,
       "capture": "none",
@@ -803,7 +803,7 @@
     {
       "name": "imap4",
       "about": "* OK",
-      "expect": "classification",
+      "expect": "records",
       "declared": "-",
       "port": 143,
       "capture": "none",
@@ -823,7 +823,7 @@
     {
       "name": "imap4-lowercase",
       "about": "* ok строчными",
-      "expect": "classification",
+      "expect": "records",
       "declared": "-",
       "port": 143,
       "capture": "none",
@@ -843,7 +843,7 @@
     {
       "name": "smtp-521",
       "about": "521 : SMTP на любом порту",
-      "expect": "classification",
+      "expect": "records",
       "declared": "-",
       "port": 25,
       "capture": "none",
@@ -1877,6 +1877,1146 @@
         "whole": 10,
         "bytewise": 10,
         "given": 10
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "ftp-auth-530",
+      "about": "приветствие одной строкой, AUTH TLS, ответ 530 без последнего перевода строки, закрытие",
+      "expect": "records",
+      "declared": "-",
+      "port": 21,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 63,
+      "input": "cases/ftp-auth-530.in.txt",
+      "input_sha256": "52f610ff6ff3c519ac8960042b6b9c008c0103e3f868172b6654f1e29ea2c280",
+      "output": "cases/ftp-auth-530.out",
+      "output_sha256": "7aafcb279f717525a75f8beb287422a38c37161e2fb582ebde14949ee1693d27",
+      "c_app_proto": {
+        "whole": 5,
+        "bytewise": 5,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "ftp-multiline-greeting-500",
+      "about": "три строки приветствия с кодом, AUTH TLS после последней, ответ 500",
+      "expect": "records",
+      "declared": "-",
+      "port": 21,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 86,
+      "input": "cases/ftp-multiline-greeting-500.in.txt",
+      "input_sha256": "17f1207acea4cb97340567c91571b91c1b93ea8530e4d4afcc4e09e2d0458ca2",
+      "output": "cases/ftp-multiline-greeting-500.out",
+      "output_sha256": "78ce6b9f91ed3cc5dc29ead7194495ab9b95d3f0c5c209df8d219b0a3523dbda",
+      "c_app_proto": {
+        "whole": 5,
+        "bytewise": 5,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "ftp-line-without-code",
+      "about": "строка продолжения без кода: не цифра, закрытие, AUTH TLS не шлётся",
+      "expect": "records",
+      "declared": "-",
+      "port": 21,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 47,
+      "input": "cases/ftp-line-without-code.in.txt",
+      "input_sha256": "32a1ccc8a4c80bb8ec98b1cf530e5010c74356d7119fdbf35a028431b6a03591",
+      "output": "cases/ftp-line-without-code.out",
+      "output_sha256": "08e31f44a421dcc9455702a8dc2ea6f0277df8a7a58ae20e9f7ae0aa4e6ce08f",
+      "c_app_proto": {
+        "whole": 5,
+        "bytewise": 5,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "ftp-tab-in-greeting",
+      "about": "TAB в тексте приветствия: не isprint, закрытие без записи байта",
+      "expect": "records",
+      "declared": "-",
+      "port": 21,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 19,
+      "input": "cases/ftp-tab-in-greeting.in.txt",
+      "input_sha256": "820e7bfe3249cdf761804ecc2cbb8fb478657ae0e97ef9f0cb6dd25965130b80",
+      "output": "cases/ftp-tab-in-greeting.out",
+      "output_sha256": "e019c56ea40fe93ccc07d8b906d78eb555be4c5c6b69f7b9d8de7299ceb7d969",
+      "c_app_proto": {
+        "whole": 5,
+        "bytewise": 5,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "ftp-nonprint-in-greeting",
+      "about": "байт 0xE9 в тексте: не isprint в локали C, закрытие",
+      "expect": "records",
+      "declared": "-",
+      "port": 21,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 20,
+      "input": "cases/ftp-nonprint-in-greeting.in.txt",
+      "input_sha256": "4d0746bdc22375c50c6a20067bcd5eba2c4a7a6ba0c4984969c516657583b4f0",
+      "output": "cases/ftp-nonprint-in-greeting.out",
+      "output_sha256": "f0a6e7972693a39cadf6967465ed233cc8c2556aa521bcd18588d8e72d85010c",
+      "c_app_proto": {
+        "whole": 5,
+        "bytewise": 5,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "ftp-nul-in-greeting",
+      "about": "NUL в тексте приветствия: закрытие",
+      "expect": "records",
+      "declared": "-",
+      "port": 21,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 15,
+      "input": "cases/ftp-nul-in-greeting.in.txt",
+      "input_sha256": "076b269955b9573ff6a3077fc17e3839f84e1aa079332b989bbdf631f1e39b8a",
+      "output": "cases/ftp-nul-in-greeting.out",
+      "output_sha256": "fbb401e381abd3d92cfcefe5c6b3143dcb5a0e649867885c11317df355ff848f",
+      "c_app_proto": {
+        "whole": 5,
+        "bytewise": 5,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "ftp-bad-separator",
+      "about": "вторая строка 220x: разделитель не пробел и не минус, закрытие",
+      "expect": "records",
+      "declared": "-",
+      "port": 21,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 23,
+      "input": "cases/ftp-bad-separator.in.txt",
+      "input_sha256": "9d7edf02d93e8fe0d6209e9aa10f0d10e1516f083c23e0b7bdf83573a37b0faf",
+      "output": "cases/ftp-bad-separator.out",
+      "output_sha256": "bfdd3ce8ac69cbce03d326eac64808a80c23bef75e55519e62c23aaf8e9250aa",
+      "c_app_proto": {
+        "whole": 5,
+        "bytewise": 5,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "ftp-short-code",
+      "about": "вторая строка с кодом из двух цифр: пробел вместо третьей цифры, закрытие",
+      "expect": "records",
+      "declared": "-",
+      "port": 21,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 22,
+      "input": "cases/ftp-short-code.in.txt",
+      "input_sha256": "b53be60495a07c1d80d25b36fd203b7beb78fbc93db4dbfbef544198f4adda26",
+      "output": "cases/ftp-short-code.out",
+      "output_sha256": "454b57e787139f5128cef5746ae065fa6f20a3fec6c470d17cff17af41b2979a",
+      "c_app_proto": {
+        "whole": 5,
+        "bytewise": 5,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "ftp-cr-inside-text",
+      "about": "CR внутри текста строк пропускается, в записи его нет",
+      "expect": "records",
+      "declared": "-",
+      "port": 21,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 19,
+      "input": "cases/ftp-cr-inside-text.in.txt",
+      "input_sha256": "d6e612bac199872de2155c6dfa683dc5cbf67fb56752c0cd6fa141ab8795d85e",
+      "output": "cases/ftp-cr-inside-text.out",
+      "output_sha256": "017bb5650cdda65decd599ba361322c8cc959e3a244aab51ccd33de98d02a3d6",
+      "c_app_proto": {
+        "whole": 5,
+        "bytewise": 5,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "ftp-bare-lf",
+      "about": "строки с одним LF",
+      "expect": "records",
+      "declared": "-",
+      "port": 21,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 15,
+      "input": "cases/ftp-bare-lf.in.txt",
+      "input_sha256": "2ae396abb644bc2dffcc799b3dac7aa3e6ecbfcc072dfc3f40735ae3d4970e0b",
+      "output": "cases/ftp-bare-lf.out",
+      "output_sha256": "985d4560cc5be89b1ca3e66643bb6ae13b21406c659945cfba949d74de2f4d1a",
+      "c_app_proto": {
+        "whole": 5,
+        "bytewise": 5,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "ftp-auth-reply-multiline",
+      "about": "ответ 530- из двух строк: читается только первая, на её LF закрытие",
+      "expect": "records",
+      "declared": "-",
+      "port": 21,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 41,
+      "input": "cases/ftp-auth-reply-multiline.in.txt",
+      "input_sha256": "41cd439c8ac530daf2efc5543632cd4481763e803960ce5f9ce47679131a7332",
+      "output": "cases/ftp-auth-reply-multiline.out",
+      "output_sha256": "449c6d33aeb9be88e5ee2b3c0d9a5a30e3823acbafa432ff8973a2ff311348e3",
+      "c_app_proto": {
+        "whole": 5,
+        "bytewise": 5,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "ftp-auth-reply-tab",
+      "about": "TAB в ответе на AUTH TLS: закрытие",
+      "expect": "records",
+      "declared": "-",
+      "port": 21,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 17,
+      "input": "cases/ftp-auth-reply-tab.in.txt",
+      "input_sha256": "d07206d261de0d0f03182ee815d58b42f2f627bdcda07f7ec3e12b2b05eeb127",
+      "output": "cases/ftp-auth-reply-tab.out",
+      "output_sha256": "5119ab76fb805b1b9c2b5311343d2a07272affd7b0b1aac65036c59afdd99414",
+      "c_app_proto": {
+        "whole": 5,
+        "bytewise": 5,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "ftp-auth-reply-without-newline",
+      "about": "ответ на AUTH TLS без перевода строки: записан, закрытия нет",
+      "expect": "records",
+      "declared": "-",
+      "port": 21,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 25,
+      "input": "cases/ftp-auth-reply-without-newline.in.txt",
+      "input_sha256": "84865bc9982cea796d985def7a44987f0028a996fbf06c19ebbf3073b72acdc5",
+      "output": "cases/ftp-auth-reply-without-newline.out",
+      "output_sha256": "150260f2288dc70afcf90b46205b188d83e5a5bebd9be660e3478d2ef44cbc52",
+      "c_app_proto": {
+        "whole": 5,
+        "bytewise": 5,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "ftp-auth-234-without-newline",
+      "about": "234 без перевода строки: передачи STARTTLS нет, app_proto 5",
+      "expect": "records",
+      "declared": "-",
+      "port": 21,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 23,
+      "input": "cases/ftp-auth-234-without-newline.in.txt",
+      "input_sha256": "c32c4ab1593a6ceb105cf7448145805af27c75ea86401a842d8f7d67e5795456",
+      "output": "cases/ftp-auth-234-without-newline.out",
+      "output_sha256": "79d1a8910de85f0604d461476d960df69eb0468ebe9d64e75605aa592774e822",
+      "c_app_proto": {
+        "whole": 5,
+        "bytewise": 5,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "ftp-auth-reply-not-a-code",
+      "about": "ответ на AUTH TLS без кода: закрытие, байт не записан",
+      "expect": "records",
+      "declared": "-",
+      "port": 21,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 15,
+      "input": "cases/ftp-auth-reply-not-a-code.in.txt",
+      "input_sha256": "0542ee945d061037819ad8104c40fc69b9c1db3c29a0b10e2c16a22d9f75acd0",
+      "output": "cases/ftp-auth-reply-not-a-code.out",
+      "output_sha256": "a927a7211cc07682b4c4aa24163a9ad1e70f239624ad61e895e6d0878b55804e",
+      "c_app_proto": {
+        "whole": 5,
+        "bytewise": 5,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "ftp-auth-code-four-digits",
+      "about": "ответ 2345: четвёртая цифра на месте разделителя, закрытие, записано 234",
+      "expect": "records",
+      "declared": "-",
+      "port": 21,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 16,
+      "input": "cases/ftp-auth-code-four-digits.in.txt",
+      "input_sha256": "46d2bc69ba15744611901fee2f621b46da1e5f2144091713e73071feab22f480",
+      "output": "cases/ftp-auth-code-four-digits.out",
+      "output_sha256": "1ba561cf56816927841a46ee261d5a94556b5daaf1bad816d903e9b10e992a30",
+      "c_app_proto": {
+        "whole": 5,
+        "bytewise": 5,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "ftp-cr-before-code",
+      "about": "пустая строка CRLF между строками приветствия: CR на месте цифры, закрытие",
+      "expect": "records",
+      "declared": "-",
+      "port": 21,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 16,
+      "input": "cases/ftp-cr-before-code.in.txt",
+      "input_sha256": "41554030539ce1a813a9d85e9f6cde25c3ec59008a4f95eacdbf761b9000a42c",
+      "output": "cases/ftp-cr-before-code.out",
+      "output_sha256": "49500765d1ff0d34e83274b3c533e8e092aca892a21102316fd6ecf44256bedf",
+      "c_app_proto": {
+        "whole": 5,
+        "bytewise": 5,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "ftp-code-234-in-greeting",
+      "about": "строка 234 в приветствии это последняя строка приветствия, не согласие: AUTH TLS, затем 530",
+      "expect": "records",
+      "declared": "-",
+      "port": 21,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 32,
+      "input": "cases/ftp-code-234-in-greeting.in.txt",
+      "input_sha256": "94586abbde3b3fbe2c05e06204732cb59714bf48ee4154ba83eb1a1028e0a58d",
+      "output": "cases/ftp-code-234-in-greeting.out",
+      "output_sha256": "8001cefaf92e2e15510994a771c4439f67650033bd22d99d62821f9b5a0978a3",
+      "c_app_proto": {
+        "whole": 5,
+        "bytewise": 5,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "ftp-220-dash-25-auth",
+      "about": "220- на 25 это FTP (E3.3): AUTH TLS почтовому серверу, ответ 502",
+      "expect": "records",
+      "declared": "-",
+      "port": 25,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 78,
+      "input": "cases/ftp-220-dash-25-auth.in.txt",
+      "input_sha256": "27c42db98d7442946b3c411b09256d646549bfe28d7470df9bd38a5f92a22d5a",
+      "output": "cases/ftp-220-dash-25-auth.out",
+      "output_sha256": "815a51c9614694601b959f3130e525559200fdc845149bf16260731faa80b341",
+      "c_app_proto": {
+        "whole": 5,
+        "bytewise": 5,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "ftp-220-space-2525-auth",
+      "about": "220 на 2525 это FTP (E3.3): AUTH TLS, ответ 502",
+      "expect": "records",
+      "declared": "-",
+      "port": 2525,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 70,
+      "input": "cases/ftp-220-space-2525-auth.in.txt",
+      "input_sha256": "ebdd66a7e7c1c40d595f4521158d9b6479bf1ef59491dd4a96a8f8080cb8101b",
+      "output": "cases/ftp-220-space-2525-auth.out",
+      "output_sha256": "7950774c880229be2b1edc95767e2de942e45217ba42eb4770ac7e2fc32fa8f1",
+      "c_app_proto": {
+        "whole": 5,
+        "bytewise": 5,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "ftp-split-crlf-and-code",
+      "about": "заданные сегменты режут CRLF и код ответа",
+      "expect": "records",
+      "declared": "-",
+      "port": 21,
+      "capture": "none",
+      "segments": 3,
+      "bytes": 22,
+      "input": "cases/ftp-split-crlf-and-code.in.txt",
+      "input_sha256": "359044bc1407be3e1f066df03a296366b153d51ba048ee27eba980ff60ac8c80",
+      "output": "cases/ftp-split-crlf-and-code.out",
+      "output_sha256": "4f58b500f7a3c43173a16ce7d8480c12ffb18c807a0ad6c782a1334735a4374b",
+      "c_app_proto": {
+        "whole": 5,
+        "bytewise": 5,
+        "given": 5
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "ftp-greeting-70000",
+      "about": "строка приветствия 70 004 байта с LF: у C запись 70 011 байт, у rmasscan первые 65 536 (Р5), AUTH TLS и закрытие как у C",
+      "expect": "records",
+      "declared": "-",
+      "port": 21,
+      "capture": "none",
+      "segments": 3,
+      "bytes": 70012,
+      "input": "cases/ftp-greeting-70000.in.txt",
+      "input_sha256": "f8caf1b37fb21b3602788de95e4850bb8f362c82f53fe1e5ac667625653d97d0",
+      "output": "cases/ftp-greeting-70000.out",
+      "output_sha256": "7b7dbee6cf7f8719d74963bb220e3f95cbccd00c7053dfee5d2b9cda0fd1f923",
+      "c_app_proto": {
+        "whole": 5,
+        "bytewise": 5,
+        "given": 5
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "smtp-ehlo-starttls-454",
+      "about": "EHLO со STARTTLS в списке, STARTTLS, ответ 454: закрытие",
+      "expect": "records",
+      "declared": "-",
+      "port": 25,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 154,
+      "input": "cases/smtp-ehlo-starttls-454.in.txt",
+      "input_sha256": "2783f15ee8442e5b59233de724475888b300b55485f641e5aefb8e65d771fb71",
+      "output": "cases/smtp-ehlo-starttls-454.out",
+      "output_sha256": "80a3e6c8bf967bb7897ace14f6c6d59cc74c7d1eba813ab3a529fcd4e478b0ac",
+      "c_app_proto": {
+        "whole": 11,
+        "bytewise": 11,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "smtp-ehlo-without-starttls",
+      "about": "EHLO без STARTTLS в списке: STARTTLS шлётся всё равно, ответ 502",
+      "expect": "records",
+      "declared": "-",
+      "port": 25,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 100,
+      "input": "cases/smtp-ehlo-without-starttls.in.txt",
+      "input_sha256": "27d7a91558432e890f166d0915f9af4d7caed3d126004344c0a594964c3c824d",
+      "output": "cases/smtp-ehlo-without-starttls.out",
+      "output_sha256": "86d8af922ffe678c2e7036af0ce7c49c66508f1bc27c5bd7044529c6f1a1a642",
+      "c_app_proto": {
+        "whole": 11,
+        "bytewise": 11,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "smtp-ehlo-rejected-587",
+      "about": "на 587 EHLO отвергнут кодом 500: STARTTLS шлётся всё равно, ответ 503",
+      "expect": "records",
+      "declared": "-",
+      "port": 587,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 85,
+      "input": "cases/smtp-ehlo-rejected-587.in.txt",
+      "input_sha256": "c8c3fcb006194f25ee587bdcd07ab7e5fee34337e8b6045671d126e171cd76d2",
+      "output": "cases/smtp-ehlo-rejected-587.out",
+      "output_sha256": "92e8e39a5f68546e31c3204ef4d0dd81079ead3c3763df743c48f29c9818dbfd",
+      "c_app_proto": {
+        "whole": 11,
+        "bytewise": 11,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "smtp-521-ehlo-reply",
+      "about": "521 на любом порту это SMTP: EHLO, ответ 221, STARTTLS",
+      "expect": "records",
+      "declared": "-",
+      "port": 2525,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 27,
+      "input": "cases/smtp-521-ehlo-reply.in.txt",
+      "input_sha256": "a26773c8d481e87523d1211f0388299d12f1483f82b86288fefa74c701d3d617",
+      "output": "cases/smtp-521-ehlo-reply.out",
+      "output_sha256": "1ad7b04d75e9e53ca6334c77d3c79f2578710893c5b9cd4853f492feb2687eea",
+      "c_app_proto": {
+        "whole": 11,
+        "bytewise": 11,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "smtp-tab-in-ehlo",
+      "about": "TAB в строке ответа на EHLO: закрытие",
+      "expect": "records",
+      "declared": "-",
+      "port": 25,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 25,
+      "input": "cases/smtp-tab-in-ehlo.in.txt",
+      "input_sha256": "4e7d3a09a8f3e190ba009abf5ead7d1e041e55fb6befbc3eff99e3d03f29c23f",
+      "output": "cases/smtp-tab-in-ehlo.out",
+      "output_sha256": "9c8919ccc32e1d32679f276af9620b597f41d7486d0aa7c11d74cac24840968d",
+      "c_app_proto": {
+        "whole": 11,
+        "bytewise": 11,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "smtp-nonprint-in-starttls-reply",
+      "about": "байт 0x7F в ответе на STARTTLS: закрытие",
+      "expect": "records",
+      "declared": "-",
+      "port": 25,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 22,
+      "input": "cases/smtp-nonprint-in-starttls-reply.in.txt",
+      "input_sha256": "025bb3c762459030a0ecb181bfde3180a2bc8e381dd267ac444093ec02be53d6",
+      "output": "cases/smtp-nonprint-in-starttls-reply.out",
+      "output_sha256": "6e579edeebc6acda3051665d2ed7832989de9ded00f3bf06f2676c1e793dab32",
+      "c_app_proto": {
+        "whole": 11,
+        "bytewise": 11,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "smtp-starttls-reply-without-newline",
+      "about": "ответ на STARTTLS без перевода строки: записан, закрытия нет",
+      "expect": "records",
+      "declared": "-",
+      "port": 25,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 24,
+      "input": "cases/smtp-starttls-reply-without-newline.in.txt",
+      "input_sha256": "974d6d613aca7a135eaba0a834d19c8df08de871083d3ac19332870f2e9f3306",
+      "output": "cases/smtp-starttls-reply-without-newline.out",
+      "output_sha256": "a44d166fcfc946e24f7364d6fb235ab9ae9ea2d3ea40d281c4a70bd2ec355ac3",
+      "c_app_proto": {
+        "whole": 11,
+        "bytewise": 11,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "smtp-ehlo-line-without-code",
+      "about": "строка без кода в ответе на EHLO: закрытие, STARTTLS не шлётся",
+      "expect": "records",
+      "declared": "-",
+      "port": 25,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 28,
+      "input": "cases/smtp-ehlo-line-without-code.in.txt",
+      "input_sha256": "dd86953f086a0d1d58c4ad9b1a7d668ed690929e7cc9bdb6991a59c435fee042",
+      "output": "cases/smtp-ehlo-line-without-code.out",
+      "output_sha256": "ce5d31e20b0fad6e52700048aa2dea6efded7e078401ef4a2acc45f039d8a5ec",
+      "c_app_proto": {
+        "whole": 11,
+        "bytewise": 11,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "smtp-starttls-reply-multiline",
+      "about": "ответ 454- из двух строк: читается первая, закрытие на её LF",
+      "expect": "records",
+      "declared": "-",
+      "port": 25,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 38,
+      "input": "cases/smtp-starttls-reply-multiline.in.txt",
+      "input_sha256": "d318292cf1bafe5976d5324a84520022c6e78182123d54e8990e7bbe5b730d2c",
+      "output": "cases/smtp-starttls-reply-multiline.out",
+      "output_sha256": "b66ef14fa1e615cdc939f8f0a7b1e8ed326e48687b1ca99c35bfcf215c09bf55",
+      "c_app_proto": {
+        "whole": 11,
+        "bytewise": 11,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "smtp-ehlo-bad-separator",
+      "about": "ответ на EHLO 250+: разделитель не пробел и не минус, закрытие",
+      "expect": "records",
+      "declared": "-",
+      "port": 25,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 15,
+      "input": "cases/smtp-ehlo-bad-separator.in.txt",
+      "input_sha256": "b71537af053080cbdf3cdaf275e04a00c47210f5bc9804a4660dcda19a295f1d",
+      "output": "cases/smtp-ehlo-bad-separator.out",
+      "output_sha256": "5105cc6b344b333990f0d8e164ffc582c45226617bef185780471d5841b8b39b",
+      "c_app_proto": {
+        "whole": 11,
+        "bytewise": 11,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "smtp-starttls-reply-221",
+      "about": "221 на STARTTLS: передача только на 220, закрытие",
+      "expect": "records",
+      "declared": "-",
+      "port": 25,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 30,
+      "input": "cases/smtp-starttls-reply-221.in.txt",
+      "input_sha256": "22b03c1c3073c1ad7235fdb7ddd5eac03cc639cb636a5db547dd7a2d08108bb0",
+      "output": "cases/smtp-starttls-reply-221.out",
+      "output_sha256": "939fa722d0dd7662fb28ff58cad060eaac20565f3f0a58540c7bd09b105f8fb7",
+      "c_app_proto": {
+        "whole": 11,
+        "bytewise": 11,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "pop3-capa-err",
+      "about": "-ERR на CAPA: строка записана, закрытие, STLS не шлётся",
+      "expect": "records",
+      "declared": "-",
+      "port": 110,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 45,
+      "input": "cases/pop3-capa-err.in.txt",
+      "input_sha256": "fde9754acec4ec28ab51425b9b2b5a88c285ceab2e94b8ff70690f559d84f53c",
+      "output": "cases/pop3-capa-err.out",
+      "output_sha256": "049108d4949892902c1ca1c15fbd179b9fba911f6a9d9241e8e9abd9df0f17de",
+      "c_app_proto": {
+        "whole": 12,
+        "bytewise": 12,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "pop3-capa-stls-err",
+      "about": "список CAPA со STLS до точки, STLS, ответ -ERR: закрытие",
+      "expect": "records",
+      "declared": "-",
+      "port": 110,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 97,
+      "input": "cases/pop3-capa-stls-err.in.txt",
+      "input_sha256": "bc423b831caad248f5b2f024e1d492021248c565c8f92b3631c763caa037a0e6",
+      "output": "cases/pop3-capa-stls-err.out",
+      "output_sha256": "11f8d0d0bed46e929daa5f5d1280c17891d444147dd3bc8867a87bbbdc4eaef1",
+      "c_app_proto": {
+        "whole": 12,
+        "bytewise": 12,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "pop3-capa-without-stls",
+      "about": "список CAPA без STLS: STLS шлётся всё равно",
+      "expect": "records",
+      "declared": "-",
+      "port": 110,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 53,
+      "input": "cases/pop3-capa-without-stls.in.txt",
+      "input_sha256": "733b250b31a5d2ce375539f5a4161c5b255780346a35287708cbd725fa5bbac6",
+      "output": "cases/pop3-capa-without-stls.out",
+      "output_sha256": "e9b704a580cb883fdd1fa18e7780e4f5cda74f28d8a223bc294db89d95ef0d02",
+      "c_app_proto": {
+        "whole": 12,
+        "bytewise": 12,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "pop3-capa-bad-reply",
+      "about": "ответ на CAPA без + и -: байт записан, закрытие",
+      "expect": "records",
+      "declared": "-",
+      "port": 110,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 18,
+      "input": "cases/pop3-capa-bad-reply.in.txt",
+      "input_sha256": "49b5dbdcf94e202a4eef7adf65e4b143be180c436a9566eebdcf91c265e2fbae",
+      "output": "cases/pop3-capa-bad-reply.out",
+      "output_sha256": "a79a34e458e341ac60cf084832b20c1f51b8bcfd03eac848437188768cbda610",
+      "c_app_proto": {
+        "whole": 12,
+        "bytewise": 12,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "pop3-capa-plus-no",
+      "about": "ответ +NO на CAPA: N не O, закрытие",
+      "expect": "records",
+      "declared": "-",
+      "port": 110,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 16,
+      "input": "cases/pop3-capa-plus-no.in.txt",
+      "input_sha256": "a794bcfa06451cbd81fe79f53a3ccb1044ee1607883265554514286e152cf4cb",
+      "output": "cases/pop3-capa-plus-no.out",
+      "output_sha256": "8f56c832485cba69545eeb74dac14f5f5fa332b36e0497f61597e3b1660fc6f0",
+      "c_app_proto": {
+        "whole": 12,
+        "bytewise": 12,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "pop3-dot-lines",
+      "about": "строки с точкой в начале и пустые строки в списке CAPA, конец только на строке из точки",
+      "expect": "records",
+      "declared": "-",
+      "port": 110,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 44,
+      "input": "cases/pop3-dot-lines.in.txt",
+      "input_sha256": "bf5d2e522ce9b53d69c323730ce6c022d6bc69fb8df009552c7da60e2142d3bc",
+      "output": "cases/pop3-dot-lines.out",
+      "output_sha256": "b5f8e44ee2be4144b5789c3b826ed6078821f7d34a45563ed1e9b2beb5cedaed",
+      "c_app_proto": {
+        "whole": 12,
+        "bytewise": 12,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "pop3-nonprint-kept",
+      "about": "TAB, 0x01, 0x80 и 0xFF в приветствии записаны: проверки isprint у POP3 нет",
+      "expect": "records",
+      "declared": "-",
+      "port": 110,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 25,
+      "input": "cases/pop3-nonprint-kept.in.txt",
+      "input_sha256": "33d0cbdedd354bd573300769e6674b93c30c812fe6e9891bb20909e4ed42058a",
+      "output": "cases/pop3-nonprint-kept.out",
+      "output_sha256": "6881c0368724bfa63450587080f26e37d9fca01001387942206d4d26e28eba6a",
+      "c_app_proto": {
+        "whole": 12,
+        "bytewise": 12,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "pop3-greeting-without-newline",
+      "about": "приветствие без перевода строки: CAPA не шлётся",
+      "expect": "records",
+      "declared": "-",
+      "port": 110,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 9,
+      "input": "cases/pop3-greeting-without-newline.in.txt",
+      "input_sha256": "d304c0ee61c68974c275da97b34e1e12cb50214d47fdec348eb9213bc29fa2c3",
+      "output": "cases/pop3-greeting-without-newline.out",
+      "output_sha256": "1d5ca4a5577c98a02eacb9b97f31b5bd6a3165b007fce7f8265ad1c01c997523",
+      "c_app_proto": {
+        "whole": 12,
+        "bytewise": 12,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "pop3-bare-lf",
+      "about": "строки с одним LF до ответа -ERR на STLS",
+      "expect": "records",
+      "declared": "-",
+      "port": 110,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 28,
+      "input": "cases/pop3-bare-lf.in.txt",
+      "input_sha256": "c20f2e9131a65f9d5ee8d449320bc9a4cf5ee5bc38e10d637ac4541290e22112",
+      "output": "cases/pop3-bare-lf.out",
+      "output_sha256": "3e5e38a9aff157c7857c488b84d79344973db37f1c91d3dcb332c79adb5f5bbf",
+      "c_app_proto": {
+        "whole": 12,
+        "bytewise": 12,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "pop3-stls-reply-bad",
+      "about": "ответ +ON на STLS: N не K, закрытие",
+      "expect": "records",
+      "declared": "-",
+      "port": 110,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 20,
+      "input": "cases/pop3-stls-reply-bad.in.txt",
+      "input_sha256": "5413b0094df014c91dc40f72ca326acd8d5301b1f5bd035e259afcdc850c71f3",
+      "output": "cases/pop3-stls-reply-bad.out",
+      "output_sha256": "0d68c72662efe48f84b1f17646c5987fa8ca585f709483c656268da4bfbc47b2",
+      "c_app_proto": {
+        "whole": 12,
+        "bytewise": 12,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "pop3-empty-line-before-dot",
+      "about": "пустая строка перед строкой из точки: начало строки остаётся, точка кончает список CAPA",
+      "expect": "records",
+      "declared": "-",
+      "port": 110,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 33,
+      "input": "cases/pop3-empty-line-before-dot.in.txt",
+      "input_sha256": "90259ada7253d7a03173f73c7d1e7ec3fcfbac0aad121741e7948551e4d08a11",
+      "output": "cases/pop3-empty-line-before-dot.out",
+      "output_sha256": "ec1b6eb8f0ad7554d8ee424730130ca7c1c7959b33f733932b3ad6f314c1062d",
+      "c_app_proto": {
+        "whole": 12,
+        "bytewise": 12,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "imap4-capability-banner",
+      "about": "приветствие с CAPABILITY и STARTTLS: запись * OK, два закрытия",
+      "expect": "records",
+      "declared": "-",
+      "port": 143,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 62,
+      "input": "cases/imap4-capability-banner.in.txt",
+      "input_sha256": "19ac47b6ff7231089dbd440422e4f60be0f2b3027ab1ec8e9d11809b3855f340",
+      "output": "cases/imap4-capability-banner.out",
+      "output_sha256": "a9358fca687cf4707bcc4d8bbdd8c80423cc1172331d682ef12467f17095738a",
+      "c_app_proto": {
+        "whole": 13,
+        "bytewise": 13,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "imap4-starttls-dialogue",
+      "about": "полный диалог STARTTLS: CAPABILITY не шлётся, запись * OK, два закрытия",
+      "expect": "records",
+      "declared": "-",
+      "port": 143,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 87,
+      "input": "cases/imap4-starttls-dialogue.in.txt",
+      "input_sha256": "c51c526367eb2e9dea362feb374ea41f4b8d26c3859285e1a1d9377378035d59",
+      "output": "cases/imap4-starttls-dialogue.out",
+      "output_sha256": "9ae61ccafe47565a88e89ef4e7e61b4b8c3f2cc98bdc1da0c283db804c987e8e",
+      "c_app_proto": {
+        "whole": 13,
+        "bytewise": 13,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "imap4-two-spaces",
+      "about": "два пробела после звезды: шаблона * OK нет, поток unknown",
+      "expect": "records",
+      "declared": "-",
+      "port": 143,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 13,
+      "input": "cases/imap4-two-spaces.in.txt",
+      "input_sha256": "6048202785e44f9fed7bc11e69ce1d84d003bde77e5b37b0e777cb13a3ac25ac",
+      "output": "cases/imap4-two-spaces.out",
+      "output_sha256": "8b32b6b6bc2a581b4d4f75e2339f9420bb5b61d378f56fa398f4f3804148559c",
+      "c_app_proto": {
+        "whole": 0,
+        "bytewise": 0,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "imap4-bye",
+      "about": "* BYE: шаблона нет, поток unknown",
+      "expect": "records",
+      "declared": "-",
+      "port": 143,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 28,
+      "input": "cases/imap4-bye.in.txt",
+      "input_sha256": "b19da48b6929c5288442146314aa120881df625182ccf9880808bbb673e5b0f9",
+      "output": "cases/imap4-bye.out",
+      "output_sha256": "14be15eefedb2e925e899246a5ee8ac2c6672d3a342e9448a3a5ae664658d5e5",
+      "c_app_proto": {
+        "whole": 0,
+        "bytewise": 0,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "imap4-ok-without-space",
+      "about": "* OK и сразу CRLF: шаблону нужен пробел, поток unknown",
+      "expect": "records",
+      "declared": "-",
+      "port": 143,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 6,
+      "input": "cases/imap4-ok-without-space.in.txt",
+      "input_sha256": "1721ef052551571dd6bf91cf8b7d55f8d45dad3663588357fb11c394fd525db1",
+      "output": "cases/imap4-ok-without-space.out",
+      "output_sha256": "ea08024e5e4b3b82ad1e2b163f14d318c17616c3ce64ee6f1550b080c2c14dc6",
+      "c_app_proto": {
+        "whole": 0,
+        "bytewise": 0,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "imap4-split-after-star",
+      "about": "звезда отдельным сегментом: совпадение во втором сегменте, повтор HEUR",
+      "expect": "records",
+      "declared": "-",
+      "port": 143,
+      "capture": "none",
+      "segments": 2,
+      "bytes": 12,
+      "input": "cases/imap4-split-after-star.in.txt",
+      "input_sha256": "ac1dbe9e3be40fd3a81acc42516504af9b9bcd3bd7acbaa465fa69c5d9f606bc",
+      "output": "cases/imap4-split-after-star.out",
+      "output_sha256": "fbfeb4d9d5bf4d617fa23768e87a7c8bc652301c18c02690338bf671942203c6",
+      "c_app_proto": {
+        "whole": 13,
+        "bytewise": 13,
+        "given": 13
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "ftp-auth-234",
+      "about": "234 на AUTH TLS: передача TLS",
+      "expect": "declared-4b",
+      "declared": "starttls-unknown",
+      "port": 21,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 51,
+      "input": "cases/ftp-auth-234.in.txt",
+      "input_sha256": "a02e5d1c002f41750d6d6e0f59d04f58beb3224541af41444fda7f2596329d21",
+      "output": "cases/ftp-auth-234.out",
+      "output_sha256": "09a58a238ade5431ae7783b048e08b5ff65b6d5ca8e455576b0e6838b517ca29",
+      "c_app_proto": {
+        "whole": 9,
+        "bytewise": 9,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "ftp-auth-234-dash-25-tail",
+      "about": "220- на 25 это FTP, 234- передаёт на первом LF; хвост с цифр у C целиком снова приветствие FTP со вторым AUTH TLS, по сегментам TLS",
+      "expect": "declared-4b",
+      "declared": "starttls-unknown",
+      "port": 25,
+      "capture": "none",
+      "segments": 2,
+      "bytes": 59,
+      "input": "cases/ftp-auth-234-dash-25-tail.in.txt",
+      "input_sha256": "f73ba19e0bd849dc88d51cc4f105693177323817b8591371369d453fb9641045",
+      "output": "cases/ftp-auth-234-dash-25-tail.out",
+      "output_sha256": "7dc6e20c3133635c6829aec38c44e806ded55bf0c5103e4791147ab206f4fb6c",
+      "c_app_proto": {
+        "whole": 9,
+        "bytewise": 9,
+        "given": 9
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "smtp-starttls-220",
+      "about": "EHLO со STARTTLS, 220 на STARTTLS: передача TLS",
+      "expect": "declared-4b",
+      "declared": "starttls-unknown",
+      "port": 25,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 112,
+      "input": "cases/smtp-starttls-220.in.txt",
+      "input_sha256": "2d4f3d7fb391ab7ee8132a7ad2c3d5d4b3ea0c8fb10858cf5c436196c1086225",
+      "output": "cases/smtp-starttls-220.out",
+      "output_sha256": "58a8538eb55eac3e05c7ba4bbbf1f8afcbaec5abfb3ab3624efb44abd0279e95",
+      "c_app_proto": {
+        "whole": 9,
+        "bytewise": 9,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "smtp-starttls-220-587",
+      "about": "на 587 EHLO без STARTTLS в списке, 220 на STARTTLS: передача TLS",
+      "expect": "declared-4b",
+      "declared": "starttls-unknown",
+      "port": 587,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 66,
+      "input": "cases/smtp-starttls-220-587.in.txt",
+      "input_sha256": "20d786ed9767832d199c2951441370dc8ed5c662b22a8cb2b71e05d6fa23f622",
+      "output": "cases/smtp-starttls-220-587.out",
+      "output_sha256": "2279175f59a151060ae08e3ff3bf02af51848dc63ba7e23e8d606cc3ae1a8e14",
+      "c_app_proto": {
+        "whole": 9,
+        "bytewise": 9,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "smtp-starttls-220-tail",
+      "about": "220- на STARTTLS передаёт на первом LF; хвост у C целиком снова приветствие SMTP со вторым EHLO, по сегментам TLS",
+      "expect": "declared-4b",
+      "declared": "starttls-unknown",
+      "port": 25,
+      "capture": "none",
+      "segments": 2,
+      "bytes": 47,
+      "input": "cases/smtp-starttls-220-tail.in.txt",
+      "input_sha256": "4266041bcc4f7981db494fe02a64e12da96d2c768ebd9ba156bc24281e9b78c8",
+      "output": "cases/smtp-starttls-220-tail.out",
+      "output_sha256": "831c71f2bb873622984179552984f87e6668fc0e23caff77dcba66a8472e1c9f",
+      "c_app_proto": {
+        "whole": 9,
+        "bytewise": 9,
+        "given": 9
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "pop3-stls-ok",
+      "about": "список CAPA со STLS, +OK на STLS: передача TLS, строка +OK записана с LF",
+      "expect": "declared-4b",
+      "declared": "starttls-unknown",
+      "port": 110,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 91,
+      "input": "cases/pop3-stls-ok.in.txt",
+      "input_sha256": "6745bcac75a6bd955284e4499490ae071838e2a5e6db7ab2dd59290ec0e38aff",
+      "output": "cases/pop3-stls-ok.out",
+      "output_sha256": "930708cdcc71046460460c34ba71aef216fc155490e9888fe078cfcaf9095008",
+      "c_app_proto": {
+        "whole": 9,
+        "bytewise": 9,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "pop3-stls-ok-tail",
+      "about": "+OK на STLS; хвост +OK у C целиком снова приветствие POP3 со вторым CAPA, по сегментам TLS",
+      "expect": "declared-4b",
+      "declared": "starttls-unknown",
+      "port": 110,
+      "capture": "none",
+      "segments": 2,
+      "bytes": 38,
+      "input": "cases/pop3-stls-ok-tail.in.txt",
+      "input_sha256": "bf015f6628288eb2b5e643ef68b889901338c44a1afa883520fb6f1c7e8b12b5",
+      "output": "cases/pop3-stls-ok-tail.out",
+      "output_sha256": "e94141aab7bf29b6f09d272e2aac116d2f14a5958fb8c550a534a75e2940b060",
+      "c_app_proto": {
+        "whole": 9,
+        "bytewise": 9,
+        "given": 9
       },
       "asan": {"same_output": true, "reports": 0}
     }

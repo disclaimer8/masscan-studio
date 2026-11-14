@@ -229,6 +229,17 @@ Ctrl-C выходит сразу с кодом 1, `paused.conf` к этому м
   `unknown` (справка B6); совпадение SSL3 отвергается всегда, потому что hello TLS в 4b не шлётся. Hello уходят только
   на порты 80, 8080, 8530 (запрос HTTP), 23, 3389, 11211 и 25565; на портах TLS (4c), SMB (4d) и NPSL (Р3) rmasscan
   пишет только то, что сервер прислал сам.
+- Парсеры баннеров FTP, SMTP, POP3 и IMAP4 (подэтап 4b, справка D2-D5, B6, E3.3, E3.4;
+  `crates/rmasscan-proto/src/banner1/{ftp,smtp,pop3,imap4}.rs`, эталоны `tests/golden/tcp-banners`) повторяют C
+  побайтно, со странностями C (Р1): `"220-"` почтового сервера на 25 и `"220 "` на 2525 разбираются как FTP и получают
+  `AUTH TLS` (`src/proto-banner1.c:147-153`), SMTP шлёт `STARTTLS` после ответа на EHLO с любым кодом
+  (`src/proto-smtp.c:114-124`), TAB или байт вне 0x20-0x7E в строке FTP и SMTP закрывает соединение, IMAP4 всегда
+  пишет `* OK`, закрывает дважды и не шлёт ни `CAPABILITY`, ни `STARTTLS` (`src/proto-imap4.c:49-66`). На согласие
+  STARTTLS (FTP 234, SMTP 220, POP3 `+OK`) hello TLS в 4b не шлётся (у C `banner_ssl.hello`, `src/proto-ftp.c:103`,
+  `src/proto-smtp.c:149`, `src/proto-pop3.c:131`), номер приложения SSL3 как у C, а каждый байт после строки согласия
+  пишется одной записью `unknown`. У C остаток того же сегмента идёт текстовым парсером с начала (`src/proto-ftp.c:101`,
+  `src/proto-smtp.c:147`, `src/proto-pop3.c:129`): это новое приветствие со вторым `AUTH TLS`, `EHLO` или `CAPA`, а
+  следующий сегмент уходит в TLS, так что у C итог зависит от нарезки, а у rmasscan нет.
 - Операции `-sL`, `--echo`/`--echo-all`, `--offline` (с `--packet-trace` или без) и `--iflist`
   взаимоисключающие. `--offline --packet-trace` печатает трассу осознанно, в C она пуста.
 - Интерфейс выбирается по маршруту к целям: первая и последняя unicast-цель обязаны идти одним маршрутом

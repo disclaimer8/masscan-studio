@@ -61,13 +61,6 @@ impl ByteBudget {
 /// Действие сессии из разбора: `tcpapi_send(..., TCP__static)` и `tcpapi_close` парсеров баннеров
 /// (`src/stack-tcp-api.h:45-76`), в порядке вызова.
 #[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "шлют и закрывают парсеры задач 9-12, заглушки задачи 8 только пишут"
-    )
-)]
 pub(crate) enum SessionAction {
     Send(Vec<u8>),
     Close,

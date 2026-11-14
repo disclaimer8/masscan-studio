@@ -125,6 +125,7 @@ pub struct Cli {
     // логическое (см. [`preprocess_args`]); `--top-port` синоним.
     #[arg(
         long = "top-ports",
+        alias = "top-port",
         num_args = 0..=1,
         require_equals = true,
         default_missing_value = "",
@@ -254,7 +255,7 @@ pub struct Cli {
     )]
     pub noreset: Vec<String>,
     // Р9: `F_NUMABLE` (main-conf.c:2419): `--tcp-mss [N|BOOL]`; значение берётся из следующего слова, если оно
-    // целое или логическое (см. [`preprocess_args`]); `--tcpmss` синоним.
+    // целое или логическое (см. [`preprocess_args`]); синоним C `--tcpmss` даёт тот же ключ `EQUALS`, что `tcp-mss`.
     #[arg(
         long = "tcp-mss",
         num_args = 0..=1,
@@ -749,7 +750,8 @@ fn refuse_json_status(argv: &[String]) -> Result<(), ParseError> {
             continue;
         };
         let name = rest.split(['=', ':']).next().unwrap_or(rest);
-        if name.eq_ignore_ascii_case("json-status") || name.eq_ignore_ascii_case("status-json") {
+        // Имя по `EQUALS` (`src/main-conf.c:833-849`), как у опций таблицы clap.
+        if matches!(normalize_key(name).as_str(), "jsonstatus" | "statusjson") {
             return Err(ParseError::Masscan(format!(
                 "[-] FAIL: {name} not supported, use --status-ndjson\n    hint: new-line delimited JSON status is what we use"
             )));
@@ -758,7 +760,8 @@ fn refuse_json_status(argv: &[String]) -> Result<(), ParseError> {
     Ok(())
 }
 
-/// Ошибка разбора: clap печатает свою (`e.exit()`, код clap), текст masscan печатается в stderr как есть, exit 1.
+/// Ошибка разбора: текст clap печатает `clap::Error::print` (справка и версия в stdout) с кодом [`clap_exit_code`], текст
+/// masscan печатается в stderr как есть, exit 1.
 #[derive(Debug)]
 pub enum ParseError {
     Clap(clap::Error),
@@ -820,6 +823,10 @@ fn dash_o_format(arg: &str) -> Result<&'static str, String> {
 
 // Причуды masscan, которые clap не выражает.
 //
+// 0. Имя `--опции` сравнивается как `EQUALS` C ([`equals_option`]) и переписывается в длинное имя clap раньше всех
+//    остальных правил, поэтому они видят только каноническое имя. Слово, которое правило ниже забирает как значение
+//    (`it.next()`), уже не переписывается; значение, которое берёт сам clap, не начинается с `--` (иначе clap его не
+//    примет), поэтому переписывание его не задевает. Короткие опции не трогаются.
 // 1. `-sL` (nmap-стиль) - это один флаг, а
 //    clap прочёл бы его как `-s L`. Заменяется на `--list`.
 // 2. `-o<буква> FILE` (main-conf.c:3401–3459): буква слитно с `-o`, файл следующим argv (`-` значит stdout, иное
@@ -835,7 +842,8 @@ where
 {
     let mut it = args.into_iter().map(Into::into).peekable();
     let mut out: Vec<String> = it.next().into_iter().collect();
-    while let Some(a) = it.next() {
+    while let Some(raw) = it.next() {
+        let a = equals_option(&raw)?.unwrap_or(raw);
         if let Some((name, inline)) = numable_split(&a) {
             // main-conf.c:3236-3260 (`F_NUMABLE`): `--name=v`, `--name:v` или следующее слово, если оно целое или
             // логическое; иначе `--name` один значит «включить». `--noreset` и `--tcp-sackok` сюда не входят: в C
@@ -878,8 +886,6 @@ where
                 .ok_or_else(|| "missing output filename".to_string())?;
             out.push(format!("--output-format={format}"));
             out.push(format!("--output-filename={file}"));
-        } else if let Some(canon) = equals_banner_option(&a) {
-            out.push(canon);
         } else {
             out.push(a);
         }
@@ -887,41 +893,87 @@ where
     Ok(out)
 }
 
-/// Опции баннеров подэтапа 4a (`config_parameters[]`, `src/main-conf.c:2377-2403`; `banner-types` и три синонима,
-/// `:2683-2697`): имя после `normalize_key` и имя clap.
-const EQUALS_OPTIONS: [(&str, &str); 12] = [
-    ("banners", "banners"),
-    ("banner", "banner"),
-    ("nobanners", "nobanners"),
-    ("nobanner", "nobanner"),
-    ("rawudp", "rawudp"),
-    ("capture", "capture"),
-    ("nocapture", "nocapture"),
-    ("hellotimeout", "hello-timeout"),
-    ("bannertypes", "banner-types"),
-    ("bannertype", "banner-types"),
-    ("bannerapps", "banner-types"),
-    ("bannerapp", "banner-types"),
-];
+/// Таблица `EQUALS` (`src/main-conf.c:833-849`): ключ [`normalize_key`] каждого длинного имени и синонима clap (вместе
+/// с `--help` и `--version`) и длинное имя его опции. Внутренние опции `--rmasscan-…`, которые пишет сам
+/// [`preprocess_args`], в неё не входят: скрытая опция, которую пользователь набирать не должен, обязана начинаться с
+/// `rmasscan-`. Совпадение двух имён после нормализации одно, `nocapture`/`no-capture`, и это одна опция (как у C,
+/// `:2403`); тест `equals_table_has_one_option_per_key` держит это для всей таблицы.
+struct EqualsTable(HashMap<String, String>);
 
-/// Р17: имя опции баннеров сравнивается как `EQUALS` C (`src/main-conf.c:833-849`: регистр и `-`, `.`, `_` не важны,
-/// `--No-Banners`, `--raw_udp`) и переписывается в имя clap; значение после `=`, иначе после `:`, остаётся
-/// (`masscan_command_line`, :3279-3289). `None` для всех остальных аргументов: прочие опции clap сверяет точно.
-fn equals_banner_option(a: &str) -> Option<String> {
-    let rest = a.strip_prefix("--")?;
+impl EqualsTable {
+    fn long_of(&self, key: &str) -> Option<&str> {
+        self.0.get(key).map(String::as_str)
+    }
+}
+
+/// [`EqualsTable`] из `Cli::command()`, строится один раз на процесс.
+fn equals_table() -> &'static EqualsTable {
+    static TABLE: std::sync::OnceLock<EqualsTable> = std::sync::OnceLock::new();
+    TABLE.get_or_init(|| {
+        let mut cmd = Cli::command();
+        // `--help` и `--version` clap добавляет при сборке команды (C: `EQUALS("help", …)`, :3225).
+        cmd.build();
+        let mut by_key = HashMap::new();
+        for arg in cmd.get_arguments() {
+            let Some(long) = arg.get_long() else { continue };
+            if long.starts_with("rmasscan-") {
+                continue;
+            }
+            for name in std::iter::once(long).chain(arg.get_all_aliases().unwrap_or_default()) {
+                by_key.insert(normalize_key(name), long.to_string());
+            }
+        }
+        EqualsTable(by_key)
+    })
+}
+
+/// Имя с индексным смыслом: индекс `[i]` читает его собственный разбор. Сегодня это ключи массива адаптеров
+/// ([`NIC_KEYS`], `src/main-conf.c:882-890`).
+fn has_index_meaning(key: &str) -> bool {
+    NIC_KEYS.contains(&key)
+}
+
+/// Р17: имя `--опции` сравнивается как `EQUALS` C (`src/main-conf.c:833-849`: регистр и `-`, `.`, `_` не важны) и
+/// переписывается в длинное имя clap. Значение идёт после первого `=`, иначе после первого `:` (`masscan_command_line`,
+/// :3279-3289) и остаётся как есть, `:` становится `=`. Закрытый суффикс `[…]` у имени без индексного смысла
+/// отбрасывается, как у C (`EQUALS` истинно на `[`, :840-841); имя с индексным смыслом остаётся своему разбору
+/// ([`indexed_nic_key`]). Незакрытая `[` это ошибка у любого имени (Р17, «непарный индекс»; у C индекс читает
+/// `parseInt`, `ARRAY` :881-890). `None`: не `--опция`, ключ адаптера с индексом или имени нет в таблице (тогда его
+/// отклонит clap, как C отклоняет неизвестное имя, :3036).
+fn equals_option(a: &str) -> Result<Option<String>, String> {
+    let Some(rest) = a.strip_prefix("--") else {
+        return Ok(None);
+    };
     let (name, value) = match rest.find('=').or_else(|| rest.find(':')) {
         Some(i) => (&rest[..i], Some(&rest[i + 1..])),
         None => (rest, None),
     };
-    if name.contains('[') {
-        return None;
-    }
     let key = normalize_key(name);
-    let (_, canon) = EQUALS_OPTIONS.iter().find(|(k, _)| *k == key)?;
-    Some(match value {
-        Some(v) => format!("--{canon}={v}"),
-        None => format!("--{canon}"),
-    })
+    if let Some(open) = name.find('[') {
+        if !name[open..].contains(']') {
+            return Err(format!("--{name}: unclosed '[' in the option name"));
+        }
+        if has_index_meaning(&key) {
+            return Ok(None);
+        }
+    }
+    let Some(long) = equals_table().long_of(&key) else {
+        return Ok(None);
+    };
+    Ok(Some(match value {
+        Some(v) => format!("--{long}={v}"),
+        None => format!("--{long}"),
+    }))
+}
+
+/// Код выхода ошибки clap: справка и версия 0, любая ошибка разбора 1, как `exit(1)` C на неизвестное имя
+/// (`src/main-conf.c:3036`), а не 2 clap. C печатает справку с кодом 1 (:3225-3227); здесь `--help` это успех.
+pub fn clap_exit_code(kind: clap::error::ErrorKind) -> u8 {
+    use clap::error::ErrorKind;
+    match kind {
+        ErrorKind::DisplayHelp | ErrorKind::DisplayVersion => 0,
+        _ => 1,
+    }
 }
 
 /// Ключи, которые C хранит в `nic[i]` (`masscan_set_parameter`, main-conf.c:2470-2641), в нормализованном виде.
@@ -956,7 +1008,7 @@ const NIC_KEYS: [&str; 27] = [
 ];
 
 /// `--имя[i]`, `--имя[i]=v` или `--имя[i]:v` для ключа массива адаптеров: имя с индексом и встроенное значение.
-/// Другие ключи с `[` остаются clap (он их отклонит); `None`, если аргумент не такой.
+/// Скобку другого ключа уже отбросил [`equals_option`], незакрытую он отклонил; `None`, если аргумент не такой.
 fn indexed_nic_key(a: &str) -> Option<Result<(&str, Option<&str>), String>> {
     let rest = a.strip_prefix("--")?;
     let open = rest.find('[')?;
@@ -995,19 +1047,14 @@ fn top_ports_count(v: &str) -> Result<u32, String> {
 /// Опции с необязательным числовым или логическим значением (`F_NUMABLE`, main-conf.c:2419-2421).
 const NUMABLE: [&str; 4] = ["tcp-mss", "tcp-wscale", "tcp-tsecho", "top-ports"];
 
-/// `--имя`, `--имя=v` или `--имя:v` для имён из [`NUMABLE`]: имя и встроенное значение.
+/// `--имя` или `--имя=v` для имён из [`NUMABLE`]: имя и встроенное значение. Имя уже каноническое: синонимы C
+/// `tcpmss` (main-conf.c:2419, тот же ключ `normalize_key`, что у `tcp-mss`) и `top-port` (:2423, синоним clap) и любое
+/// написание переписал [`equals_option`], `:` тоже.
 fn numable_split(a: &str) -> Option<(&'static str, Option<&str>)> {
     let rest = a.strip_prefix("--")?;
     let (name, inline) = match rest.find(['=', ':']) {
         Some(i) => (&rest[..i], Some(&rest[i + 1..])),
         None => (rest, None),
-    };
-    // main-conf.c:2419: `tcpmss` синоним `tcp-mss`.
-    let name = match name {
-        "tcpmss" => "tcp-mss",
-        // main-conf.c:2423: `top-port` синоним `top-ports`.
-        "top-port" => "top-ports",
-        n => n,
     };
     NUMABLE.iter().find(|n| **n == name).map(|n| (*n, inline))
 }
@@ -2201,6 +2248,9 @@ mod tests {
             "--status-json",
             "--json-status=1",
             "--status-json:x",
+            // Имя по `EQUALS` (`src/main-conf.c:833-849`), как у прочих опций.
+            "--Json_Status",
+            "--STATUS.JSON=1",
         ] {
             let bare = n.trim_start_matches("--").split(['=', ':']).next().unwrap();
             assert_eq!(
@@ -3048,8 +3098,11 @@ adapter-ip = 198.18.0.9\noutput-filename = base.xml\n",
             one(&["-c", f, "--adapter[1]", "cli"]).as_deref(),
             Some("cli")
         );
-        // Не ключ адаптера со скобкой это ошибка clap, а не молчаливое игнорирование.
-        assert!(parse(&["--rate[1]", "5"]).is_err());
+        // Закрытый `[…]` у ключа не адаптера отбрасывается, как у `EQUALS` C (`src/main-conf.c:840-841`, Р17).
+        assert_eq!(
+            parse(&["--rate[1]", "5"]).unwrap().rate.as_deref(),
+            Some("5")
+        );
     }
 
     /// Порты после разбора `argv`, отсортированные, как их видит `--echo`.
@@ -3151,5 +3204,281 @@ adapter-ip = 198.18.0.9\noutput-filename = base.xml\n",
                 "--list"
             ]
         );
+    }
+
+    /// `preprocess_args` с именем программы впереди.
+    fn pre(a: &[&str]) -> Vec<String> {
+        preprocess_args(std::iter::once("rmasscan").chain(a.iter().copied())).unwrap()
+    }
+
+    /// Каждое длинное имя и синоним clap (с `--help` и `--version`, кроме внутренних `--rmasscan-…`) и id его
+    /// аргумента, собранные отдельно от [`equals_table`].
+    fn clap_long_names() -> Vec<(String, String)> {
+        let mut cmd = Cli::command();
+        cmd.build();
+        let mut names = Vec::new();
+        for arg in cmd.get_arguments() {
+            let Some(long) = arg.get_long() else { continue };
+            if long.starts_with("rmasscan-") {
+                // Внутренние опции, которые пишет сам `preprocess_args`, скрыты из справки.
+                assert!(arg.is_hide_set(), "{long}");
+                continue;
+            }
+            let id = arg.get_id().as_str().to_string();
+            for name in std::iter::once(long).chain(arg.get_all_aliases().unwrap_or_default()) {
+                names.push((name.to_string(), id.clone()));
+            }
+        }
+        names
+    }
+
+    /// Р17, справка C1: ключ `normalize_key` каждого имени и синонима clap ведёт ровно к одной опции. Совпадают после
+    /// нормализации только `nocapture` и его синоним `no-capture` (`src/main-conf.c:2403`), это одна опция.
+    #[test]
+    fn equals_table_has_one_option_per_key() {
+        let names = clap_long_names();
+        assert!(names.len() > 100, "{}", names.len());
+        let long_to_id: HashMap<String, String> = names.iter().cloned().collect();
+        let mut groups: HashMap<String, Vec<(String, String)>> = HashMap::new();
+        for (name, id) in &names {
+            groups
+                .entry(normalize_key(name))
+                .or_default()
+                .push((name.clone(), id.clone()));
+        }
+        for (key, group) in &groups {
+            let id = &group[0].1;
+            assert!(group.iter().all(|(_, i)| i == id), "{key}: {group:?}");
+            let long = equals_table().long_of(key);
+            assert_eq!(long.map(|l| &long_to_id[l]), Some(id), "{key}");
+        }
+        assert_eq!(equals_table().0.len(), groups.len());
+        let mut pairs: Vec<Vec<&str>> = groups
+            .values()
+            .filter(|g| g.len() > 1)
+            .map(|g| {
+                let mut n: Vec<&str> = g.iter().map(|(n, _)| n.as_str()).collect();
+                n.sort_unstable();
+                n
+            })
+            .collect();
+        pairs.sort();
+        assert_eq!(pairs, [["no-capture", "nocapture"]]);
+        for name in [
+            "help",
+            "version",
+            "banner-app",
+            "top-port",
+            "rotate-size",
+            "source-ip",
+        ] {
+            assert!(
+                equals_table().long_of(&normalize_key(name)).is_some(),
+                "{name}"
+            );
+        }
+        assert_eq!(equals_table().long_of("rmasscannic"), None);
+        assert_eq!(equals_table().long_of("rmasscanscan"), None);
+    }
+
+    /// Р17 (`EQUALS`, `src/main-conf.c:833-849`): каждое длинное имя и синоним clap, набранные заглавными с `_` вместо
+    /// `-`, разбираются как само имя: голым, со значением после `=` и со значением следующим словом. clap узнаёт итог
+    /// как ту же опцию (любая ошибка, кроме «неизвестный аргумент», значит, что имя узнано).
+    #[test]
+    fn equals_rewrites_every_long_option() {
+        use clap::error::ErrorKind;
+        use clap::parser::ValueSource;
+        for (name, id) in clap_long_names() {
+            let shout = format!("--{}", name.to_uppercase().replace('-', "_"));
+            let plain = format!("--{name}");
+            for (typed, canon) in [
+                (vec![shout.clone()], vec![plain.clone()]),
+                (vec![format!("{shout}=1")], vec![format!("{plain}=1")]),
+                (
+                    vec![shout.clone(), "1".into()],
+                    vec![plain.clone(), "1".into()],
+                ),
+            ] {
+                let typed: Vec<&str> = typed.iter().map(String::as_str).collect();
+                let canon: Vec<&str> = canon.iter().map(String::as_str).collect();
+                let got = pre(&typed);
+                assert_eq!(got, pre(&canon), "{typed:?}");
+                match Cli::command().try_get_matches_from(&got) {
+                    Ok(m) => assert_eq!(
+                        m.value_source(&id),
+                        Some(ValueSource::CommandLine),
+                        "{typed:?}"
+                    ),
+                    Err(e) => assert_ne!(e.kind(), ErrorKind::UnknownArgument, "{typed:?}: {e}"),
+                }
+            }
+        }
+    }
+
+    /// Значение после первого `=`, иначе после первого `:` (`masscan_command_line`, `src/main-conf.c:3279-3289`); `:` у
+    /// любой опции значит `=`, а `:` и `=` внутри значения остаются.
+    #[test]
+    fn equals_keeps_value_after_eq_and_colon() {
+        assert_eq!(pre(&["--Rate=100"]), ["rmasscan", "--rate=100"]);
+        assert_eq!(pre(&["--RATE:100"]), ["rmasscan", "--rate=100"]);
+        assert_eq!(pre(&["--rate:100"]), ["rmasscan", "--rate=100"]);
+        assert_eq!(pre(&["--rate="]), ["rmasscan", "--rate="]);
+        assert_eq!(
+            pre(&["--Adapter_IP=fe80::1"]),
+            ["rmasscan", "--adapter-ip=fe80::1"]
+        );
+        assert_eq!(
+            pre(&["--router.mac:00:11:22:33:44:55"]),
+            ["rmasscan", "--router-mac=00:11:22:33:44:55"]
+        );
+        assert_eq!(
+            pre(&["--Stylesheet:http://x/a"]),
+            ["rmasscan", "--stylesheet=http://x/a"]
+        );
+        assert_eq!(
+            pre(&["--Stylesheet=http://x/a:b"]),
+            ["rmasscan", "--stylesheet=http://x/a:b"]
+        );
+        // `=` раньше `:`: имя `Exclude:a` неизвестно (у C тоже), clap его отклоняет.
+        assert_eq!(pre(&["--Exclude:a=b"]), ["rmasscan", "--Exclude:a=b"]);
+        assert!(parse(&["--Exclude:a=b"]).is_err());
+        let cli = parse(&["--Rate:250", "--Seed=7", "--Source_IP:fe80::1", "10.0.0.1"]).unwrap();
+        assert_eq!(cli.rate.as_deref(), Some("250"));
+        assert_eq!(cli.seed, Some(7));
+        assert_eq!(cli.adapter_ip.as_deref(), Some("fe80::1"));
+        assert_eq!(cli.targets, ["10.0.0.1"]);
+    }
+
+    /// Ключ адаптера с индексом (`nic[i]`, `src/main-conf.c:882-890`) `EQUALS` не трогает: индекс разбирает
+    /// [`indexed_nic_key`], в любом написании имени. Без индекса это одиночная опция clap.
+    #[test]
+    fn equals_leaves_array_names_to_indexed_parsers() {
+        assert_eq!(
+            pre(&["--Adapter-Ip[1]", "10.0.0.1"]),
+            ["rmasscan", "--rmasscan-nic=Adapter-Ip[1]=10.0.0.1"]
+        );
+        assert_eq!(
+            pre(&["--SOURCE_IP[1]=10.0.0.1"]),
+            ["rmasscan", "--rmasscan-nic=SOURCE_IP[1]=10.0.0.1"]
+        );
+        assert_eq!(
+            pre(&["--Adapter-Ip", "10.0.0.1"]),
+            ["rmasscan", "--adapter-ip", "10.0.0.1"]
+        );
+        let cfg = parse(&["--Adapter-Ip[1]", "198.18.0.2", "--ADAPTER[1]", "veth1"])
+            .unwrap()
+            .to_config()
+            .unwrap();
+        assert_eq!(cfg.nics[1].adapter_ip, Some((0xc612_0002, 0xc612_0002)));
+        assert_eq!(cfg.nics[1].adapter_name.as_deref(), Some("veth1"));
+    }
+
+    /// `EQUALS` C истинно, когда имя таблицы кончилось там, где у набранного имени `[` (`src/main-conf.c:840-841`):
+    /// закрытый суффикс `[…]` у опции без индексного смысла отбрасывается, по всей таблице clap.
+    #[test]
+    fn equals_array_suffix_ignored_like_c() {
+        for (name, _) in clap_long_names() {
+            if has_index_meaning(&normalize_key(&name)) {
+                continue;
+            }
+            let suffixed = format!("--{name}[0]");
+            let plain = format!("--{name}");
+            assert_eq!(
+                pre(&[&format!("{suffixed}=v")]),
+                pre(&[&format!("{plain}=v")]),
+                "{name}"
+            );
+            assert_eq!(pre(&[&suffixed, "v"]), pre(&[&plain, "v"]), "{name}");
+            // Что внутри скобок и после них, C не смотрит.
+            let shout = format!("--{}[7]x", name.to_uppercase());
+            assert_eq!(pre(&[&shout, "v"]), pre(&[&plain, "v"]), "{name}");
+        }
+        let cli = parse(&["--banner-types[0]", "dns-ver", "--readscan", "f"]).unwrap();
+        assert_eq!(cli.banner_types, ["dns-ver"]);
+        assert_eq!(
+            parse(&["--rate[7]", "100"]).unwrap().rate.as_deref(),
+            Some("100")
+        );
+    }
+
+    /// Р17 («непарный индекс»): незакрытая `[` в имени это код 1 у любой опции, в том числе у ключей адаптера и у
+    /// неизвестных имён. C сравнивает имя до `[` и читает индекс `parseInt` (`ARRAY`, `src/main-conf.c:881-890`).
+    #[test]
+    fn unpaired_index_fails() {
+        for (bad, name) in [
+            (&["--rate[", "100"][..], "--rate["),
+            (&["--Adapter-Ip[1", "10.0.0.1"][..], "--Adapter-Ip[1"),
+            (&["--adapter-ip[1=10.0.0.1"][..], "--adapter-ip[1"),
+            (&["--banners["][..], "--banners["),
+            (&["--bogus[x"][..], "--bogus[x"),
+        ] {
+            assert_eq!(
+                masscan_err(&[bad, &["10.0.0.0/30", "-p80"][..]].concat()),
+                format!("{name}: unclosed '[' in the option name"),
+                "{bad:?}"
+            );
+        }
+    }
+
+    /// `EQUALS` стоит раньше `F_NUMABLE` (`src/main-conf.c:3228`, `is_numable` :3041-3056 тоже сравнивает по `EQUALS`):
+    /// следующее целое или логическое слово забирается при любом написании имени.
+    #[test]
+    fn equals_then_numable() {
+        assert_eq!(pre(&["--TCP-MSS", "1400"]), ["rmasscan", "--tcp-mss=1400"]);
+        assert_eq!(pre(&["--TCP-MSS", "1400"]), pre(&["--tcp-mss", "1400"]));
+        assert_eq!(pre(&["--TcpMss", "off"]), ["rmasscan", "--tcp-mss=off"]);
+        assert_eq!(
+            pre(&["--Top_Ports", "100"]),
+            ["rmasscan", "--top-ports=100"]
+        );
+        assert_eq!(pre(&["--TOP-PORT", "5"]), ["rmasscan", "--top-ports=5"]);
+        assert_eq!(pre(&["--top-port:5"]), ["rmasscan", "--top-ports=5"]);
+        assert_eq!(
+            pre(&["--Tcp.WScale", "x"]),
+            ["rmasscan", "--tcp-wscale=", "x"]
+        );
+        let cfg = parse(&["10.0.0.1", "--TCP-MSS", "1400", "-p80"])
+            .unwrap()
+            .to_config()
+            .unwrap();
+        assert_eq!(cfg.tcp_opts.mss, Some(1400));
+    }
+
+    /// Ошибки clap это код 1, как `exit(1)` C на неизвестное имя (`src/main-conf.c:3036`), а не 2 clap; текст clap.
+    /// Справка и версия это 0 (C печатает справку с кодом 1, `:3225-3227`).
+    #[test]
+    fn clap_errors_exit_1() {
+        use clap::error::ErrorKind;
+        for (argv, text) in [
+            (&["--bogus"][..], "unexpected argument '--bogus'"),
+            (
+                &["10.0.0.0/30", "--rate"][..],
+                "a value is required for '--rate <PPS>'",
+            ),
+            (&["--seed", "x"][..], "invalid value 'x' for '--seed <N>'"),
+        ] {
+            match parse(argv) {
+                Err(ParseError::Clap(e)) => {
+                    assert_eq!(clap_exit_code(e.kind()), 1, "{argv:?}");
+                    assert!(e.to_string().contains(text), "{argv:?}: {e}");
+                }
+                other => panic!("{argv:?}: {other:?}"),
+            }
+        }
+        for (argv, kind) in [
+            ("--help", ErrorKind::DisplayHelp),
+            ("--HELP", ErrorKind::DisplayHelp),
+            ("-h", ErrorKind::DisplayHelp),
+            ("--version", ErrorKind::DisplayVersion),
+            ("-V", ErrorKind::DisplayVersion),
+        ] {
+            match parse(&[argv]) {
+                Err(ParseError::Clap(e)) => {
+                    assert_eq!(e.kind(), kind, "{argv}");
+                    assert_eq!(clap_exit_code(e.kind()), 0, "{argv}");
+                }
+                other => panic!("{argv}: {other:?}"),
+            }
+        }
     }
 }

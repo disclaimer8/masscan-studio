@@ -123,5 +123,12 @@ mod tests {
         assert_eq!(normalize_json_string(&[0x00]), "\\u0000");
         assert_eq!(normalize_json_string(&[0xFF]), "\\u00ff");
         assert_eq!(normalize_json_string(&[0x7F]), "\\u007f");
+        // Жёсткие литералы по `src/out-json.c:82`: `"` и `\` экранируются `\u00nn`, не `\"`/`\\`.
+        assert_eq!(normalize_json_string(b"\""), "\\u0022");
+        assert_eq!(normalize_json_string(b"\\"), "\\u005c");
+        assert_eq!(normalize_json_string(&[0x80]), "\\u0080");
+        assert_eq!(normalize_json_string(&[0x1F]), "\\u001f");
+        assert_eq!(normalize_json_string(b" "), " ");
+        assert_eq!(normalize_json_string(b"~"), "~");
     }
 }

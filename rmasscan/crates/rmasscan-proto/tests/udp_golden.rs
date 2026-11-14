@@ -840,4 +840,41 @@ fn manifest_check_names_the_tampered_file() {
         "both sums: {err}"
     );
     assert_ne!(want, got);
+
+    // Файл пропал: ошибка называет его же (не пропуск и не чужое имя).
+    fs::write(&path, fs::read(src.join(victim)).expect("orig")).expect("restore");
+    let gone = "cases/dns-chaos-txt.bin";
+    fs::remove_file(tmp.0.join(gone)).expect("remove");
+    let err = golden::check_manifest_hashes(&tmp.0, &manifest).expect_err("missing file");
+    assert!(err.starts_with(gone), "names the missing file: {err}");
+}
+
+/// Сумма относится к своему кейсу и своему полю: `output_sha256` после вложенных `frames` и кейс с
+/// `"output": null` не подхватывают чужое имя (ошибка называет файл кейса, а не последнего кадра).
+#[test]
+fn manifest_pairing_is_per_case_and_ignores_nested_frames() {
+    let tmp = TempDir::new();
+    fs::write(tmp.0.join("a.bin"), b"abc").expect("a");
+    fs::write(tmp.0.join("a.out"), b"x").expect("a.out");
+    fs::write(tmp.0.join("a.eth.out"), b"frame").expect("frame");
+    let abc = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+    let snippet = |out_sha: &str| {
+        format!(
+            "{{\n  \"cases\": [\n    {{\n      \"name\": \"a\",\n      \"input\": \"a.bin\",\n      \
+             \"input_sha256\": \"{abc}\",\n      \"output\": \"a.out\",\n      \"frames\": {{\n        \
+             \"eth\": {{\n          \"output\": \"a.eth.out\"\n        }}\n      }},\n      \
+             \"output_sha256\": \"{out_sha}\"\n    }}\n  ]\n}}\n"
+        )
+    };
+    let x = "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881";
+    assert_eq!(golden::check_manifest_hashes(&tmp.0, &snippet(x)), Ok(2));
+    let err = golden::check_manifest_hashes(&tmp.0, &snippet(abc)).unwrap_err();
+    assert!(
+        err.starts_with("a.out:"),
+        "case output, not the frame: {err}"
+    );
+    // Сумма без своего имени (`"output": null` у кейса) это ошибка, а не имя предыдущего кейса.
+    let orphan = snippet(x).replace("\"output\": \"a.out\",", "\"output\": null,");
+    let err = golden::check_manifest_hashes(&tmp.0, &orphan).unwrap_err();
+    assert!(err.contains("without a preceding file name"), "{err}");
 }

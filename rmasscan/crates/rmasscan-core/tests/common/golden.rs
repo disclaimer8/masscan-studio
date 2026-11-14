@@ -17,11 +17,24 @@ fn string_field<'a>(line: &'a str, key: &str) -> Option<&'a str> {
 }
 
 /// Сверяет суммы файлов с манифестом: число проверенных файлов или ошибка с именем файла и обеими
-/// суммами. Сумма относится к ближайшему выше полю `input`/`output` (порядок полей кейса в манифесте).
+/// суммами. Сумма относится к полю `input`/`output` своего кейса: имена сбрасываются на строке `"name"`
+/// (начало кейса), вложенные `frames.*.output` (глубже отступом, чем `name`) их не перезаписывают, а имя
+/// расходуется суммой, так что сумма без своего имени это ошибка, а не чужой файл.
 pub fn check_manifest_hashes(dir: &Path, manifest_text: &str) -> Result<usize, String> {
     let (mut input, mut output) = (None, None);
+    let mut case_indent = None;
     let mut checked = 0usize;
     for line in manifest_text.lines() {
+        let indent = line.len() - line.trim_start().len();
+        if string_field(line, "name").is_some() {
+            case_indent = Some(indent);
+            (input, output) = (None, None);
+            continue;
+        }
+        if case_indent.is_some_and(|c| indent > c) {
+            // Вложенные объекты кейса (`frames`): свои `output` без сумм.
+            continue;
+        }
         let (file, want) = if let Some(v) = string_field(line, "input") {
             input = Some(v);
             continue;
@@ -29,9 +42,9 @@ pub fn check_manifest_hashes(dir: &Path, manifest_text: &str) -> Result<usize, S
             output = Some(v);
             continue;
         } else if let Some(v) = string_field(line, "input_sha256") {
-            (input, v)
+            (input.take(), v)
         } else if let Some(v) = string_field(line, "output_sha256") {
-            (output, v)
+            (output.take(), v)
         } else {
             continue;
         };

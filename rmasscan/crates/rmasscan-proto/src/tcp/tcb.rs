@@ -16,6 +16,7 @@
 //! hello (`banout`, `banner1_state`, `stream`, `app_state`) живут у приложения ([`App`]).
 
 use std::collections::VecDeque;
+use std::sync::Arc;
 
 use rmasscan_core::stack::{ConnKey, SegmentOut};
 
@@ -26,9 +27,9 @@ pub(crate) const MSS: usize = 1400;
 /// Предел очереди отправки: сегментов с данными. У C предела нет (`_tcb_seg_send`, `src/stack-tcp-core.c:1359-1375`),
 /// но очередь растёт только внутри одного вызова приложения в EST_RECV (в EST_SEND данные не принимаются, пока всё не
 /// подтверждено), и больше всех из одного сегмента ставит SSH: строка версии и по блобу KEX на каждый 7-байтовый
-/// пакет, 208 сегментов на 1460 байт (`src/proto-ssh.c:83-160`). Посылка за пределом отбрасывается в той же точке и так
-/// же, как посылка за FIN (`:1359-1371`). FIN предел не держит: за FIN ничего не встаёт, поэтому он в очереди не больше
-/// одного.
+/// пакет, 209 сегментов на 1460 байт (строка версии и 208 KEX, пакеты занимают 1457 байт, `src/proto-ssh.c:83-160`).
+/// Посылка за пределом отбрасывается в той же точке и так же, как посылка за FIN (`:1359-1371`). FIN предел не держит:
+/// за FIN ничего не встаёт, поэтому он в очереди не больше одного.
 pub(crate) const SEND_QUEUE_MAX_SEGMENTS: usize = 512;
 
 const SEC: u64 = 1_000_000;
@@ -104,12 +105,91 @@ enum Hold {
     Copy,
 }
 
+/// Байты сегмента: кусок `start..end` общего буфера посылки. Hello соединений одного порта делят один буфер, как у C
+/// `TCP__static` это указатель на `stream->hello` (`src/stack-tcp-app.c:187`, `src/stack-tcp-core.c:1381-1385`);
+/// посылка парсера копируется один раз, и её сегменты по 1400 делят эту копию. Сравниваются видимые байты.
+#[derive(Clone)]
+pub(crate) struct Bytes {
+    buf: Arc<[u8]>,
+    start: usize,
+    end: usize,
+}
+
+impl Bytes {
+    /// Копия байтов посылки.
+    fn copy_of(bytes: &[u8]) -> Bytes {
+        Bytes::shared(&Arc::from(bytes))
+    }
+
+    /// Весь общий буфер, без копии.
+    fn shared(buf: &Arc<[u8]>) -> Bytes {
+        Bytes {
+            buf: Arc::clone(buf),
+            start: 0,
+            end: buf.len(),
+        }
+    }
+
+    /// Пустые байты (FIN).
+    fn empty() -> Bytes {
+        Bytes {
+            buf: Arc::default(),
+            start: 0,
+            end: 0,
+        }
+    }
+
+    /// Кусок `from..to` видимых байтов (границы обрезаются по длине).
+    fn slice(&self, from: usize, to: usize) -> Bytes {
+        let len = self.len();
+        let to = to.min(len);
+        let from = from.min(to);
+        Bytes {
+            buf: Arc::clone(&self.buf),
+            start: self.start.saturating_add(from),
+            end: self.start.saturating_add(to),
+        }
+    }
+
+    /// Убрать `n` байт спереди (частичный ACK `TCP__copy`).
+    fn drop_front(&mut self, n: usize) {
+        self.start = self.start.saturating_add(n).min(self.end);
+    }
+
+    /// Буфер, который сегмент держит (для проверки, что hello не копируется).
+    #[cfg(test)]
+    pub(crate) fn buffer(&self) -> &Arc<[u8]> {
+        &self.buf
+    }
+}
+
+impl std::ops::Deref for Bytes {
+    type Target = [u8];
+    fn deref(&self) -> &[u8] {
+        self.buf.get(self.start..self.end).unwrap_or(&[])
+    }
+}
+
+impl PartialEq for Bytes {
+    fn eq(&self, other: &Bytes) -> bool {
+        **self == **other
+    }
+}
+
+impl Eq for Bytes {}
+
+impl std::fmt::Debug for Bytes {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Bytes({} bytes)", self.len())
+    }
+}
+
 /// `struct TCP_Segment` (`src/stack-tcp-core.c:92-99`). FIN это сегмент без байтов (`TCP__close_fin` всегда с длиной
 /// 0), сегмент с байтами никогда не FIN.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Segment {
     seqno: u32,
-    data: Vec<u8>,
+    data: Bytes,
     hold: Hold,
     is_fin: bool,
 }
@@ -176,6 +256,24 @@ impl Tcb {
             deadline_micros: Some(now_micros.saturating_add(SEC)),
         }
     }
+
+    /// Очередь отправки: `(seqno, длина, is_fin)` сегментов.
+    #[cfg(test)]
+    pub(crate) fn queue_spans(&self) -> Vec<(u32, usize, bool)> {
+        self.segments
+            .iter()
+            .map(|s| (s.seqno, s.data.len(), s.is_fin))
+            .collect()
+    }
+
+    /// Буферы, которые держат сегменты очереди.
+    #[cfg(test)]
+    pub(crate) fn queue_buffers(&self) -> Vec<Arc<[u8]>> {
+        self.segments
+            .iter()
+            .map(|s| Arc::clone(s.data.buffer()))
+            .collect()
+    }
 }
 
 /// Приложение соединения: `application_event` (`src/stack-tcp-app.c:43-218`) и парсеры за ним. Вызывается из
@@ -199,20 +297,30 @@ impl TcbCtl<'_> {
     /// `return 1` и `"TCP app attempted SEND in wrong state\n"`). `true` не значит, что байты встали: пустая посылка,
     /// посылка за FIN и за пределом очереди отбрасываются молча, как у C (`:1356-1371`).
     pub(crate) fn send(&mut self, bytes: &[u8]) -> bool {
-        self.send_held(bytes, Hold::Static)
+        self.send_held(bytes, None, Hold::Static)
     }
 
     /// То же с `TCP__copy`, флагом ответов telnet (`src/proto-tcp-telnet.c:248`): разница только в частичном ACK
     /// (`src/stack-tcp-core.c:1533-1540`).
     pub(crate) fn send_copy(&mut self, bytes: &[u8]) -> bool {
-        self.send_held(bytes, Hold::Copy)
+        self.send_held(bytes, None, Hold::Copy)
     }
 
-    fn send_held(&mut self, bytes: &[u8], hold: Hold) -> bool {
+    /// [`TcbCtl::send`] общего буфера без копии: hello, который у C `TCP__static` указатель на байты потока
+    /// (`src/stack-tcp-app.c:187`).
+    pub(crate) fn send_shared(&mut self, buf: &Arc<[u8]>) -> bool {
+        self.send_held(buf, Some(buf), Hold::Static)
+    }
+
+    fn send_held(&mut self, bytes: &[u8], shared: Option<&Arc<[u8]>>, hold: Hold) -> bool {
         match self.tcb.state {
             TcpState::EstablishedRecv | TcpState::EstablishedSend => {
                 self.tcb.state = TcpState::EstablishedSend;
-                seg_send(self.tcb, self.out, bytes, hold, false);
+                // Пустая посылка не встаёт (`:1356-1357`): буфер под неё не заводится.
+                if !bytes.is_empty() {
+                    let data = shared.map_or_else(|| Bytes::copy_of(bytes), Bytes::shared);
+                    seg_send(self.tcb, self.out, &data, hold, false);
+                }
                 true
             }
             _ => false,
@@ -364,7 +472,7 @@ pub(crate) fn incoming(
 
         St::EstablishedSend => match what {
             W::Close => {
-                seg_send(tcb, out, &[], Hold::Static, true);
+                seg_send(tcb, out, &Bytes::empty(), Hold::Static, true);
                 tcb.state = St::FinWait1Send;
             }
             W::Fin => {
@@ -393,7 +501,7 @@ pub(crate) fn incoming(
 
         St::EstablishedRecv => match what {
             W::Close => {
-                seg_send(tcb, out, &[], Hold::Static, true);
+                seg_send(tcb, out, &Bytes::empty(), Hold::Static, true);
                 tcb.state = St::FinWait1Recv;
             }
             W::Fin => {
@@ -479,7 +587,7 @@ pub(crate) fn incoming(
 
         St::CloseWait => match what {
             W::Close => {
-                seg_send(tcb, out, &[], Hold::Static, true);
+                seg_send(tcb, out, &Bytes::empty(), Hold::Static, true);
                 tcb.state = St::LastAck;
             }
             // Напоминание приложению, что его ждут (`:2277-2281`).
@@ -559,13 +667,15 @@ fn they_have_acked_my_fin(tcb: &Tcb) -> bool {
     }
 }
 
-/// `_tcb_seg_send` (`src/stack-tcp-core.c:1337-1427`); рекурсия по хвосту длиннее [`MSS`] развёрнута в цикл.
-fn seg_send(tcb: &mut Tcb, out: &mut Vec<SegmentOut>, buf: &[u8], hold: Hold, is_fin: bool) {
-    let mut rest = buf;
+/// `_tcb_seg_send` (`src/stack-tcp-core.c:1337-1427`); рекурсия по хвосту длиннее [`MSS`] развёрнута в цикл. Куски
+/// посылки делят её буфер.
+fn seg_send(tcb: &mut Tcb, out: &mut Vec<SegmentOut>, buf: &Bytes, hold: Hold, is_fin: bool) {
+    let total = buf.len();
+    let mut from = 0usize;
     loop {
-        let (chunk, more) = rest
-            .split_at_checked(rest.len().min(MSS))
-            .unwrap_or((rest, &[]));
+        let to = from.saturating_add(MSS).min(total);
+        let chunk = buf.slice(from, to);
+        let last = to >= total;
         if chunk.is_empty() && !is_fin {
             return;
         }
@@ -581,24 +691,25 @@ fn seg_send(tcb: &mut Tcb, out: &mut Vec<SegmentOut>, buf: &[u8], hold: Hold, is
             .segments
             .back()
             .map_or(tcb.seqno_me, |s| s.seqno.wrapping_add(s.len32()));
+        // Голова очереди уходит сразу (`:1405-1412`).
+        let is_head = tcb.segments.is_empty();
+        if is_head {
+            send_packet(tcb, out, PSH_ACK | if is_fin { FIN } else { 0 }, &chunk);
+        }
         tcb.segments.push_back(Segment {
             seqno,
-            data: chunk.to_vec(),
+            data: chunk,
             hold,
-            is_fin: is_fin && more.is_empty(),
+            is_fin: is_fin && last,
         });
         // `APP_SENDING` (`:1397-1398`) не шлётся: сюда данные приходят только в EST_SEND, FIN его не шлёт (справка F1).
-        // Голова очереди уходит сразу (`:1405-1412`).
-        if tcb.segments.len() == 1 {
-            send_packet(tcb, out, PSH_ACK | if is_fin { FIN } else { 0 }, chunk);
-            if !is_fin {
-                tcb.state = TcpState::EstablishedSend;
-            }
+        if is_head && !is_fin {
+            tcb.state = TcpState::EstablishedSend;
         }
-        if more.is_empty() {
+        if last {
             return;
         }
-        rest = more;
+        from = to;
     }
 }
 
@@ -672,7 +783,7 @@ fn seg_acknowledge(tcb: &mut Tcb, ackno: u32) -> bool {
                 let cut = usize::try_from(length)
                     .unwrap_or(usize::MAX)
                     .min(seg.data.len());
-                seg.data.drain(..cut);
+                seg.data.drop_front(cut);
             }
         }
     }
@@ -809,7 +920,7 @@ mod tests {
     fn data_seg(seqno: u32, n: usize) -> Segment {
         Segment {
             seqno,
-            data: vec![b'd'; n],
+            data: Bytes::copy_of(&vec![b'd'; n]),
             hold: Hold::Static,
             is_fin: false,
         }
@@ -818,7 +929,7 @@ mod tests {
     fn fin_seg(seqno: u32) -> Segment {
         Segment {
             seqno,
-            data: Vec::new(),
+            data: Bytes::empty(),
             hold: Hold::Static,
             is_fin: true,
         }
@@ -1414,6 +1525,50 @@ mod tests {
             what: W::Fin,
             ..BASE
         },
+        // Неточности 2-4 справки A4 (задача 6): строки справки верны только при очереди, какую оставляет приложение C.
+        Row {
+            cite: ":2088-2091, :1405 EST_RECV CLOSE behind data -> FIN queued, not sent",
+            queue: Q::Data,
+            what: W::Close,
+            next: Next::To(St::FinWait1Recv),
+            queue_after: Some(2),
+            ..BASE
+        },
+        Row {
+            cite: ":2273-2276, :1405 CLOSE_WAIT CLOSE behind data -> FIN queued, not sent",
+            state: St::CloseWait,
+            queue: Q::Data,
+            what: W::Close,
+            next: Next::To(St::LastAck),
+            queue_after: Some(2),
+            ..BASE
+        },
+        Row {
+            cite: ":2186-2188, :1304-1309 FIN_WAIT1_RECV TIMEOUT, data head -> 0x18",
+            state: St::FinWait1Recv,
+            queue: Q::DataFin,
+            frames: &[(0x18, S, R, 10)],
+            ..BASE
+        },
+        Row {
+            cite: ":2290-2293, :1304-1309 LAST_ACK TIMEOUT, data head -> 0x18",
+            state: St::LastAck,
+            queue: Q::DataFin,
+            frames: &[(0x18, S, R, 10)],
+            ..BASE
+        },
+        Row {
+            cite: ":2294-2298, :1492-1522 LAST_ACK ACK retiring the data ahead of the FIN is good -> destroy, FIN unacked",
+            state: St::LastAck,
+            queue: Q::DataFin,
+            what: W::Ack,
+            ack: S + 10,
+            next: Next::Destroyed,
+            after: Some((S + 10, R)),
+            queue_after: Some(0),
+            deadline: Dl::Gone,
+            ..BASE
+        },
         // Пролог.
         Row {
             cite: ":1955-1960 duplicate FIN -> ACK, return",
@@ -1740,7 +1895,7 @@ mod tests {
         assert_eq!(frames(&out), [(0x18, S, R, 10)]);
         let (_, out) = ack_of(&mut t, &mut app, S + 4, T0 + 3 * SEC);
         assert!(out.is_empty());
-        assert_eq!(t.segments[0].data, b"456789");
+        assert_eq!(&*t.segments[0].data, b"456789");
         assert_eq!(t.segments[0].seqno, S, "seg->seqno is not moved");
         let (_, out) = tick(&mut t, &mut app, T0 + 4 * SEC);
         assert!(out.is_empty(), "SEQNO FAILURE");

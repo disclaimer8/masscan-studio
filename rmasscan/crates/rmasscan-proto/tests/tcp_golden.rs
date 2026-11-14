@@ -1,4 +1,4 @@
-//! Паритет каркаса баннеров TCP и парсеров задач 9-11 с C (AGPL-3.0, подэтап 4b, задачи 8-11). Каждый
+//! Паритет каркаса баннеров TCP и парсеров задач 9-12 с C (AGPL-3.0, подэтап 4b, задачи 8-12). Каждый
 //! кейс `tests/golden/tcp-banners` это поток сервера одного соединения и вывод C-оракула `tcp-oracle` (вне
 //! репозитория, Р14): настоящий `banner1_parse` masscan © Robert David Graham (HEAD 8e6b3b0,
 //! `src/proto-banner1.c:113-325`) с `banner1_create`, `banout` и парсерами C, `tcpapi_*` записывают действия (README
@@ -10,7 +10,6 @@
 //! сравнивается с C по виду ожидания кейса ([`Expect`]):
 //! - `records`: записи в порядке C (каждая запись C обрезана до 65 536 байт, Р5) и `app_proto` в каждой нарезке,
 //!   действия только целиком;
-//! - `classification`: только `app_proto` (парсер этого приложения ещё заглушка);
 //! - `declared-4b`: правило 4b, названное в кейсе, и `app_proto` C: `unknown-stream` (весь поток одной записью
 //!   `unknown`, без действий) или `starttls-unknown` (до строки согласия на STARTTLS как C, затем `unknown`, hello TLS
 //!   не шлётся; [`starttls_expect`]).
@@ -46,8 +45,8 @@ const DIR: &str = concat!(
 );
 const ORACLE_GIT_HEAD: &str = "8e6b3b0c07a81e8ea61d557c06134a21a6881614";
 
-/// Число кейсов по видам ожидания: `records`, `classification`, `declared-4b`.
-const COUNTS: (usize, usize, usize) = (191, 4, 18);
+/// Число кейсов по видам ожидания: `records`, `declared-4b`.
+const COUNTS: (usize, usize) = (208, 18);
 
 fn read(path: &Path) -> Vec<u8> {
     fs::read(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
@@ -298,7 +297,7 @@ fn starttls_expect(c: &Case, cout: &COut) -> (Vec<(u16, Vec<u8>)>, Vec<StreamAct
 /// сравниваются только целиком (Telnet отвечает на каждый сегмент по устройству, справка E2).
 #[test]
 fn tcp_golden_matches_c() {
-    let mut kinds = (0usize, 0usize, 0usize);
+    let mut kinds = (0usize, 0usize);
     for c in cases() {
         let cout = c_out(&c);
         let want_app = c_app(&cout.whole);
@@ -314,7 +313,6 @@ fn tcp_golden_matches_c() {
                         assert_eq!(got.actions, cout.whole.actions, "{at}: actions");
                     }
                 }
-                Expect::Classification => {}
                 Expect::Declared(UNKNOWN_STREAM) => {
                     assert_eq!(
                         got.records,
@@ -335,8 +333,7 @@ fn tcp_golden_matches_c() {
         }
         match c.expect {
             Expect::Records => kinds.0 += 1,
-            Expect::Classification => kinds.1 += 1,
-            Expect::Declared(_) => kinds.2 += 1,
+            Expect::Declared(_) => kinds.1 += 1,
         }
     }
     assert_eq!(kinds, COUNTS);
@@ -442,6 +439,22 @@ fn c_split_evidence_matches_the_reference() {
             .records
             .contains(&(app_id::VNC_INFO, b"ERROR: bad".to_vec())),
         "vnc38-error-lowbyte bytewise records"
+    );
+    // E2.6: у C ключевое слово команды, разрезанное границей сегментов, теряется (состояние 0 сбрасывает smack):
+    // в заданной нарезке записи нет, целиком есть.
+    let (_, out) = by_name("memcached-split-keyword");
+    assert_eq!(
+        out.whole.records,
+        [(app_id::MEMCACHED, b"uptime=5 ".to_vec())]
+    );
+    assert!(out.given.expect("given run").records.is_empty());
+    // E2.7: у C по сегментам Minecraft дописывает только сегмент, на котором счётчик скобок опустился до нуля;
+    // целиком запись это весь поток.
+    let (c, out) = by_name("mc-favicon");
+    assert_eq!(out.whole.records, [(app_id::MC, c.stream())]);
+    assert_eq!(
+        out.given.expect("given run").records,
+        [(app_id::MC, c.segment_bytes()[1].clone())]
     );
 }
 

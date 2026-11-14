@@ -42,10 +42,20 @@ impl Banout {
     /// Переносится только эта запись; уже оплаченный префикс сливается без повторного списания, c_len/lossy
     /// сохраняются. Неиспользованная резервация возвращается, в том числе при неполной целевой записи.
     pub(crate) fn commit_deferred_heur(&mut self, staged: &mut Banout, budget: &mut ByteBudget) {
-        // Переносится только HEUR; байты любой другой отложенной записи возвращаются в бюджет, а не теряются.
+        self.commit_deferred_app(staged, budget, crate::app_id::HEUR);
+    }
+
+    /// Отложенная запись Minecraft (E2.7): сырой поток ждёт в staging до `flush`, где счётчик скобок решает,
+    /// станет ли он записью; перенос и учёт бюджета те же, что у отложенного HEUR.
+    pub(crate) fn commit_deferred_mc(&mut self, staged: &mut Banout, budget: &mut ByteBudget) {
+        self.commit_deferred_app(staged, budget, crate::app_id::MC);
+    }
+
+    fn commit_deferred_app(&mut self, staged: &mut Banout, budget: &mut ByteBudget, app: u16) {
+        // Переносится только запись `app`; байты любой другой отложенной записи возвращаются в бюджет.
         let mut rec = None;
         for r in std::mem::take(&mut staged.recs) {
-            if r.app == crate::app_id::HEUR && rec.is_none() {
+            if r.app == app && rec.is_none() {
                 rec = Some(r);
             } else {
                 budget.give(r.bytes.len());

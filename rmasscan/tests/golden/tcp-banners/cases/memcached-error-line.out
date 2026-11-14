@@ -1,0 +1,9 @@
+tcp-oracle v1 port=11211 capture=none segments=1 bytes=34
+run whole calls=1
+app_proto 25
+record 25 9 "uptime=1 "
+end
+run bytewise calls=34
+app_proto 25
+record 1 8 =stream
+end

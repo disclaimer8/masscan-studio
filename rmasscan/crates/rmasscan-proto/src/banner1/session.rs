@@ -26,6 +26,8 @@ use super::ftp::Ftp;
 use super::hello::{HelloTable, TcpBannerSettings};
 use super::http::Http;
 use super::imap4::Imap4;
+use super::memcached::Memcached;
+use super::minecraft::Minecraft;
 use super::pop3::Pop3;
 use super::rdp::Rdp;
 use super::smtp::Smtp;
@@ -140,7 +142,9 @@ pub(crate) fn parser_for(p: AppProto) -> Box<dyn Parser> {
         AppProto::Telnet => Box::<Telnet>::default(),
         AppProto::Vnc(version) => Box::new(Vnc::new(version)),
         AppProto::Rdp => Box::<Rdp>::default(),
-        AppProto::Memcached | AppProto::Minecraft | AppProto::Unported => Box::new(Unported),
+        AppProto::Memcached => Box::<Memcached>::default(),
+        AppProto::Minecraft => Box::<Minecraft>::default(),
+        AppProto::Unported => Box::new(Unported),
     }
 }
 

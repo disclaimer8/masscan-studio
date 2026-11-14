@@ -10,8 +10,6 @@ pub enum Expect {
     /// Записи (в порядке C, каждая не длиннее 65 536 байт, Р5), действия и `app_proto` равны выводу C на целом
     /// потоке.
     Records,
-    /// Сравнивается только `app_proto` с выбором C: парсер этого приложения в задаче 8 ещё заглушка.
-    Classification,
     /// Ожидание по правилу 4b (названо строкой); вывод C хранится как свидетельство, `app_proto` равен выбору C.
     Declared(&'static str),
 }
@@ -28,7 +26,6 @@ impl Expect {
     pub fn name(self) -> &'static str {
         match self {
             Expect::Records => "records",
-            Expect::Classification => "classification",
             Expect::Declared(_) => "declared-4b",
         }
     }
@@ -126,7 +123,7 @@ fn cat(parts: &[&[u8]]) -> Vec<u8> {
 /// 0xFF, совпадение во втором сегменте, SSL3 первым и затем `{"` или IAC, SMB) и потоки без совпадения, в том числе
 /// 70 000 байт.
 pub fn cases() -> Vec<Case> {
-    use Expect::{Classification, Declared, Records};
+    use Expect::{Declared, Records};
     let unk = Declared(UNKNOWN_STREAM);
     let mut v = vec![
         // --- без совпадения: весь поток в HEUR (`src/proto-banner1.c:184`) ---
@@ -208,7 +205,7 @@ pub fn cases() -> Vec<Case> {
         ),
         case(
             "smb-star-7b-then-quote",
-            Classification,
+            Records,
             "00 00 7b 22: * не съедает 0x7B, совпадает безъякорный Minecraft (7b 22)",
             445,
             &[b"\x00\x00\x7b\x22a\x22:1}"],
@@ -252,14 +249,14 @@ pub fn cases() -> Vec<Case> {
     // --- классификация (парсеры задач 9-12) ---
     v.push(case(
         "mc-json-at-start",
-        Classification,
+        Records,
         "7b 22 (Minecraft) в начале потока",
         9999,
         &[b"{\"text\":\"synthetic\"}"],
     ));
     v.push(case(
         "mc-status-reply",
-        Classification,
+        Records,
         "7b 22 после длины и номера пакета (безъякорный шаблон)",
         25565,
         &[b"\x2b\x00\x29{\"description\":{\"text\":\"lab\"},\"players\":{}}"],
@@ -394,7 +391,7 @@ pub fn cases() -> Vec<Case> {
     }
     v.push(case(
         "memcached-stat",
-        Classification,
+        Records,
         "STAT pid",
         11211,
         &[b"STAT pid 1234\r\nSTAT uptime 5\r\nEND\r\n"],
@@ -1165,6 +1162,85 @@ fn text_cases() -> Vec<Case> {
             "VNC security types и error length",
             5900,
             &[version, sec],
+        ));
+    }
+
+    // Задача 12: memcached (D10, E1.4, E2.6) и Minecraft (D11, E1.13, E2.7). Каждый memcached-кейс начинается с
+    // якорного шаблона классификатора `STAT pid `.
+    for (name, data) in [
+        (
+            "memcached-stats-full",
+            &b"STAT pid 1234\r\nSTAT uptime 12345\r\nSTAT time 1700000000\r\nSTAT version 1.6.21\r\n\
+              STAT curr_items 42\r\nEND\r\nSTAT time 9\r\n"[..],
+        ),
+        (
+            "memcached-unknown-stat",
+            b"STAT pid 1\r\nSTAT libevent 2.1.12\r\nSTAT uptime 5\r\n",
+        ),
+        (
+            "memcached-stat-newline",
+            b"STAT pid 1\r\nSTAT\nSTAT uptime 1\r\nSTAT time 2\r\n",
+        ),
+        (
+            "memcached-error-line",
+            b"STAT pid 1\r\nERROR\r\nSTAT uptime 1\r\n",
+        ),
+        (
+            "memcached-error-lf",
+            b"STAT pid 1\r\nERROR\nSTAT uptime 1\r\nSTAT time 2\r\n",
+        ),
+    ] {
+        v.push(case(
+            name,
+            Records,
+            "memcached STAT по TCP, строки и END",
+            11211,
+            &[data],
+        ));
+    }
+    v.push(case(
+        "memcached-tcp-past-segment",
+        Records,
+        "E1.4: сегмент кончается в пропуске строки, байт за ним не читается",
+        11211,
+        &[b"STAT pid 1234", b"\r\nSTAT uptime 5\r\n"],
+    ));
+    v.push(case(
+        "memcached-split-keyword",
+        Records,
+        "E2.6: STAT второй строки разрезан границей сегментов",
+        11211,
+        &[b"STAT pid 1\r\nSTA", b"T uptime 5\r\n"],
+    ));
+    for (name, port, segs) in [
+        (
+            "mc-json-balanced",
+            25565,
+            vec![&b"{\"description\":{\"text\":\"lab\"},\"players\":{\"online\":0}}"[..]],
+        ),
+        (
+            "mc-favicon",
+            25565,
+            vec![
+                &b"{\"favicon\":\"data:image/png;base64,iVBORw0KGgo=\""[..],
+                b",\"description\":{\"text\":\"lab\"}}",
+            ],
+        ),
+        (
+            "mc-unbalanced",
+            25565,
+            vec![&b"{\"description\":{\"text\":\"lab\""[..]],
+        ),
+        ("mc-extra-close", 25565, vec![&b"{\"a\":1}}tail"[..]]),
+        ("mc-braces-in-string", 25565, vec![&b"{\"a\":\"}{\"}"[..]]),
+        ("mc-json-any-port", 8080, vec![&b"result={\"ok\":true}"[..]]),
+    ] {
+        v.push(case(
+            name,
+            Records,
+            "Minecraft: счёт скобок и сырая запись на сбросе",
+            port,
+            &segs,
         ));
     }
     v

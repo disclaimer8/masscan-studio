@@ -1,0 +1,5 @@
+tcp-banner-input v1
+port 11211
+capture none
+segment 535441542070696420310d0a535441
+segment 5420757074696d6520350d0a

@@ -4,8 +4,10 @@ Offline parity of `rmasscan_proto::banner_stream` (`crates/rmasscan-proto/src/ba
 `banner1_parse` (`src/proto-banner1.c:113-325`, masscan `8e6b3b0c07a81e8ea61d557c06134a21a6881614`) for one TCP
 connection: the classifier (`patterns[]`, `src/proto-banner1.c:34-106`, compiled by smack, `src/smack1.c`), the HEUR
 record and its replay, the banner buffers (`src/proto-banout.c`) and the hello table of `banner1_create`. Banners
-sub-stage 4b, task 8, the FTP, SMTP, POP3 and IMAP4 parsers of task 9 (`src/proto-{ftp,smtp,pop3,imap4}.c`), and
-HTTP responses and request editing of task 10 (`src/proto-http.c`)
+sub-stage 4b, task 8, the FTP, SMTP, POP3 and IMAP4 parsers of task 9 (`src/proto-{ftp,smtp,pop3,imap4}.c`),
+HTTP responses and request editing of task 10 (`src/proto-http.c`), the SSH, Telnet, VNC and RDP parsers of
+task 11 (`src/proto-{ssh,tcp-telnet,vnc,tcp-rdp}.c`), and memcached over TCP and Minecraft of task 12
+(`src/proto-memcached.c`, `src/proto-mc.c`)
 (`docs/superpowers/specs/2026-11-13-rmasscan-banners-c-reference-tcp.md` B1-B6, C2, C3, D2-D5, E2.1, E2.2, E3.3, E3.4,
 E4; design R1, R5, R13, R14). The test `crates/rmasscan-proto/tests/tcp_golden.rs` replays every case; unit tests in
 `banner1/classify.rs`, `banner1/hello.rs` and `banner1/banout.rs` read `patterns.out`, `hellos.out` and
@@ -91,7 +93,7 @@ at the pin or is dirty and copies the sources before compiling (the clone is nev
 Each case names how rmasscan is compared with C's `whole` run, in every split the test makes (whole, byte by byte, the
 given segments and 8 random splits):
 
-- `records` (114 cases): records in C's order, each C record cut at 65 536 bytes (R5), and `app_proto`; the actions too
+- `records` (208 cases): records in C's order, each C record cut at 65 536 bytes (R5), and `app_proto`; the actions too
   on the whole stream. From task 8 the streams no ported parser handles: no match, 70 000 bytes without a match, a
   byte before an anchored pattern, the SMB `*` with 0x7B or 0xFF, and an SSL3 record first. From task 9 the FTP, SMTP,
   POP3 and IMAP4 streams: the 11 classification cases of these parsers from task 8 (`ftp-220-dash-21`,
@@ -99,10 +101,9 @@ given segments and 8 random splits):
   `pop3`, `pop3-lowercase`, `imap4`, `imap4-lowercase`) and 50 new ones (greeting lines, the reply to
   `AUTH TLS`, EHLO and STARTTLS, CAPA and STLS, TAB, NUL and other bytes outside `isprint`, a line without a code,
   `"220-"` on 25, a 70 004-byte FTP greeting line, IMAP `* OK` and streams that only look like IMAP).
-- `classification` (45 cases): only `app_proto`. The patterns of the parsers not ported yet (SSH, VNC versions,
-  memcached, the 15 unanchored and 6 anchored Telnet patterns, both RDP prefixes, Minecraft), upper and lower case, a
-  match in the second segment. C's parsers ran and their records are kept as evidence; the parser tasks turn their
-  cases into `records`.
+- The `classification` kind of tasks 8-11 (only `app_proto`, while a parser was still a stub) is retired: with
+  task 12 every 4b parser is ported, so each former classification case is a `records` case now. Its C output file
+  never changed in those upgrades; only the expected comparison grew.
 - `declared-4b` (18 cases): the named 4b rule and C's `app_proto`.
   - `unknown-stream` (11): SMB is not ported in 4b (reference B6), so the whole stream is one `unknown` record (app 1)
     and no action, while C ran its SMB parser.
@@ -117,7 +118,7 @@ given segments and 8 random splits):
 
 ## What the goldens show (C at 8e6b3b0)
 
-177 response cases and 27 request cases. The classifier: patterns are anchored at stream offset 0 and partial anchored matches continue across
+226 response cases and 27 request cases. The classifier: patterns are anchored at stream offset 0 and partial anchored matches continue across
 segments; any leading byte that does not continue an anchored pattern ends anchoring for the rest of the stream; case
 matters only for A-Z; the first match by earliest end wins; the SMB `*` matches every byte except the first byte of an
 unanchored pattern, 0x7B (`{`) and 0xFF (`smb-star-7b-*`, `smb-star-ff-*`; `00 00 7b 22` is Minecraft); `"220 "` on 25
@@ -190,3 +191,17 @@ binary values and repeated cookies. Sanitizer metadata is evidence, not an alter
   behavior. Short/empty values remain accepted. These class-a fixes are also in the binding reference and README.
 - The retained off-repository sanitizer diagnostics and stdout hashes in the manifest identify the failing C
   evidence; those invalid bytes are not fixture expectations.
+
+## Tasks 11 and 12
+
+Task 11 added the SSH, Telnet, VNC and RDP streams (SSH ident and KEX fallthrough, Telnet negotiation and
+subnegotiation, the VNC 3.3/3.7/3.8 security handshakes and error path, RDP TPKT/COTP/CC including the whole-stream
+`unknown` of E2.5) and upgraded 41 task-8 classification cases to `records`. Task 12 adds memcached over TCP and
+Minecraft: `STAT` lines (kept stats, unknown stat, bare `STAT`, `ERROR`, `END`), the split-keyword and
+past-segment cases (`memcached-split-keyword`, `memcached-tcp-past-segment`: C loses a command keyword cut at a
+segment boundary, E2.6, and reads `px[length]` in the skip-line state, E1.4), and Minecraft JSON (balanced, with
+favicon, unbalanced, extra closes, braces inside strings, `{"` unanchored on any port). C's split runs stay as
+evidence for E2.4-E2.7 and E2.9, pinned by `c_split_evidence_matches_the_reference`; rmasscan gives the whole-stream
+records in every split (Minecraft: the raw stream at flush when the brace count ends `<= 0`, favicon kept, E2.7).
+The task-12 recapture regenerated all 226 cases locally with the same oracle builds: every prior case file and
+table stayed byte-identical, and normal and sanitizer outputs agree with zero reports.

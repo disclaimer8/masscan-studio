@@ -13,7 +13,9 @@
 //! других ответов пропускается целиком, неизвестное имя статистики останавливает разбор, после `END` всё
 //! игнорируется. Единственное отличие: в состоянии «до конца строки» C читает `px[length]` за буфером
 //! (`src/proto-memcached.c:165`); на UDP это не влияет на вывод (состояние дальше не используется), здесь байт не
-//! читается.
+//! читается (E1.4). Поиск ключевого слова команды, начавшийся в конце сегмента, продолжается в следующем без
+//! сброса smack (состояние 1 C, E2.6): результат это C на неразрезанном потоке, а у C по сегментам состояние 0
+//! сбрасывает сопоставление на каждом входе, и разрезанное слово теряется.
 
 /// Ответы (`memcached_responses`, `src/proto-memcached.c:47-69`), в нижнем регистре, как их хранит smack
 /// (`make_copy_of_pattern`, `src/smack1.c:668-694`). Индекс это `MC_*`.
@@ -137,12 +139,14 @@ impl Matcher {
     }
 }
 
-/// Состояния `memcached_tcp_parse` (номера C в комментариях). Состояние 1 у C недостижимо: оно бывает только
-/// проваливанием из 0.
+/// Состояния `memcached_tcp_parse` (номера C в комментариях). Состояние 1 у C недостижимо как сохранённое: оно
+/// бывает только проваливанием из 0; здесь это продолжение поиска через границу сегмента (E2.6).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum State {
     /// 0: начало строки, ключевое слово ответа.
     Command,
+    /// 1: поиск ключевого слова продолжается со следующего сегмента без сброса smack.
+    CommandNext,
     /// 2: пропуск до конца строки.
     SkipLine,
     /// 3: после `END` всё игнорируется.
@@ -178,15 +182,18 @@ impl MemcachedText {
         let mut i = 0;
         while let Some(&c) = px.get(i) {
             match self.state {
-                State::Command => {
-                    // src/proto-memcached.c:129-154: сопоставление начинается заново на каждом входе в состояние 0,
-                    // в том числе в начале следующего сегмента TCP.
-                    self.matcher = Matcher::new();
+                State::Command | State::CommandNext => {
+                    // src/proto-memcached.c:129-154: состояние 0 сбрасывает smack и проваливается в поиск
+                    // состояния 1. Сброс только в начале строки: поиск, исчерпавший сегмент, продолжается в
+                    // следующем как состояние 1 (E2.6), с тем же префиксом или мёртвым состоянием.
+                    if self.state == State::Command {
+                        self.matcher = Matcher::new();
+                    }
                     let (id, next) = self.matcher.search(&RESPONSES, px, i);
                     // У C `i--` указывает на байт-разделитель совпавшего шаблона.
                     let newline = next.checked_sub(1).and_then(|at| px.get(at)) == Some(&b'\n');
                     match id {
-                        None => {}
+                        None => self.state = State::CommandNext,
                         Some(MC_STAT) if newline => self.state = State::SkipLine,
                         Some(MC_STAT) => self.state = State::StatSpace,
                         Some(MC_END) => self.state = State::End,
@@ -313,26 +320,60 @@ mod tests {
         assert_eq!(text(b""), b"");
     }
 
-    /// Состояние живёт между кусками (TCP в 4b): имя статистики может разорваться, а ключевое слово в начале строки
-    /// нет: состояние 0 на входе сбрасывает smack (`src/proto-memcached.c:129-131`), как у C.
+    fn text_split(whole: &[u8], cut: usize) -> Vec<u8> {
+        let mut t = MemcachedText::new();
+        let mut out = Vec::new();
+        t.parse(&whole[..cut], &mut out);
+        t.parse(&whole[cut..], &mut out);
+        out
+    }
+
+    /// E2.6: ключевое слово команды, разрезанное границей сегмента, продолжается (состояние 1), поэтому любой
+    /// разрез и побайтная подача дают результат C на неразрезанном потоке; у C по сегментам состояние 0 слово
+    /// теряло (`src/proto-memcached.c:129-137`).
     #[test]
-    fn memcached_text_streams_like_c() {
-        let whole = b"STAT uptime 12345\r\nSTAT time 1\r\n";
-        for cut in 0..=whole.len() {
+    fn memcached_split_keyword_kept() {
+        for whole in [
+            &b"STAT uptime 12345\r\nSTAT time 1\r\n"[..],
+            b"STAT pid 7\r\nERROR\nSTAT version 1.6\r\nEND\r\nSTAT time 9\r\n",
+            b"\nSTAT uptime 1\r\nSTAT time 2\r\n",
+            b"HELLO\r\nSTAT uptime 5\r\n",
+            b"STAT\nSTAT uptime 1\r\nSTAT time 2\r\n",
+        ] {
+            let want = text(whole);
+            for cut in 0..=whole.len() {
+                assert_eq!(text_split(whole, cut), want, "cut {cut} of {whole:?}");
+            }
             let mut t = MemcachedText::new();
             let mut out = Vec::new();
-            t.parse(&whole[..cut], &mut out);
-            t.parse(&whole[cut..], &mut out);
-            let want: &[u8] = match cut {
-                // Разрыв внутри `STAT` первой строки: ничего.
-                1..=3 => b"",
-                // Второй кусок начинается с пробела: пустой шаблон и разделитель, строка пропускается.
-                4 => b"time=1 ",
-                // Разрыв внутри `STAT` второй строки: её нет.
-                20..=23 => b"uptime=12345 ",
-                _ => b"uptime=12345 time=1 ",
-            };
-            assert_eq!(out, want, "cut {cut}");
+            for b in whole.chunks(1) {
+                t.parse(b, &mut out);
+            }
+            assert_eq!(out, want, "bytewise {whole:?}");
+        }
+        // Разрез ровно внутри `STAT` и ровно перед его разделителем.
+        let whole = b"STAT uptime 12345\r\nSTAT time 1\r\n";
+        for cut in [1, 2, 3, 4, 5] {
+            assert_eq!(text_split(whole, cut), b"uptime=12345 time=1 ", "cut {cut}");
+        }
+    }
+
+    /// E1.4: в состоянии пропуска строки C читает `px[length]` (`src/proto-memcached.c:165`); здесь байт за
+    /// сегментом это «не `\n`», поэтому сегмент без конца строки не возвращает автомат к команде раньше времени.
+    #[test]
+    fn memcached_never_reads_past_segment() {
+        for (a, b) in [
+            (&b"STAT pid 7"[..], &b"\nSTAT uptime 1\r\n"[..]),
+            (b"STAT pid 7", b"\r\nSTAT uptime 1\r\n"),
+            (b"ERROR x", b"\nSTAT uptime 1\r\nSTAT time 2\r\n"),
+        ] {
+            let mut t = MemcachedText::new();
+            let mut out = Vec::new();
+            t.parse(a, &mut out);
+            t.parse(b, &mut out);
+            let whole: Vec<u8> = [a, b].concat();
+            assert_eq!(out, text(&whole), "{a:?} + {b:?}");
+            assert!(!out.is_empty(), "{a:?} + {b:?}");
         }
     }
 }

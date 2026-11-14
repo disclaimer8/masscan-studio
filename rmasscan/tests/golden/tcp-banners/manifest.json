@@ -52,8 +52,8 @@
     "calls": "banner1_create once; per run a zeroed StreamState with the case's port, banout_init, banner1_parse per piece (whole stream, every byte, the given segments), then the records banner_flush reports (list order, length && protocol, app = protocol & 0x0FFFFFFF); each run in a forked child with a 2-second alarm"
   },
   "host": "Darwin 27.2.0, arm64",
-  "captured_at": "2026-11-14T17:44:19Z",
-  "expected": "rmasscan banner_stream on the whole stream, byte by byte, the given segments and 8 random splits: records (each C record cut at 65 536 bytes, R5) and app_proto equal C's whole run for expect=records, actions too on the whole stream; app_proto only for expect=classification; for expect=declared-4b the named 4b rule and C's app_proto: unknown-stream (the whole stream as one unknown record, no action) or starttls-unknown (the first segment ends with the STARTTLS go-ahead line: the text parser record and the actions before the TLS hello of C's run over that segment, the given run when there is a second segment, else the whole run; the bytes of the second segment as one unknown record; no TLS hello)",
+  "captured_at": "2026-11-14T20:52:35Z",
+  "expected": "rmasscan banner_stream on the whole stream, byte by byte, the given segments and 8 random splits: records (each C record cut at 65 536 bytes, R5) and app_proto equal C's whole run for expect=records, actions too on the whole stream; for expect=declared-4b the named 4b rule and C's app_proto: unknown-stream (the whole stream as one unknown record, no action) or starttls-unknown (the first segment ends with the STARTTLS go-ahead line: the text parser record and the actions before the TLS hello of C's run over that segment, the given run when there is a second segment, else the whole run; the bytes of the second segment as one unknown record; no TLS hello)",
   "tables": [
     {
       "name": "patterns",
@@ -283,7 +283,7 @@
     {
       "name": "smb-star-7b-then-quote",
       "about": "00 00 7b 22: * не съедает 0x7B, совпадает безъякорный Minecraft (7b 22)",
-      "expect": "classification",
+      "expect": "records",
       "declared": "-",
       "port": 445,
       "capture": "none",
@@ -503,7 +503,7 @@
     {
       "name": "mc-json-at-start",
       "about": "7b 22 (Minecraft) в начале потока",
-      "expect": "classification",
+      "expect": "records",
       "declared": "-",
       "port": 9999,
       "capture": "none",
@@ -523,7 +523,7 @@
     {
       "name": "mc-status-reply",
       "about": "7b 22 после длины и номера пакета (безъякорный шаблон)",
-      "expect": "classification",
+      "expect": "records",
       "declared": "-",
       "port": 25565,
       "capture": "none",
@@ -1103,7 +1103,7 @@
     {
       "name": "memcached-stat",
       "about": "STAT pid",
-      "expect": "classification",
+      "expect": "records",
       "declared": "-",
       "port": 11211,
       "capture": "none",
@@ -3737,6 +3737,266 @@
         "whole": 33,
         "bytewise": 33,
         "given": 33
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "memcached-stats-full",
+      "about": "memcached STAT по TCP, строки и END",
+      "expect": "records",
+      "declared": "-",
+      "port": 11211,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 115,
+      "input": "cases/memcached-stats-full.in.txt",
+      "input_sha256": "5cf59bb3317dcdd20a15828bd607f87e9975b6c29dcb45dcdf148e9bebd38304",
+      "output": "cases/memcached-stats-full.out",
+      "output_sha256": "290e27574b9b28290ff9e591592f46dd7355de78b4cbca81dd18c4d00ace9445",
+      "c_app_proto": {
+        "whole": 25,
+        "bytewise": 25,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "memcached-unknown-stat",
+      "about": "memcached STAT по TCP, строки и END",
+      "expect": "records",
+      "declared": "-",
+      "port": 11211,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 49,
+      "input": "cases/memcached-unknown-stat.in.txt",
+      "input_sha256": "a3e17bfd0504660e01982ecc59e977e4f1d11c303875fdda274d9cd61112b037",
+      "output": "cases/memcached-unknown-stat.out",
+      "output_sha256": "56ca7bdfbb7681c833a780dabecb78f912a0ff6c74d9d7532fb5fa69abb71a25",
+      "c_app_proto": {
+        "whole": 25,
+        "bytewise": 25,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "memcached-stat-newline",
+      "about": "memcached STAT по TCP, строки и END",
+      "expect": "records",
+      "declared": "-",
+      "port": 11211,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 45,
+      "input": "cases/memcached-stat-newline.in.txt",
+      "input_sha256": "ff043696e34c5d8a80fca860f14c65815554fd26194b2cdd1dc1312ec4c4e623",
+      "output": "cases/memcached-stat-newline.out",
+      "output_sha256": "da7302502d776e801eeffad000cc591ae3c89d4fcf58af2e0a06f63d8be39266",
+      "c_app_proto": {
+        "whole": 25,
+        "bytewise": 25,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "memcached-error-line",
+      "about": "memcached STAT по TCP, строки и END",
+      "expect": "records",
+      "declared": "-",
+      "port": 11211,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 34,
+      "input": "cases/memcached-error-line.in.txt",
+      "input_sha256": "50fea58852b63626ba989eb3973abf46f543b9daccf237e14c09430bc7b649ab",
+      "output": "cases/memcached-error-line.out",
+      "output_sha256": "bcf392a22ec413cd7d2b6552362a7f0dbb5d53cbaae0dab3a82c48427667995a",
+      "c_app_proto": {
+        "whole": 25,
+        "bytewise": 25,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "memcached-error-lf",
+      "about": "memcached STAT по TCP, строки и END",
+      "expect": "records",
+      "declared": "-",
+      "port": 11211,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 46,
+      "input": "cases/memcached-error-lf.in.txt",
+      "input_sha256": "d2950b96e82612cadcaf683f98d4101122335d89088074587f308fdb91cce3c7",
+      "output": "cases/memcached-error-lf.out",
+      "output_sha256": "ee4f010ff3471220c8ece2cf46425041c263b93c8a76aa7f1a1dbbad7d0f8096",
+      "c_app_proto": {
+        "whole": 25,
+        "bytewise": 25,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "memcached-tcp-past-segment",
+      "about": "E1.4: сегмент кончается в пропуске строки, байт за ним не читается",
+      "expect": "records",
+      "declared": "-",
+      "port": 11211,
+      "capture": "none",
+      "segments": 2,
+      "bytes": 30,
+      "input": "cases/memcached-tcp-past-segment.in.txt",
+      "input_sha256": "fa893907394096ad2958aba0ab9afe0d18c42d0726bd70d98031074bc410fce1",
+      "output": "cases/memcached-tcp-past-segment.out",
+      "output_sha256": "aa1c066b1a8373cd2f45d717292ec0f25c81e8bf1fc0f7dfa6bff1d22f06f27a",
+      "c_app_proto": {
+        "whole": 25,
+        "bytewise": 25,
+        "given": 25
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "memcached-split-keyword",
+      "about": "E2.6: STAT второй строки разрезан границей сегментов",
+      "expect": "records",
+      "declared": "-",
+      "port": 11211,
+      "capture": "none",
+      "segments": 2,
+      "bytes": 27,
+      "input": "cases/memcached-split-keyword.in.txt",
+      "input_sha256": "5f435c97916b316ca7ce0272e9c51020560d342f322f86080ebcceac52a6ed8f",
+      "output": "cases/memcached-split-keyword.out",
+      "output_sha256": "429be1efda3b8910652f91bd45afc4d186bc6db4f273faa79b7f072eadd5b07d",
+      "c_app_proto": {
+        "whole": 25,
+        "bytewise": 25,
+        "given": 25
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "mc-json-balanced",
+      "about": "Minecraft: счёт скобок и сырая запись на сбросе",
+      "expect": "records",
+      "declared": "-",
+      "port": 25565,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 53,
+      "input": "cases/mc-json-balanced.in.txt",
+      "input_sha256": "c3fc699053b7bb4486ac718859d9f7cb665167b2c4ef41b12ab89bfa249ba46f",
+      "output": "cases/mc-json-balanced.out",
+      "output_sha256": "57f0ddb5059a4bcdc4f0abc77f1e5341b6bb1459f57efd39e6c73664bf383f4b",
+      "c_app_proto": {
+        "whole": 32,
+        "bytewise": 32,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "mc-favicon",
+      "about": "Minecraft: счёт скобок и сырая запись на сбросе",
+      "expect": "records",
+      "declared": "-",
+      "port": 25565,
+      "capture": "none",
+      "segments": 2,
+      "bytes": 77,
+      "input": "cases/mc-favicon.in.txt",
+      "input_sha256": "0680a46e1868793c8afb19e91dc04a88548209510b5aad7a8344f5c1461b04c9",
+      "output": "cases/mc-favicon.out",
+      "output_sha256": "69fbcb5e3e051475cae49198cef4897eaf0e45ccef0382b9a036f179c37437c5",
+      "c_app_proto": {
+        "whole": 32,
+        "bytewise": 32,
+        "given": 32
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "mc-unbalanced",
+      "about": "Minecraft: счёт скобок и сырая запись на сбросе",
+      "expect": "records",
+      "declared": "-",
+      "port": 25565,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 28,
+      "input": "cases/mc-unbalanced.in.txt",
+      "input_sha256": "63004ac65c80369d2c2405e846a9e0340e17ba211b8867083d72d107fe610b02",
+      "output": "cases/mc-unbalanced.out",
+      "output_sha256": "becda662205b87a4964235a6325c6238b9819d660538ea9b67baaf91225a23a7",
+      "c_app_proto": {
+        "whole": 32,
+        "bytewise": 32,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "mc-extra-close",
+      "about": "Minecraft: счёт скобок и сырая запись на сбросе",
+      "expect": "records",
+      "declared": "-",
+      "port": 25565,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 12,
+      "input": "cases/mc-extra-close.in.txt",
+      "input_sha256": "d5b2c84ec0855739ed5070183b1903e611e417b12ed942a1f598c23c950dd90f",
+      "output": "cases/mc-extra-close.out",
+      "output_sha256": "cb6a4adf944d35a764b213873b4d7c187f730b7c8208739bf267de5b1c1d1716",
+      "c_app_proto": {
+        "whole": 32,
+        "bytewise": 32,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "mc-braces-in-string",
+      "about": "Minecraft: счёт скобок и сырая запись на сбросе",
+      "expect": "records",
+      "declared": "-",
+      "port": 25565,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 10,
+      "input": "cases/mc-braces-in-string.in.txt",
+      "input_sha256": "e6e3a52654c28508d1a3684b9f9c925ccc8d5e7ae9411fd7df37809ab9046ae8",
+      "output": "cases/mc-braces-in-string.out",
+      "output_sha256": "5d655b87a7a3e0c91f9233c7f549bb78be0e4eb6d21360730472ee6ba0614745",
+      "c_app_proto": {
+        "whole": 32,
+        "bytewise": 32,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "mc-json-any-port",
+      "about": "Minecraft: счёт скобок и сырая запись на сбросе",
+      "expect": "records",
+      "declared": "-",
+      "port": 8080,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 18,
+      "input": "cases/mc-json-any-port.in.txt",
+      "input_sha256": "4e3afa852851b65e2392709a618ad95152a26114557973c4ac9dfe347185b21a",
+      "output": "cases/mc-json-any-port.out",
+      "output_sha256": "92eb8754c2083c77a8a7b02b2b883553274f68a12bb71a37a64f3b0950871c10",
+      "c_app_proto": {
+        "whole": 32,
+        "bytewise": 32,
+        "given": null
       },
       "asan": {"same_output": true, "reports": 0}
     },

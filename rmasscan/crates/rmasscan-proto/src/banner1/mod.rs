@@ -13,6 +13,8 @@ mod ftp;
 pub(crate) mod hello;
 mod http;
 mod imap4;
+mod memcached;
+mod minecraft;
 mod pop3;
 mod rdp;
 pub(crate) mod session;
@@ -541,5 +543,7 @@ mod tests {
     }
 }
 
+#[cfg(test)]
+mod memcached_mc_tests;
 #[cfg(test)]
 mod terminal_tests;

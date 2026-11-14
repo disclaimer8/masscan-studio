@@ -1,0 +1,10 @@
+PUT /lab HTTP/1.1
+User-Agent: x
+Accept: */*
+content-length: 7
+Host: lab.test
+Cookie: third
+Cookie: second
+Cookie: first
+
+abcd

@@ -38,6 +38,28 @@ pub(crate) struct Banout {
 const HEAD_CAPACITY: usize = 200;
 
 impl Banout {
+    /// Одна отложенная запись HTTP (`src/proto-http.c:554-559, :678-681`): уже оплаченные байты переезжают из
+    /// staging-списка, как одно дописывание C после всех Server. Длина C и lossy сохраняются даже при коротком
+    /// сохранённом префиксе. Голова переезжает при той же логической длине (`src/proto-banout.c:258-286`).
+    /// Вызывается один раз для нового app; пустые узлы staging не несут бюджета.
+    pub(crate) fn commit_deferred_http(&mut self, staged: &mut Banout) {
+        let rec = std::mem::take(&mut staged.recs)
+            .into_iter()
+            .find(|r| r.app == crate::app_id::HTTP);
+        let Some(rec) = rec else {
+            return;
+        };
+        let at = self.new_proto(rec.app);
+        if at == 0 && rec.c_len >= HEAD_CAPACITY {
+            self.recs.insert(1, rec);
+            if let Some(head) = self.recs.first_mut() {
+                *head = Rec::default();
+            }
+        } else if let Some(target) = self.recs.get_mut(at) {
+            *target = rec;
+        }
+    }
+
     /// `banout_append(banout, app, px, length)` (`src/proto-banout.c:326-363`): запись по точному `protocol`
     /// (`banout_find_proto`, `:48-54`) или новая (`banout_new_proto`, `:237-253`); голова, которой не хватает места
     /// (`length + n >= max_length`), переезжает за себя (`banout_expand`, `:258-286`). Байты за пределом
@@ -286,6 +308,32 @@ mod tests {
             assert_eq!(budget.left(), usize::MAX, "{name}: budget back");
             assert!(b.nodes().is_empty(), "{name}: released");
         }
+    }
+
+    /// Перенос оплаченной записи HTTP сохраняет длину C и lossy, не списывает бюджет второй раз; пустой повтор
+    /// ничего не делает. Последующее дописывание после отказа всё ещё обрезается с конца (Р5).
+    #[test]
+    fn deferred_http_transfer_preserves_reservation_and_lossy() {
+        let mut staged = Banout::default();
+        let mut main = Banout::default();
+        let mut b = ByteBudget::new(4);
+        staged.append(&mut b, 4, &[b'h'; 250]);
+        assert_eq!(b.left(), 0);
+        b.give(20);
+        main.commit_deferred_http(&mut staged);
+        assert_eq!(b.left(), 20);
+        assert_eq!(main.nodes(), [(0, 0), (4, 250)]);
+        assert!(main.lossy(4));
+        main.append(&mut b, 4, b"tail");
+        main.append(&mut b, 17, b"t");
+        main.commit_deferred_http(&mut staged);
+        assert_eq!(
+            main.flush(&mut b),
+            [(17, b"t".to_vec()), (4, b"hhhh".to_vec())]
+        );
+        assert_eq!(b.left(), 24);
+        assert!(main.flush(&mut b).is_empty());
+        assert_eq!(b.left(), 24);
     }
 
     /// Р5: запись не длиннее 65 536 байт, байты за пределом не берутся из бюджета и не считаются выброшенными; длина

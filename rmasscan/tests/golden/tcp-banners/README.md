@@ -4,7 +4,8 @@ Offline parity of `rmasscan_proto::banner_stream` (`crates/rmasscan-proto/src/ba
 `banner1_parse` (`src/proto-banner1.c:113-325`, masscan `8e6b3b0c07a81e8ea61d557c06134a21a6881614`) for one TCP
 connection: the classifier (`patterns[]`, `src/proto-banner1.c:34-106`, compiled by smack, `src/smack1.c`), the HEUR
 record and its replay, the banner buffers (`src/proto-banout.c`) and the hello table of `banner1_create`. Banners
-sub-stage 4b, task 8, and the FTP, SMTP, POP3 and IMAP4 parsers of task 9 (`src/proto-{ftp,smtp,pop3,imap4}.c`)
+sub-stage 4b, task 8, the FTP, SMTP, POP3 and IMAP4 parsers of task 9 (`src/proto-{ftp,smtp,pop3,imap4}.c`), and
+HTTP responses and request editing of task 10 (`src/proto-http.c`)
 (`docs/superpowers/specs/2026-11-13-rmasscan-banners-c-reference-tcp.md` B1-B6, C2, C3, D2-D5, E2.1, E2.2, E3.3, E3.4,
 E4; design R1, R5, R13, R14). The test `crates/rmasscan-proto/tests/tcp_golden.rs` replays every case; unit tests in
 `banner1/classify.rs`, `banner1/hello.rs` and `banner1/banout.rs` read `patterns.out`, `hellos.out` and
@@ -31,8 +32,9 @@ server stream, then the records `banner_flush` reports (list order, `length && p
 for a case with more than one segment, `given` (one call per segment). The last two are evidence of how C depends on
 the split (reference E2); rmasscan must give the `whole` result in every split.
 
-Every case also runs under an AddressSanitizer build of the same sources; `manifest.json` records per case whether
-its output equals the default build's and how many sanitizer reports it printed (all equal, none).
+Every response case also runs under an AddressSanitizer build of the same sources; `manifest.json` records per case
+whether its output equals the default build's and how many sanitizer reports it printed (all equal, none). Request
+editing has its own `http_requests` section and sanitizer findings below.
 
 C is not allowed in this repository (`crates/rmasscan-lab/tests/rust_only.rs`), so the driver, its build script and
 the runner live off the repository next to the oracle host's masscan clone (R14). `manifest.json` records their
@@ -89,7 +91,7 @@ at the pin or is dirty and copies the sources before compiling (the clone is nev
 Each case names how rmasscan is compared with C's `whole` run, in every split the test makes (whole, byte by byte, the
 given segments and 8 random splits):
 
-- `records` (81 cases): records in C's order, each C record cut at 65 536 bytes (R5), and `app_proto`; the actions too
+- `records` (114 cases): records in C's order, each C record cut at 65 536 bytes (R5), and `app_proto`; the actions too
   on the whole stream. From task 8 the streams no ported parser handles: no match, 70 000 bytes without a match, a
   byte before an anchored pattern, the SMB `*` with 0x7B or 0xFF, and an SSL3 record first. From task 9 the FTP, SMTP,
   POP3 and IMAP4 streams: the 11 classification cases of these parsers from task 8 (`ftp-220-dash-21`,
@@ -97,7 +99,7 @@ given segments and 8 random splits):
   `pop3`, `pop3-lowercase`, `imap4`, `imap4-lowercase`) and 50 new ones (greeting lines, the reply to
   `AUTH TLS`, EHLO and STARTTLS, CAPA and STLS, TAB, NUL and other bytes outside `isprint`, a line without a code,
   `"220-"` on 25, a 70 004-byte FTP greeting line, IMAP `* OK` and streams that only look like IMAP).
-- `classification` (48 cases): only `app_proto`. The patterns of the parsers not ported yet (SSH, HTTP, VNC versions,
+- `classification` (45 cases): only `app_proto`. The patterns of the parsers not ported yet (SSH, VNC versions,
   memcached, the 15 unanchored and 6 anchored Telnet patterns, both RDP prefixes, Minecraft), upper and lower case, a
   match in the second segment. C's parsers ran and their records are kept as evidence; the parser tasks turn their
   cases into `records`.
@@ -115,7 +117,7 @@ given segments and 8 random splits):
 
 ## What the goldens show (C at 8e6b3b0)
 
-147 cases. The classifier: patterns are anchored at stream offset 0 and partial anchored matches continue across
+177 response cases and 27 request cases. The classifier: patterns are anchored at stream offset 0 and partial anchored matches continue across
 segments; any leading byte that does not continue an anchored pattern ends anchoring for the rest of the stream; case
 matters only for A-Z; the first match by earliest end wins; the SMB `*` matches every byte except the first byte of an
 unanchored pattern, 0x7B (`{`) and 0xFF (`smb-star-7b-*`, `smb-star-ff-*`; `00 00 7b 22` is Minecraft); `"220 "` on 25
@@ -127,6 +129,11 @@ C depends on the split here, and rmasscan follows the whole stream:
   record with the bytes before the match; rmasscan replays them into the parser and keeps no such record.
 - E2.2: after a rejected SSL3 record (`ssl3-then-mc`, `ssl3-then-iac`) C keeps searching and its later segments match
   Minecraft or Telnet; on the whole stream the SSL3 match is the first and the stream is `unknown`, as in rmasscan.
+- E2.3: a failed HTTP version (`http-failure-given`) gives no record on the whole stream, but C already recorded
+  `HTTP/1.` when cut there. Rust holds the raw header in a bounded, budgeted Banout until the blank line or session
+  flush; failure releases it without recording. This also preserves the whole-stream record order: Server values
+  first, then the raw header append, then body/title. The staged record transfers its logical length and truncation
+  flag without charging or releasing its reservation twice. Incomplete headers are emitted once at session flush.
 - R5: C keeps 70 000 bytes in one record (`no-match-70000`); rmasscan keeps the first 65 536.
 - STARTTLS: after the go-ahead line C keeps running the text parser over the rest of that segment from state 0
   (`src/proto-ftp.c:101`, `src/proto-smtp.c:147`, `src/proto-pop3.c:129`; the loop goes on). On the whole stream a
@@ -146,3 +153,40 @@ The text parsers (task 9), as C does on the whole stream:
   at a line holding one dot.
 - IMAP4: every classified stream is `* OK` and two closes, nothing sent (`src/proto-imap4.c:49-66`, E3.4); `* ok`
   gives `* o`. `*  OK`, `* BYE` and `* OK` followed by CRLF do not match `"* OK "` and stay `unknown`.
+
+## HTTP task 10
+
+The 30 new response cases and three upgraded task-8 HTTP cases cover `HTTP/1.0 302`, `Server: gws`, repeated and
+spaced Server names, `<title>`, `<TITLE id=x>`, `<titlex>`, no title, a title without a closing `<`, multiple titles,
+full HTML on/off, failed/incomplete status and fields, 2,000 version digits, bare LF, CR inside a field name and
+banout order around 199/200 bytes. Every response is compared with C whole in all splits (whole, bytewise, given,
+eight seeded random splits); actions on whole too. All 177 response cases and three tables give identical normal
+and sanitizer output, with zero reports.
+
+`requests/<name>.in.txt` lists edits in the C3 application order: `payload HEX` (including Content-Length),
+`User-Agent: HEX`, `Host: HEX`, `method HEX`, `url HEX`, `version HEX`, `header NAMEHEX VALUEHEX`, `Cookie: HEX`.
+Empty hex means an empty value; field names are C strings (NUL truncates the name), values have explicit lengths.
+`requests/<name>.out` is the exact request bytes, including NUL, CR and LF. The Rust unit fixture generator is
+`http_request.rs::tests::cases`; `RMASSCAN_HTTP_INPUTS=DIR cargo test -p rmasscan-proto --lib
+http_request_golden_matches_c` writes independent oracle inputs. Its ordinary run compares each generated input
+and result with these files. The shared manifest test verifies all 412 response/table/request file hashes.
+
+The request adapter, kept off repository, includes the unchanged TCP oracle with renamed main, creates Banner1,
+copies the default hello, then calls the real `http_change_requestline`/`http_change_field` in C3 order. The pinned
+source hashes are in the main oracle section; `http_requests.oracle` records request adapter, build script, runner,
+compiler and both binary hashes. Task 10 captured locally with Apple clang; prior TCP outputs and table bytes stayed
+identical. The original oracle artifacts were preserved; no remote machine or scan was used.
+
+The 27 request cases cover default and individual options, a combined case, case-insensitive replacement and
+respelling, a name without colon, CRLF/bare LF, whitespace/empty values, empty method, URL with space, explicit
+binary values and repeated cookies. Sanitizer metadata is evidence, not an alternate expected request:
+
+- Eight request runs report a C memory defect. `combined`, `user_agent-13`, `user_agent-14`, `user_agent-15` have the
+  known replace over-read (`src/proto-http.c:362-364`, E1.7); `method-2`, `url-6`, `version-8`, `version-9` expose
+  shrinking before tail movement (`:110-114`, E1.17). Each has one report; the other 19 have none.
+- `method-2` (empty method), `version-8` (empty version) and `version-9` (version `a\r\nb`) have corrupted visible tails
+  under ASan; the other 24 outputs agree. Rust uses a safe logical splice preserving the full old tail, matching the
+  ordinary captures here and never copying allocator/redzone bytes. That agreement does not prove defined C
+  behavior. Short/empty values remain accepted. These class-a fixes are also in the binding reference and README.
+- The retained off-repository sanitizer diagnostics and stdout hashes in the manifest identify the failing C
+  evidence; those invalid bytes are not fixture expectations.

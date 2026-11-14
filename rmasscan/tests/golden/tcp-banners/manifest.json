@@ -6,15 +6,47 @@
     "build_script_sha256": "a311bba4f271923e32f338cdb5c00456819b8a69bcf383414b44c443d90c7542",
     "runner_sha256": "536f07858f7db122e34d2b82c45f53fc4589d52c60cc13a5df2b4f7cdd20b8f8",
     "binaries_sha256": {
-      "default": "af4b2786bb37e8f550eef506b95109b3b5a4058e1089ebf63f3852bd4000968c",
-      "asan": "208185354740c20052306481ffff7b6120f1e34af0b9c950520478efa3c26f90"
+      "default": "022bc297e1130ab05eb24acdd6d911bd4d914d28672ee768844de49fdeebf861",
+      "asan": "b512b76632b740725117bd988713419b190be749b962942faf3a6766134185b9"
     },
-    "compiler": "gcc (Ubuntu 15.2.0-16ubuntu1) 15.2.0",
+    "compiler": "Apple clang version 21.0.0 (clang-2100.4.1.1)",
     "builds": {
       "default": "-std=gnu99 -g -O2 (masscan Makefile CFLAGS)",
       "asan": "-std=gnu99 -g -O1 -fno-omit-frame-pointer -fsanitize=address,undefined -fsanitize-recover=address"
     },
-    "linked_sources": ["proto-banner1", "proto-banout", "smack1", "smackqueue", "proto-http", "proto-ftp", "proto-smtp", "proto-pop3", "proto-imap4", "proto-ssh", "proto-vnc", "proto-tcp-telnet", "proto-tcp-rdp", "proto-memcached", "proto-mc", "crypto-base64", "proto-ssl", "proto-ssl-test", "proto-x509", "proto-smb", "proto-ntlmssp", "proto-versioning", "scripting-banner", "stub-lua", "util-malloc", "util-logger", "util-safefunc", "pixie-timer", "crypto-siphash24", "massip-addr", "massip-rangesv4"],
+    "linked_sources": [
+      "proto-banner1",
+      "proto-banout",
+      "smack1",
+      "smackqueue",
+      "proto-http",
+      "proto-ftp",
+      "proto-smtp",
+      "proto-pop3",
+      "proto-imap4",
+      "proto-ssh",
+      "proto-vnc",
+      "proto-tcp-telnet",
+      "proto-tcp-rdp",
+      "proto-memcached",
+      "proto-mc",
+      "crypto-base64",
+      "proto-ssl",
+      "proto-ssl-test",
+      "proto-x509",
+      "proto-smb",
+      "proto-ntlmssp",
+      "proto-versioning",
+      "scripting-banner",
+      "stub-lua",
+      "util-malloc",
+      "util-logger",
+      "util-safefunc",
+      "pixie-timer",
+      "crypto-siphash24",
+      "massip-addr",
+      "massip-rangesv4"
+    ],
     "linked_sources_sha256": {
       "proto-banner1.c": "4e0c677048c5392e0df115621d408cc4a9af3827454ff3032cf0696790b74e0f",
       "proto-banout.c": "e59a6e46e62afff8644a44e581e24efdef06293cefb33b0de90b8ce423e2b814",
@@ -51,8 +83,8 @@
     "stubs": "tcpapi_send, tcpapi_close, tcpapi_recv, tcpapi_set_timeout, tcpapi_reconnect, tcpapi_change_app_state record their calls; output_report_banner, syn_cookie, default_udp_parse, pcapfile_*, preprocess_frame abort if called (banner1_parse never reaches them)",
     "calls": "banner1_create once; per run a zeroed StreamState with the case's port, banout_init, banner1_parse per piece (whole stream, every byte, the given segments), then the records banner_flush reports (list order, length && protocol, app = protocol & 0x0FFFFFFF); each run in a forked child with a 2-second alarm"
   },
-  "host": "Ubuntu 26.04.1 LTS, kernel 7.0.0-38-generic, x86_64",
-  "captured_at": "2026-11-14T15:28:46Z",
+  "host": "Darwin 27.2.0, arm64",
+  "captured_at": "2026-11-14T17:16:57Z",
   "expected": "rmasscan banner_stream on the whole stream, byte by byte, the given segments and 8 random splits: records (each C record cut at 65 536 bytes, R5) and app_proto equal C's whole run for expect=records, actions too on the whole stream; app_proto only for expect=classification; for expect=declared-4b the named 4b rule and C's app_proto: unknown-stream (the whole stream as one unknown record, no action) or starttls-unknown (the first segment ends with the STARTTLS go-ahead line: the text parser record and the actions before the TLS hello of C's run over that segment, the given run when there is a second segment, else the whole run; the bytes of the second segment as one unknown record; no TLS hello)",
   "tables": [
     {
@@ -603,7 +635,7 @@
     {
       "name": "http-status",
       "about": "HTTP/1.",
-      "expect": "classification",
+      "expect": "records",
       "declared": "-",
       "port": 80,
       "capture": "none",
@@ -623,7 +655,7 @@
     {
       "name": "http-mixed-case",
       "about": "hTtP/1. вперемешку",
-      "expect": "classification",
+      "expect": "records",
       "declared": "-",
       "port": 8080,
       "capture": "none",
@@ -1623,7 +1655,7 @@
     {
       "name": "http-split-after-2",
       "about": "HTTP/1. разрезан после HT: совпадение во втором сегменте (E2.1, у C по сегментам лишняя запись unknown)",
-      "expect": "classification",
+      "expect": "records",
       "declared": "-",
       "port": 80,
       "capture": "none",
@@ -3019,6 +3051,947 @@
         "given": 9
       },
       "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "http-302",
+      "about": "HTTP: статус, поля и title как C на целом потоке",
+      "expect": "records",
+      "declared": "-",
+      "port": 80,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 38,
+      "input": "cases/http-302.in.txt",
+      "input_sha256": "60e677b6606b73402aa57b9380b1856b16daad18633f2b1543a40dd09d185f75",
+      "output": "cases/http-302.out",
+      "output_sha256": "67256fcc01705d546f34c204c8ab9c1d495e4116b53d913b7f38c91bc14969ce",
+      "c_app_proto": {
+        "whole": 4,
+        "bytewise": 4,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "http-gws",
+      "about": "HTTP: статус, поля и title как C на целом потоке",
+      "expect": "records",
+      "declared": "-",
+      "port": 80,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 48,
+      "input": "cases/http-gws.in.txt",
+      "input_sha256": "222e065f453b575668aed150ba9b067512cada785bc27c3112eb117951b9cc98",
+      "output": "cases/http-gws.out",
+      "output_sha256": "063f9f3f5e4d1464cde3952659f88aac4283cf37800add584d43061dae0b6a07",
+      "c_app_proto": {
+        "whole": 4,
+        "bytewise": 4,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "http-two-server",
+      "about": "HTTP: статус, поля и title как C на целом потоке",
+      "expect": "records",
+      "declared": "-",
+      "port": 80,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 44,
+      "input": "cases/http-two-server.in.txt",
+      "input_sha256": "21f588937b7bd5acee5184d0d4589378bc3bef8873c1d917a4db84502c61f513",
+      "output": "cases/http-two-server.out",
+      "output_sha256": "d0e3c340a086d975a35878447afd323776e14b9f6a406fb6fee9e209ccc9bcee",
+      "c_app_proto": {
+        "whole": 4,
+        "bytewise": 4,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "http-server-space",
+      "about": "HTTP: статус, поля и title как C на целом потоке",
+      "expect": "records",
+      "declared": "-",
+      "port": 80,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 31,
+      "input": "cases/http-server-space.in.txt",
+      "input_sha256": "d3a02ba2fe5b267bbd800f4ad3a00cd499b14fa5cb0dcb85f6c41ec2f2da2651",
+      "output": "cases/http-server-space.out",
+      "output_sha256": "0effe20db40bc8df1f290049cb7a60231bd8c22d149f3c1eaf55e33cbcb6c454",
+      "c_app_proto": {
+        "whole": 4,
+        "bytewise": 4,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "http-title",
+      "about": "HTTP: статус, поля и title как C на целом потоке",
+      "expect": "records",
+      "declared": "-",
+      "port": 80,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 32,
+      "input": "cases/http-title.in.txt",
+      "input_sha256": "0140c28534fc52bcb561898ce6207c7da13af8bc509b53636013a9e132716e8e",
+      "output": "cases/http-title.out",
+      "output_sha256": "e19f354110ac1603e7e2ed6b73b632437798471ecfa0e65b52e9645c65358c23",
+      "c_app_proto": {
+        "whole": 4,
+        "bytewise": 4,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "http-title-attributes",
+      "about": "HTTP: статус, поля и title как C на целом потоке",
+      "expect": "records",
+      "declared": "-",
+      "port": 80,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 37,
+      "input": "cases/http-title-attributes.in.txt",
+      "input_sha256": "859ae8a8d1f1b6ffa1d69e0d3b84504439edb5836e5b80bb0325e5f62ac2fc68",
+      "output": "cases/http-title-attributes.out",
+      "output_sha256": "6893dd64ad1b7a3570808faa8b895045eb8a24525ffa2fc6331ca3cfe083000a",
+      "c_app_proto": {
+        "whole": 4,
+        "bytewise": 4,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "http-title-prefix",
+      "about": "HTTP: статус, поля и title как C на целом потоке",
+      "expect": "records",
+      "declared": "-",
+      "port": 80,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 33,
+      "input": "cases/http-title-prefix.in.txt",
+      "input_sha256": "6b63264ed1b289cd6cd57c286911cd5f320eaf7e942250a2ac6cc3a5e9dc85ab",
+      "output": "cases/http-title-prefix.out",
+      "output_sha256": "d50c813b96a3d0a15ac89f232b290633c7ec9db1aab77c41f62dbf74a384f521",
+      "c_app_proto": {
+        "whole": 4,
+        "bytewise": 4,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "http-title-no-lt",
+      "about": "HTTP: статус, поля и title как C на целом потоке",
+      "expect": "records",
+      "declared": "-",
+      "port": 80,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 32,
+      "input": "cases/http-title-no-lt.in.txt",
+      "input_sha256": "d9d7546015702d337f9ad14f85098567662e8b4f89c0e897e0d96ba379172b01",
+      "output": "cases/http-title-no-lt.out",
+      "output_sha256": "cc3d23de48a9bf02d77aa294382120b6ddc60b1294a20305afac15cfb2f49c90",
+      "c_app_proto": {
+        "whole": 4,
+        "bytewise": 4,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "http-no-title",
+      "about": "HTTP: статус, поля и title как C на целом потоке",
+      "expect": "records",
+      "declared": "-",
+      "port": 80,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 32,
+      "input": "cases/http-no-title.in.txt",
+      "input_sha256": "fb458b4905d44d27f86f895142963058b962a1e8513aea0a5adec0b337d74f1a",
+      "output": "cases/http-no-title.out",
+      "output_sha256": "d34bee958f3fa542fe09fcb7ae095552bf25fe357ab474fcf95d8e95740cb87e",
+      "c_app_proto": {
+        "whole": 4,
+        "bytewise": 4,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "http-title-unclosed-tag",
+      "about": "HTTP: статус, поля и title как C на целом потоке",
+      "expect": "records",
+      "declared": "-",
+      "port": 80,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 27,
+      "input": "cases/http-title-unclosed-tag.in.txt",
+      "input_sha256": "b24e6fa10bdb62094cde04fc8e7716589a76e93623b14d949ecc177ab112dd84",
+      "output": "cases/http-title-unclosed-tag.out",
+      "output_sha256": "44d9d2dbaf36618cf242c7889d9e2741ee911b9572b614a8828c67b43dd7d1e2",
+      "c_app_proto": {
+        "whole": 4,
+        "bytewise": 4,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "http-title-two",
+      "about": "HTTP: статус, поля и title как C на целом потоке",
+      "expect": "records",
+      "declared": "-",
+      "port": 80,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 44,
+      "input": "cases/http-title-two.in.txt",
+      "input_sha256": "de5580058a95cc2adfbdcff28b91c55558a1a565e5c29bdd24478200c9af3994",
+      "output": "cases/http-title-two.out",
+      "output_sha256": "28d403379dfd3bf712f6bbc6d1418308b64d917e428010b63f482c5baaf4df61",
+      "c_app_proto": {
+        "whole": 4,
+        "bytewise": 4,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "http-title-overlap",
+      "about": "HTTP: статус, поля и title как C на целом потоке",
+      "expect": "records",
+      "declared": "-",
+      "port": 80,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 44,
+      "input": "cases/http-title-overlap.in.txt",
+      "input_sha256": "77fe5a83ad971bceb9c6e5ed4810c537d0a01903d48de6b61937987112389c40",
+      "output": "cases/http-title-overlap.out",
+      "output_sha256": "8925795f77cca01fb5c63bf766fe89fa664a88d19968101d4faec4f2eae52d74",
+      "c_app_proto": {
+        "whole": 4,
+        "bytewise": 4,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "http-failed-status",
+      "about": "HTTP: статус, поля и title как C на целом потоке",
+      "expect": "records",
+      "declared": "-",
+      "port": 80,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 26,
+      "input": "cases/http-failed-status.in.txt",
+      "input_sha256": "c2f801ce6b5a5370c04f4e6a4ea87a4b3ba8f638a242ad932708db8ee8c3c7cf",
+      "output": "cases/http-failed-status.out",
+      "output_sha256": "26e3f3d08ebea6e8165701822a82c3965a85698b3c8479ac9aac286892d830aa",
+      "c_app_proto": {
+        "whole": 4,
+        "bytewise": 4,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "http-failed-status-split",
+      "about": "HTTP: статус, поля и title как C на целом потоке",
+      "expect": "records",
+      "declared": "-",
+      "port": 80,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 8,
+      "input": "cases/http-failed-status-split.in.txt",
+      "input_sha256": "abd620f633b8b451efc1f5218702d0725cfcf82236c521a7959daff266fde6c9",
+      "output": "cases/http-failed-status-split.out",
+      "output_sha256": "44cc8e56e8608755f87f3a02b145a68bffe81af7e42c1d1728433b8685474daa",
+      "c_app_proto": {
+        "whole": 4,
+        "bytewise": 4,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "http-incomplete-status",
+      "about": "HTTP: статус, поля и title как C на целом потоке",
+      "expect": "records",
+      "declared": "-",
+      "port": 80,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 7,
+      "input": "cases/http-incomplete-status.in.txt",
+      "input_sha256": "c73c375dfd28b9ede8a1303815723eeab2b72e35c0e576ec93b001647e80b012",
+      "output": "cases/http-incomplete-status.out",
+      "output_sha256": "cf09ff06fe402b868c540f7e38c99b8c0a0d004bbeb86f761a8a03fffe624f3d",
+      "c_app_proto": {
+        "whole": 4,
+        "bytewise": 4,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "http-incomplete-header",
+      "about": "HTTP: статус, поля и title как C на целом потоке",
+      "expect": "records",
+      "declared": "-",
+      "port": 80,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 25,
+      "input": "cases/http-incomplete-header.in.txt",
+      "input_sha256": "cd3f4c907ea2870ca025821ae22db023b0a02b8c80a3a84a1a17226cf3dc2c85",
+      "output": "cases/http-incomplete-header.out",
+      "output_sha256": "572f91ce24b0bca3252e207c55b91041b80853896909b97aa08b36f6b1d1a852",
+      "c_app_proto": {
+        "whole": 4,
+        "bytewise": 4,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "http-empty-version",
+      "about": "HTTP: статус, поля и title как C на целом потоке",
+      "expect": "records",
+      "declared": "-",
+      "port": 80,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 14,
+      "input": "cases/http-empty-version.in.txt",
+      "input_sha256": "44c80092332face04162bf4bc009a9ca8ff86f44c0153fd813a04da6c45b52b2",
+      "output": "cases/http-empty-version.out",
+      "output_sha256": "6d18503177b361d7e25858a389fd4aa9a7b00762a88bd53d23d995ee201d6307",
+      "c_app_proto": {
+        "whole": 0,
+        "bytewise": 0,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "http-lf-only",
+      "about": "HTTP: статус, поля и title как C на целом потоке",
+      "expect": "records",
+      "declared": "-",
+      "port": 80,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 36,
+      "input": "cases/http-lf-only.in.txt",
+      "input_sha256": "3979fae2f14ca76819defb7750e764729c146dd3add68db3bf2edc95cd8b5239",
+      "output": "cases/http-lf-only.out",
+      "output_sha256": "d88a305879c7d7df66f8438100cbaa4b24b9931bdff875a9c5fc0c92ec0fcca7",
+      "c_app_proto": {
+        "whole": 4,
+        "bytewise": 4,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "http-cr-field",
+      "about": "HTTP: статус, поля и title как C на целом потоке",
+      "expect": "records",
+      "declared": "-",
+      "port": 80,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 38,
+      "input": "cases/http-cr-field.in.txt",
+      "input_sha256": "82a7d0e6d90e30b0a5c36a4769e2042ff61d3050cbeca6597eb10ff5b802e52f",
+      "output": "cases/http-cr-field.out",
+      "output_sha256": "33ce6df1a543ec454df630fa7cf822fb9ce6234a5fa29a1ae9916fae6fdebc18",
+      "c_app_proto": {
+        "whole": 4,
+        "bytewise": 4,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "http-field-without-colon",
+      "about": "HTTP: статус, поля и title как C на целом потоке",
+      "expect": "records",
+      "declared": "-",
+      "port": 80,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 38,
+      "input": "cases/http-field-without-colon.in.txt",
+      "input_sha256": "8f2c33efd81db593fcef117df7ee452c2a53be00bcbbc612d77f9407c12ad4a6",
+      "output": "cases/http-field-without-colon.out",
+      "output_sha256": "07bd236ed2160192cb336efcdc03930c30104fffb4b5cdd24d8f379d856179c0",
+      "c_app_proto": {
+        "whole": 4,
+        "bytewise": 4,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "http-failure-given",
+      "about": "E2.3: неуспешный статус после конца сегмента",
+      "expect": "records",
+      "declared": "-",
+      "port": 80,
+      "capture": "none",
+      "segments": 2,
+      "bytes": 9,
+      "input": "cases/http-failure-given.in.txt",
+      "input_sha256": "6a0867923eaf8d543d3dd1f99d38fe6b4ce30df545c38047eb25976ca05e89cc",
+      "output": "cases/http-failure-given.out",
+      "output_sha256": "e68d822c543acf62da95ee3219c059f1a36ed469e269f7f191cb7cbaca151711",
+      "c_app_proto": {
+        "whole": 4,
+        "bytewise": 4,
+        "given": 4
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "http-order-1",
+      "about": "порядок banout: длина Server вокруг 200 байт",
+      "expect": "records",
+      "declared": "-",
+      "port": 80,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 43,
+      "input": "cases/http-order-1.in.txt",
+      "input_sha256": "44ebd35f4e330fe1ce4b74a947dfae6e63aae16c661e87878b53d7d59757cdb9",
+      "output": "cases/http-order-1.out",
+      "output_sha256": "983428d906693ab239f6a02627d6d0257fbee75801354e7e49a75abc7e755c3f",
+      "c_app_proto": {
+        "whole": 4,
+        "bytewise": 4,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "http-order-199",
+      "about": "порядок banout: длина Server вокруг 200 байт",
+      "expect": "records",
+      "declared": "-",
+      "port": 80,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 241,
+      "input": "cases/http-order-199.in.txt",
+      "input_sha256": "8e5651ff7e76684abc1aaf196d2082cd148878e83c362f932a0a270bdae09520",
+      "output": "cases/http-order-199.out",
+      "output_sha256": "b9226db639ea237c06fa1132c5085bd12969d19fc4a97bb22a71f1dcae312cd5",
+      "c_app_proto": {
+        "whole": 4,
+        "bytewise": 4,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "http-order-200",
+      "about": "порядок banout: длина Server вокруг 200 байт",
+      "expect": "records",
+      "declared": "-",
+      "port": 80,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 242,
+      "input": "cases/http-order-200.in.txt",
+      "input_sha256": "2d40aaa42b402bdeb1a7d3d5c56a3dd1b77cd940db7d1fc8d4deab8afbbeac37",
+      "output": "cases/http-order-200.out",
+      "output_sha256": "936660736873ef7ec3622dbcc6fbeb93e046bfbec553739f0626ed3b694a0e9e",
+      "c_app_proto": {
+        "whole": 4,
+        "bytewise": 4,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "http-order-250",
+      "about": "порядок banout: длина Server вокруг 200 байт",
+      "expect": "records",
+      "declared": "-",
+      "port": 80,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 292,
+      "input": "cases/http-order-250.in.txt",
+      "input_sha256": "8808c373e452397f628e1628db12ddd7f195e15008cfacbc8478dc8a0ddd50e5",
+      "output": "cases/http-order-250.out",
+      "output_sha256": "5e89a4ee0b811ffd3584884e4f0316fff2466edaffda836f86b44491fee313a7",
+      "c_app_proto": {
+        "whole": 4,
+        "bytewise": 4,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "http-capture-off",
+      "about": "полный HTML и несколько title",
+      "expect": "records",
+      "declared": "-",
+      "port": 80,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 73,
+      "input": "cases/http-capture-off.in.txt",
+      "input_sha256": "7d87e024ad4761d4cbaafbc0df6aeb8807a83cada6385979a03a882a3cacdcd7",
+      "output": "cases/http-capture-off.out",
+      "output_sha256": "0c9e5bd6359d29f7c23ef5dc6871929d9342c852be35806d285a2c765d4b6f7b",
+      "c_app_proto": {
+        "whole": 4,
+        "bytewise": 4,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "http-title-long",
+      "about": "большой заголовок и HTML вокруг переноса головы",
+      "expect": "records",
+      "declared": "-",
+      "port": 80,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 537,
+      "input": "cases/http-title-long.in.txt",
+      "input_sha256": "757b7487d4f578923a303955d151afe41504943b13d8d7a93c63ea8dd5ae1487",
+      "output": "cases/http-title-long.out",
+      "output_sha256": "16a2fd46fcc02dcbeb3c56e86fc56aae890c6e471cbfe55233067efaefd56f3a",
+      "c_app_proto": {
+        "whole": 4,
+        "bytewise": 4,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "http-capture",
+      "about": "полный HTML и несколько title",
+      "expect": "records",
+      "declared": "-",
+      "port": 80,
+      "capture": "html",
+      "segments": 1,
+      "bytes": 73,
+      "input": "cases/http-capture.in.txt",
+      "input_sha256": "e36d9a8aa7b8636ec8d494543d33a7481fb557689830550c27f2196481c41643",
+      "output": "cases/http-capture.out",
+      "output_sha256": "10476c7e9560d7f2d37d85d8969ad141de03965de5a4dc3ab8cb0091c673f0aa",
+      "c_app_proto": {
+        "whole": 4,
+        "bytewise": 4,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "http-capture-long",
+      "about": "большой заголовок и HTML вокруг переноса головы",
+      "expect": "records",
+      "declared": "-",
+      "port": 80,
+      "capture": "html",
+      "segments": 1,
+      "bytes": 537,
+      "input": "cases/http-capture-long.in.txt",
+      "input_sha256": "827e1969e55f028fee77ee60342a48ff725eb9211c153de76bab81136c7903f0",
+      "output": "cases/http-capture-long.out",
+      "output_sha256": "a893db1abe80b3e88d88aff7a8e5b9f6fb6ebf935076137eba00db203c18241c",
+      "c_app_proto": {
+        "whole": 4,
+        "bytewise": 4,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "http-version-2000",
+      "about": "2000 цифр версии без пробела: незавершённый статус",
+      "expect": "records",
+      "declared": "-",
+      "port": 80,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 2007,
+      "input": "cases/http-version-2000.in.txt",
+      "input_sha256": "62bd3eb6bab14895bdf02a23d5d4b27a2fb46dc1fa49f5c6bd727d9723ec2abd",
+      "output": "cases/http-version-2000.out",
+      "output_sha256": "419f797a0ac6d659ec7613f6f0a2e3f017fc0347659cad79827a3726bfd47b3e",
+      "c_app_proto": {
+        "whole": 4,
+        "bytewise": 4,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
     }
-  ]
+  ],
+  "http_requests": {
+    "oracle": {
+      "harness": "request_oracle.c includes tcp_oracle.c with renamed main; unmodified pinned proto-http.c; artifacts off repository (R14)",
+      "driver_sha256": "38a518f56ff8a99e1b047266c243c820fb436fd7b1327658e0d6561c1053749c",
+      "build_script_sha256": "a9c0b8b6e7bb46a93b9b6c6d66d3536fe2e723d603ac816a7478e4bede1e3513",
+      "runner_sha256": "284a934abf310fcfe2a0a76e90be4f1924aa39eeeec38d02ab86d31d95b1c3ff",
+      "binaries_sha256": {
+        "default": "05858f1f2dbbb10c80feaba2d18b75e6141ed9c4e2bedf8d0450840649603f96",
+        "asan": "3047b5ab3188be872f56f16215c03a0467a5dc79e5b2d7152f8f5926847b25c7"
+      },
+      "compiler": "Apple clang version 21.0.0 (clang-2100.4.1.1)",
+      "calls": "banner1_create; copy default hello; http_change_requestline and http_change_field in C3 order; explicit lengths for values, C strings for field names",
+      "sanitizer": "recovering AddressSanitizer/UndefinedBehaviorSanitizer. Ordinary output is the comparison fixture; E1.7/E1.17 memory defects are documented, allocator bytes are never adopted"
+    },
+    "cases": [
+      {
+        "name": "bare-lf",
+        "input": "requests/bare-lf.in.txt",
+        "input_sha256": "5561ab20f5aaca81d74c2a946054dba05db0ca11859c6bb039354b2a3c3f49d9",
+        "output": "requests/bare-lf.out",
+        "output_sha256": "f2db6aeba1cf761d92c2fe32aa01fff923646af13aa28638d9425c04c58d9e23",
+        "sanitizer": {
+          "reports": 0,
+          "same_output": true,
+          "stdout_sha256": "f2db6aeba1cf761d92c2fe32aa01fff923646af13aa28638d9425c04c58d9e23"
+        }
+      },
+      {
+        "name": "binary",
+        "input": "requests/binary.in.txt",
+        "input_sha256": "76105041200858ab2de143417f8c850927480ebda5bd51db7f256b319ff00312",
+        "output": "requests/binary.out",
+        "output_sha256": "d1672ce8dd851025c136b165c04cafa4bd0126a08983a399ddf4af80dc0e0c2a",
+        "sanitizer": {
+          "reports": 0,
+          "same_output": true,
+          "stdout_sha256": "d1672ce8dd851025c136b165c04cafa4bd0126a08983a399ddf4af80dc0e0c2a"
+        }
+      },
+      {
+        "name": "combined",
+        "input": "requests/combined.in.txt",
+        "input_sha256": "39a8c58b2f3d72f5cff149a49596c39eb59b8290868cd31f072bf1685481b15c",
+        "output": "requests/combined.out",
+        "output_sha256": "2b95dcf27d0840d9aa1a91de810dcb3a0124e339826f3084466c4bb698e7df4c",
+        "sanitizer": {
+          "reports": 1,
+          "same_output": true,
+          "stdout_sha256": "2b95dcf27d0840d9aa1a91de810dcb3a0124e339826f3084466c4bb698e7df4c"
+        }
+      },
+      {
+        "name": "cookies",
+        "input": "requests/cookies.in.txt",
+        "input_sha256": "f777c18a58f2111aa5b563975dc05b8f68a7b439a16900e7d86ba9c7c2c8573d",
+        "output": "requests/cookies.out",
+        "output_sha256": "15e8a44e7c39632e84a205b3f6c3b6205921de22495606476659c6d87750bb90",
+        "sanitizer": {
+          "reports": 0,
+          "same_output": true,
+          "stdout_sha256": "15e8a44e7c39632e84a205b3f6c3b6205921de22495606476659c6d87750bb90"
+        }
+      },
+      {
+        "name": "crlf",
+        "input": "requests/crlf.in.txt",
+        "input_sha256": "1dbe259e1c0c878645f27f6e587eb95997a2ca2d3f6e7e1376597674c0e56555",
+        "output": "requests/crlf.out",
+        "output_sha256": "f4e5f5c74ec075c086665dfe6687265ecd2c545813ed805423974f68b0fd9f96",
+        "sanitizer": {
+          "reports": 0,
+          "same_output": true,
+          "stdout_sha256": "f4e5f5c74ec075c086665dfe6687265ecd2c545813ed805423974f68b0fd9f96"
+        }
+      },
+      {
+        "name": "default",
+        "input": "requests/default.in.txt",
+        "input_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "output": "requests/default.out",
+        "output_sha256": "195492d57cde4ccce01f197edf6159a548c1d213b1742709bda8ac09e03f51e4",
+        "sanitizer": {
+          "reports": 0,
+          "same_output": true,
+          "stdout_sha256": "195492d57cde4ccce01f197edf6159a548c1d213b1742709bda8ac09e03f51e4"
+        }
+      },
+      {
+        "name": "host-10",
+        "input": "requests/host-10.in.txt",
+        "input_sha256": "787aa5f83d9c8a892828ed43ac48833a694ce3bcb8efb77058a8673214c7e4ce",
+        "output": "requests/host-10.out",
+        "output_sha256": "9d09fdfe5a3130eb6cbac75079584d60aec7624a98ffdb1130335ae100127887",
+        "sanitizer": {
+          "reports": 0,
+          "same_output": true,
+          "stdout_sha256": "9d09fdfe5a3130eb6cbac75079584d60aec7624a98ffdb1130335ae100127887"
+        }
+      },
+      {
+        "name": "host-11",
+        "input": "requests/host-11.in.txt",
+        "input_sha256": "197115b8ac65a8bb525fc9d2fdb5a2d68fa251c75bb04ce185abb5478a8abea5",
+        "output": "requests/host-11.out",
+        "output_sha256": "2949235c748fafe5facf5339b8c388997bb5278c8d1c5c8c43c04cfde3fd671b",
+        "sanitizer": {
+          "reports": 0,
+          "same_output": true,
+          "stdout_sha256": "2949235c748fafe5facf5339b8c388997bb5278c8d1c5c8c43c04cfde3fd671b"
+        }
+      },
+      {
+        "name": "host-12",
+        "input": "requests/host-12.in.txt",
+        "input_sha256": "4f548a27e3a8441a92307f0cc39447bdce55b752cf974a63c708518a87fa0e5d",
+        "output": "requests/host-12.out",
+        "output_sha256": "0a4876518bcd57e00e27e930a08171588de8c5e6213609335f25652fcd512a40",
+        "sanitizer": {
+          "reports": 0,
+          "same_output": true,
+          "stdout_sha256": "0a4876518bcd57e00e27e930a08171588de8c5e6213609335f25652fcd512a40"
+        }
+      },
+      {
+        "name": "method-1",
+        "input": "requests/method-1.in.txt",
+        "input_sha256": "64029f39debd7a12d218f5909f4ab410ab7fd43673c49bcf42c15d4d70bcf806",
+        "output": "requests/method-1.out",
+        "output_sha256": "15722cb8ac758d77a242f1312b7b141375db8469bd69b67c700ca7dc38ac0724",
+        "sanitizer": {
+          "reports": 0,
+          "same_output": true,
+          "stdout_sha256": "15722cb8ac758d77a242f1312b7b141375db8469bd69b67c700ca7dc38ac0724"
+        }
+      },
+      {
+        "name": "method-2",
+        "input": "requests/method-2.in.txt",
+        "input_sha256": "d71f3e76a8cad5734a4feb6d0a5b05454497d25dbed4b23a888a82649720a4ca",
+        "output": "requests/method-2.out",
+        "output_sha256": "837e8b17d9ecc116a35d74b1fcdb836709ace1238e48085bf0eacfafd1e684db",
+        "sanitizer": {
+          "reports": 1,
+          "same_output": false,
+          "stdout_sha256": "c1d0a4cf47eb53ae08f75473309ac29777e25cdaea65775d7889d68bbefdc999"
+        }
+      },
+      {
+        "name": "method-3",
+        "input": "requests/method-3.in.txt",
+        "input_sha256": "48fcb5b2f89795eed9cb745e5c5b2fbcc8535ceea523bab63236f924aa674493",
+        "output": "requests/method-3.out",
+        "output_sha256": "f0435bacf6fd805dfaee073f36a92a1a9636ea172e4ee69f1d71da11c63167bd",
+        "sanitizer": {
+          "reports": 0,
+          "same_output": true,
+          "stdout_sha256": "f0435bacf6fd805dfaee073f36a92a1a9636ea172e4ee69f1d71da11c63167bd"
+        }
+      },
+      {
+        "name": "no-colon",
+        "input": "requests/no-colon.in.txt",
+        "input_sha256": "e0676dce23a149018019e4d4ff802150306fbf8d1296f579ec582fcd839e7263",
+        "output": "requests/no-colon.out",
+        "output_sha256": "c1f2ca76d1feeae0b41876f9b99228f3969424f8885577f49d88a2ccd848b9fe",
+        "sanitizer": {
+          "reports": 0,
+          "same_output": true,
+          "stdout_sha256": "c1f2ca76d1feeae0b41876f9b99228f3969424f8885577f49d88a2ccd848b9fe"
+        }
+      },
+      {
+        "name": "payload-16",
+        "input": "requests/payload-16.in.txt",
+        "input_sha256": "bb45e17c0d7d34cf4984323d551a33d1c0e8268d09c0814bbce1db8e2624844d",
+        "output": "requests/payload-16.out",
+        "output_sha256": "9c3652afb5e24146f820c4ab189b2e1b92fe43c3fb2dc412b9b706c75dc25146",
+        "sanitizer": {
+          "reports": 0,
+          "same_output": true,
+          "stdout_sha256": "9c3652afb5e24146f820c4ab189b2e1b92fe43c3fb2dc412b9b706c75dc25146"
+        }
+      },
+      {
+        "name": "payload-17",
+        "input": "requests/payload-17.in.txt",
+        "input_sha256": "8655d1d547fcd44ebf9011a0d9030d41507a1eeee32eeffa0b23e3a19ca7fb7d",
+        "output": "requests/payload-17.out",
+        "output_sha256": "17380d10ac29579a10e25c4fec62fc85f6624eff503129c318deabb36f8b1939",
+        "sanitizer": {
+          "reports": 0,
+          "same_output": true,
+          "stdout_sha256": "17380d10ac29579a10e25c4fec62fc85f6624eff503129c318deabb36f8b1939"
+        }
+      },
+      {
+        "name": "payload-18",
+        "input": "requests/payload-18.in.txt",
+        "input_sha256": "5bc4fa9db96aa58b97ae4406e31d85e96a6435f2a7ea7c98dc079c13c87e00f5",
+        "output": "requests/payload-18.out",
+        "output_sha256": "ddd9e69fe4171225091ef7635411d4eb3d05b45fed843d43de88f1f46e801870",
+        "sanitizer": {
+          "reports": 0,
+          "same_output": true,
+          "stdout_sha256": "ddd9e69fe4171225091ef7635411d4eb3d05b45fed843d43de88f1f46e801870"
+        }
+      },
+      {
+        "name": "replace-case",
+        "input": "requests/replace-case.in.txt",
+        "input_sha256": "902990964beedfc1445eca758789026d3c06680ba9321dd3817dfeee2cd49600",
+        "output": "requests/replace-case.out",
+        "output_sha256": "06fc310c15c158597cae434097d1874bdeee6ad5dc45b6a944e31ff1424bc926",
+        "sanitizer": {
+          "reports": 0,
+          "same_output": true,
+          "stdout_sha256": "06fc310c15c158597cae434097d1874bdeee6ad5dc45b6a944e31ff1424bc926"
+        }
+      },
+      {
+        "name": "space-empty",
+        "input": "requests/space-empty.in.txt",
+        "input_sha256": "0c1160e9aeaee132c027bad22a28ddc19a7402af72f6982a7c6f7226880348f8",
+        "output": "requests/space-empty.out",
+        "output_sha256": "a2bf07c0179d455136f455a8388595da2472c2bf243ef5c04eb8592c0c15b878",
+        "sanitizer": {
+          "reports": 0,
+          "same_output": true,
+          "stdout_sha256": "a2bf07c0179d455136f455a8388595da2472c2bf243ef5c04eb8592c0c15b878"
+        }
+      },
+      {
+        "name": "url-4",
+        "input": "requests/url-4.in.txt",
+        "input_sha256": "fc12665a62f8f360b3c5f3833a79b962c1422e2a26b6df53f581bc1db2d9525e",
+        "output": "requests/url-4.out",
+        "output_sha256": "e6d3d4280b487ffb53141246d2b227fd3b534d7c26fbf51acfff7156dce6617b",
+        "sanitizer": {
+          "reports": 0,
+          "same_output": true,
+          "stdout_sha256": "e6d3d4280b487ffb53141246d2b227fd3b534d7c26fbf51acfff7156dce6617b"
+        }
+      },
+      {
+        "name": "url-5",
+        "input": "requests/url-5.in.txt",
+        "input_sha256": "37fda25f3060afa1e4fbe20c19092f4eed5b3149cfd3901a132ffad4ae2e083e",
+        "output": "requests/url-5.out",
+        "output_sha256": "6be20cbb928a3b4ea46fca5567b1be522320e7aa57dfa8cc8760962374aa7265",
+        "sanitizer": {
+          "reports": 0,
+          "same_output": true,
+          "stdout_sha256": "6be20cbb928a3b4ea46fca5567b1be522320e7aa57dfa8cc8760962374aa7265"
+        }
+      },
+      {
+        "name": "url-6",
+        "input": "requests/url-6.in.txt",
+        "input_sha256": "7e2584d2d68659a81f725db2203af8a75e17cff7b97536c047806109dac9d31b",
+        "output": "requests/url-6.out",
+        "output_sha256": "8443d1be2d0a5dc923c8a4f509f344ba43f3538734a944b7689e7989716214a2",
+        "sanitizer": {
+          "reports": 1,
+          "same_output": true,
+          "stdout_sha256": "8443d1be2d0a5dc923c8a4f509f344ba43f3538734a944b7689e7989716214a2"
+        }
+      },
+      {
+        "name": "user_agent-13",
+        "input": "requests/user_agent-13.in.txt",
+        "input_sha256": "c94e43ceed2b23edf60ff2a8319b565944b94bde04c0adcac3995fdd95adf4b9",
+        "output": "requests/user_agent-13.out",
+        "output_sha256": "94fe67efa2ebef6990ed911a59a13d5ba001a1ed57bc76716c19751695580635",
+        "sanitizer": {
+          "reports": 1,
+          "same_output": true,
+          "stdout_sha256": "94fe67efa2ebef6990ed911a59a13d5ba001a1ed57bc76716c19751695580635"
+        }
+      },
+      {
+        "name": "user_agent-14",
+        "input": "requests/user_agent-14.in.txt",
+        "input_sha256": "f37c0b7ea74b614a403820a010323991e915d6376f7173a4488dbc384b3e725b",
+        "output": "requests/user_agent-14.out",
+        "output_sha256": "04d9e2502c1744e9b5d2b8474ea21c9319e05dca207f64bfe30476122d1b644e",
+        "sanitizer": {
+          "reports": 1,
+          "same_output": true,
+          "stdout_sha256": "04d9e2502c1744e9b5d2b8474ea21c9319e05dca207f64bfe30476122d1b644e"
+        }
+      },
+      {
+        "name": "user_agent-15",
+        "input": "requests/user_agent-15.in.txt",
+        "input_sha256": "9a516492cecd321a1b55d7289e6a5589381c53796e7a91da66abf766761a23d0",
+        "output": "requests/user_agent-15.out",
+        "output_sha256": "76e4e7baf9e7a7cc6943cac0f545954169c01de57b66dbd0a190e9b19fc398d2",
+        "sanitizer": {
+          "reports": 1,
+          "same_output": true,
+          "stdout_sha256": "76e4e7baf9e7a7cc6943cac0f545954169c01de57b66dbd0a190e9b19fc398d2"
+        }
+      },
+      {
+        "name": "version-7",
+        "input": "requests/version-7.in.txt",
+        "input_sha256": "63d22510cc3f945d08df28e2f370b8d6c8aaf2cb3ad51168bdee176dd3d9a619",
+        "output": "requests/version-7.out",
+        "output_sha256": "5414a6b31c19ac816ddba112ca887eb761a11a9351570b602db993505b67e62c",
+        "sanitizer": {
+          "reports": 0,
+          "same_output": true,
+          "stdout_sha256": "5414a6b31c19ac816ddba112ca887eb761a11a9351570b602db993505b67e62c"
+        }
+      },
+      {
+        "name": "version-8",
+        "input": "requests/version-8.in.txt",
+        "input_sha256": "31cd7ba4e61d58a20ae1a6e165c781198143c870fa7a06fadbeba065f419dcfb",
+        "output": "requests/version-8.out",
+        "output_sha256": "5860855e6405bc2fe54b7d6f3ecf3bd74a955a12bc5b1e1378bd297b361aec95",
+        "sanitizer": {
+          "reports": 1,
+          "same_output": false,
+          "stdout_sha256": "496b80080d96550ebfb41fbffc347f1f5e23751f0276c6135274ac1d16551a9f"
+        }
+      },
+      {
+        "name": "version-9",
+        "input": "requests/version-9.in.txt",
+        "input_sha256": "36e9e35bc7f727e034f82ce34daef3b746b967f2a95d2d10fe528520dc3fb774",
+        "output": "requests/version-9.out",
+        "output_sha256": "051e4400a1985d0eea4d4b569447c62a039e120de233a078b112134e40a0a144",
+        "sanitizer": {
+          "reports": 1,
+          "same_output": false,
+          "stdout_sha256": "11b95409d4826c59dc3937c4192b3815c84afdd5825f91b47595e277b7018860"
+        }
+      }
+    ]
+  }
 }

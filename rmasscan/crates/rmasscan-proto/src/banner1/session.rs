@@ -24,6 +24,7 @@ use super::banout::Banout;
 use super::classify::{Classifier, PATTERNS, SearchState};
 use super::ftp::Ftp;
 use super::hello::{HelloTable, TcpBannerSettings};
+use super::http::Http;
 use super::imap4::Imap4;
 use super::pop3::Pop3;
 use super::smtp::Smtp;
@@ -51,6 +52,9 @@ pub(crate) enum AppProto {
 /// Разбор байтов сервера одним парсером приложения: возобновляемый автомат, результат не зависит от нарезки (Р13).
 pub(crate) trait Parser: Send {
     fn parse(&mut self, cx: &mut ParseCx<'_>, px: &[u8]);
+    /// Последние отложенные байты перед `banner_flush` (`src/stack-tcp-core.c:810-828`); у HTTP незавершённый
+    /// заголовок ждёт здесь ради порядка C на неразрезанном потоке (`src/proto-http.c:678-681`, E2.3).
+    fn flush(&mut self, _cx: &mut ParseCx<'_>) {}
 }
 
 /// `isprint` локали C (masscan `setlocale` не зовёт): 0x20-0x7E; NUL в это не входит. Общий для FTP, SMTP и следующих
@@ -69,7 +73,6 @@ pub(crate) struct ParseCx<'a> {
     pub(crate) banout: &'a mut Banout,
     pub(crate) budget: &'a mut ByteBudget,
     pub(crate) acts: &'a mut Vec<SessionAction>,
-    #[expect(dead_code, reason = "`--capture html` читает парсер HTTP, задачи 9-12")]
     pub(crate) capture_html: bool,
     pub(crate) starttls: bool,
 }
@@ -123,8 +126,8 @@ pub(crate) fn parser_for(p: AppProto) -> Box<dyn Parser> {
         AppProto::Smtp => Box::<Smtp>::default(),
         AppProto::Pop3 => Box::<Pop3>::default(),
         AppProto::Imap4 => Box::<Imap4>::default(),
+        AppProto::Http => Box::<Http>::default(),
         AppProto::Ssh
-        | AppProto::Http
         | AppProto::Vnc(_)
         | AppProto::Memcached
         | AppProto::Telnet
@@ -373,6 +376,15 @@ impl Session for Banner1Session {
     }
 
     fn flush(&mut self, budget: &mut ByteBudget) -> Vec<(u16, Vec<u8>)> {
+        if let Stage::Parse(parser) = &mut self.stage {
+            parser.flush(&mut ParseCx {
+                banout: &mut self.banout,
+                budget,
+                acts: &mut Vec::new(),
+                capture_html: self.scan.capture_html,
+                starttls: false,
+            });
+        }
         self.banout.flush(budget)
     }
 }

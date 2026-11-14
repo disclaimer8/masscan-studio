@@ -11,6 +11,7 @@ pub(crate) mod classify;
 mod driver;
 mod ftp;
 pub(crate) mod hello;
+mod http;
 mod imap4;
 mod pop3;
 pub(crate) mod session;
@@ -263,7 +264,7 @@ mod tests {
             R0 + 1 + u32::try_from(reply.len()).expect("len"),
             S + 99,
         );
-        assert_eq!(got, [(app_id::HEUR, reply.to_vec())]);
+        assert_eq!(got, [(app_id::HTTP, b"HTTP/1.0 200 OK\r\n\r".to_vec())]);
 
         let k = key(2, 443);
         let mut out = StackOutput::default();

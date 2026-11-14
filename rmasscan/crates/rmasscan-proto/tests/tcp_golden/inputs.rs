@@ -287,14 +287,14 @@ pub fn cases() -> Vec<Case> {
     ));
     v.push(case(
         "http-status",
-        Classification,
+        Records,
         "HTTP/1.",
         80,
         &[b"HTTP/1.1 200 OK\r\nServer: lab\r\n\r\n"],
     ));
     v.push(case(
         "http-mixed-case",
-        Classification,
+        Records,
         "hTtP/1. вперемешку",
         8080,
         &[b"hTtP/1.0 404 Not Found\r\n\r\n"],
@@ -470,7 +470,7 @@ pub fn cases() -> Vec<Case> {
     ));
     v.push(case(
         "http-split-after-2",
-        Classification,
+        Records,
         "HTTP/1. разрезан после HT: совпадение во втором сегменте (E2.1, у C по сегментам лишняя запись unknown)",
         80,
         &[b"HT", b"TP/1.0 200 OK\r\n\r\n"],
@@ -542,6 +542,133 @@ pub fn cases() -> Vec<Case> {
         &[b"\x00\x00", b"\x00\x27\xffSMBr\x00\x00\x00\x00"],
     ));
     v.extend(text_cases());
+    v.extend(http_cases());
+    v
+}
+
+/// HTTP (`src/proto-http.c:487-691`): статус, поля, HTML и порядок banout по целому потоку C.
+fn http_cases() -> Vec<Case> {
+    let mut v = Vec::new();
+    for (name, stream) in [
+        (
+            "302",
+            b"HTTP/1.0 302 Found\r\nLocation: /lab\r\n\r\n".as_slice(),
+        ),
+        (
+            "gws",
+            b"HTTP/1.0 200 OK\r\nServer: gws\r\n\r\n<title>x</title>",
+        ),
+        (
+            "two-server",
+            b"HTTP/1.0 200\r\nServer:  one \r\nsErVeR:\ttwo\r\n\r\n",
+        ),
+        ("server-space", b"HTTP/1.0 200\r\nServer : lost\r\n\r\n"),
+        ("title", b"HTTP/1.0 200\r\n\r\n<title>x</title>"),
+        (
+            "title-attributes",
+            b"HTTP/1.0 200\r\n\r\n<TITLE id=x>x</title>",
+        ),
+        ("title-prefix", b"HTTP/1.0 200\r\n\r\n<titlex>x</title>"),
+        ("title-no-lt", b"HTTP/1.0 200\r\n\r\n<title>x\n&x;tail"),
+        ("no-title", b"HTTP/1.0 200\r\n\r\nplain title>body"),
+        ("title-unclosed-tag", b"HTTP/1.0 200\r\n\r\n<title id=x"),
+        (
+            "title-two",
+            b"HTTP/1.0 200\r\n\r\n<title>x</title><TITLE>y<end",
+        ),
+        (
+            "title-overlap",
+            b"HTTP/1.0 200\r\n\r\n<tit<title>x<title>y</title>",
+        ),
+        ("failed-status", b"HTTP/1.1x\r\nServer: gws\r\n\r\n"),
+        ("failed-status-split", b"HTTP/1.x"),
+        ("incomplete-status", b"HTTP/1."),
+        ("incomplete-header", b"HTTP/1.0 200\r\nServer: gws"),
+        ("empty-version", b"HTTP/. 200\r\n\r\n"),
+        ("lf-only", b"HTTP/1.0 200\nServer: x\n\n<title>t<end"),
+        (
+            "cr-field",
+            b"HTTP/1.0 200\r\nS\rerver: x\r\nServer:\r\t\n\r\n",
+        ),
+        (
+            "field-without-colon",
+            b"HTTP/1.0 200\r\nmalformed\r\nServer: x\r\n\r\n",
+        ),
+    ] {
+        v.push(case(
+            &format!("http-{name}"),
+            Expect::Records,
+            "HTTP: статус, поля и title как C на целом потоке",
+            80,
+            &[stream],
+        ));
+    }
+    // E2.3: классификатор уже совпал, но статус отвергается после границы сегмента.
+    v.push(case(
+        "http-failure-given",
+        Expect::Records,
+        "E2.3: неуспешный статус после конца сегмента",
+        80,
+        &[b"HTTP/1.", b"1x"],
+    ));
+    for n in [1, 199, 200, 250] {
+        let server = vec![b's'; n];
+        let stream = [
+            b"HTTP/1.0 200\r\nServer: ".as_slice(),
+            &server,
+            b"\r\n\r\n<title>t</title>",
+        ]
+        .concat();
+        v.push(case(
+            &format!("http-order-{n}"),
+            Expect::Records,
+            "порядок banout: длина Server вокруг 200 байт",
+            80,
+            &[&stream],
+        ));
+    }
+    for capture in [false, true] {
+        let mut c = case(
+            if capture {
+                "http-capture"
+            } else {
+                "http-capture-off"
+            },
+            Expect::Records,
+            "полный HTML и несколько title",
+            80,
+            &[b"HTTP/1.0 200\r\nServer: gws\r\n\r\nbefore<title>x</title>after<TITLE id=x>y<end"],
+        );
+        c.capture_html = capture;
+        v.push(c);
+        let mut c = case(
+            if capture {
+                "http-capture-long"
+            } else {
+                "http-title-long"
+            },
+            Expect::Records,
+            "большой заголовок и HTML вокруг переноса головы",
+            80,
+            &[&[
+                b"HTTP/1.0 200\r\nX: ".as_slice(),
+                &vec![b'h'; 250],
+                b"\r\n\r\n",
+                &vec![b'b'; 250],
+                b"<title>t</title>",
+            ]
+            .concat()],
+        );
+        c.capture_html = capture;
+        v.push(c);
+    }
+    v.push(case(
+        "http-version-2000",
+        Expect::Records,
+        "2000 цифр версии без пробела: незавершённый статус",
+        80,
+        &[&[b"HTTP/1.".as_slice(), &vec![b'1'; 2000]].concat()],
+    ));
     v
 }
 

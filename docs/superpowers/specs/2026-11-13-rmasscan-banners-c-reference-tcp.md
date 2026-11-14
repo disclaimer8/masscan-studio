@@ -370,6 +370,12 @@ ever: later server bytes are ACKed and never parsed (Р1, reproduce).
   _http_append(...)` (`:345-347`, needs a header without an empty line). The recon note's "bare-LF loop" does not
   exist (§F4).
 
+- Task 10 oracle correction (E1.17): `_http_insert` shrinks the allocation **before** moving the tail
+  (`src/proto-http.c:110-114`). Empty method, empty version and the short version `a\r\nb` read beyond the new
+  allocation; the normal allocator retained the logical CRLF tail, while ASan produced NUL/redzone bytes in the
+  returned request. The deterministic rule is a safe logical splice preserving the entire old tail, never allocator
+  bytes. Short and empty values remain accepted; ordinary C output agreement does not establish defined C behavior.
+
 ### C4. Others
 
 - `--connection-timeout <n>` / `--tcp-timeout` (old-style, `src/main-conf.c:2765-2767` ✓): `parseInt`; 0 means the
@@ -434,6 +440,7 @@ Details the tests must pin:
 | E1.14 | б | `--hello-file` silently truncated to 12285 bytes (`src/main-conf.c:1237-1246`) | longer file refused, exit 1 (Р17) | - |
 | E1.15 | - (receive rule of every rmasscan receiver, not а-г; ruling of task 3 review) | no checksum verified on receive (`src/proto-preprocess.c:10`, `:96` `TODO: verify checksum`; `src/main.c:808-1043` goes from `preprocess_frame` to `is_my_ip`/`is_my_port` and `stack_incoming_tcp`): a segment with a wrong IPv4 header or TCP sum reaches the stack (ACK advances, payload reaches the banner parser, FIN/RST change state) | `tcp_segment` drops it before the stack, as `parse_reply` (`ChecksumPolicy::Verify`, the default) drops a bad-sum SYN-ACK; `tcp_segment` has no `ChecksumPolicy` parameter, so the stack path always verifies | - |
 | E1.16 | б | a FIN at the next sequence number in FIN_WAIT2 or TIME_WAIT re-arms the timer at `secs + 5` (`src/stack-tcp-core.c:2243-2253`) and the lifetime is checked only on TIMEOUT (`:1970-1980`): a peer sending such FINs less than 5 s apart keeps a TCB for ever (slot leak) | every deadline is capped at `created + lifetime + 2 s` (the 2 s grid tick on which the automaton RSTs by lifetime); the table capacity itself is D7, not an E1 fix | - |
+| E1.17 | а | `_http_insert` calls `REALLOC(new_header_length + 1)` before moving the old tail (`src/proto-http.c:110-114`); shrinking method/URL/version can read bytes beyond the new allocation into the visible request (ASan differs from ordinary C for empty method, empty version, version `a\r\nb`) | safe logical splice preserves the full tail; no rejection of short/empty values and no allocator-dependent bytes | request fixtures `method-2`, `version-8`, `version-9` |
 
 ### E2. Segmentation dependencies (Р13: the reference is C on the unsplit stream)
 

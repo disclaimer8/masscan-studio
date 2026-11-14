@@ -1,0 +1,16 @@
+tcp-oracle v1 port=80 capture=html segments=1 bytes=73
+run whole calls=1
+app_proto 4
+record 31 3 "gws"
+record 17 2 "xy"
+record 18 44 "before<title>x</title>after<TITLE id=x>y<end"
+record 4 28 =stream
+end
+run bytewise calls=73
+app_proto 4
+record 1 6 =stream
+record 17 2 "xy"
+record 18 44 "before<title>x</title>after<TITLE id=x>y<end"
+record 31 3 "gws"
+record 4 28 =stream
+end

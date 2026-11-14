@@ -47,7 +47,7 @@ const DIR: &str = concat!(
 const ORACLE_GIT_HEAD: &str = "8e6b3b0c07a81e8ea61d557c06134a21a6881614";
 
 /// Число кейсов по видам ожидания: `records`, `classification`, `declared-4b`.
-const COUNTS: (usize, usize, usize) = (81, 48, 18);
+const COUNTS: (usize, usize, usize) = (114, 45, 18);
 
 fn read(path: &Path) -> Vec<u8> {
     fs::read(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
@@ -361,6 +361,13 @@ fn c_split_evidence_matches_the_reference() {
     assert_eq!(given.records.first(), Some(&(app_id::HEUR, b"HT".to_vec())));
     assert!(out.whole.records.iter().all(|r| r.0 != app_id::HEUR));
     assert!(out.bytewise.records.iter().any(|r| r.0 == app_id::HEUR));
+    // E2.3: неуспешный статус целиком не записан, а при разрезе C уже записал прошлый сегмент HTTP.
+    let (_, out) = by_name("http-failure-given");
+    assert!(out.whole.records.is_empty());
+    assert_eq!(
+        out.given.expect("given failure").records,
+        [(app_id::HTTP, b"HTTP/1.".to_vec())]
+    );
     // E2.2: после отвергнутого SSL3 C по сегментам находит {" или IAC, целиком нет.
     for (name, later) in [
         ("ssl3-then-mc", app_id::MC),
@@ -481,5 +488,5 @@ fn manifest_hashes_match_files() {
     let n =
         golden::check_manifest_hashes(Path::new(DIR), &manifest).unwrap_or_else(|e| panic!("{e}"));
     // Вход и вывод каждого кейса, вход и вывод сценариев banout, таблицы шаблонов и hello.
-    assert_eq!(n, 2 * cases().len() + 2 + 2);
+    assert_eq!(n, 2 * cases().len() + 2 + 2 + 2 * 27);
 }

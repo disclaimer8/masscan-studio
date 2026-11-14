@@ -5,6 +5,7 @@
 pub mod app;
 pub mod banner;
 mod banner1;
+pub mod http_request;
 mod memcached_text;
 pub mod normalize;
 mod tcp;
@@ -15,6 +16,7 @@ pub use banner::{BannerRecord, MAX_BANNER_BYTES};
 #[doc(hidden)]
 pub use banner1::banner_stream;
 pub use banner1::{HelloSet, StreamAction, StreamResult, TcpBannerSettings, tcp_stack_factory};
+pub use http_request::{HttpRequestOptions, http_request};
 pub use normalize::{normalize_json_string, normalize_string};
 pub use tcp::TcpBannerStack;
 #[doc(hidden)]

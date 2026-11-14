@@ -71,6 +71,9 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+/// Бюджет очереди результатов в байтах нагрузки баннеров по умолчанию (64 МиБ).
+pub const DEFAULT_RESULT_BYTE_CAPACITY: usize = 64 * 1024 * 1024;
+
 /// Параметры запуска. `wait` берётся из плана.
 #[derive(Debug, Clone)]
 pub struct EngineOptions {
@@ -79,6 +82,10 @@ pub struct EngineOptions {
     /// Сколько элементов (принятых ответов и, с [`Self::banners`], их баннеров) может ждать потребителя. Ответ
     /// принимается, пока очередь не полна, и встаёт вместе со своими баннерами.
     pub result_capacity: usize,
+    /// Сколько байт нагрузки баннеров может ждать потребителя (по умолчанию [`DEFAULT_RESULT_BYTE_CAPACITY`], ноль
+    /// запрещён). Один порог на любой набор баннеров: набор встаёт целиком или не встаёт, пустая очередь принимает
+    /// любой набор. Ответы без баннеров на байты не смотрят.
+    pub result_byte_capacity: usize,
     /// Максимум ответов в одном `Event::Results`.
     pub event_batch_limit: usize,
     pub progress_interval: Duration,
@@ -102,6 +109,7 @@ impl EngineOptions {
             scan_id,
             attempt_id,
             result_capacity: 4096,
+            result_byte_capacity: DEFAULT_RESULT_BYTE_CAPACITY,
             event_batch_limit: 1000,
             progress_interval: Duration::from_millis(250),
             io_timeout: MAX_IO_TIMEOUT,
@@ -229,6 +237,8 @@ enum Entry {
 struct QState {
     started: Option<u64>,
     results: VecDeque<Entry>,
+    /// Сумма нагрузки баннеров в `results` (бюджет `result_byte_capacity`).
+    banner_bytes: usize,
     progress: Option<Progress>,
     outcome: Option<Outcome>,
     checkpoint: Option<u64>,
@@ -241,34 +251,49 @@ struct Queue {
     st: Mutex<QState>,
     cv: Condvar,
     capacity: usize,
+    byte_capacity: usize,
     batch_limit: usize,
 }
 
 impl Queue {
-    fn new(capacity: usize, batch_limit: usize) -> Self {
+    fn new(capacity: usize, byte_capacity: usize, batch_limit: usize) -> Self {
         Self {
             st: Mutex::new(QState::default()),
             cv: Condvar::new(),
             capacity,
+            byte_capacity,
             batch_limit,
         }
     }
 
+    /// Правило приёма для любого набора (ответ с баннерами, позже набор соединения): очередь пуста, либо записей
+    /// меньше `capacity` и байты с набором не больше `byte_capacity`. Набор встаёт целиком или не встаёт; пустая
+    /// очередь принимает любой, иначе набор больше бюджета остановил бы скан навсегда.
+    fn fits(&self, st: &QState, new_bytes: usize) -> bool {
+        st.results.is_empty()
+            || (st.results.len() < self.capacity
+                && st.banner_bytes.saturating_add(new_bytes) <= self.byte_capacity)
+    }
+
     /// Не блокирует. `false` = очередь переполнена, ответ НЕ принят (и его баннеры тоже). Ёмкость считается по
-    /// элементам очереди, ответам и баннерам: ответ принимается, если очередь не полна, и встаёт под той же блокировкой
-    /// вместе со своими баннерами (очередь превышает ёмкость не больше чем на баннеры одного ответа). Без баннеров
-    /// проверка прежняя.
+    /// элементам очереди, ответам и баннерам, и по байтам нагрузки баннеров ([`Self::fits`]): ответ встаёт под той
+    /// же блокировкой вместе со своими баннерами (очередь превышает ёмкость не больше чем на баннеры одного ответа).
+    /// Без баннеров проверка по записям прежняя.
     fn push_result(&self, r: Reply, banners: Vec<BannerRecord>) -> bool {
         let mut st = lock(&self.st);
         if st.closed {
             return true; // потребителя нет: молча не храним
         }
-        if st.results.len() >= self.capacity {
+        let new_bytes = banners
+            .iter()
+            .fold(0usize, |a, b| a.saturating_add(b.payload.len()));
+        if !self.fits(&st, new_bytes) {
             return false;
         }
         st.results.push_back(Entry::Reply(r));
         st.results
             .extend(banners.into_iter().map(|b| Entry::Banner(Box::new(b))));
+        st.banner_bytes = st.banner_bytes.saturating_add(new_bytes);
         drop(st);
         self.cv.notify_all();
         true
@@ -296,6 +321,7 @@ impl Queue {
         let mut st = lock(&self.st);
         st.closed = true;
         st.results.clear();
+        st.banner_bytes = 0;
         st.progress = None;
     }
 
@@ -307,10 +333,11 @@ impl Queue {
             return Ok(Output::Event(Event::Started { range }));
         }
         while let Some(Entry::Banner(_)) = st.results.front() {
-            if let Some(Entry::Banner(b)) = st.results.pop_front()
-                && want == Want::Outputs
-            {
-                return Ok(Output::Banner(*b));
+            if let Some(Entry::Banner(b)) = st.results.pop_front() {
+                st.banner_bytes = st.banner_bytes.saturating_sub(b.payload.len());
+                if want == Want::Outputs {
+                    return Ok(Output::Banner(*b));
+                }
             }
         }
         if !st.results.is_empty() {
@@ -323,7 +350,9 @@ impl Queue {
                         }
                     }
                     Some(Entry::Banner(_)) if want == Want::Events => {
-                        st.results.pop_front();
+                        if let Some(Entry::Banner(b)) = st.results.pop_front() {
+                            st.banner_bytes = st.banner_bytes.saturating_sub(b.payload.len());
+                        }
                     }
                     _ => break,
                 }
@@ -1171,6 +1200,11 @@ impl Engine {
         if options.result_capacity == 0 {
             return Err(StartError::InvalidOptions("result_capacity must be > 0"));
         }
+        if options.result_byte_capacity == 0 {
+            return Err(StartError::InvalidOptions(
+                "result_byte_capacity must be > 0",
+            ));
+        }
         if options.event_batch_limit == 0 {
             return Err(StartError::InvalidOptions("event_batch_limit must be > 0"));
         }
@@ -1190,7 +1224,11 @@ impl Engine {
         let rate = plan.effective().max_rate() / count as f64;
         let io_timeout = options.io_timeout.min(MAX_IO_TIMEOUT);
 
-        let queue = Queue::new(options.result_capacity, options.event_batch_limit);
+        let queue = Queue::new(
+            options.result_capacity,
+            options.result_byte_capacity,
+            options.event_batch_limit,
+        );
         lock(&queue.st).started = Some(plan.range());
         let shared = Arc::new(Shared {
             halt: AtomicU8::new(RUN),
@@ -2296,5 +2334,122 @@ mod tests {
             encode_neighbor_advertisement(NDP_ME_MAC, NDP_ME, NDP_ROUTER_MAC, NDP_ROUTER_IP)
                 .to_vec()
         );
+    }
+}
+
+#[cfg(test)]
+mod byte_budget_tests {
+    //! Бюджет очереди в байтах нагрузки баннеров (И7): правило приёма и возврат байт при выдаче и пропуске.
+
+    use super::*;
+    use rmasscan_core::receive::PortStatus;
+    use std::net::{IpAddr, Ipv4Addr};
+
+    fn reply(n: u32) -> Reply {
+        Reply {
+            remote_ip: 0x0a00_0000 + n,
+            remote_port: 53,
+            local_ip: 0x0a00_00fe,
+            local_port: 40000,
+            status: PortStatus::Open,
+            tcp_flags: 0,
+            ttl: 64,
+            ip_proto: 17,
+            mac: None,
+            ip6: None,
+        }
+    }
+
+    fn banner(len: usize) -> BannerRecord {
+        BannerRecord {
+            timestamp: 0,
+            ip: IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
+            ip_proto: 17,
+            port: 53,
+            app: 0,
+            ttl: 64,
+            payload: vec![0x41; len],
+        }
+    }
+
+    const KIB64: usize = 64 * 1024;
+
+    #[test]
+    fn replies_only_queue_unchanged_by_byte_budget() {
+        let q = Queue::new(4096, 1, 1000);
+        for n in 0..4096 {
+            assert!(q.push_result(reply(n), Vec::new()), "reply {n}");
+        }
+        assert!(!q.push_result(reply(4096), Vec::new()), "4097th");
+    }
+
+    #[test]
+    fn empty_queue_accepts_any_banner_set() {
+        let q = Queue::new(4096, 1, 1000);
+        assert!(q.push_result(reply(0), vec![banner(KIB64), banner(KIB64)]));
+        assert!(
+            !q.push_result(reply(1), vec![banner(1)]),
+            "now it is not empty"
+        );
+    }
+
+    #[test]
+    fn byte_budget_frees_on_pop() {
+        let q = Queue::new(4096, 100 * 1024, 1000);
+        assert!(q.push_result(reply(0), vec![banner(KIB64)]));
+        assert!(!q.push_result(reply(1), vec![banner(KIB64)]));
+        let mut st = lock(&q.st);
+        let _ = q.pop_locked(&mut st, Want::Outputs); // Results{reply 0}
+        assert!(matches!(
+            q.pop_locked(&mut st, Want::Outputs),
+            Ok(Output::Banner(_))
+        ));
+        drop(st);
+        assert!(q.push_result(reply(1), vec![banner(KIB64)]));
+        assert!(
+            q.push_result(reply(2), Vec::new()),
+            "no banners: bytes do not matter"
+        );
+    }
+
+    #[test]
+    fn events_consumer_skipping_banners_releases_bytes() {
+        let q = Queue::new(4096, 100 * 1024, 1000);
+        assert!(q.push_result(reply(0), vec![banner(KIB64)]));
+        assert!(!q.push_result(reply(1), vec![banner(KIB64)]));
+        let mut st = lock(&q.st);
+        match q.pop_locked(&mut st, Want::Events) {
+            Ok(Output::Event(Event::Results { replies })) => assert_eq!(replies.len(), 1),
+            _ => panic!("expected Results"),
+        }
+        assert!(
+            st.results.is_empty(),
+            "the banner is skipped with the batch"
+        );
+        drop(st);
+        assert!(q.push_result(reply(1), vec![banner(KIB64)]));
+        // close обнуляет счётчик вместе с очередью
+        q.close();
+        assert!(lock(&q.st).results.is_empty());
+    }
+
+    #[test]
+    fn batch_cut_at_event_batch_limit_with_banners() {
+        let q = Queue::new(4096, DEFAULT_RESULT_BYTE_CAPACITY, 3);
+        for n in 0..3 {
+            assert!(q.push_result(reply(n), Vec::new()));
+        }
+        assert!(q.push_result(reply(3), vec![banner(5)])); // ответ на позиции event_batch_limit
+        assert!(q.push_result(reply(4), Vec::new()));
+        let mut st = lock(&q.st);
+        let mut got = Vec::new();
+        while let Ok(o) = q.pop_locked(&mut st, Want::Outputs) {
+            got.push(match o {
+                Output::Event(Event::Results { replies }) => format!("R{}", replies.len()),
+                Output::Banner(_) => "B".to_string(),
+                Output::Event(e) => format!("{e:?}"),
+            });
+        }
+        assert_eq!(got, ["R3", "R1", "B", "R1"]);
     }
 }

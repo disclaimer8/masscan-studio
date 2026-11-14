@@ -30,8 +30,9 @@ pub mod io;
 pub use banners::{BannerOptions, Output, UdpBannerParser, udp_reply_banners};
 pub use checkpoint::{CHECKPOINT_FORMAT_VERSION, Checkpoint, CheckpointError};
 pub use engine::{
-    CancelHandle, DEFAULT_TX_STALL_TIMEOUT, DedupCache, Engine, EngineError, EngineHandle,
-    EngineOptions, MAX_DEDUP_ENTRIES, MAX_IO_TIMEOUT, MAX_TX_BATCH, PcapSink, StartError,
+    CancelHandle, DEFAULT_RESULT_BYTE_CAPACITY, DEFAULT_TX_STALL_TIMEOUT, DedupCache, Engine,
+    EngineError, EngineHandle, EngineOptions, MAX_DEDUP_ENTRIES, MAX_IO_TIMEOUT, MAX_TX_BATCH,
+    PcapSink, StartError,
 };
 pub use events::{Event, FailReason, Outcome, Progress, Reason};
 pub use identity::{ENGINE_ALGORITHM_VERSION, job_digest};

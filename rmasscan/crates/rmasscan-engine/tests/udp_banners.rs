@@ -237,6 +237,7 @@ fn items(outputs: &[Output]) -> Vec<Item> {
                 replies.iter().copied().map(Item::Status).collect()
             }
             Output::Banner(b) => vec![Item::Banner(b.clone())],
+            Output::ConnectionBanner(b) => panic!("no TCP stack in the UDP banner tests: {b:?}"),
             Output::Event(_) => vec![],
         })
         .collect()
@@ -354,7 +355,7 @@ fn banners_off_changes_nothing() {
         .into_iter()
         .filter_map(|o| match o {
             Output::Event(e) => Some(e),
-            Output::Banner(_) => None,
+            Output::Banner(_) | Output::ConnectionBanner(_) => None,
         })
         .collect();
     assert_eq!(frames_out, frames_off);

@@ -1445,6 +1445,9 @@ impl Sink for FailingSink {
     fn report_reply_banner(&mut self, b: BannerRecord) -> Result<(), String> {
         self.report_banner(&b)
     }
+    fn report_connection_banner(&mut self, b: BannerRecord) -> Result<(), String> {
+        self.report_banner(&b)
+    }
     fn finish(&mut self) -> Result<(), String> {
         assert!(
             self.on_finish,
@@ -2468,6 +2471,9 @@ impl Sink for PressOnFirstOpen<'_> {
     }
     fn report_reply_banner(&mut self, b: BannerRecord) -> Result<(), String> {
         Sink::report_reply_banner(&mut self.pipeline, b)
+    }
+    fn report_connection_banner(&mut self, b: BannerRecord) -> Result<(), String> {
+        Sink::report_connection_banner(&mut self.pipeline, b)
     }
     fn finish(&mut self) -> Result<(), String> {
         self.pipeline.finish()

@@ -25,7 +25,9 @@
 //! Баннеры (`--banners`, `--rawudp`, подэтап 4a, только UDP): движок разбирает датаграмму ответа, прошедшего дедуп,
 //! функцией `rmasscan_proto::udp_banner_parser` (`handle_udp`) и выдаёт баннеры сразу за пачкой, которая этим ответом
 //! кончается (`rmasscan_engine::Output`); цикл событий пишет их в [`Sink::report_reply_banner`] со временем записи
-//! статуса того же ответа. Без `--banners` движок датаграммы не разбирает.
+//! статуса того же ответа. Без `--banners` движок датаграммы не разбирает. Баннеры соединений TCP
+//! (`Output::ConnectionBanner`, только когда движку передан стек `EngineOptions::tcp_stack`) цикл событий пишет в
+//! [`Sink::report_connection_banner`], время ставит приёмник в момент обработки.
 
 #![forbid(unsafe_code)]
 
@@ -1227,6 +1229,16 @@ pub fn run_live_conf(
             // у его записи статуса. Ошибка приёмника останавливает скан, как у записи статуса.
             Ok(Output::Banner(b)) => {
                 if let Err(e) = sink.report_reply_banner(b) {
+                    sink_error = Some(e);
+                    handle.stop();
+                    break 'events;
+                }
+            }
+            // Баннер соединения TCP (сброс TCB, `banner_flush`, `src/stack-tcp-core.c:800-830`): к записи статуса не
+            // привязан, время ставит приёмник в момент обработки (`global_now` C, справка B3). Ошибка приёмника
+            // останавливает скан, как у записи статуса.
+            Ok(Output::ConnectionBanner(b)) => {
+                if let Err(e) = sink.report_connection_banner(b) {
                     sink_error = Some(e);
                     handle.stop();
                     break 'events;

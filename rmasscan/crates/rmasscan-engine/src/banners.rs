@@ -1,16 +1,20 @@
-//! Баннеры UDP-ответов (`handle_udp`, `src/proto-udp.c:54-132`): аддитивный API движка (Р11).
+//! Баннеры UDP-ответов (`handle_udp`, `src/proto-udp.c:54-132`) и стек TCP (подэтап 4b): аддитивный API движка
+//! (Р11).
 //!
 //! Движок не зависит от `rmasscan-proto`: новая обычная зависимость изменила бы `Cargo.lock` Studio, которая
 //! собирается с `--locked` и не меняется ни на байт. Поэтому разбор датаграммы приходит снаружи, указателем на функцию
-//! в [`BannerOptions::udp_parser`] (CLI передаёт туда `rmasscan_proto::handle_udp`), а тип записи
-//! ([`BannerRecord`]) живёт в ядре.
+//! в [`BannerOptions::udp_parser`] (CLI передаёт туда `rmasscan_proto::handle_udp`), таблица соединений TCP через
+//! фабрику [`TcpStackOptions::factory`] (трейт ядра `rmasscan_core::stack`), а тип записи ([`BannerRecord`]) живёт
+//! в ядре.
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::sync::Arc;
 
 use rmasscan_core::banner::{BannerRecord, MAX_BANNER_BYTES};
 use rmasscan_core::cookie::{syn_cookie_ipv4, syn_cookie_ipv6};
 use rmasscan_core::packet::LinkType;
 use rmasscan_core::receive::{PortStatus, Reply, udp_payload};
+use rmasscan_core::stack::{StackStats, TcpStackFactory};
 use rmasscan_core::targets::TEMPL_UDP;
 
 use crate::events::Event;
@@ -35,13 +39,20 @@ pub struct BannerOptions {
 ///
 /// Гарантия порядка: баннеры ответа приходят сразу после того [`Event::Results`], в котором последним стоит этот
 /// ответ, и раньше записи любого более позднего ответа. Пачка `Results` с баннерами обрывается на ответе, за которым
-/// идут его баннеры.
+/// идут его баннеры. Баннеры соединений ([`Output::ConnectionBanner`]) между ответом и его баннерами не встают
+/// (каждый набор кладётся под одной блокировкой очереди), записи одного соединения идут подряд, в порядке C, и тоже
+/// обрывают пачку `Results`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Output {
     Event(Event),
     /// Баннер последнего ответа перед ним. `timestamp` всегда 0: у [`Reply`] времени нет, и потребитель ставит баннеру
     /// время записи статуса его ответа (CLI: `Sink::report_reply_banner`); `ttl` уже как у ответа.
     Banner(BannerRecord),
+    /// Баннер соединения TCP (сброс TCB, `banner_flush`, `src/stack-tcp-core.c:800-830`): к предыдущему ответу не
+    /// привязан, приходит, когда соединение кончилось (FIN, RST, жизнь) или в сбросе таблицы в конце скана.
+    /// `timestamp` всегда 0: потребитель ставит время в момент обработки (`global_now` C при сбросе, справка B3; CLI:
+    /// `Sink::report_connection_banner`); `ttl` это TTL SYN-ACK соединения. Только с [`TcpStackOptions`].
+    ConnectionBanner(BannerRecord),
 }
 
 /// Баннеры, которые движок выдаёт за принятым и прошедшим дедуп ответом `reply` (кадр `frame` канала `link`, seed
@@ -102,4 +113,46 @@ pub fn udp_reply_banners(
             }
         })
         .collect()
+}
+
+/// Включает пользовательский стек TCP (`--banners`, подэтап 4b). По умолчанию в [`crate::EngineOptions`] его нет
+/// (`None`, так у Studio): ни один сегмент не идёт в стек, тиков нет, [`Output::ConnectionBanner`] не выдаётся, кадры
+/// и события побайтно прежние.
+///
+/// Реализация таблицы приходит снаружи, через фабрику (CLI передаёт фабрику `rmasscan-proto`): обычная зависимость
+/// движка от `rmasscan-proto` изменила бы `Cargo.lock` Studio (Р11), как и для [`BannerOptions::udp_parser`].
+/// Каждый RX-поток получает свою таблицу (в C своя таблица у каждого `receive_thread`, `src/main.c:612`) с параметрами
+/// `TableParams { seed скана, capacity: max(1024, table_capacity / адаптеров), banner_byte_budget: banner_byte_budget
+/// / адаптеров }`.
+#[derive(Debug, Clone)]
+pub struct TcpStackOptions {
+    pub factory: Arc<dyn TcpStackFactory>,
+    /// Предел живых соединений на скан (C предела не знает, `src/stack-tcp-core.c:673-697`).
+    pub table_capacity: usize,
+    /// Бюджет байтов баннеров живых соединений на скан.
+    pub banner_byte_budget: usize,
+}
+
+/// Счётчики стека скана ([`crate::EngineHandle::stack_stats`]): сумма таблиц всех RX-потоков и кадры стека. Кадр
+/// выброшен, если очередь кадров адаптера полна (`STACK_OUT_CAP`, RX не ждёт, Р7), если построитель его не строит
+/// (длиннее буфера C или IPv6 без `source_ipv6`, `TcpFrameBuilder::build`) или если его выдал сброс таблицы в конце
+/// (`tcpcon_destroy_table` кадров не шлёт, `src/stack-tcp-core.c:933-961`). Отправленные кадры считает TX.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct StackSummary {
+    pub stack: StackStats,
+    pub frames_sent: u64,
+    pub frames_dropped: u64,
+}
+
+impl StackSummary {
+    /// Сумма счётчиков таблиц (насыщающая).
+    pub(crate) fn add_table(&mut self, s: &StackStats) {
+        let t = &mut self.stack;
+        t.tcbs_created = t.tcbs_created.saturating_add(s.tcbs_created);
+        t.tcbs_live = t.tcbs_live.saturating_add(s.tcbs_live);
+        t.table_full = t.table_full.saturating_add(s.table_full);
+        t.banner_bytes_dropped = t
+            .banner_bytes_dropped
+            .saturating_add(s.banner_bytes_dropped);
+    }
 }

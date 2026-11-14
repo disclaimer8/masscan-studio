@@ -43,6 +43,14 @@ pub trait Sink {
     /// справка A0), у rmasscan время статуса это момент обработки (Р9 этапа вывода). Метод обязательный, чтобы новый
     /// приёмник не унаследовал молча время 0 (1970 год в выводе).
     fn report_reply_banner(&mut self, b: BannerRecord) -> Result<(), String>;
+    /// Баннер соединения TCP (`rmasscan_engine::Output::ConnectionBanner`): к записи статуса не привязан, приходит,
+    /// когда соединение кончилось или таблица сброшена в конце скана.
+    ///
+    /// Контракт: `b.timestamp` от движка всегда 0. Приёмник, который пишет время, обязан поставить время по своим
+    /// часам в момент обработки: C пишет баннеры TCB с `global_now` в момент сброса (`banner_flush`,
+    /// `src/stack-tcp-core.c:800-830`, справка B3), а не со временем записи статуса. Метод обязательный по той же
+    /// причине, что [`Sink::report_reply_banner`].
+    fn report_connection_banner(&mut self, b: BannerRecord) -> Result<(), String>;
     fn finish(&mut self) -> Result<(), String>;
 }
 
@@ -183,6 +191,11 @@ impl<W: Write> Sink for Interactive<W> {
 
     /// Строка `Banner on port …` времени не печатает (`src/output.c:903-923`): метку ставить некуда.
     fn report_reply_banner(&mut self, b: BannerRecord) -> Result<(), String> {
+        self.report_banner(&b)
+    }
+
+    /// Как у баннера ответа: строка `Banner on port …` времени не печатает.
+    fn report_connection_banner(&mut self, b: BannerRecord) -> Result<(), String> {
         self.report_banner(&b)
     }
 

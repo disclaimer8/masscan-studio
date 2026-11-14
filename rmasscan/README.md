@@ -764,7 +764,7 @@ IPv6. Принятый код `0ce2a9e8` — коммит слияния `ffb8d6
 маршрутов и адаптеров на трёх ОС, ограниченный обмен PF_ROUTE на macOS, карта доставки IPv4 у планов Studio) плюс коммит только с
 тестом. На нём все шесть окон прогнаны заново (набор r3, `safety_trips` пуст): Linux `ipv6` PASS 4/4 (`v01`–`v03`), регрессии
 протоколов Linux PASS 6/6, управления сканом Linux PASS 7/7, вывода Linux PASS 18/18, автоопределения Linux PASS 13/13 и Windows VM
-PASS 10/10. Тесты на `0ce2a9e8`: Mac 2201/0, minipc 2084/0, гость 1973/0; офлайн-тесты Studio (`cargo xtask test`) на Mac
+PASS 10/10. Тесты на `0ce2a9e8`: Mac 2201/0, хост стенда Linux 2084/0, гость 1973/0; офлайн-тесты Studio (`cargo xtask test`) на Mac
 484/0. Правило подтверждения 1e9 в `validate` и проверка MAC следующего хопа IPv6 в `ReadyPlan::new_cli` в коде под окнами есть, но
 ни одно окно их не упражняет. Прежний набор r2 на `e9eaebeb` (до правок итогового ревью и до слияния): evidence `f089b071`, те же
 вердикты. Итоговое ревью ветки (правки до `0e0bd100`) и ревью слияния пройдены. GO (stands) условно: зелёный CI на точном HEAD и
@@ -777,14 +777,14 @@ Studio CI PR фиксирует контролёр при слиянии. Window
 `T:`/`U:`/`S:`/`I:`/`O:` в `-p`, `-sU`/`-sS`/`-sZ`, `--top-ports`, `--udp-ports`, `--ping`, `--arp`, записи этих протоколов во
 всех форматах вывода и в `--readscan` (94 эталона C). Живая приёмка: Linux `protocols` PASS 6/6 (`p01`–`p05`), регрессии управления сканом Linux PASS 7/7, вывода
 Linux PASS 18/18, автоопределения Linux PASS 13/13 и Windows VM PASS 10/10; тесты Mac 1964/0 (сводка в
-`verification/mac-test-ws-summary.txt`), minipc 1836/0 и гость 1731/0.
+`verification/mac-test-ws-summary.txt`), хост стенда Linux 1836/0 и гость 1731/0.
 GO (stands) условно: зелёный CI на точном HEAD и итоговое ревью ветки фиксирует контролёр при слиянии. macOS живой и
 физические NIC: NOT RUN. Отчёт: `../docs/experiments/2026-11-08-rmasscan-protocols-ipv4-acceptance.md`.
 
 Управление сканом (код `8059eac`, evidence `6509a8c`, 2026-11-10, ветка `feat/rmasscan-scan-control`): `--shard`,
 `--retries`, `--wait`, пауза первым Ctrl-C с `paused.conf`, `--resume`/`--resume-index`/`--resume-count`, `--infinite`,
 `-c`/`-iL`, `--adapter[0..7]`, `--pcap`, `--ttl`, `--badsum`, `--tcp-*`. Живая приёмка: Linux `scan-control` PASS 7/7,
-регрессия вывода Linux PASS 18/18, автоопределения Linux PASS 13/13 и Windows VM PASS 10/10; тесты minipc 1702/0 и
+регрессия вывода Linux PASS 18/18, автоопределения Linux PASS 13/13 и Windows VM PASS 10/10; тесты хоста стенда Linux 1702/0 и
 гость 1598/0; CI `rmasscan` и `language-guard` на `8059eac` зелёные. macOS живой и физические NIC: NOT RUN.
 Отчёт: `../docs/experiments/2026-11-08-rmasscan-scan-control-acceptance.md`.
 
@@ -827,7 +827,7 @@ resume, остановку в пределах 1 с и ограниченную 
 
 Этап 1 закрыт. Критерии выхода выполнены: `-sL` и `--echo` побайтно совпадают с C,
 self-тесты C отображены на Rust (`tests/selftest_parity.rs`), передача и SYN покрыты
-тестами и дифференциалами с C, генерация offline около 0.96–0.99 от C на minipc
+тестами и дифференциалами с C, генерация offline около 0.96–0.99 от C на хосте стенда Linux
 (см. BENCHMARKS.md), C в графе сборки нет.
 
 Статус CI относится к конкретному commit и в этом файле не фиксируется; CI собирает и гоняет offline-тесты (в том числе на macOS), но не живой Windows/macOS raw I/O.

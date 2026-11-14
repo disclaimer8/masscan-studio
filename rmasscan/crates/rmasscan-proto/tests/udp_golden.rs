@@ -782,14 +782,17 @@ fn manifest_hashes_match_files() {
 /// Временный каталог, удаляется при выходе из области видимости (в том числе при панике).
 struct TempDir(std::path::PathBuf);
 
+/// Номер следующего [`TempDir`] процесса. Имя из часов делили параллельные тесты: часы macOS идут микросекундами, и
+/// два теста, начатые в одну микросекунду, получали один каталог, а `Drop` короткого удалял его посреди копии
+/// длинного.
+static NEXT_TEMP_DIR: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 impl TempDir {
     fn new() -> Self {
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_nanos());
-        let dir =
-            std::env::temp_dir().join(format!("rmasscan-golden-{}-{nanos}", std::process::id()));
-        fs::create_dir_all(&dir).expect("create temp dir");
+        let n = NEXT_TEMP_DIR.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("rmasscan-golden-{}-{n}", std::process::id()));
+        // `create_dir`, не `create_dir_all`: совпадение имени падает здесь, а не делит каталог молча.
+        fs::create_dir(&dir).unwrap_or_else(|e| panic!("create temp dir {}: {e}", dir.display()));
         Self(dir)
     }
 }

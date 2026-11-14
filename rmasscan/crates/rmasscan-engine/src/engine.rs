@@ -334,6 +334,7 @@ impl Queue {
         }
         while let Some(Entry::Banner(_)) = st.results.front() {
             if let Some(Entry::Banner(b)) = st.results.pop_front() {
+                debug_assert!(st.banner_bytes >= b.payload.len());
                 st.banner_bytes = st.banner_bytes.saturating_sub(b.payload.len());
                 if want == Want::Outputs {
                     return Ok(Output::Banner(*b));
@@ -351,6 +352,7 @@ impl Queue {
                     }
                     Some(Entry::Banner(_)) if want == Want::Events => {
                         if let Some(Entry::Banner(b)) = st.results.pop_front() {
+                            debug_assert!(st.banner_bytes >= b.payload.len());
                             st.banner_bytes = st.banner_bytes.saturating_sub(b.payload.len());
                         }
                     }
@@ -2399,11 +2401,14 @@ mod byte_budget_tests {
         assert!(q.push_result(reply(0), vec![banner(KIB64)]));
         assert!(!q.push_result(reply(1), vec![banner(KIB64)]));
         let mut st = lock(&q.st);
+        assert_eq!(st.banner_bytes, KIB64);
         let _ = q.pop_locked(&mut st, Want::Outputs); // Results{reply 0}
+        assert_eq!(st.banner_bytes, KIB64, "the banner is still queued");
         assert!(matches!(
             q.pop_locked(&mut st, Want::Outputs),
             Ok(Output::Banner(_))
         ));
+        assert_eq!(st.banner_bytes, 0);
         drop(st);
         assert!(q.push_result(reply(1), vec![banner(KIB64)]));
         assert!(
@@ -2426,22 +2431,31 @@ mod byte_budget_tests {
             st.results.is_empty(),
             "the banner is skipped with the batch"
         );
+        assert_eq!(st.banner_bytes, 0);
         drop(st);
         assert!(q.push_result(reply(1), vec![banner(KIB64)]));
         // close обнуляет счётчик вместе с очередью
         q.close();
         assert!(lock(&q.st).results.is_empty());
+        assert_eq!(lock(&q.st).banner_bytes, 0);
+    }
+
+    /// Ответ с баннером ровно на последней позиции полной пачки (`event_batch_limit` = 3): пачка режется по лимиту,
+    /// баннер остаётся во главе очереди.
+    fn batch_cut_queue() -> Queue {
+        let q = Queue::new(4096, DEFAULT_RESULT_BYTE_CAPACITY, 3);
+        assert!(q.push_result(reply(0), Vec::new()));
+        assert!(q.push_result(reply(1), Vec::new()));
+        assert!(q.push_result(reply(2), vec![banner(5)]));
+        assert!(q.push_result(reply(3), Vec::new()));
+        q
     }
 
     #[test]
     fn batch_cut_at_event_batch_limit_with_banners() {
-        let q = Queue::new(4096, DEFAULT_RESULT_BYTE_CAPACITY, 3);
-        for n in 0..3 {
-            assert!(q.push_result(reply(n), Vec::new()));
-        }
-        assert!(q.push_result(reply(3), vec![banner(5)])); // ответ на позиции event_batch_limit
-        assert!(q.push_result(reply(4), Vec::new()));
+        let q = batch_cut_queue();
         let mut st = lock(&q.st);
+        assert_eq!(st.banner_bytes, 5);
         let mut got = Vec::new();
         while let Ok(o) = q.pop_locked(&mut st, Want::Outputs) {
             got.push(match o {
@@ -2450,6 +2464,23 @@ mod byte_budget_tests {
                 Output::Event(e) => format!("{e:?}"),
             });
         }
-        assert_eq!(got, ["R3", "R1", "B", "R1"]);
+        assert_eq!(got, ["R3", "B", "R1"]);
+        assert_eq!(st.banner_bytes, 0);
+    }
+
+    #[test]
+    fn batch_cut_at_event_batch_limit_events_consumer_releases_bytes() {
+        let q = batch_cut_queue();
+        let mut st = lock(&q.st);
+        assert!(matches!(
+            q.pop_locked(&mut st, Want::Events),
+            Ok(Output::Event(Event::Results { replies })) if replies.len() == 3
+        ));
+        assert_eq!(st.banner_bytes, 5, "the banner waits at the head");
+        assert!(matches!(
+            q.pop_locked(&mut st, Want::Events),
+            Ok(Output::Event(Event::Results { replies })) if replies.len() == 1
+        ));
+        assert_eq!(st.banner_bytes, 0);
     }
 }

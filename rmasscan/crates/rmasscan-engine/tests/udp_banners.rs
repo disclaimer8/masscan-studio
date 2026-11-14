@@ -998,8 +998,14 @@ fn byte_budget_refuses_reply_whose_banners_overflow() {
 #[test]
 fn empty_queue_accepts_any_banner_set_in_engine() {
     let (outputs, outcome) = run_unread_big_banners(1);
+    assert_eq!(
+        outcome.reason,
+        rmasscan_engine::Reason::Failed(rmasscan_engine::FailReason::ConsumerTooSlow)
+    );
     assert_eq!(outcome.progress.received, 1);
-    assert_eq!(grouped(&outputs)[0].1.len(), 1);
+    let groups = grouped(&outputs);
+    assert_eq!(groups[0].1.len(), 1);
+    assert_eq!(groups[0].1[0].payload.len(), 64 * 1024);
 }
 
 /// Нулевой бюджет запрещён.

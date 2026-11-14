@@ -6,8 +6,9 @@
 
 mod common;
 
+use std::collections::VecDeque;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::TryRecvError;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
@@ -25,8 +26,12 @@ use rmasscan_core::stack::{
     TcpStackFactory,
 };
 use rmasscan_core::targets::{add_target_string, parse_ports};
-use rmasscan_core::throttle::Clock;
-use rmasscan_engine::fake::{FakeAdapter, ManualClock, reply_to_syn, reply_to_syn6, reply_to_udp};
+use rmasscan_core::tcp_frame::{TcpFrameBuilder, stateless_rst};
+use rmasscan_core::throttle::{Clock, Throttler};
+use rmasscan_engine::fake::{
+    FakeAdapter, ManualClock, TxStep, port_unreachable_for, reply_to_syn, reply_to_syn6,
+    reply_to_udp,
+};
 use rmasscan_engine::{
     BannerOptions, CancelHandle, Engine, EngineHandle, EngineOptions, Event, FailReason, Outcome,
     Output, Reason, STACK_OUT_CAP, StackSummary, TcpStackOptions,
@@ -72,6 +77,9 @@ struct Seen {
     flags: u8,
     ttl: u8,
     payload: Vec<u8>,
+    /// Сколько тиков было до этого сегмента: тик с большим номером идёт на следующей итерации RX, то есть после
+    /// выдачи этого сегмента в очередь кадров адаптера.
+    tick: usize,
 }
 
 /// Журнал одной таблицы.
@@ -156,12 +164,17 @@ impl TcpStack for Scripted {
     }
 
     fn on_segment(&mut self, now: u64, seg: &SegmentIn<'_>, out: &mut StackOutput) -> bool {
-        lk(&self.log).segs.push(Seen {
-            key: seg.key,
-            flags: seg.flags,
-            ttl: seg.ttl,
-            payload: seg.payload.to_vec(),
-        });
+        {
+            let mut log = lk(&self.log);
+            let tick = log.ticks.len();
+            log.segs.push(Seen {
+                key: seg.key,
+                flags: seg.flags,
+                ttl: seg.ttl,
+                payload: seg.payload.to_vec(),
+                tick,
+            });
+        }
         let pos = self.conns.iter().position(|c| c.key == seg.key);
         if seg.flags & (SYN | ACK) == SYN | ACK {
             if pos.is_some() {
@@ -352,13 +365,25 @@ fn nic(k: u8) -> NicBinding {
 }
 
 fn plan_n(targets: &str, ports: &str, wait_secs: u32, nics: u8) -> ReadyPlan {
+    plan_full(targets, ports, wait_secs, nics, 1_000_000.0, 0)
+}
+
+fn plan_full(
+    targets: &str,
+    ports: &str,
+    wait_secs: u32,
+    nics: u8,
+    max_rate: f64,
+    retries: u32,
+) -> ReadyPlan {
     let mut m = MassIp::new();
     add_target_string(m.ipv4_mut(), targets).unwrap();
     parse_ports(m.ports_mut(), ports).unwrap();
     let cfg = ScanConfig {
         targets: m,
         seed: SEED,
-        max_rate: 1_000_000.0,
+        max_rate,
+        retries,
         wait_secs,
         ..ScanConfig::default()
     };
@@ -437,6 +462,37 @@ fn run_paced(
         outcome,
         summary,
     }
+}
+
+/// Прогон на фиктивном адаптере без часов: `ManualClock` двигает только сон throttle TX, поэтому окно `--wait` стоит,
+/// пока тест не сдвинет часы сам. Тест ждёт `settled` (например, TX отправил кадры стека), затем шагами по 60 с
+/// доводит RX до конца окна и читает всё до `Finished`. Так TX, который дожёвывает очередь кадров (задача 5), не
+/// соревнуется с концом RX: на фиктивном адаптере с часами пустой приём RX двигает окно наперегонки с отправкой.
+fn run_settled(
+    plan: &ReadyPlan,
+    responder: impl FnMut(&[u8]) -> Vec<Vec<u8>> + Send + 'static,
+    options: EngineOptions,
+    settled: impl Fn(&EngineHandle, &FakeAdapter) -> bool,
+) -> (Run, FakeAdapter) {
+    let clock = ManualClock::new();
+    let fake = FakeAdapter::new();
+    fake.set_responder(responder);
+    let h = start_manual(plan, &fake, &clock, options);
+    wait_for("settled", || settled(&h, &fake));
+    advance_until(&clock, Duration::from_secs(60), "outcome", || {
+        h.outcome().is_some()
+    });
+    let outputs = drain_outputs(&h, Duration::ZERO);
+    let summary = h.stack_stats();
+    let outcome = h.join().unwrap();
+    (
+        Run {
+            outputs,
+            outcome,
+            summary,
+        },
+        fake,
+    )
 }
 
 /// Записи статуса, баннеры ответов и баннеры соединений в порядке выдачи.
@@ -946,22 +1002,31 @@ fn join_without_reading_does_not_block_on_the_end_flush() {
 }
 
 /// Очередь кадров стека (`STACK_OUT_CAP` = `BUFFER_COUNT - 1`, `src/stack-queue.c:105-124`) переполняется без ожидания
-/// RX (Р7, у C RX ждёт свободный буфер, E1.12): лишний кадр выбрасывается и считается, скан идёт дальше.
+/// RX (Р7, у C RX ждёт свободный буфер, E1.12): лишний кадр выбрасывается и считается, скан идёт дальше. Вставшие
+/// кадры TX отправляет после зонда (задача 5). Окно `--wait` длинное: на `ManualClock` сон throttle при 16 383 кадрах
+/// сдвигает часы на секунды, а часы общие с окном RX.
 #[test]
 fn stack_queue_overflow_is_counted_not_blocking() {
     assert_eq!(STACK_OUT_CAP, 16_383);
-    let plan = plan_v4("10.0.0.1", "80", 1);
+    let plan = plan_v4("10.0.0.1", "80", 3600);
     let f = ScriptedFactory::new(Script {
         create: true,
         acks: 20_000,
         ..Script::default()
     });
-    let r = run(&plan, tcp_server(|s| vec![synack(s)]), stack_options(&f));
+    let (r, fake) = run_settled(
+        &plan,
+        tcp_server(|s| vec![synack(s)]),
+        stack_options(&f),
+        |h, _| h.stack_stats().frames_sent == 16_383,
+    );
     assert_eq!(r.outcome.reason, Reason::Completed);
     assert_eq!(r.summary.frames_dropped, 20_000 - 16_383);
+    assert_eq!(r.summary.frames_sent, 16_383);
+    assert_eq!(fake.sent_count(), 1 + 16_383);
     assert_eq!(
-        r.summary.frames_sent, 0,
-        "TX sends stack frames from Task 5 on"
+        r.outcome.progress.sent, 1,
+        "Progress.sent counts probes only"
     );
     assert_eq!(replies_of(&r.outputs).len(), 1);
 }
@@ -1009,10 +1074,11 @@ fn ipv6_segment_reaches_stack() {
         records: vec![4],
         ..Script::default()
     });
-    let r = run(
+    let (r, fake) = run_settled(
         &plan,
         |syn: &[u8]| reply_to_syn6(syn, SYN | ACK).into_iter().collect(),
         stack_options(&f),
+        |h, _| h.stack_stats().frames_sent == 1,
     );
     assert_eq!(r.outcome.reason, Reason::Completed);
     let them: u128 = 0x2001_0db8_0000_0000_0000_0000_0000_0007;
@@ -1028,6 +1094,12 @@ fn ipv6_segment_reaches_stack() {
     );
     assert_eq!(log.segs[0].ttl, 64);
     assert_eq!(r.summary.frames_dropped, 0, "the IPv6 ACK frame is built");
+    assert_eq!(r.summary.frames_sent, 1);
+    // SYN IPv6, затем ACK стека IPv6 (`ethertype` 0x86dd, флаги ACK).
+    let sent = fake.sent_frames();
+    assert_eq!(sent.len(), 2);
+    assert_eq!(sent[1][12..14], [0x86, 0xdd]);
+    assert_eq!(sent[1][14 + 40 + 13], ACK);
     let replies = replies_of(&r.outputs);
     assert_eq!(replies.len(), 1);
     assert_eq!(replies[0].ip6.map(|a| a.remote), Some(them));
@@ -1318,4 +1390,564 @@ fn no_stack_gives_zero_summary() {
     assert_eq!(r.outcome.reason, Reason::Completed);
     assert_eq!(r.summary, StackSummary::default());
     assert!(no_stall_opts().tcp_stack.is_none());
+}
+
+// ---------------------------------------------------- сторона передачи ---
+//
+// Задача 5. Кадры стека и RST без состояния отправляет TX своего адаптера: в каждой пачке throttle сначала кадры из
+// очереди адаптера, остаток пачки SYN (`src/main.c:282-299`, `stack_flush_packets` `src/stack-queue.c:46-96`), каждый
+// кадр в счёт `--rate`; после последнего зонда TX дожёвывает очередь под тем же throttle, пока не кончится RX
+// (`src/main.c:470-494`). Прогоны идут на фиктивном адаптере без часов: `ManualClock` двигает только сон throttle, и
+// окно `--wait` стоит, пока тест не сдвинет часы сам.
+
+/// Флаги TCP кадра Ethernet/IPv4 без опций IP.
+fn tcp_flags(f: &[u8]) -> u8 {
+    f[47]
+}
+
+fn dst_ip(f: &[u8]) -> u32 {
+    u32::from_be_bytes(f[30..34].try_into().unwrap())
+}
+
+/// Синхронизация TX с RX (только для порядка в тестах): ответчик даёт SYN-ACK на каждый SYN и считает их, хук
+/// отправки (поток TX, после каждого кадра, принятого адаптером) пишет время отправки по `ManualClock` и ждёт, пока
+/// таблица не увидит столько же SYN-ACK и не получит тик после последнего из них. Тик идёт на следующей итерации RX,
+/// после выдачи кадров этого сегмента в очередь адаптера, поэтому к возврату хука кадры стека на каждый отправленный
+/// SYN уже стоят в очереди. Затем хук зовёт `after(число отправленных)`. Ожидание ограничено 10 с: чего не хватило,
+/// покажут проверки теста. Возвращает время каждого отправленного кадра, по порядку отправки.
+fn sync_tx_to_rx(
+    fake: &FakeAdapter,
+    f: &Arc<ScriptedFactory>,
+    clock: &Arc<ManualClock>,
+    after: impl Fn(usize) + Send + Sync + 'static,
+) -> Arc<Mutex<Vec<u64>>> {
+    let syns = Arc::new(AtomicUsize::new(0));
+    let s2 = syns.clone();
+    fake.set_responder(move |frame: &[u8]| {
+        if is_tcp_syn(frame) {
+            s2.fetch_add(1, Ordering::SeqCst);
+            vec![synack(frame)]
+        } else {
+            vec![]
+        }
+    });
+    let times = Arc::new(Mutex::new(Vec::new()));
+    let (t2, f2, c2) = (times.clone(), f.clone(), clock.clone());
+    fake.set_send_hook(move |sent| {
+        lk(&t2).push(c2.now_micros());
+        let want = syns.load(Ordering::SeqCst);
+        let t = Instant::now();
+        while !synacks_delivered(&f2, want) && t.elapsed() < Duration::from_secs(10) {
+            std::thread::sleep(Duration::from_micros(20));
+        }
+        after(sent);
+    });
+    times
+}
+
+/// Таблица 0 видела `want` SYN-ACK, и после последнего был тик.
+fn synacks_delivered(f: &ScriptedFactory, want: usize) -> bool {
+    let tables = lk(&f.tables);
+    let Some((_, log)) = tables.first() else {
+        return want == 0;
+    };
+    let log = lk(log);
+    let seen: Vec<usize> = log
+        .segs
+        .iter()
+        .filter(|s| s.flags & (SYN | ACK) == SYN | ACK)
+        .map(|s| s.tick)
+        .collect();
+    seen.len() >= want && seen.last().is_none_or(|&t| log.ticks.len() > t)
+}
+
+/// Кадры на проводе по порядку, каждый со временем отправки по часам движка.
+type Timed = Vec<(Wire, u64)>;
+
+/// Кадр на проводе: SYN зонда `j` или кадр стека в ответ на SYN-ACK зонда `j`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Wire {
+    Syn(usize),
+    Stack(usize),
+}
+
+/// Модель TX для прогона под [`sync_tx_to_rx`], где на каждый новый SYN-ACK стек выдаёт `acks` кадров и они стоят в
+/// очереди к следующей пачке. Каждая пачка throttle сначала берёт кадры стека (каждый занимает место в пачке и идёт в
+/// счёт throttle, `src/stack-queue.c:56`, `:93`), остаток идёт SYN (`src/main.c:289-299`); после последнего зонда очередь
+/// дожёвывается тем же throttle (`:470-494`). Часы движка двигает только сон throttle, поэтому модель на своём
+/// `ManualClock` с тем же началом повторяет движок точно. Выдаёт кадры с временем отправки и пачки `(стека, SYN)`.
+fn model_tx(rate: f64, probes: usize, acks: usize) -> (Timed, Vec<(usize, usize)>) {
+    let clock = ManualClock::new();
+    let mut thr = Throttler::start(rate, &*clock);
+    let mut queue: VecDeque<usize> = VecDeque::new();
+    let (mut next, mut sent) = (0usize, 0u64);
+    let (mut wire, mut batches) = (Vec::new(), Vec::new());
+    while next < probes || !queue.is_empty() {
+        let b = thr.next_batch(sent, &*clock) as usize;
+        let now = clock.now_micros();
+        let stack = b.min(queue.len());
+        for _ in 0..stack {
+            wire.push((Wire::Stack(queue.pop_front().unwrap()), now));
+        }
+        let syns = (b - stack).min(probes - next);
+        for j in next..next + syns {
+            wire.push((Wire::Syn(j), now));
+            queue.extend(std::iter::repeat_n(j, acks));
+        }
+        next += syns;
+        sent += (stack + syns) as u64;
+        batches.push((stack, syns));
+    }
+    (wire, batches)
+}
+
+/// Прогон под [`sync_tx_to_rx`] на адаптере без часов: все `probes * (1 + acks)` кадров ушли, затем окно `--wait`
+/// доводится до конца. Кадры на проводе с временем отправки и итог.
+fn run_synced(plan: &ReadyPlan, acks: usize) -> (Timed, Run) {
+    let f = ScriptedFactory::new(Script {
+        create: true,
+        acks,
+        ..Script::default()
+    });
+    let clock = ManualClock::new();
+    let fake = FakeAdapter::new();
+    let times = sync_tx_to_rx(&fake, &f, &clock, |_| {});
+    let h = start_manual(plan, &fake, &clock, stack_options(&f));
+    let probes = plan.range() as usize;
+    let total = probes * (1 + acks);
+    let t = Instant::now();
+    while fake.sent_count() < total {
+        assert!(
+            t.elapsed() < Duration::from_secs(20),
+            "{} of {total} frames sent",
+            fake.sent_count()
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    advance_until(&clock, Duration::from_secs(60), "outcome", || {
+        h.outcome().is_some()
+    });
+    let outputs = drain_outputs(&h, Duration::ZERO);
+    let summary = h.stack_stats();
+    let outcome = h.join().unwrap();
+    let reference = reference_frames(plan, probes);
+    let syn_of = |ip: u32| reference.iter().position(|s| syn_target(s) == ip).unwrap();
+    let times = lk(&times).clone();
+    let sent = fake.sent_frames();
+    assert_eq!(sent.len(), times.len());
+    let wire = sent
+        .iter()
+        .zip(times)
+        .map(|(fr, at)| match tcp_flags(fr) {
+            SYN => {
+                let j = syn_of(dst_ip(fr));
+                assert_eq!(fr, &reference[j]);
+                (Wire::Syn(j), at)
+            }
+            ACK => (Wire::Stack(syn_of(dst_ip(fr))), at),
+            x => panic!("unexpected flags {x:#x}"),
+        })
+        .collect();
+    (
+        wire,
+        Run {
+            outputs,
+            outcome,
+            summary,
+        },
+    )
+}
+
+/// Каждая пачка throttle сначала берёт кадры стека, остаток пачки идёт SYN (`src/main.c:289-299`: «This takes
+/// priority over sending SYN packets»), и кадр стека занимает в пачке место SYN. На малой пачке (1 кадр) SYN
+/// следующего зонда ждёт, пока не уйдут все кадры стека ответа на предыдущий; на /23 throttle растит пачку, и в
+/// одной пачке едут и кадры стека, и SYN. Порядок и время каждого кадра совпадают с моделью [`model_tx`].
+#[test]
+fn stack_frames_go_before_syns_in_the_same_batch() {
+    for (targets, acks) in [("10.0.0.0/29", 3), ("10.0.0.0/23", 1)] {
+        let plan = plan_full(targets, "80", 60, 1, 1_000_000.0, 0);
+        let probes = plan.range() as usize;
+        let (wire, r) = run_synced(&plan, acks);
+        assert_eq!(r.outcome.reason, Reason::Completed, "{targets}");
+        let (model, batches) = model_tx(1_000_000.0, probes, acks);
+        assert_eq!(wire, model, "{targets}");
+        if probes == 8 {
+            // Пачка всегда 1: SYN j, затем `acks` кадров стека его ответа, затем SYN j + 1.
+            let order: Vec<Wire> = (0..probes)
+                .flat_map(|j| std::iter::once(Wire::Syn(j)).chain(vec![Wire::Stack(j); acks]))
+                .collect();
+            assert_eq!(wire.iter().map(|w| w.0).collect::<Vec<_>>(), order);
+        } else {
+            assert!(
+                batches.iter().any(|&(s, y)| s > 0 && y > 0),
+                "no batch carried both: {batches:?}"
+            );
+        }
+        assert_eq!(r.summary.frames_sent, (probes * acks) as u64);
+        assert_eq!(r.summary.frames_dropped, 0);
+        assert_eq!(r.outcome.progress.sent, probes as u64);
+    }
+}
+
+/// `--rate` несёт кадры стека вместе с SYN (справка A8, `src/stack-queue.c:93`: `(*packets_sent)++` на каждый кадр
+/// очереди): N кадров стека и M зондов на скорости R занимают (N + M) / R по часам движка, ровно столько же, сколько
+/// N + M одних зондов (throttle их не различает). Одни зонды заняли бы M / R, и кадры стека без счёта ушли бы в тех
+/// же пачках. Последние кадры стека уходят уже после зондов, под тем же throttle. `Progress.sent` считает только
+/// зонды.
+#[test]
+fn stack_frames_count_against_rate() {
+    let rate = 100.0;
+    let acks = 4;
+    let plan = plan_full("10.0.0.0/29", "80", 60, 1, rate, 0);
+    let probes = plan.range() as usize;
+    let t0 = ManualClock::new().now_micros();
+    let (wire, r) = run_synced(&plan, acks);
+    assert_eq!(r.outcome.reason, Reason::Completed);
+    let (model, _) = model_tx(rate, probes, acks);
+    assert_eq!(wire, model);
+    let frames = probes * (1 + acks);
+    let last = wire.last().unwrap().1;
+    // Тот же throttle на N + M одних зондах.
+    let (probes_only, _) = model_tx(rate, frames, 0);
+    assert_eq!(last, probes_only.last().unwrap().1);
+    // Точность самого throttle на этих часах: 40 зондов на 100/с уходят за 0,46 с (порт C, `src/main-throttle.c`).
+    let span = (last - t0) as f64 / 1e6;
+    let expected = frames as f64 / rate;
+    assert!(
+        (0.9 * expected..=1.2 * expected).contains(&span),
+        "{frames} frames at {rate}/s took {span} s, expected {expected} s"
+    );
+    // Последний SYN ушёл после кадров стека всех ответов, кроме своего: позже, чем M / R.
+    let last_syn = wire
+        .iter()
+        .rev()
+        .find(|w| matches!(w.0, Wire::Syn(_)))
+        .unwrap();
+    assert!(
+        (last_syn.1 - t0) as f64 / 1e6 > 2.0 * probes as f64 / rate,
+        "{wire:?}"
+    );
+    assert_eq!(r.summary.frames_sent, (probes * acks) as u64);
+    assert_eq!(r.outcome.progress.sent, probes as u64);
+}
+
+/// После последнего зонда TX дожёвывает очередь кадров стека, пока не кончится RX (`src/main.c:470-494`). SYN-ACK,
+/// пришедший за 1 с до конца окна `--wait` 10 с (часы движка), получает свои кадры стека; итог `Completed`, ничего не
+/// выброшено. Без linger TX ушёл бы сразу после зонда, и кадры остались бы в очереди.
+#[test]
+fn tx_lingers_for_stack_frames_until_rx_ends() {
+    let plan = plan_v4("10.0.0.1", "80", 10);
+    let f = ScriptedFactory::new(Script {
+        create: true,
+        acks: 3,
+        records: vec![1],
+        ..Script::default()
+    });
+    let clock = ManualClock::new();
+    let fake = FakeAdapter::new();
+    let captured: Arc<Mutex<Option<Vec<u8>>>> = Arc::default();
+    let c2 = captured.clone();
+    fake.set_responder(move |fr: &[u8]| {
+        if is_tcp_syn(fr) {
+            *lk(&c2) = Some(fr.to_vec());
+        }
+        vec![]
+    });
+    let h = start_manual(&plan, &fake, &clock, stack_options(&f));
+    wait_for("the probe", || fake.sent_count() == 1);
+    // Зонд один: после него у TX нет пачек, кадры ниже может отправить только linger. Срок окна RX отсчитан от
+    // момента, когда RX увидел конец TX, то есть не раньше этих часов: SYN-ACK через 9 с ещё в окне 10 с.
+    clock.advance(Duration::from_secs(9));
+    let syn = lk(&captured).clone().unwrap();
+    fake.push_frame(synack(&syn));
+    wait_for("stack frames sent in the wait window", || {
+        fake.sent_count() == 4
+    });
+    advance_until(&clock, Duration::from_secs(60), "outcome", || {
+        h.outcome().is_some()
+    });
+    let outputs = drain_outputs(&h, Duration::ZERO);
+    let summary = h.stack_stats();
+    let outcome = h.join().unwrap();
+    assert_eq!(outcome.reason, Reason::Completed);
+    let sent = fake.sent_frames();
+    assert!(is_tcp_syn(&sent[0]));
+    assert!(
+        sent[1..]
+            .iter()
+            .all(|fr| tcp_flags(fr) == ACK && dst_ip(fr) == 0x0a00_0001),
+        "{sent:?}"
+    );
+    assert_eq!((summary.frames_sent, summary.frames_dropped), (3, 0));
+    assert_eq!(outcome.progress.sent, 1);
+    assert_eq!(replies_of(&outputs).len(), 1);
+    assert_eq!(conn_banners(&outputs).len(), 1);
+}
+
+fn rst_options() -> EngineOptions {
+    let mut o = opts();
+    o.stateless_rst = true;
+    o
+}
+
+/// RST без состояния на ответ (`stateless_rst`, справка A7), собранный построителем кадров адаптера.
+fn expected_rst(plan: &ReadyPlan, r: &Reply) -> Option<Vec<u8>> {
+    stateless_rst(r, SEED).map(|s| TcpFrameBuilder::from_plan(plan).build(&s))
+}
+
+/// Без стека и с `stateless_rst` за каждым свежим (прошедшим cookie и дедуп) ответом SYN-ACK и RST идёт один RST
+/// (`src/main.c:1094-1100`, после `dedup_is_duplicate` `:1066-1068`), байты как у `stateless_rst`. Повтор ответа RST не
+/// получает, ICMP Port Unreachable (`closed` без флагов TCP) тоже, цель без ответа тоже. Каждый RST в счёт
+/// `frames_sent`, не в `Progress.sent`.
+#[test]
+fn stateless_rst_for_synack_and_rst_reply() {
+    let plan = plan_v4("10.0.0.0/29", "80", 60);
+    let responder = tcp_server(|s| {
+        let rst = || reply_to_syn(s, RST | ACK).unwrap();
+        match syn_target(s) & 7 {
+            0 | 1 => vec![synack(s)],
+            2 | 3 => vec![rst()],
+            4 => vec![synack(s), synack(s)],
+            5 => vec![port_unreachable_for(s, 0x0a00_00fe).unwrap()],
+            6 => vec![rst(), rst()],
+            _ => vec![],
+        }
+    });
+    let (r, fake) = run_settled(&plan, responder, rst_options(), |h, fk| {
+        let p = h.progress();
+        p.received + p.duplicates == 9 && fk.sent_count() >= 8 + 6
+    });
+    assert_eq!(r.outcome.reason, Reason::Completed);
+    let replies = replies_of(&r.outputs);
+    assert_eq!(replies.len(), 7);
+    let mut want: Vec<Vec<u8>> = replies
+        .iter()
+        .filter_map(|rp| expected_rst(&plan, rp))
+        .collect();
+    assert_eq!(want.len(), 6);
+    let sent = fake.sent_frames();
+    let mut rsts: Vec<Vec<u8>> = sent.iter().filter(|fr| !is_tcp_syn(fr)).cloned().collect();
+    assert!(rsts.iter().all(|fr| tcp_flags(fr) == RST), "{rsts:?}");
+    want.sort();
+    rsts.sort();
+    assert_eq!(rsts, want);
+    // Ни RST цели с ICMP `closed` (.5) и без ответа (.7), по одному целям с повтором (.4, .6).
+    let mut to: Vec<u32> = rsts.iter().map(|fr| dst_ip(fr) & 7).collect();
+    to.sort();
+    assert_eq!(to, [0, 1, 2, 3, 4, 6]);
+    assert_eq!(sent.iter().filter(|fr| is_tcp_syn(fr)).count(), 8);
+    assert_eq!((r.summary.frames_sent, r.summary.frames_dropped), (6, 0));
+    assert_eq!(r.outcome.progress.sent, 8);
+    assert_eq!(r.outcome.progress.duplicates, 2);
+}
+
+/// RST без состояния уходит и на SYN-ACK, пришедший в окне `--wait` после последнего зонда: TX ждёт конца RX и в
+/// этом режиме (решение S3 предполётного ревью: linger при `ndp || tcp_stack || stateless_rst`).
+#[test]
+fn stateless_rst_sent_for_synack_in_wait_window() {
+    let plan = plan_v4("10.0.0.1", "80", 10);
+    let clock = ManualClock::new();
+    let fake = FakeAdapter::new();
+    let captured: Arc<Mutex<Option<Vec<u8>>>> = Arc::default();
+    let c2 = captured.clone();
+    fake.set_responder(move |fr: &[u8]| {
+        if is_tcp_syn(fr) {
+            *lk(&c2) = Some(fr.to_vec());
+        }
+        vec![]
+    });
+    let h = start_manual(&plan, &fake, &clock, rst_options());
+    wait_for("the probe", || fake.sent_count() == 1);
+    // Как в `tx_lingers_for_stack_frames_until_rx_ends`: RST может отправить только linger, SYN-ACK через 9 с ещё в
+    // окне 10 с.
+    clock.advance(Duration::from_secs(9));
+    let syn = lk(&captured).clone().unwrap();
+    fake.push_frame(synack(&syn));
+    wait_for("RST sent in the wait window", || fake.sent_count() == 2);
+    advance_until(&clock, Duration::from_secs(60), "outcome", || {
+        h.outcome().is_some()
+    });
+    let outputs = drain_outputs(&h, Duration::ZERO);
+    let summary = h.stack_stats();
+    let outcome = h.join().unwrap();
+    assert_eq!(outcome.reason, Reason::Completed);
+    let replies = replies_of(&outputs);
+    assert_eq!(replies.len(), 1);
+    assert_eq!(
+        fake.sent_frames()[1],
+        expected_rst(&plan, &replies[0]).unwrap()
+    );
+    assert_eq!((summary.frames_sent, summary.frames_dropped), (1, 0));
+    assert_eq!(outcome.progress.sent, 1);
+}
+
+/// Пауза посреди пачки повторов досылает остаток пачки мимо throttle (`batch = u64::MAX`); эта досылка кадры стека не
+/// берёт: они ждут linger, который после Pause работает до конца окна ожидания RX. Порядок: 4 копии SYN цели, затем
+/// кадры стека её ответа; итог `Paused`.
+#[test]
+fn pause_burst_does_not_drain_stack_frames() {
+    let plan = plan_full("10.0.0.0/31", "80", 60, 1, 1_000_000.0, 3);
+    let f = ScriptedFactory::new(Script {
+        create: true,
+        acks: 2,
+        ..Script::default()
+    });
+    let clock = ManualClock::new();
+    let fake = FakeAdapter::new();
+    let cell: Arc<OnceLock<CancelHandle>> = Arc::default();
+    let c2 = cell.clone();
+    // Pause после первой копии, когда кадры стека её ответа уже в очереди.
+    sync_tx_to_rx(&fake, &f, &clock, move |sent| {
+        if sent == 1 {
+            let c = loop {
+                if let Some(c) = c2.get() {
+                    break c;
+                }
+                std::thread::yield_now();
+            };
+            c.pause();
+        }
+    });
+    let h = start_manual(&plan, &fake, &clock, stack_options(&f));
+    cell.set(h.cancel_handle()).ok();
+    wait_for("burst and stack frames", || fake.sent_count() == 6);
+    advance_until(&clock, Duration::from_secs(60), "outcome", || {
+        h.outcome().is_some()
+    });
+    drain_outputs(&h, Duration::ZERO);
+    let summary = h.stack_stats();
+    let outcome = h.join().unwrap();
+    assert_eq!(outcome.reason, Reason::Paused);
+    let kinds: Vec<u8> = fake.sent_frames().iter().map(|fr| tcp_flags(fr)).collect();
+    assert_eq!(kinds, [SYN, SYN, SYN, SYN, ACK, ACK]);
+    let first = syn_target(&fake.sent_frames()[0]);
+    assert!(
+        fake.sent_frames()[..4]
+            .iter()
+            .all(|fr| syn_target(fr) == first)
+    );
+    assert_eq!((summary.frames_sent, summary.frames_dropped), (2, 0));
+    assert_eq!(outcome.progress.sent, 4);
+}
+
+/// Отправка кадра стека, которая не удалась (ошибка адаптера, `Uncertain`, `WouldBlockUnsent`), как у Neighbor
+/// Advertisement скан не валит и не повторяется: кадр считается в `frames_dropped` (C результат
+/// `rawsock_send_packet` для кадров стека не смотрит, `src/stack-queue.c:74`). И в пачках скана, и после зондов.
+#[test]
+fn stack_frame_send_error_counted_not_fatal() {
+    let plan = plan_full("10.0.0.0/31", "80", 60, 1, 1_000_000.0, 0);
+    let f = ScriptedFactory::new(Script {
+        create: true,
+        acks: 3,
+        ..Script::default()
+    });
+    let clock = ManualClock::new();
+    let fake = FakeAdapter::new();
+    // По порядку вызовов `send`: SYN 1, три кадра его ответа (в пачках скана), SYN 2, три кадра его ответа (после
+    // зондов).
+    fake.script_tx([
+        TxStep::Sent,
+        TxStep::Fail("boom".into()),
+        TxStep::Uncertain,
+        TxStep::Sent,
+        TxStep::Sent,
+        TxStep::WouldBlockUnsent,
+        TxStep::Fail("boom".into()),
+        TxStep::Sent,
+    ]);
+    sync_tx_to_rx(&fake, &f, &clock, |_| {});
+    let h = start_manual(&plan, &fake, &clock, stack_options(&f));
+    wait_for("all attempts", || fake.send_calls() == 8);
+    advance_until(&clock, Duration::from_secs(60), "outcome", || {
+        h.outcome().is_some()
+    });
+    drain_outputs(&h, Duration::ZERO);
+    let summary = h.stack_stats();
+    let outcome = h.join().unwrap();
+    assert_eq!(outcome.reason, Reason::Completed);
+    let kinds: Vec<u8> = fake.sent_frames().iter().map(|fr| tcp_flags(fr)).collect();
+    assert_eq!(kinds, [SYN, ACK, SYN, ACK]);
+    assert_eq!((summary.frames_sent, summary.frames_dropped), (2, 4));
+    assert_eq!(fake.uncertain_frames().len(), 1);
+    assert_eq!(fake.would_block_count(), 1);
+    assert_eq!(fake.send_calls(), 8, "no retry");
+    assert_eq!(outcome.progress.sent, 2);
+}
+
+/// Р11: `EngineOptions::new` (`stateless_rst: false`, `tcp_stack: None`, так у Studio) шлёт только зонды, побайтно те
+/// же, что у независимого курсора, ни одного RST на SYN-ACK и RST; ответы и `Progress` те же, что с `stateless_rst`,
+/// который сверх зондов даёт по RST на ответ.
+#[test]
+fn no_new_frames_without_options() {
+    let o = opts();
+    assert!(!o.stateless_rst);
+    assert!(o.tcp_stack.is_none());
+    let plan = plan_v4("10.0.0.0/29", "80", 60);
+    let responder = || {
+        tcp_server(|s| match syn_target(s) & 1 {
+            0 => vec![synack(s)],
+            _ => vec![reply_to_syn(s, RST | ACK).unwrap()],
+        })
+    };
+    let (r, fake) = run_settled(&plan, responder(), opts(), |h, _| {
+        h.progress().received == 8
+    });
+    assert_eq!(r.outcome.reason, Reason::Completed);
+    assert_eq!(fake.sent_frames(), reference_frames(&plan, 8));
+    assert_eq!(r.summary, StackSummary::default());
+    assert!(
+        r.outputs.iter().all(|x| matches!(x, Output::Event(_))),
+        "{:?}",
+        r.outputs
+    );
+
+    let (with_rst, fake_rst) = run_settled(&plan, responder(), rst_options(), |h, fk| {
+        h.progress().received == 8 && fk.sent_count() == 16
+    });
+    assert_eq!(replies_of(&with_rst.outputs), replies_of(&r.outputs));
+    assert_eq!(with_rst.outcome.progress.sent, r.outcome.progress.sent);
+    assert_eq!(with_rst.outcome.progress.received, 8);
+    let syns: Vec<Vec<u8>> = fake_rst
+        .sent_frames()
+        .into_iter()
+        .filter(|fr| is_tcp_syn(fr))
+        .collect();
+    assert_eq!(syns, reference_frames(&plan, 8));
+    assert_eq!(with_rst.summary.frames_sent, 8);
+}
+
+/// Кадры, которые TX уже не отправит (здесь Stop посреди очереди после зонда), не теряются молча: к `Finished` они в
+/// `frames_dropped`, и каждый кадр стека посчитан ровно в одном из двух счётчиков (C бросает их в очереди).
+#[test]
+fn stack_frames_left_unsent_are_counted() {
+    let plan = plan_v4("10.0.0.1", "80", 60);
+    let f = ScriptedFactory::new(Script {
+        create: true,
+        acks: 50,
+        ..Script::default()
+    });
+    let clock = ManualClock::new();
+    let fake = FakeAdapter::new();
+    let cell: Arc<OnceLock<CancelHandle>> = Arc::default();
+    let c2 = cell.clone();
+    // Stop после SYN и пяти кадров стека.
+    sync_tx_to_rx(&fake, &f, &clock, move |sent| {
+        if sent == 6 {
+            let c = loop {
+                if let Some(c) = c2.get() {
+                    break c;
+                }
+                std::thread::yield_now();
+            };
+            c.stop();
+        }
+    });
+    let h = start_manual(&plan, &fake, &clock, stack_options(&f));
+    cell.set(h.cancel_handle()).ok();
+    drain_outputs(&h, Duration::ZERO);
+    let summary = h.stack_stats();
+    let outcome = h.join().unwrap();
+    assert_eq!(outcome.reason, Reason::Stopped);
+    assert_eq!(fake.sent_count(), 6);
+    assert_eq!((summary.frames_sent, summary.frames_dropped), (5, 45));
 }

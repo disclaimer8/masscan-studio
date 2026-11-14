@@ -8,6 +8,9 @@
 //!   и внутри каждого повтора/сна throttle (отрезки сна <= 50 мс).
 //! - RX выходит при `halt >= STOP`. При `PAUSE` и при естественном конце TX
 //!   он отрабатывает `wait` (по инжектированным часам) и выходит.
+//! - С ответом на NS (`source_ipv6`), стеком TCP или RST без состояния TX после
+//!   последнего зонда (и после Pause) живёт, пока не кончится RX, и отправляет
+//!   очередь своего адаптера (`src/main.c:470-494`); Stop и отказ его прерывают.
 //! - Каждый поток владеет своим handle адаптера и освобождает его до
 //!   публикации выхода. Поток, вышедший вторым, вычисляет единственный
 //!   [`Outcome`] и кладёт его в очередь отдельно от результатов; `Finished`
@@ -41,7 +44,7 @@ use rmasscan_core::packet::LinkType;
 use rmasscan_core::probe::{NicBinding, PlanError, ProbeCursor, ReadyPlan};
 use rmasscan_core::receive::{PortStatus, Reply, ndp_reply_for, parse_reply};
 use rmasscan_core::stack::{StackOutput, StackStats, TableParams, TcpStack};
-use rmasscan_core::tcp_frame::{TcpFrameBuilder, tcp_segment};
+use rmasscan_core::tcp_frame::{TcpFrameBuilder, stateless_rst, tcp_segment};
 use rmasscan_core::throttle::{Clock, SystemClock, Throttler};
 
 use crate::banners::{BannerOptions, Output, StackSummary, TcpStackOptions, udp_reply_banners};
@@ -129,8 +132,17 @@ pub struct EngineOptions {
     /// Пользовательский стек TCP (`--banners`, подэтап 4b). `None` (по умолчанию, так у Studio): ни тиков, ни
     /// разбора сегментов, ни [`Output::ConnectionBanner`], путь приёма побайтно прежний. С `Some` каждый RX-поток
     /// ведёт свою таблицу ([`TcpStackOptions`]): таймеры на каждой итерации приёма, сегменты до статуса и дедупа
-    /// (справка A1), сброс живых соединений в конце RX ([`EngineHandle::stack_stats`] даёт счётчики).
+    /// (справка A1), сброс живых соединений в конце RX ([`EngineHandle::stack_stats`] даёт счётчики). Кадры стека
+    /// TX отправляет впереди SYN каждой пачки в счёт `--rate` и после зондов до конца RX (справка A8).
     pub tcp_stack: Option<TcpStackOptions>,
+    /// RST без состояния (Р8, справка A7; CLI ставит его без `--banners` и без `--noreset`). С `true` и без
+    /// [`Self::tcp_stack`] за каждым ответом TCP с SYN-ACK или RST, прошедшим cookie и дедуп, RX ставит RST в очередь
+    /// кадров своего адаптера (`src/main.c:1094-1100`); повтор ответа и ICMP Port Unreachable RST не получают. TX
+    /// отправляет очередь впереди SYN каждой пачки в счёт `--rate`, а после зондов ждёт конца RX, так что RST получает и
+    /// ответ, пришедший в окне `--wait`. Отправленные считает [`StackSummary::frames_sent`], не `Progress.sent`. Со
+    /// стеком TCP RST без состояния не шлётся (C: `tcpcon == NULL`). `false` (по умолчанию, так у Studio): кадры
+    /// прежние.
+    pub stateless_rst: bool,
 }
 
 impl EngineOptions {
@@ -147,6 +159,7 @@ impl EngineOptions {
             tx_stall_timeout: DEFAULT_TX_STALL_TIMEOUT,
             banners: None,
             tcp_stack: None,
+            stateless_rst: false,
         }
     }
 }
@@ -637,15 +650,22 @@ struct Shared {
     progress_micros: u64,
     /// [`EngineOptions::banners`]: RX разбирает датаграмму ответа, прошедшего дедуп.
     banners: Option<BannerOptions>,
-    /// Кадры стека TCP от RX к TX своего адаптера (`stack_transmit_packetbuffer`, `src/stack-queue.c:105-124`): пишет
-    /// RX-поток адаптера (не больше [`STACK_OUT_CAP`], лишнее выбрасывается со счётом), отправляет TX. Без
-    /// [`EngineOptions::tcp_stack`] очереди есть (по одной на адаптер), но всегда пусты.
+    /// Кадры стека TCP и RST без состояния от RX к TX своего адаптера (`stack_transmit_packetbuffer`,
+    /// `src/stack-queue.c:105-124`): пишет RX-поток адаптера (не больше [`STACK_OUT_CAP`], лишнее выбрасывается со
+    /// счётом), отправляет TX впереди SYN каждой пачки. Без [`EngineOptions::tcp_stack`] и
+    /// [`EngineOptions::stateless_rst`] очереди есть (по одной на адаптер), но всегда пусты и TX их не трогает.
     stack_out: Vec<Mutex<VecDeque<Vec<u8>>>>,
+    /// TX берёт кадры из `stack_out` и после зондов ждёт конца RX: `tcp_stack.is_some() || stateless_rst`.
+    stack_tx: bool,
+    /// RX ставит RST без состояния за свежим ответом: `stateless_rst && tcp_stack.is_none()` (`src/main.c:1094`:
+    /// `tcpcon == NULL`).
+    stateless_rst: bool,
     /// Последний слепок счётчиков таблицы каждого RX-потока (пишет свой RX: на шаге прогресса и при выходе).
     stack_stats: Vec<Mutex<StackStats>>,
-    /// Кадры стека, которые отправил TX (все адаптеры).
+    /// Кадры стека и RST без состояния, которые отправил TX (все адаптеры).
     stack_frames_sent: AtomicU64,
-    /// Кадры стека, которые не встали в `stack_out` или не построились ([`StackSummary::frames_dropped`]).
+    /// Кадры стека и RST, которые не встали в `stack_out`, не построились, не отправились или остались в очереди к
+    /// концу скана ([`StackSummary::frames_dropped`]).
     stack_frames_dropped: AtomicU64,
     /// Живые соединения, брошенные несбросленными, когда `finish` ответил «ещё есть» без продвижения
     /// ([`StackSummary::flush_abandoned`]).
@@ -786,6 +806,17 @@ impl Shared {
 
     /// Вызывается ровно один раз: потоком, вышедшим последним.
     fn finalize(&self) {
+        // Кадры стека, которые TX уже не отправил (RX кончился, Stop, отказ), не теряются молча: C бросает их в
+        // очереди. Все потоки вышли, новых кадров нет, и к `Finished` счётчик окончательный.
+        if self.stack_tx {
+            let unsent: usize = self
+                .stack_out
+                .iter()
+                .map(|q| lock(q).drain(..).count())
+                .sum();
+            self.stack_frames_dropped
+                .fetch_add(unsent as u64, Ordering::Relaxed);
+        }
         let fail = lock(&self.fail).clone();
         let tx_end = self.tx_end();
         let rx_end = self.rx_end();
@@ -895,6 +926,68 @@ fn flush_ndp(
     }
 }
 
+/// Пауза linger TX, когда отправлять нечего (`pixie_usleep(100)`, `src/main.c:492`). Идёт по настоящему времени, мимо
+/// часов движка: она не меняет ни счёт throttle, ни окно ожидания RX, а через инжектированные `ManualClock` linger
+/// двигал бы окно `--wait` наперегонки с приёмом. Сон throttle в linger идёт по часам движка, как в цикле зондов.
+const LINGER_POLL: Duration = Duration::from_micros(100);
+
+/// `stack_flush_packets` (`src/stack-queue.c:46-96`): отправляет до `budget` кадров из очереди кадров стека адаптера
+/// `idx` по порядку, перед каждым спрашивая `keep_going`. Возвращает, сколько кадров взято: каждый занимает место в
+/// пачке throttle и идёт в его счёт, чем бы ни кончилась отправка (C `(*packets_sent)++` и `(*batchsize)--` на каждый
+/// снятый с очереди кадр, `:56`, `:93`). Отправка, которая не удалась (`WouldBlockUnsent`, `Uncertain`, ошибка адаптера),
+/// как у Neighbor Advertisement скан не валит и не повторяется: кадр выброшен и посчитан в
+/// [`StackSummary::frames_dropped`] (C результат `rawsock_send_packet` не смотрит, `:74`). Блокировка очереди держится
+/// только на снятие кадра, отправка идёт без неё.
+fn send_stack_frames(
+    shared: &Shared,
+    idx: usize,
+    tx: &mut dyn Tx,
+    budget: u64,
+    keep_going: &dyn Fn() -> bool,
+) -> u64 {
+    let (mut taken, mut sent) = (0u64, 0u64);
+    while taken < budget && keep_going() {
+        let Some(frame) = lock(&shared.stack_out[idx]).pop_front() else {
+            break;
+        };
+        taken += 1;
+        if let Ok(SendStatus::Sent) = tx.send(&frame, shared.io_timeout) {
+            sent += 1;
+        }
+    }
+    if sent > 0 {
+        shared.stack_frames_sent.fetch_add(sent, Ordering::Relaxed);
+    }
+    if taken > sent {
+        shared
+            .stack_frames_dropped
+            .fetch_add(taken - sent, Ordering::Relaxed);
+    }
+    taken
+}
+
+/// Кладёт готовые кадры (стека или RST без состояния) в очередь кадров адаптера `idx` без ожидания: кадр, который
+/// построитель не построил (пустой), и кадр сверх [`STACK_OUT_CAP`] выбрасываются и считаются (Р7; RX у C ждёт буфер,
+/// E1.12). Кадры строятся до вызова, под блокировкой они только перекладываются.
+fn enqueue_stack_frames(shared: &Shared, idx: usize, frames: Vec<Vec<u8>>) {
+    let mut dropped = 0u64;
+    {
+        let mut q = lock(&shared.stack_out[idx]);
+        for f in frames {
+            if f.is_empty() || q.len() >= STACK_OUT_CAP {
+                dropped += 1;
+            } else {
+                q.push_back(f);
+            }
+        }
+    }
+    if dropped > 0 {
+        shared
+            .stack_frames_dropped
+            .fetch_add(dropped, Ordering::Relaxed);
+    }
+}
+
 fn run_tx(
     shared: Arc<Shared>,
     idx: usize,
@@ -961,18 +1054,27 @@ fn run_tx(
         // Пауза посреди пачки: остаток пачки уходит сразу, мимо throttle (не более `retries` кадров), иначе при
         // малой скорости Pause ждал бы до `retries / rate` секунд. Любая команда прерывает сон throttle.
         let pausing = || shared.halted() == PAUSE && mid_burst.get();
-        let batch = if pausing() {
-            u64::MAX
+        let (batch, burst) = if pausing() {
+            (u64::MAX, true)
         } else {
             match throttler.next_batch_interruptible(my_sent, clock, || shared.halted() != RUN) {
-                Ok(b) => b,
-                Err(_) if pausing() => u64::MAX,
+                Ok(b) => (b, false),
+                Err(_) if pausing() => (u64::MAX, true),
                 Err(_) => break END_HALTED,
             }
         };
         shared.rate_bits[idx].store(throttler.current_rate().to_bits(), Ordering::Relaxed);
         // batch == 0 означает "вызвать снова".
         let mut left = batch;
+        // Кадры стека и RST без состояния впереди SYN, в счёт той же пачки и того же throttle (`src/main.c:289-299`:
+        // «This takes priority over sending SYN packets»; поток кадров стека может съесть всю пачку). Досылка
+        // остатка пачки повторов при паузе их не берёт: она идёт мимо throttle, а кадры стека дождутся linger.
+        // `shared.sent` (`Progress.sent`) считает только зонды.
+        if shared.stack_tx && !burst && left > 0 {
+            let taken = send_stack_frames(&shared, idx, &mut *tx, left, &|| shared.halted() == RUN);
+            my_sent += taken;
+            left -= taken;
+        }
         while left > 0 {
             // Не больше, чем осталось в окне throttle, `max_batch()` адаптера и
             // общей скрепы. Загрузка не продвигает курсор.
@@ -1077,23 +1179,43 @@ fn run_tx(
         }
     };
     shared.tx_ends[idx].store(end, Ordering::Release);
-    // Окно ожидания ответов после конца передачи: RX ещё принимает, и NS соседа, пришедший теперь, тоже должен
-    // получить NA (иначе роутер не вернёт нам ответы на последние зонды). TX живёт, пока RX не закончил.
-    if ndp {
+    // Окно ожидания ответов после конца передачи (`src/main.c:470-494`): RX ещё принимает, и TX живёт, пока RX не
+    // закончил. NS соседа, пришедший теперь, тоже получает NA (иначе роутер не вернёт нам ответы на последние зонды);
+    // кадры стека (ACK, приветствия, FIN, RST) и RST без состояния на ответы, пришедшие в окне, уходят под тем же
+    // throttle, что и зонды. Linger шлёт и после Pause: RX принимает до конца окна ожидания (C сбрасывает очередь до
+    // `is_rx_done`); не шлёт только после Stop/Fail.
+    if ndp || shared.stack_tx {
+        let keep_going = || shared.halted() < STOP;
         loop {
             let done = shared.rx_end() != END_RUNNING || shared.halted() >= STOP;
-            flush_ndp(
-                &shared.ndp_out[idx],
-                // Linger шлёт NA и после Pause: RX принимает до конца окна ожидания (main.c:470-493 сбрасывает
-                // очередь до `is_rx_done`); не шлёт только после Stop/Fail.
-                &|| shared.halted() < STOP,
-                &mut *tx,
-                shared.io_timeout,
-            );
+            if ndp {
+                flush_ndp(
+                    &shared.ndp_out[idx],
+                    &keep_going,
+                    &mut *tx,
+                    shared.io_timeout,
+                );
+            }
             if done {
                 break;
             }
-            clock.sleep_micros(WOULD_BLOCK_BACKOFF_MICROS);
+            // Throttle спрашивается, только когда есть что отправить (C спрашивает его каждые 100 мкс и после
+            // простоя выдаёт пачку до 10000 кадров разом; здесь после простоя он начинает с пачки 1, как в начале
+            // скана). Так простой linger не трогает часы движка.
+            if shared.stack_tx && !lock(&shared.stack_out[idx]).is_empty() {
+                match throttler.next_batch_interruptible(my_sent, clock, || !keep_going()) {
+                    Ok(b) => {
+                        shared.rate_bits[idx]
+                            .store(throttler.current_rate().to_bits(), Ordering::Relaxed);
+                        my_sent += send_stack_frames(&shared, idx, &mut *tx, b, &keep_going);
+                    }
+                    Err(_) => break,
+                }
+            } else if shared.stack_tx {
+                std::thread::sleep(LINGER_POLL);
+            } else {
+                clock.sleep_micros(WOULD_BLOCK_BACKOFF_MICROS);
+            }
         }
     }
 }
@@ -1164,22 +1286,7 @@ impl RxStack {
                 .drain(..)
                 .map(|s| self.frames.build(&s))
                 .collect();
-            let mut dropped = 0u64;
-            {
-                let mut q = lock(&shared.stack_out[idx]);
-                for f in frames {
-                    if f.is_empty() || q.len() >= STACK_OUT_CAP {
-                        dropped += 1;
-                    } else {
-                        q.push_back(f);
-                    }
-                }
-            }
-            if dropped > 0 {
-                shared
-                    .stack_frames_dropped
-                    .fetch_add(dropped, Ordering::Relaxed);
-            }
+            enqueue_stack_frames(shared, idx, frames);
         }
         for set in self.out.banners.drain(..) {
             if !shared.queue.push_conn_banners(set) {
@@ -1265,6 +1372,10 @@ fn run_rx(
     let mut last_progress = clock.now_micros();
     let mut last_health = last_progress;
     let mut stack = table.map(|t| RxStack::new(t, &plan));
+    // RST без состояния (`src/main.c:1094-1100`): тот же построитель кадров адаптера, что у стека.
+    let rst = shared
+        .stateless_rst
+        .then(|| TcpFrameBuilder::from_plan(&plan));
 
     let end = loop {
         if shared.halted() >= STOP {
@@ -1354,6 +1465,15 @@ fn run_rx(
                                 shared.duplicates.fetch_add(1, Ordering::Relaxed);
                             } else if shared.queue.push_result(reply, banners) {
                                 shared.received.fetch_add(1, Ordering::Relaxed);
+                                // RST без состояния за записью статуса свежего ответа SYN-ACK или RST, только без
+                                // стека (`src/main.c:1094-1100`, после дедупа `:1066-1068`): повтор и ICMP `closed`
+                                // его не получают (`stateless_rst` даёт `None` на ответ без этих флагов).
+                                if let Some(b) = &rst
+                                    && let Some(seg) =
+                                        stateless_rst(&reply, plan.effective().seed())
+                                {
+                                    enqueue_stack_frames(&shared, idx, vec![b.build(&seg)]);
+                                }
                             } else {
                                 // Ответ потерян, молча не теряем: останавливаем TX
                                 // и завершаемся Failed; принятое остаётся в очереди.
@@ -1614,6 +1734,8 @@ impl Engine {
                 .unwrap_or(u64::MAX),
             banners: options.banners,
             stack_out: (0..count).map(|_| Mutex::new(VecDeque::new())).collect(),
+            stack_tx: options.tcp_stack.is_some() || options.stateless_rst,
+            stateless_rst: options.stateless_rst && options.tcp_stack.is_none(),
             stack_stats: (0..count)
                 .map(|_| Mutex::new(StackStats::default()))
                 .collect(),
@@ -1843,9 +1965,10 @@ impl EngineHandle {
         self.shared.snapshot()
     }
 
-    /// Счётчики стека TCP ([`EngineOptions::tcp_stack`]): сумма таблиц RX-потоков и кадры стека. Таблица отдаёт
-    /// счётчики на шаге прогресса и при выходе RX-потока, поэтому окончательные они после `Finished` (CLI читает их
-    /// после конца цикла событий и до `join`). Без стека нули.
+    /// Счётчики стека TCP ([`EngineOptions::tcp_stack`]): сумма таблиц RX-потоков и кадры стека (с
+    /// [`EngineOptions::stateless_rst`] это RST без состояния). Таблица отдаёт счётчики на шаге прогресса и при выходе
+    /// RX-потока, поэтому окончательные они после `Finished` (CLI читает их после конца цикла событий и до `join`).
+    /// Без стека и без RST нули.
     pub fn stack_stats(&self) -> StackSummary {
         let mut s = StackSummary {
             frames_sent: self.shared.stack_frames_sent.load(Ordering::Relaxed),

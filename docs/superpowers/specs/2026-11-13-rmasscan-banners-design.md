@@ -2,11 +2,13 @@
 
 Этап 4 [дорожной карты порта](2026-10-23-masscan-rust-port-design.md) (§9): собственный TCP-стек в пространстве
 пользователя, разбор прикладных ответов и записи баннеров во всех форматах вывода. Ссылки на C — masscan `8e6b3b0`
-(`src/файл.c:строка`). Факты о C собраны в четырёх справках, они часть этого документа:
+(`src/файл.c:строка`). Факты о C собраны в пяти справках, они часть этого документа:
 [TCP-стек](2026-11-13-rmasscan-banners-c-reference-tcpstack.md),
 [каркас и текстовые парсеры](2026-11-13-rmasscan-banners-c-reference-parsers.md),
 [TLS, X.509, SMB](2026-11-13-rmasscan-banners-c-reference-tls-smb.md),
-[записи баннеров и UDP-парсеры](2026-11-13-rmasscan-banners-c-reference-output-udp.md).
+[записи баннеров и UDP-парсеры](2026-11-13-rmasscan-banners-c-reference-output-udp.md),
+[TCP-стек, каркас и текстовые парсеры для 4b](2026-11-13-rmasscan-banners-c-reference-tcp.md): для 4b при расхождении
+со справками TCP-стека и каркаса главнее справка 4b (её §F).
 
 ## 1. Намерение
 

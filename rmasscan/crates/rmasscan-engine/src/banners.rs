@@ -137,11 +137,14 @@ pub struct TcpStackOptions {
 /// выброшен, если очередь кадров адаптера полна (`STACK_OUT_CAP`, RX не ждёт, Р7), если построитель его не строит
 /// (длиннее буфера C или IPv6 без `source_ipv6`, `TcpFrameBuilder::build`) или если его выдал сброс таблицы в конце
 /// (`tcpcon_destroy_table` кадров не шлёт, `src/stack-tcp-core.c:933-961`). Отправленные кадры считает TX.
+/// `flush_abandoned`: живые соединения, чьи баннеры не сброшены в конце скана, потому что таблица на `finish` ответила
+/// «ещё есть» и не продвинулась (нарушение контракта `finish`; итог при этом `Completed`, баннеры не теряются молча).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct StackSummary {
     pub stack: StackStats,
     pub frames_sent: u64,
     pub frames_dropped: u64,
+    pub flush_abandoned: u64,
 }
 
 impl StackSummary {

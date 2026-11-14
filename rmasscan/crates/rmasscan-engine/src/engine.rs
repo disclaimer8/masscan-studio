@@ -638,8 +638,8 @@ struct Shared {
     /// [`EngineOptions::banners`]: RX разбирает датаграмму ответа, прошедшего дедуп.
     banners: Option<BannerOptions>,
     /// Кадры стека TCP от RX к TX своего адаптера (`stack_transmit_packetbuffer`, `src/stack-queue.c:105-124`): пишет
-    /// RX-поток адаптера (не больше [`STACK_OUT_CAP`], лишнее выбрасывается со счётом), отправляет TX. Пусто без
-    /// [`EngineOptions::tcp_stack`].
+    /// RX-поток адаптера (не больше [`STACK_OUT_CAP`], лишнее выбрасывается со счётом), отправляет TX. Без
+    /// [`EngineOptions::tcp_stack`] очереди есть (по одной на адаптер), но всегда пусты.
     stack_out: Vec<Mutex<VecDeque<Vec<u8>>>>,
     /// Последний слепок счётчиков таблицы каждого RX-потока (пишет свой RX: на шаге прогресса и при выходе).
     stack_stats: Vec<Mutex<StackStats>>,
@@ -647,6 +647,9 @@ struct Shared {
     stack_frames_sent: AtomicU64,
     /// Кадры стека, которые не встали в `stack_out` или не построились ([`StackSummary::frames_dropped`]).
     stack_frames_dropped: AtomicU64,
+    /// Живые соединения, брошенные несбросленными, когда `finish` ответил «ещё есть» без продвижения
+    /// ([`StackSummary::flush_abandoned`]).
+    stack_flush_abandoned: AtomicU64,
 }
 
 /// Сводка итогов потоков: "идёт", если хоть один идёт; "естественный конец",
@@ -1127,7 +1130,11 @@ impl RxStack {
     /// принял (`reply_ok`: cookie верен; `Open`, а при SYN|ACK|RST `Closed`): C проверяет cookie в стековом блоке и
     /// на плохом делает `continue` (`src/main.c:969-975`), не трогая TCB, даже живой, и не доходя до статуса, а с
     /// верным создаёт TCB (`:976-986`), в том числе для SYN|ACK|RST (`TCP_IS_SYNACK` смотрит только биты 0x12).
-    /// Остальные сегменты идут в стек без cookie (`:987-1041`). `true`: стек взял сегмент.
+    /// Остальные сегменты идут в стек без cookie (`:987-1041`). Отличие от C: стек видит только то, что принял
+    /// `parse_reply` (`rmasscan-core/src/receive.rs:35-39`), а он проверяет и принадлежность адреса и порта ответчика
+    /// эффективному набору целей; поэтому SYN-ACK с верным cookie извне набора TCB не получает, а C его создаёт (до
+    /// стека C проверяет набор целей только для ARP, `src/main.c:891`). Практически ничтожно: cookie покрывает адрес
+    /// и порт ответчика. `true`: стек взял сегмент.
     fn segment(
         &mut self,
         now: u64,
@@ -1206,7 +1213,16 @@ impl RxStack {
             }
             // Страховка тотальности: таблица, которая отвечает «ещё есть», но ничего не выдала и не уничтожила ни
             // одного соединения, нарушила контракт `finish`; цикл без продвижения не крутится.
-            if !more || (!produced && self.table.stats().tcbs_live >= live) {
+            if !more {
+                return true;
+            }
+            let left = self.table.stats().tcbs_live;
+            if !produced && left >= live {
+                // Баннеры не теряются молча: оставшиеся соединения считаются в `StackSummary::flush_abandoned`,
+                // итог остаётся `Completed` (нарушение контракта таблицы, а не отказ скана).
+                shared
+                    .stack_flush_abandoned
+                    .fetch_add(left, Ordering::Relaxed);
                 return true;
             }
         }
@@ -1603,6 +1619,7 @@ impl Engine {
                 .collect(),
             stack_frames_sent: AtomicU64::new(0),
             stack_frames_dropped: AtomicU64::new(0),
+            stack_flush_abandoned: AtomicU64::new(0),
         });
 
         let dedup = Arc::new(Mutex::new(DedupCache::new(options.dedup_capacity)));
@@ -1833,6 +1850,7 @@ impl EngineHandle {
         let mut s = StackSummary {
             frames_sent: self.shared.stack_frames_sent.load(Ordering::Relaxed),
             frames_dropped: self.shared.stack_frames_dropped.load(Ordering::Relaxed),
+            flush_abandoned: self.shared.stack_flush_abandoned.load(Ordering::Relaxed),
             ..StackSummary::default()
         };
         for t in &self.shared.stack_stats {

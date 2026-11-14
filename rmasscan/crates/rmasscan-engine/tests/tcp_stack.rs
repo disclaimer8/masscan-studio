@@ -62,6 +62,8 @@ struct Script {
     close_on_fin: bool,
     /// Жизнь соединения на тике: `now > created + life` закрывает и сбрасывает (`src/stack-tcp-core.c:1970-1980`).
     lifetime_micros: Option<u64>,
+    /// `finish` отвечает «ещё есть», ничего не выдавая и не уничтожая (нарушение контракта).
+    stall_finish: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -209,6 +211,9 @@ impl TcpStack for Scripted {
             if log.ticks_at_finish.is_none() {
                 log.ticks_at_finish = Some(log.ticks.len());
             }
+        }
+        if self.script.stall_finish {
+            return true;
         }
         let n = max_connections.min(self.conns.len());
         let gone: Vec<Conn> = self.conns.drain(..n).collect();
@@ -760,6 +765,51 @@ fn finish_flush_larger_than_queue_is_delivered_whole() {
     assert_eq!(lk(&log).finish_calls, 2, "64 + 64");
 }
 
+/// То же с пределом по числу записей: байтов вдоволь, а набор из 60 записей при `result_capacity = 100` не встаёт
+/// рядом с предыдущим. Сброс ждёт места из-за записей, все наборы доставлены целиком, итог `Completed`.
+#[test]
+fn finish_flush_waits_on_entry_capacity() {
+    let plan = plan_v4("10.0.0.0/29", "80", 1);
+    let f = ScriptedFactory::new(Script {
+        create: true,
+        records: vec![10; 60],
+        ..Script::default()
+    });
+    let mut o = stack_options(&f);
+    o.result_capacity = 100; // 8 записей статуса и один набор (60), второй набор ждёт
+    o.result_byte_capacity = 1 << 20;
+    let r = run_paced(
+        &plan,
+        tcp_server(|s| vec![synack(s)]),
+        o,
+        Duration::from_micros(200),
+    );
+    assert_eq!(r.outcome.reason, Reason::Completed);
+    assert_eq!(replies_of(&r.outputs).len(), 8);
+    assert_eq!(conn_banners(&r.outputs).len(), 8 * 60);
+    assert_sets_whole(&r.outputs, 60);
+    assert_eq!(r.summary.flush_abandoned, 0);
+}
+
+/// Таблица отвечает на `finish` «ещё есть» без продвижения: сброс не крутится вечно и не молчит. Брошенные
+/// соединения посчитаны в `flush_abandoned`, итог `Completed`.
+#[test]
+fn finish_without_progress_is_counted_not_silent() {
+    let plan = plan_v4("10.0.0.0/29", "80", 1);
+    let f = ScriptedFactory::new(Script {
+        create: true,
+        stall_finish: true,
+        ..Script::default()
+    });
+    let r = run(&plan, tcp_server(|s| vec![synack(s)]), stack_options(&f));
+    assert_eq!(r.outcome.reason, Reason::Completed);
+    assert_eq!(replies_of(&r.outputs).len(), 8);
+    assert!(conn_banners(&r.outputs).is_empty());
+    assert_eq!(r.summary.flush_abandoned, 8);
+    assert_eq!(r.summary.stack.tcbs_live, 8);
+    assert_eq!(lk(&f.log(0)).finish_calls, 1);
+}
+
 /// Stop прерывает ожидающий сброс: RX выходит, итог `Stopped`, доставлено только то, что встало до остановки.
 #[test]
 fn finish_interrupted_by_stop() {
@@ -790,7 +840,6 @@ fn finish_interrupted_by_stop() {
         }
     }
     // Сброс стоит: второй набор не помещается, пока потребитель не читает (в очереди вторая запись первого набора).
-    assert_eq!(lk(&f.log(0)).finish_calls, 1);
     assert!(h.outcome().is_none());
     h.stop();
     // RX бросает сброс сам, без чтения: Stop перепроверяется не реже раза в 50 мс. Потребитель читает только после

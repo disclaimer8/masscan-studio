@@ -430,6 +430,7 @@ Details the tests must pin:
 | E1.13 | а | Minecraft multi-segment path: overlapping `memcpy`, freed `banmem` not cleared, first byte of every accumulated segment zeroed (`src/proto-mc.c:68-89`) | unsplit rule E2.7 | `minecraft-unsplit` |
 | E1.14 | б | `--hello-file` silently truncated to 12285 bytes (`src/main-conf.c:1237-1246`) | longer file refused, exit 1 (Р17) | - |
 | E1.15 | - (receive rule of every rmasscan receiver, not а-г; ruling of task 3 review) | no checksum verified on receive (`src/proto-preprocess.c:10`, `:96` `TODO: verify checksum`; `src/main.c:808-1043` goes from `preprocess_frame` to `is_my_ip`/`is_my_port` and `stack_incoming_tcp`): a segment with a wrong IPv4 header or TCP sum reaches the stack (ACK advances, payload reaches the banner parser, FIN/RST change state) | `tcp_segment` drops it before the stack, as `parse_reply` (`ChecksumPolicy::Verify`, the default) drops a bad-sum SYN-ACK; `tcp_segment` has no `ChecksumPolicy` parameter, so the stack path always verifies | - |
+| E1.16 | б | a FIN at the next sequence number in FIN_WAIT2 or TIME_WAIT re-arms the timer at `secs + 5` (`src/stack-tcp-core.c:2243-2253`) and the lifetime is checked only on TIMEOUT (`:1970-1980`): a peer sending such FINs less than 5 s apart keeps a TCB for ever (slot leak) | every deadline is capped at `created + lifetime + 2 s` (the 2 s grid tick on which the automaton RSTs by lifetime); the table capacity itself is D7, not an E1 fix | - |
 
 ### E2. Segmentation dependencies (Р13: the reference is C on the unsplit stream)
 

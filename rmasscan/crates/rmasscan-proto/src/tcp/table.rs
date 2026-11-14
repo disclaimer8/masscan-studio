@@ -9,6 +9,8 @@
 //! опоздание обработки (итерация RX до 50 мс) не сдвигает ни сетку, ни проверку жизни: по умолчанию RST на тике
 //! +32 с, при `--connection-timeout 6` на +8 с. C считает от времени обработки и сравнивает срок жизни в целых секундах
 //! (`when_created + timeout_connection < secs`, `:1970-1980`); на этой сетке его RST приходится на тот же тик.
+//! Единственный срок вне сетки 2 с это TIME_WAIT (FIN + 5 с): там C сравнивает целые секунды по фазе своих часов, и
+//! RST или тихое уничтожение у него различаются в окне короче секунды; здесь проверка по микросекундам, детерминирована.
 
 use std::collections::{BTreeMap, HashMap};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
@@ -116,7 +118,11 @@ impl Table {
     /// срок жизни только на таймауте (`:1970-1980`), поэтому собеседник, который шлёт FIN со следующим номером чаще
     /// раза в 5 с, держит блок у C вечно; здесь срок не позже этого.
     fn ceiling(&self, tcb: &Tcb) -> u64 {
-        let secs = u64::from(self.lifetime_secs).saturating_add(TICK / SEC);
+        Self::ceiling_of(tcb, self.lifetime_secs)
+    }
+
+    fn ceiling_of(tcb: &Tcb, lifetime_secs: u32) -> u64 {
+        let secs = u64::from(lifetime_secs).saturating_add(TICK / SEC);
         tcb.created_micros.saturating_add(secs.saturating_mul(SEC))
     }
 
@@ -139,15 +145,12 @@ impl Table {
         at: u64,
         out: &mut StackOutput,
     ) -> Option<TcbResult> {
-        let ceiling = {
-            let conn = self.conns.get(key)?;
-            self.ceiling(&conn.tcb)
-        };
+        let lifetime_secs = self.lifetime_secs;
         let conn = self.conns.get_mut(key)?;
         let id = conn.id;
-        if let Some(d) = conn.tcb.deadline_micros {
-            self.timers.remove(&(d, id));
-        }
+        let ceiling = Self::ceiling_of(&conn.tcb, lifetime_secs);
+        // Запись таймера трогается только при смене срока: ACK, DATA и FIN его обычно не двигают (горячий путь).
+        let old = conn.tcb.deadline_micros;
         if what == What::Timeout {
             conn.tcb.deadline_micros = None;
         }
@@ -183,6 +186,9 @@ impl Table {
                 if !set.is_empty() {
                     out.banners.push(records(key, ttl, set));
                 }
+                if let Some(d) = old {
+                    self.timers.remove(&(d, id));
+                }
                 self.conns.remove(key);
             }
             TcbResult::Okay => {
@@ -192,7 +198,12 @@ impl Table {
                     .unwrap_or_else(|| at.saturating_add(TICK))
                     .min(ceiling);
                 conn.tcb.deadline_micros = Some(deadline);
-                self.timers.insert((deadline, id), *key);
+                if old != Some(deadline) {
+                    if let Some(d) = old {
+                        self.timers.remove(&(d, id));
+                    }
+                    self.timers.insert((deadline, id), *key);
+                }
             }
         }
         Some(r)
@@ -225,7 +236,22 @@ impl Table {
     /// Порция `tcpcon_destroy_table` (`src/stack-tcp-core.c:933-961`): до `max` живых соединений уничтожаются без
     /// кадров, их баннеры сбрасываются. Порядок по таймеру (у C по корзинам хэша, `:944-947`). `true`: живые остались.
     pub(crate) fn finish(&mut self, max: usize, out: &mut StackOutput) -> bool {
-        let mut keys: Vec<ConnKey> = self.timers.values().take(max).copied().collect();
+        let mut keys: Vec<ConnKey> = Vec::new();
+        let mut stale: Vec<(u64, u64)> = Vec::new();
+        for (&entry, key) in &self.timers {
+            if keys.len() >= max {
+                break;
+            }
+            if self.conns.contains_key(key) {
+                keys.push(*key);
+            } else {
+                // Запись без соединения (инвариант «одна запись на живой блок» нарушен): убираем, чтобы не вернуться к ней.
+                stale.push(entry);
+            }
+        }
+        for entry in stale {
+            self.timers.remove(&entry);
+        }
         if keys.is_empty() && max > 0 {
             // Страховка: соединение без записи таймера всё равно уходит.
             keys.extend(self.conns.keys().take(max).copied());

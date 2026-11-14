@@ -671,6 +671,11 @@ mod tests {
         }
         assert_eq!(st.rst.allocated(), 0, "the filter was not consulted");
         assert_eq!(st.stats(), StackStats::default());
+        // Положительный контроль: FIN без блока в той же обстановке отвечает RST (`src/main.c:1018-1041`), фильтр
+        // опрошен; иначе тест прошёл бы и на стеке, который молчит всегда.
+        let (_, out) = send(&mut st, T0, key(1), FIN, R, S, b"");
+        assert!(!out.segments.is_empty(), "FIN without a TCB gets a RST");
+        assert!(st.rst.allocated() > 0);
     }
 
     /// Повторный SYN-ACK живого соединения: событие SYNACK (`src/main.c:986-987`), которое EST_RECV и EST_SEND

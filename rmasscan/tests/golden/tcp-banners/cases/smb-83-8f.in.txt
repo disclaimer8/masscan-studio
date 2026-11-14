@@ -1,0 +1,4 @@
+tcp-banner-input v1
+port 139
+capture none
+segment 830000018f

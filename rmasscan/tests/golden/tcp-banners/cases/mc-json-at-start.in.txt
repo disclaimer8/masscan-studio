@@ -1,0 +1,4 @@
+tcp-banner-input v1
+port 9999
+capture none
+segment 7b2274657874223a2273796e746865746963227d

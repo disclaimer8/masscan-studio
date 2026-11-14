@@ -1,0 +1,12 @@
+tcp-oracle v1 port=587 capture=none segments=1 bytes=29
+run whole calls=1
+app_proto 11
+action send flags=0 14 "EHLO masscan\x0d\x0a"
+record 11 28 "220 mail.example.test ESMTP\x0a"
+end
+run bytewise calls=29
+app_proto 11
+action send flags=0 14 "EHLO masscan\x0d\x0a"
+record 1 3 =stream
+record 11 28 "220 mail.example.test ESMTP\x0a"
+end

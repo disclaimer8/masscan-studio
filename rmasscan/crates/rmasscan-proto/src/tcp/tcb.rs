@@ -102,6 +102,10 @@ enum Hold {
     /// `TCP__static`: hello (`src/stack-tcp-app.c:187`) и парсеры с флагом 0. Частичный ACK байтов не меняет.
     Static,
     /// `TCP__copy`: ответы telnet (`src/proto-tcp-telnet.c:248`). Частичный ACK укорачивает сегмент спереди.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "ответы Telnet, парсер задач 9-12")
+    )]
     Copy,
 }
 
@@ -302,6 +306,10 @@ impl TcbCtl<'_> {
 
     /// То же с `TCP__copy`, флагом ответов telnet (`src/proto-tcp-telnet.c:248`): разница только в частичном ACK
     /// (`src/stack-tcp-core.c:1533-1540`).
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "ответы Telnet, парсер задач 9-12")
+    )]
     pub(crate) fn send_copy(&mut self, bytes: &[u8]) -> bool {
         self.send_held(bytes, None, Hold::Copy)
     }

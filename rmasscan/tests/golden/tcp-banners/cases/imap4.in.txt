@@ -1,0 +1,4 @@
+tcp-banner-input v1
+port 143
+capture none
+segment 2a204f4b20494d415034726576312072656164790d0a

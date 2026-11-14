@@ -1,0 +1,10 @@
+tcp-oracle v1 port=3389 capture=none segments=1 bytes=19
+run whole calls=1
+app_proto 30
+record 30 11 " NLA-unused"
+end
+run bytewise calls=19
+app_proto 30
+record 1 11 =stream
+record 30 11 " NLA-unused"
+end

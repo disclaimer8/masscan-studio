@@ -43,11 +43,14 @@ pub(crate) fn new_stack(
 }
 
 /// Нижняя граница памяти одного живого соединения: запись карты (ключ и соединение с TCB, состоянием приложения и
-/// указателем на сессию) и запись таймера, без очереди отправки, буферов баннеров и самой сессии (её размер знает
-/// реализация [`Sessions`]). Для README (задача 14).
+/// указателем на сессию), запись таймера и сессия баннера, на которую указывает соединение
+/// ([`crate::banner1::session::Banner1Session`]: hello, состояние классификатора, список буферов), без очереди
+/// отправки, байтов баннеров (их держит бюджет таблицы) и состояния парсера приложения. Для README (задача 14).
 #[doc(hidden)]
 pub fn connection_memory_floor() -> usize {
-    size_of::<(ConnKey, Conn)>() + size_of::<((u64, u64), ConnKey)>()
+    size_of::<(ConnKey, Conn)>()
+        + size_of::<((u64, u64), ConnKey)>()
+        + size_of::<crate::banner1::session::Banner1Session>()
 }
 
 /// Биты флагов TCP (`TCP_IS_*`, `src/stack-tcp-core.h:15-21`).
@@ -918,10 +921,21 @@ mod tests {
         assert_eq!(frames(&tick(&mut st, T0 + 32 * SEC)), [(RST, S, R, 0)]);
     }
 
+    /// Нижняя граница памяти соединения: запись карты с TCB, запись таймера и сама сессия баннера (её `Box` в
+    /// соединении указывает на `Banner1Session`).
     #[test]
-    fn memory_floor_counts_table_entry_and_tcb() {
+    fn memory_floor_counts_table_entry_tcb_and_session() {
         let floor = connection_memory_floor();
-        assert!(floor > size_of::<crate::tcp::tcb::Tcb>(), "{floor}");
+        let session = size_of::<crate::banner1::session::Banner1Session>();
+        assert_eq!(
+            floor,
+            size_of::<(ConnKey, Conn)>() + size_of::<((u64, u64), ConnKey)>() + session
+        );
+        assert!(
+            floor >= size_of::<crate::tcp::tcb::Tcb>() + session,
+            "{floor}"
+        );
+        assert!(session >= 48, "{session}");
         assert!(floor < 1024, "{floor}");
     }
 

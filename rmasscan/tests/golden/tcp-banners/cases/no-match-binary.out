@@ -1,0 +1,9 @@
+tcp-oracle v1 port=9999 capture=none segments=1 bytes=16
+run whole calls=1
+app_proto 0
+record 1 16 =stream
+end
+run bytewise calls=16
+app_proto 0
+record 1 16 =stream
+end

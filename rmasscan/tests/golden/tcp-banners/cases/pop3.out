@@ -1,0 +1,12 @@
+tcp-oracle v1 port=110 capture=none segments=1 bytes=16
+run whole calls=1
+app_proto 12
+action send flags=0 6 "CAPA\x0d\x0a"
+record 12 15 "+OK POP3 ready\x0a"
+end
+run bytewise calls=16
+app_proto 12
+action send flags=0 6 "CAPA\x0d\x0a"
+record 1 3 =stream
+record 12 15 "+OK POP3 ready\x0a"
+end

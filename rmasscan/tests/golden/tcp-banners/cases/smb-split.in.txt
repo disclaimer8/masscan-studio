@@ -1,0 +1,5 @@
+tcp-banner-input v1
+port 445
+capture none
+segment 0000
+segment 0027ff534d427200000000

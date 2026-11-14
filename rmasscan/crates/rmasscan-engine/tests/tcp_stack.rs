@@ -1684,6 +1684,101 @@ fn tx_lingers_for_stack_frames_until_rx_ends() {
     assert_eq!(conn_banners(&outputs).len(), 1);
 }
 
+/// Часы, у которых первый сон после взвода блокирует вызвавший поток до `release` (до 10 с), а остальные идут как на
+/// `ManualClock`. Держат TX внутри сна throttle ровно там, где тест выставляет конец RX.
+struct GateClock {
+    inner: Arc<ManualClock>,
+    armed: AtomicBool,
+    inside: AtomicBool,
+    released: AtomicBool,
+}
+
+impl Clock for GateClock {
+    fn now_micros(&self) -> u64 {
+        self.inner.now_micros()
+    }
+
+    fn sleep_micros(&self, us: u64) {
+        if self.armed.swap(false, Ordering::SeqCst) {
+            self.inside.store(true, Ordering::SeqCst);
+            let t = Instant::now();
+            while !self.released.load(Ordering::SeqCst) && t.elapsed() < Duration::from_secs(10) {
+                std::thread::sleep(Duration::from_micros(100));
+            }
+            return;
+        }
+        self.inner.sleep_micros(us);
+    }
+}
+
+/// Конец RX прерывает сон throttle в linger: TX с очередью кадров стека стоит внутри сна throttle, окно ожидания RX
+/// кончается (часы продвинул тест), сон возвращается, и TX не шлёт больше ни одного кадра, а сразу уходит. Без
+/// проверки `rx_end` в условии отмены throttle после сна отдавал бы пачку, и после конца RX уходил бы ещё кадр
+/// (`Finished` опаздывал бы на сон throttle, до ~1 с на малом `--rate`). Остаток очереди идёт в `frames_dropped`.
+/// Часы тестовые, ожидания ограничены: конец RX виден по остановке тиков таблицы стека.
+#[test]
+fn linger_ends_with_rx_inside_a_throttle_sleep() {
+    let plan = plan_full("10.0.0.1", "80", 1, 1, 1.0, 0);
+    let f = ScriptedFactory::new(Script {
+        create: true,
+        acks: 50,
+        records: vec![1],
+        ..Script::default()
+    });
+    let manual = ManualClock::new();
+    let gate = Arc::new(GateClock {
+        inner: manual.clone(),
+        armed: AtomicBool::new(false),
+        inside: AtomicBool::new(false),
+        released: AtomicBool::new(false),
+    });
+    let fake = FakeAdapter::new();
+    let captured: Arc<Mutex<Option<Vec<u8>>>> = Arc::default();
+    let c2 = captured.clone();
+    fake.set_responder(move |fr: &[u8]| {
+        if is_tcp_syn(fr) {
+            *lk(&c2) = Some(fr.to_vec());
+        }
+        vec![]
+    });
+    let dynclock: Arc<dyn Clock + Send + Sync> = gate.clone();
+    let h =
+        Engine::start_with_clock(plan.clone(), fake.pair(), stack_options(&f), dynclock).unwrap();
+    wait_for("the probe", || fake.sent_count() == 1);
+    let syn = lk(&captured).clone().unwrap();
+    gate.armed.store(true, Ordering::SeqCst);
+    fake.push_frame(synack(&syn));
+    wait_for("TX inside a throttle sleep", || {
+        gate.inside.load(Ordering::SeqCst)
+    });
+    let sent_before = fake.sent_count();
+    // Окно ожидания 1 с: после этого RX кончает приём и публикует конец.
+    manual.advance(Duration::from_secs(5));
+    let ticks_of = || {
+        lk(&f.tables)
+            .first()
+            .map_or(0, |(_, log)| lk(log).ticks.len())
+    };
+    let mut last = (ticks_of(), Instant::now());
+    wait_for("RX to stop ticking", || {
+        let now = ticks_of();
+        if now != last.0 {
+            last = (now, Instant::now());
+        }
+        last.1.elapsed() > Duration::from_millis(100)
+    });
+    gate.released.store(true, Ordering::SeqCst);
+    wait_for("outcome", || h.outcome().is_some());
+    let outputs = drain_outputs(&h, Duration::ZERO);
+    let summary = h.stack_stats();
+    let outcome = h.join().unwrap();
+    assert_eq!(outcome.reason, Reason::Completed);
+    assert_eq!(fake.sent_count(), sent_before, "frame sent after RX ended");
+    assert_eq!(summary.frames_sent + summary.frames_dropped, 50);
+    assert_eq!(outcome.progress.sent, 1);
+    assert_eq!(replies_of(&outputs).len(), 1);
+}
+
 fn rst_options() -> EngineOptions {
     let mut o = opts();
     o.stateless_rst = true;
@@ -1882,6 +1977,9 @@ fn no_new_frames_without_options() {
     let o = opts();
     assert!(!o.stateless_rst);
     assert!(o.tcp_stack.is_none());
+    // Тест закрепляет кадры на проводе и выдачу, а не отсутствие linger: ветка linger на этом пути не входится
+    // (`ndp || shared.stack_tx` ложно), счётчика входа в неё у движка нет, поэтому здесь видно лишь следствие, что
+    // `Progress` совпадает с числом зондов.
     let plan = plan_v4("10.0.0.0/29", "80", 60);
     let responder = || {
         tcp_server(|s| match syn_target(s) & 1 {
@@ -1893,6 +1991,8 @@ fn no_new_frames_without_options() {
         h.progress().received == 8
     });
     assert_eq!(r.outcome.reason, Reason::Completed);
+    assert_eq!(r.outcome.progress.sent, 8);
+    assert_eq!(r.outcome.progress.received, 8);
     assert_eq!(fake.sent_frames(), reference_frames(&plan, 8));
     assert_eq!(r.summary, StackSummary::default());
     assert!(

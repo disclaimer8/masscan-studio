@@ -1069,7 +1069,11 @@ fn run_tx(
         // Кадры стека и RST без состояния впереди SYN, в счёт той же пачки и того же throttle (`src/main.c:289-299`:
         // «This takes priority over sending SYN packets»; поток кадров стека может съесть всю пачку). Досылка
         // остатка пачки повторов при паузе их не берёт: она идёт мимо throttle, а кадры стека дождутся linger.
-        // `shared.sent` (`Progress.sent`) считает только зонды.
+        // `shared.sent` (`Progress.sent`) считает только зонды. `!burst` следует из `halted() == RUN` в `keep_going`
+        // (`halt` только растёт, а `burst` значит, что был виден `PAUSE`), но оба условия остаются: `RUN` ловит ещё и
+        // Pause, пришедшую после `Ok(b)`, а `!burst` не даёт `u64::MAX` попасть в `send_stack_frames`.
+        // Модель этого разбиения пачки (стек, затем SYN) дублирует `model_tx` в `tests/tcp_stack.rs`: правя здесь,
+        // правь и её.
         if shared.stack_tx && !burst && left > 0 {
             let taken = send_stack_frames(&shared, idx, &mut *tx, left, &|| shared.halted() == RUN);
             my_sent += taken;
@@ -1186,6 +1190,12 @@ fn run_tx(
     // `is_rx_done`); не шлёт только после Stop/Fail.
     if ndp || shared.stack_tx {
         let keep_going = || shared.halted() < STOP;
+        // Для сна throttle и пачки кадров стека: конец RX тоже прерывает их, иначе `Finished` опаздывает на сон
+        // throttle при малом `--rate` или на `пачка × io_timeout` при забитом адаптере. Недосланное досчитает
+        // `finalize`. `flush_ndp` оставлен на `keep_going`: последний сброс NA после конца RX нужен.
+        // Модель этого цикла (когда спрашивается throttle) дублирует `model_tx` в `tests/tcp_stack.rs`: правя здесь,
+        // правь и её.
+        let keep_sending = || shared.halted() < STOP && shared.rx_end() == END_RUNNING;
         loop {
             let done = shared.rx_end() != END_RUNNING || shared.halted() >= STOP;
             if ndp {
@@ -1203,11 +1213,11 @@ fn run_tx(
             // простоя выдаёт пачку до 10000 кадров разом; здесь после простоя он начинает с пачки 1, как в начале
             // скана). Так простой linger не трогает часы движка.
             if shared.stack_tx && !lock(&shared.stack_out[idx]).is_empty() {
-                match throttler.next_batch_interruptible(my_sent, clock, || !keep_going()) {
+                match throttler.next_batch_interruptible(my_sent, clock, || !keep_sending()) {
                     Ok(b) => {
                         shared.rate_bits[idx]
                             .store(throttler.current_rate().to_bits(), Ordering::Relaxed);
-                        my_sent += send_stack_frames(&shared, idx, &mut *tx, b, &keep_going);
+                        my_sent += send_stack_frames(&shared, idx, &mut *tx, b, &keep_sending);
                     }
                     Err(_) => break,
                 }

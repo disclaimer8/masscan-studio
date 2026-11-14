@@ -7,17 +7,24 @@
 //! собой и пустеет (`banout_expand`, `:258-286`), и её место берёт следующая новая запись. Здесь список это вектор,
 //! голова в нём первая; длина C (`length`) ведётся рядом с хранимыми байтами, поэтому голова переезжает на том же
 //! дописывании, что у C, даже когда предел Р5 или бюджет сохранили меньше байтов.
+//!
+//! Потеря только с конца записи: запись, от которой предел Р5 или бюджет таблицы отказали хоть в одном байте,
+//! помечается неполной (`lossy`) и больше не растёт, даже когда бюджет снова есть. Так запись всегда первые N байт
+//! записи C, а не куски потока с дырой посередине; неполную запись HEUR сессия в парсер не повторяет
+//! ([`super::session`]).
 
 use rmasscan_core::banner::MAX_BANNER_BYTES;
 
 use crate::tcp::app::ByteBudget;
 
-/// Запись списка: `protocol`, `length` C и сохранённые байты (не больше [`MAX_BANNER_BYTES`]).
+/// Запись списка: `protocol`, `length` C, сохранённые байты (не больше [`MAX_BANNER_BYTES`]) и отметка, что предел
+/// или бюджет уже отказали ей в байте (дальше в неё не пишется).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct Rec {
     app: u16,
     c_len: usize,
     bytes: Vec<u8>,
+    lossy: bool,
 }
 
 /// Буферы баннеров одного соединения (`tcb->banout`). Пустой вектор это свежий `banout_init`: пустая голова.
@@ -34,7 +41,9 @@ impl Banout {
     /// `banout_append(banout, app, px, length)` (`src/proto-banout.c:326-363`): запись по точному `protocol`
     /// (`banout_find_proto`, `:48-54`) или новая (`banout_new_proto`, `:237-253`); голова, которой не хватает места
     /// (`length + n >= max_length`), переезжает за себя (`banout_expand`, `:258-286`). Байты за пределом
-    /// [`MAX_BANNER_BYTES`] не хранятся и бюджет не трогают (Р5); из остального сохраняется то, что дал бюджет.
+    /// [`MAX_BANNER_BYTES`] не хранятся и бюджет не трогают (Р5); из остального сохраняется то, что дал бюджет. Первый
+    /// отказ (предела или бюджета) делает запись неполной: её следующие байты в пределе не хранятся и считаются
+    /// выброшенными, бюджета не берут, и запись остаётся началом записи C без дыр.
     pub(crate) fn append(&mut self, budget: &mut ByteBudget, app: u16, px: &[u8]) {
         if self.recs.is_empty() {
             self.recs.push(Rec::default());
@@ -56,11 +65,22 @@ impl Banout {
             return;
         };
         // Р5: запись это первые 65 536 байт записи C; дальше позиции не хранятся. Из позиций в пределе хранится то,
-        // что дал бюджет, недостача считается в бюджете.
+        // что дал бюджет, недостача считается в бюджете; после первой недостачи запись не растёт.
         let room = MAX_BANNER_BYTES.saturating_sub(rec.c_len);
         rec.c_len = rec.c_len.saturating_add(px.len());
-        let got = budget.take(px.len().min(room));
+        let want = px.len().min(room);
+        if rec.lossy {
+            budget.refuse(want);
+            return;
+        }
+        let got = budget.take(want);
         push_bounded(&mut rec.bytes, px.get(..got).unwrap_or(px));
+        rec.lossy = got < px.len();
+    }
+
+    /// Запись `app` неполная: предел Р5 или бюджет отказали ей в байте.
+    pub(crate) fn lossy(&self, app: u16) -> bool {
+        self.recs.iter().any(|r| r.app == app && r.lossy)
     }
 
     /// `banout_new_proto` (`src/proto-banout.c:237-253`): пустая голова (`protocol == 0 && length == 0`) берёт `app`,
@@ -93,6 +113,7 @@ impl Banout {
 
     /// Запись `app` целиком, вынутая из списка: её байты возвращаются в бюджет. Для повтора HEUR (справка E2.1,
     /// E1.3): до классификации в списке только запись HEUR, и после неё список пуст, как у C на неразрезанном потоке.
+    /// Неполную запись ([`Banout::lossy`]) сессия не вынимает.
     pub(crate) fn take(&mut self, budget: &mut ByteBudget, app: u16) -> Vec<u8> {
         let rec = match self.recs.iter().position(|r| r.app == app) {
             Some(0) => self.recs.first_mut().map(std::mem::take),
@@ -304,6 +325,55 @@ mod tests {
         // Запись без байтов (всё отнял бюджет) не выдаётся.
         assert_eq!(b.flush(&mut small), [(1, vec![b'q'; 100])]);
         assert_eq!(small.left(), 100);
+    }
+
+    /// Потеря только с конца записи (I1 ревью задачи 8): запись, которой бюджет отказал хоть в байте, больше не
+    /// растёт и тогда, когда бюджет вернулся; её байты в пределе считаются выброшенными, бюджета не берут. Другая
+    /// запись, которой не отказывали, растёт дальше. Отметка переезжает с головой (порядок C прежний), а предел Р5
+    /// делает запись неполной с первого байта за ним, не раньше.
+    #[test]
+    fn lossy_record_takes_nothing_more() {
+        let mut budget = ByteBudget::new(3);
+        let mut b = Banout::default();
+        b.append(&mut budget, 1, b"ab");
+        b.append(&mut budget, 4, b"cd");
+        assert!(b.lossy(4) && !b.lossy(1));
+        assert_eq!(budget.dropped(), 1);
+        budget.give(2);
+        b.append(&mut budget, 4, b"ef");
+        b.append(&mut budget, 1, b"gh");
+        assert_eq!(budget.dropped(), 3);
+        assert_eq!(budget.left(), 0);
+        assert_eq!(b.nodes(), [(1, 4), (4, 4)]);
+        assert_eq!(
+            b.flush(&mut budget),
+            [(1, b"abgh".to_vec()), (4, b"c".to_vec())]
+        );
+        assert_eq!(budget.left(), 3 + 2);
+
+        // Неполная голова переезжает с отметкой, пустую голову берёт следующая новая запись.
+        let mut budget = ByteBudget::new(10);
+        let mut b = Banout::default();
+        b.append(&mut budget, 1, &[b'h'; 150]);
+        budget.give(1000);
+        b.append(&mut budget, 1, &[b'i'; 60]);
+        b.append(&mut budget, 4, b"x");
+        assert_eq!(b.nodes(), [(4, 1), (1, 210)]);
+        assert!(b.lossy(1) && !b.lossy(4));
+        assert_eq!(
+            b.flush(&mut budget),
+            [(4, b"x".to_vec()), (1, vec![b'h'; 10])]
+        );
+
+        // Р5: ровно 65 536 байт это полная запись, следующий байт делает её неполной.
+        let mut budget = ByteBudget::new(1 << 20);
+        let mut b = Banout::default();
+        b.append(&mut budget, 1, &vec![b'a'; MAX_BANNER_BYTES]);
+        assert!(!b.lossy(1));
+        b.append(&mut budget, 1, b"b");
+        assert!(b.lossy(1));
+        assert_eq!(budget.dropped(), 0);
+        assert_eq!(b.held(), MAX_BANNER_BYTES);
     }
 
     /// Вынутая запись HEUR оставляет список, каким его застаёт парсер на неразрезанном потоке у C: пустым, и

@@ -35,6 +35,13 @@ impl ByteBudget {
         got
     }
 
+    /// `n` байт не дописываются, не взяв бюджета, и считаются выброшенными: запись, от которой бюджет уже отказал,
+    /// больше не растёт (потеря только с конца записи, [`crate::banner1::banout::Banout::append`]).
+    pub(crate) fn refuse(&mut self, n: usize) {
+        let lost = u64::try_from(n).unwrap_or(u64::MAX);
+        self.dropped = self.dropped.saturating_add(lost);
+    }
+
     /// Вернуть `n` байт (сброс баннеров).
     pub(crate) fn give(&mut self, n: usize) {
         self.left = self.left.saturating_add(n);

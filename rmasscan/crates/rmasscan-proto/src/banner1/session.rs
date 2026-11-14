@@ -6,15 +6,22 @@
 //! вынимается (E1.3), и парсер получает их, а затем весь текущий сегмент, так что он видит поток с первого байта, а
 //! записи `unknown` из байтов до совпадения нет (E2.1; у C по сегментам она остаётся). Первое совпадение решает:
 //! отвергнутый SSL3 (hello TLS не слан, B1.2) делает остаток потока `unknown` (E2.2; у C следующий сегмент ещё может
-//! совпасть с `{"` или IAC).
+//! совпасть с `{"` или IAC). Классификатор смотрит только первые 65 536 байт потока ([`CLASSIFY_WINDOW`], Р5), поэтому
+//! байты до совпадения всегда целиком в записи HEUR и при неограниченном бюджете результат не зависит от нарезки.
+//!
+//! Бюджет таблицы режет записи только с конца ([`Banout::append`]); запись HEUR, которой бюджет отказал хоть в байте,
+//! в парсер не повторяется, и поток остаётся `unknown` (её начало), а не идёт в парсер с дырой.
 
+use std::fmt;
 use std::sync::Arc;
+
+use rmasscan_core::banner::MAX_BANNER_BYTES;
 
 use crate::app::app_id;
 use crate::tcp::app::{ByteBudget, Session, SessionAction, Sessions};
 
 use super::banout::Banout;
-use super::classify::{Classifier, PATTERNS};
+use super::classify::{Classifier, PATTERNS, SearchState};
 use super::hello::{HelloTable, TcpBannerSettings};
 
 /// Парсер, который выбрал классификатор (ветки `switch (tcb_state->app_proto)`, `src/proto-banner1.c:187-316`), в
@@ -62,7 +69,8 @@ pub(crate) struct ParseCx<'a> {
 }
 
 impl ParseCx<'_> {
-    /// `banout_append(banout, app, px, length)`.
+    /// `banout_append(banout, app, px, length)`. Запись режется только с конца: после первого байта, в котором
+    /// отказали предел Р5 или бюджет, в неё больше ничего не пишется ([`Banout::append`]).
     pub(crate) fn append(&mut self, app: u16, px: &[u8]) {
         self.banout.append(self.budget, app, px);
     }
@@ -95,32 +103,61 @@ pub(crate) fn parser_for(p: AppProto) -> Box<dyn Parser> {
     }
 }
 
-/// Неизменяемая конфигурация скана: hello по порту, запрос HTTP, `--capture html` и выбор парсера.
-#[derive(Debug)]
-pub(crate) struct BannerConfig {
+/// Неизменяемая часть скана, одна на все сессии (у C это глобальные `banner1` и `payloads.tcp[]`): hello по порту с
+/// запросом HTTP, `--capture html`, выбор парсера и собранный классификатор. Сессия держит на неё `Arc`, а не копии
+/// полей.
+struct Scan {
     hellos: HelloTable,
     capture_html: bool,
     parsers: fn(AppProto) -> Box<dyn Parser>,
+    classifier: &'static Classifier,
+}
+
+impl fmt::Debug for Scan {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Scan")
+            .field("hellos", &self.hellos)
+            .field("capture_html", &self.capture_html)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Неизменяемая конфигурация скана из [`TcpBannerSettings`]: раздаёт сессии таблицам соединений.
+#[derive(Debug)]
+pub(crate) struct BannerConfig {
+    scan: Arc<Scan>,
 }
 
 impl BannerConfig {
     pub(crate) fn new(s: &TcpBannerSettings) -> BannerConfig {
+        BannerConfig::with_parsers(s, parser_for)
+    }
+
+    /// Конфигурация с выбором парсера `parsers` (вне тестов всегда [`parser_for`]). Автомат классификатора
+    /// собирается здесь, до скана, как `smack_compile` в `banner1_create` из `tcpcon_create_table`
+    /// (`src/proto-banner1.c:509-517`, `src/stack-tcp-core.c:714`), а не на первом сегменте приёма; он один на
+    /// процесс.
+    fn with_parsers(
+        s: &TcpBannerSettings,
+        parsers: fn(AppProto) -> Box<dyn Parser>,
+    ) -> BannerConfig {
         BannerConfig {
-            hellos: HelloTable::new(s),
-            capture_html: s.capture_html,
-            parsers: parser_for,
+            scan: Arc::new(Scan {
+                hellos: HelloTable::new(s),
+                capture_html: s.capture_html,
+                parsers,
+                classifier: Classifier::banner1(),
+            }),
         }
     }
 
     /// Новая сессия порта `port` (`tcpcon_create_tcb`, `src/stack-tcp-core.c:1043-1049`).
     pub(crate) fn session(&self, port: u16) -> Banner1Session {
         Banner1Session {
-            hello: self.hellos.hello(port).cloned(),
+            scan: Arc::clone(&self.scan),
             port,
-            capture_html: self.capture_html,
-            parsers: self.parsers,
             app_proto: None,
-            stage: Stage::Classify(0),
+            stage: Stage::Classify { state: 0, seen: 0 },
             banout: Banout::default(),
         }
     }
@@ -130,7 +167,7 @@ impl BannerConfig {
     pub(crate) fn forced(&self, port: u16, app: u16) -> Banner1Session {
         let mut s = self.session(port);
         s.app_proto = Some(app);
-        s.stage = Stage::Parse((self.parsers)(app_proto_for(app, 0)));
+        s.stage = Stage::Parse((self.scan.parsers)(app_proto_for(app, 0)));
         s
     }
 }
@@ -160,19 +197,30 @@ impl Sessions for BannerConfig {
     }
 }
 
-/// Где поток: классификатор (состояние smack), отвергнутый SSL3 или парсер приложения.
+/// Окно классификатора: первые 65 536 байт потока (Р5, как предел записи HEUR, в которой они ждут). Шаблон, который
+/// впервые совпал бы дальше, не ищется, и поток остаётся `unknown` (у C предела нет, и он классифицирует и разбирает
+/// позже, `src/proto-banner1.c:127-184`). Так байты до совпадения всегда целиком в записи HEUR, и результат один и
+/// тот же целиком, по байту и в любой нарезке.
+const CLASSIFY_WINDOW: usize = MAX_BANNER_BYTES;
+
+/// Где поток: классификатор (состояние smack и сколько байт потока он уже видел), `unknown` до конца или парсер
+/// приложения.
 enum Stage {
-    Classify(u32),
-    Rejected,
+    Classify {
+        state: SearchState,
+        seen: usize,
+    },
+    /// Классификатор больше не ищет, каждый байт в HEUR: отвергнутый SSL3 (E2.2), окно без совпадения
+    /// ([`CLASSIFY_WINDOW`]) или совпадение при неполной записи HEUR (её не повторить в парсер).
+    Unknown,
     Parse(Box<dyn Parser>),
 }
 
-/// Сессия баннера одного соединения (`tcb->stream`, `tcb->banner1_state`, `tcb->banout`).
+/// Сессия баннера одного соединения (`tcb->stream`, `tcb->banner1_state`, `tcb->banout`): общая часть скана, порт и
+/// своё состояние.
 pub(crate) struct Banner1Session {
-    hello: Option<Arc<[u8]>>,
+    scan: Arc<Scan>,
     port: u16,
-    capture_html: bool,
-    parsers: fn(AppProto) -> Box<dyn Parser>,
     /// `tcb_state->app_proto`; `None` это PROTO_NONE.
     app_proto: Option<u16>,
     stage: Stage,
@@ -202,7 +250,7 @@ impl Banner1Session {
             budget,
             acts,
             port: self.port,
-            capture_html: self.capture_html,
+            capture_html: self.scan.capture_html,
             starttls: false,
         };
         parser.parse(&mut cx, px);
@@ -213,7 +261,9 @@ impl Banner1Session {
     }
 
     /// Совпадение шаблона `id` (`src/proto-banner1.c:136-182`): поправки порта и версии, номер C, парсер; запись
-    /// HEUR вынимается и повторяется в парсер, затем весь текущий сегмент.
+    /// HEUR вынимается и повторяется в парсер, затем весь текущий сегмент. Неполная запись HEUR (бюджет отказал ей в
+    /// байте) в парсер не идёт: он увидел бы поток с дырой, и поток остаётся `unknown`, номер C тот, что выбрал
+    /// классификатор.
     fn classified(
         &mut self,
         id: usize,
@@ -232,7 +282,12 @@ impl Banner1Session {
             pat.app
         };
         self.app_proto = Some(app);
-        let mut parser = (self.parsers)(app_proto_for(app, pat.extra));
+        if self.banout.lossy(app_id::HEUR) {
+            // Стадия остаётся `Unknown` (её поставил `parse`): дальше всё в HEUR, а неполная запись не растёт.
+            self.banout.append(budget, app_id::HEUR, px);
+            return;
+        }
+        let mut parser = (self.scan.parsers)(app_proto_for(app, pat.extra));
         let held = self.banout.take(budget, app_id::HEUR);
         if !held.is_empty() {
             self.run(&mut parser, budget, acts, &held);
@@ -243,8 +298,9 @@ impl Banner1Session {
 }
 
 impl Session for Banner1Session {
+    /// Hello порта из общей таблицы скана.
     fn hello(&self) -> Option<&[u8]> {
-        self.hello.as_deref()
+        self.scan.hellos.hello(self.port).map(|h| &h[..])
     }
 
     /// `banner1_parse` одного сегмента. Пустой сегмент это отсутствие данных (у C `banner1_parse` пустым не зовут:
@@ -253,24 +309,32 @@ impl Session for Banner1Session {
         if px.is_empty() {
             return;
         }
-        match std::mem::replace(&mut self.stage, Stage::Rejected) {
-            // `:126-184`: один `smack_search_next` на сегмент, состояние smack между сегментами.
-            Stage::Classify(mut state) => match Classifier::banner1().search(&mut state, px) {
-                Some(id)
-                    if PATTERNS
-                        .get(id)
-                        .is_some_and(|p| p.app != app_id::SSL3 || SSL_HELLO_SENT) =>
-                {
-                    self.classified(id, px, budget, acts);
+        match std::mem::replace(&mut self.stage, Stage::Unknown) {
+            // `:126-184`: один `smack_search_next` на сегмент, состояние smack между сегментами; ищется только
+            // часть сегмента в окне.
+            Stage::Classify { mut state, seen } => {
+                let window = px.len().min(CLASSIFY_WINDOW.saturating_sub(seen));
+                let head = px.get(..window).unwrap_or(px);
+                match self.scan.classifier.search(&mut state, head) {
+                    Some(id)
+                        if PATTERNS
+                            .get(id)
+                            .is_some_and(|p| p.app != app_id::SSL3 || SSL_HELLO_SENT) =>
+                    {
+                        self.classified(id, px, budget, acts);
+                    }
+                    // Отвергнутый SSL3 (`:137-138`): первое совпадение решает, остаток потока `unknown` (E2.2).
+                    Some(_) => self.banout.append(budget, app_id::HEUR, px),
+                    None => {
+                        let seen = seen.saturating_add(px.len());
+                        if seen < CLASSIFY_WINDOW {
+                            self.stage = Stage::Classify { state, seen };
+                        }
+                        self.banout.append(budget, app_id::HEUR, px);
+                    }
                 }
-                // Отвергнутый SSL3 (`:137-138`): первое совпадение решает, остаток потока `unknown` (E2.2).
-                Some(_) => self.banout.append(budget, app_id::HEUR, px),
-                None => {
-                    self.stage = Stage::Classify(state);
-                    self.banout.append(budget, app_id::HEUR, px);
-                }
-            },
-            Stage::Rejected => self.banout.append(budget, app_id::HEUR, px),
+            }
+            Stage::Unknown => self.banout.append(budget, app_id::HEUR, px),
             Stage::Parse(mut parser) => {
                 self.run(&mut parser, budget, acts, px);
                 self.stage = Stage::Parse(parser);
@@ -321,9 +385,31 @@ mod tests {
     }
 
     fn tag_config() -> BannerConfig {
-        let mut cfg = BannerConfig::new(&TcpBannerSettings::default());
-        cfg.parsers = tagging;
-        cfg
+        BannerConfig::with_parsers(&TcpBannerSettings::default(), tagging)
+    }
+
+    thread_local! {
+        /// Байты, которые получил [`Record`] в этом потоке теста, по порядку вызовов.
+        static SEEN: std::cell::RefCell<Vec<u8>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    /// Парсер-самописец: каждый байт, который ему дали, в [`SEEN`] и в запись app 42.
+    struct Record;
+
+    impl Parser for Record {
+        fn parse(&mut self, cx: &mut ParseCx<'_>, px: &[u8]) {
+            SEEN.with(|s| s.borrow_mut().extend_from_slice(px));
+            cx.append(42, px);
+        }
+    }
+
+    fn recording(_: AppProto) -> Box<dyn Parser> {
+        Box::new(Record)
+    }
+
+    /// Что получил парсер-самописец с прошлого вызова.
+    fn take_seen() -> Vec<u8> {
+        SEEN.with(|s| std::mem::take(&mut *s.borrow_mut()))
     }
 
     /// Итог потока через сессию: `(app_proto, записи, действия)`.
@@ -571,6 +657,169 @@ mod tests {
         assert_eq!(cfg.session(23).hello(), Some(&b"\xff\xf6"[..]));
         assert_eq!(cfg.session(443).hello(), None);
         assert_eq!(cfg.forced(23, 29).hello(), Some(&b"\xff\xf6"[..]));
+    }
+
+    /// I1 ревью задачи 8: бюджет, отказавший записи HEUR в байте, делает её неполной, и такая запись в парсер не
+    /// повторяется: парсер не получает `"HTP/1.0 200"` (поток с дырой), поток остаётся `unknown` с началом `"H"`, номер
+    /// C тот, что выбрал классификатор, остальное считается выброшенным.
+    #[test]
+    fn lossy_heur_is_not_replayed_into_a_parser() {
+        let cfg = BannerConfig::with_parsers(&TcpBannerSettings::default(), recording);
+        let mut s = cfg.session(80);
+        let mut budget = ByteBudget::new(1);
+        let mut acts = Vec::new();
+        take_seen();
+        for seg in [&b"HT"[..], b"TP/1.0 200", b" OK\r\n"] {
+            s.parse(seg, &mut budget, &mut acts);
+        }
+        assert_eq!(take_seen(), b"", "a lossy HEUR record reached the parser");
+        assert_eq!(s.app_proto(), Some(app_id::HTTP));
+        assert_eq!(budget.dropped(), 1 + 10 + 5);
+        assert_eq!(s.flush(&mut budget), [(app_id::HEUR, b"H".to_vec())]);
+        assert_eq!(budget.left(), 1);
+        assert!(acts.is_empty());
+
+        // Бюджета ровно на HEUR: запись полная, повтор целиком, запись парсера режется с конца.
+        let mut s = cfg.session(80);
+        let mut budget = ByteBudget::new(2);
+        for seg in [&b"HT"[..], b"TP/1.0 200"] {
+            s.parse(seg, &mut budget, &mut acts);
+        }
+        assert_eq!(take_seen(), b"HTTP/1.0 200");
+        assert_eq!(s.flush(&mut budget), [(42, b"HT".to_vec())]);
+        assert_eq!(budget.dropped(), 10);
+
+        // Совпадение в первом сегменте: HEUR пуст, парсер получает поток, его запись режется с конца. При нехватке
+        // бюджета итог поэтому зависит от нарезки (README).
+        let mut s = cfg.session(80);
+        let mut budget = ByteBudget::new(1);
+        s.parse(b"HTTP/1.0 200", &mut budget, &mut acts);
+        assert_eq!(take_seen(), b"HTTP/1.0 200");
+        assert_eq!(s.flush(&mut budget), [(42, b"H".to_vec())]);
+    }
+
+    /// I1 ревью задачи 8: общий бюджет 12 байт. A держит 8, B получает 4 из `"0123456789"`, A сбрасывается и
+    /// возвращает 8, но B больше не растёт: его запись `"0123"`, начало потока, а не `"0123tail"` из кусков с дырой.
+    /// Каждый отказанный байт считается; новая сессия после сброса получает полную запись.
+    #[test]
+    fn budget_loss_truncates_never_splices() {
+        let cfg = BannerConfig::new(&TcpBannerSettings::default());
+        let mut budget = ByteBudget::new(12);
+        let mut acts = Vec::new();
+        let (mut a, mut b) = (cfg.session(9999), cfg.session(9999));
+        a.parse(b"abcdefgh", &mut budget, &mut acts);
+        b.parse(b"0123456789", &mut budget, &mut acts);
+        assert_eq!(budget.dropped(), 6);
+        assert_eq!(a.flush(&mut budget), [(app_id::HEUR, b"abcdefgh".to_vec())]);
+        b.parse(b"tail", &mut budget, &mut acts);
+        assert_eq!(budget.dropped(), 10);
+        assert_eq!(budget.left(), 8);
+        assert_eq!(b.flush(&mut budget), [(app_id::HEUR, b"0123".to_vec())]);
+        assert_eq!(budget.left(), 12);
+        let mut c = cfg.session(9999);
+        c.parse(b"01234567", &mut budget, &mut acts);
+        c.parse(b"tail", &mut budget, &mut acts);
+        assert_eq!(
+            c.flush(&mut budget),
+            [(app_id::HEUR, b"01234567tail".to_vec())]
+        );
+        assert_eq!(budget.dropped(), 10);
+        assert!(acts.is_empty());
+    }
+
+    /// Нарезки потока для правил окна: целиком, по байту, на границах окна и около совпадения, 8 случайных.
+    fn window_splits(stream: &[u8], seed: u64) -> Vec<Vec<&[u8]>> {
+        let mut out = vec![vec![stream], bytewise(stream)];
+        for at in [
+            CLASSIFY_WINDOW - 1,
+            CLASSIFY_WINDOW,
+            CLASSIFY_WINDOW + 1,
+            stream.len() - 7,
+            stream.len() - 6,
+        ] {
+            if at < stream.len() {
+                out.push(vec![&stream[..at], &stream[at..]]);
+            }
+        }
+        let mut rng = Rng(seed);
+        for _ in 0..8 {
+            let mut cuts: Vec<usize> = (0..1 + rng.below(12))
+                .map(|_| rng.below(stream.len() + 1))
+                .collect();
+            cuts.sort_unstable();
+            let mut segs = Vec::new();
+            let mut at = 0;
+            for c in cuts.into_iter().chain([stream.len()]) {
+                segs.push(&stream[at..c]);
+                at = c;
+            }
+            out.push(segs);
+        }
+        out
+    }
+
+    /// M1 ревью задачи 8: окно классификатора это первые 65 536 байт потока (Р5). `{"`, который впервые совпал бы
+    /// за окном (70 000 `q` и `{"x":1}`, 70 007 байт), не ищется: поток `unknown`, его первые 65 536 байт, парсер не
+    /// запускается, и итог один целиком, по байту и в каждой нарезке (у C предела нет, и он разобрал бы поток как
+    /// Minecraft). Совпадение, кончающееся последним байтом окна (смещение 65 535), классифицирует, и парсер получает
+    /// весь поток; на байт позже уже нет.
+    #[test]
+    fn classification_window_is_the_first_65536_bytes() {
+        let cfg = BannerConfig::with_parsers(&TcpBannerSettings::default(), recording);
+        let mc = b"{\"x\":1}";
+        for (lead, classified) in [(70_000usize, false), (65_534, true), (65_535, false)] {
+            let stream = [vec![b'q'; lead], mc.to_vec()].concat();
+            let seed = 0x5DEE_CE66_D1CE_4E5B ^ u64::try_from(lead).expect("lead");
+            for (i, segs) in window_splits(&stream, seed).iter().enumerate() {
+                take_seen();
+                let (app, recs, acts) = feed(&cfg, 25565, None, segs);
+                let at = format!("lead {lead}, split {i} ({} segments)", segs.len());
+                assert!(acts.is_empty(), "{at}");
+                if classified {
+                    assert_eq!(app, Some(app_id::MC), "{at}");
+                    assert!(take_seen() == stream, "{at}: parser saw the whole stream");
+                    assert!(recs == [(42, stream[..MAX_BANNER_BYTES].to_vec())], "{at}");
+                } else {
+                    assert_eq!(app, None, "{at}");
+                    assert!(take_seen().is_empty(), "{at}: parser ran");
+                    let want = [(app_id::HEUR, stream[..MAX_BANNER_BYTES].to_vec())];
+                    assert!(recs == want, "{at}: records");
+                }
+            }
+        }
+        // Через офлайн-драйвер с заглушками: то же самое целиком и в нарезке случая ревью.
+        let stream = [vec![b'q'; 70_000], mc.to_vec()].concat();
+        let s = TcpBannerSettings::default();
+        let whole = banner_stream(&s, 25565, None, &[&stream]);
+        let split = banner_stream(&s, 25565, None, &[&stream[..70_000], &stream[70_000..]]);
+        assert_eq!(whole, split);
+        assert_eq!(whole.app_proto, None);
+    }
+
+    /// M3, M4 ревью задачи 8: автомат классификатора собран при сборке конфигурации скана (тот же, что один на
+    /// процесс), а сессии делят одну неизменяемую часть скана через `Arc`: hello порта это байты таблицы, а не копия в
+    /// каждой сессии.
+    #[test]
+    fn sessions_share_the_scan_config() {
+        let cfg = BannerConfig::new(&TcpBannerSettings::default());
+        assert!(std::ptr::eq(cfg.scan.classifier, Classifier::banner1()));
+        let (a, b) = (cfg.session(80), cfg.forced(80, app_id::HTTP));
+        assert!(Arc::ptr_eq(&a.scan, &b.scan));
+        assert_eq!(Arc::strong_count(&cfg.scan), 3);
+        let table = cfg.scan.hellos.hello(80).map(|h| &h[..]);
+        assert!(table.is_some());
+        assert!(
+            a.hello()
+                .zip(table)
+                .is_some_and(|(x, y)| std::ptr::eq(x, y))
+        );
+        assert!(
+            b.hello()
+                .zip(table)
+                .is_some_and(|(x, y)| std::ptr::eq(x, y))
+        );
+        drop((a, b));
+        assert_eq!(Arc::strong_count(&cfg.scan), 1);
     }
 
     /// Детерминированный xorshift64*, как в `tcb_never_panics`.

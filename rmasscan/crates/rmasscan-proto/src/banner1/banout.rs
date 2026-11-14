@@ -38,6 +38,52 @@ pub(crate) struct Banout {
 const HEAD_CAPACITY: usize = 200;
 
 impl Banout {
+    /// Отложенный HEUR RDP: E2.5 и вложенные UNKNOWN (`src/proto-tcp-rdp.c:94-96, :188-190, :280-282`).
+    /// Переносится только эта запись; уже оплаченный префикс сливается без повторного списания, c_len/lossy
+    /// сохраняются. Неиспользованная резервация возвращается, в том числе при неполной целевой записи.
+    pub(crate) fn commit_deferred_heur(&mut self, staged: &mut Banout, budget: &mut ByteBudget) {
+        // Переносится только HEUR; байты любой другой отложенной записи возвращаются в бюджет, а не теряются.
+        let mut rec = None;
+        for r in std::mem::take(&mut staged.recs) {
+            if r.app == crate::app_id::HEUR && rec.is_none() {
+                rec = Some(r);
+            } else {
+                budget.give(r.bytes.len());
+            }
+        }
+        let Some(mut rec) = rec else {
+            return;
+        };
+        let mut at = self
+            .recs
+            .iter()
+            .position(|r| r.app == rec.app)
+            .unwrap_or_else(|| self.new_proto(rec.app));
+        if at == 0
+            && let Some(head) = self.recs.first_mut()
+            && head.c_len.saturating_add(rec.c_len) >= HEAD_CAPACITY
+        {
+            let moved = std::mem::take(head);
+            self.recs.insert(1, moved);
+            at = 1;
+        }
+        if let Some(target) = self.recs.get_mut(at) {
+            let room = MAX_BANNER_BYTES.saturating_sub(target.c_len);
+            let got = if target.lossy {
+                0
+            } else {
+                rec.bytes.len().min(room)
+            };
+            budget.give(rec.bytes.len() - got);
+            rec.bytes.truncate(got);
+            push_bounded(&mut target.bytes, &rec.bytes);
+            target.lossy |= rec.lossy || got < rec.c_len;
+            target.c_len = target.c_len.saturating_add(rec.c_len);
+        } else {
+            budget.give(rec.bytes.len());
+        }
+    }
+
     /// Одна отложенная запись HTTP (`src/proto-http.c:554-559, :678-681`): уже оплаченные байты переезжают из
     /// staging-списка, как одно дописывание C после всех Server. Длина C и lossy сохраняются даже при коротком
     /// сохранённом префиксе. Голова переезжает при той же логической длине (`src/proto-banout.c:258-286`).

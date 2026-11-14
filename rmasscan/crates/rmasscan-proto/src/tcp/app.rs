@@ -63,6 +63,7 @@ impl ByteBudget {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum SessionAction {
     Send(Vec<u8>),
+    SendCopy(Vec<u8>),
     Close,
 }
 
@@ -183,6 +184,9 @@ impl App for AppLayer<'_> {
                     match act {
                         SessionAction::Send(bytes) => {
                             ctl.send(&bytes);
+                        }
+                        SessionAction::SendCopy(bytes) => {
+                            ctl.send_copy(&bytes);
                         }
                         SessionAction::Close => ctl.close(),
                     }

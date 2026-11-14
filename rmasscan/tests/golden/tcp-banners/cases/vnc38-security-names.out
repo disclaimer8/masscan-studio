@@ -1,0 +1,23 @@
+tcp-oracle v1 port=5900 capture=none segments=2 bytes=32
+run whole calls=1
+app_proto 33
+action send flags=0 12 "RFB 003.008\x0a"
+action send flags=0 1 "\x01"
+record 33 12 =stream
+record 34 179 "Security types:\x0a  invalid\x0a  none\x0a  VNC-chap\x0a  RA2\x0a  RA2ne\x0a  SSPI\x0a  SSPIne\x0a  Tight\x0a  Ultra\x0a  TLS\x0a  VeNCrypt\x0a  GTK-VNC-SASL\x0a  MD5\x0a  Colin-Dean-xvp\x0a  Apple30\x0a  Apple35\x0a  3\x0a  255\x0a  4\x0a"
+end
+run bytewise calls=32
+app_proto 33
+action send flags=0 12 "RFB 003.008\x0a"
+action send flags=0 1 "\x01"
+record 1 11 =stream
+record 34 179 "Security types:\x0a  invalid\x0a  none\x0a  VNC-chap\x0a  RA2\x0a  RA2ne\x0a  SSPI\x0a  SSPIne\x0a  Tight\x0a  Ultra\x0a  TLS\x0a  VeNCrypt\x0a  GTK-VNC-SASL\x0a  MD5\x0a  Colin-Dean-xvp\x0a  Apple30\x0a  Apple35\x0a  3\x0a  255\x0a  4\x0a"
+record 33 12 =stream
+end
+run given calls=2
+app_proto 33
+action send flags=0 12 "RFB 003.008\x0a"
+action send flags=0 1 "\x01"
+record 33 12 =stream
+record 34 179 "Security types:\x0a  invalid\x0a  none\x0a  VNC-chap\x0a  RA2\x0a  RA2ne\x0a  SSPI\x0a  SSPIne\x0a  Tight\x0a  Ultra\x0a  TLS\x0a  VeNCrypt\x0a  GTK-VNC-SASL\x0a  MD5\x0a  Colin-Dean-xvp\x0a  Apple30\x0a  Apple35\x0a  3\x0a  255\x0a  4\x0a"
+end

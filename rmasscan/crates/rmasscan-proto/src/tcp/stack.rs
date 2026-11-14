@@ -813,6 +813,21 @@ mod tests {
         assert_eq!(state(&st, key(1)), Some(TcpState::FinWait1Send));
     }
 
+    /// Ответ Telnet проходит весь слой приложения с TCP__copy (`src/proto-tcp-telnet.c:248`).
+    #[test]
+    fn telnet_copy_action_shrinks_on_partial_ack() {
+        let script = Script::null().reply(0, vec![SessionAction::SendCopy(b"0123456789".to_vec())]);
+        let mut st = stack(&script);
+        synack(&mut st, T0, key(1));
+        let (_, out) = send(&mut st, T0 + SEC, key(1), PSHACK, R, S, b"x");
+        assert_eq!(out.segments[0].payload, b"0123456789");
+        send(&mut st, T0 + SEC + 1, key(1), ACK, R + 1, S + 4, b"");
+        assert_eq!(
+            st.table.tcb(&key(1)).expect("live").queue_spans(),
+            [(S, 6, false)]
+        );
+    }
+
     /// Решение по hello (замечание M4 задачи 6): соединения одного порта держат в очереди один буфер hello, как у C
     /// указатель `TCP__static` на `stream->hello` (`src/stack-tcp-app.c:187`); на проводе по 1400 байт.
     #[test]

@@ -1,4 +1,4 @@
-//! Паритет каркаса баннеров TCP и парсеров FTP, SMTP, POP3, IMAP4 с C (AGPL-3.0, подэтап 4b, задачи 8 и 9). Каждый
+//! Паритет каркаса баннеров TCP и парсеров задач 9-11 с C (AGPL-3.0, подэтап 4b, задачи 8-11). Каждый
 //! кейс `tests/golden/tcp-banners` это поток сервера одного соединения и вывод C-оракула `tcp-oracle` (вне
 //! репозитория, Р14): настоящий `banner1_parse` masscan © Robert David Graham (HEAD 8e6b3b0,
 //! `src/proto-banner1.c:113-325`) с `banner1_create`, `banout` и парсерами C, `tcpapi_*` записывают действия (README
@@ -47,7 +47,7 @@ const DIR: &str = concat!(
 const ORACLE_GIT_HEAD: &str = "8e6b3b0c07a81e8ea61d557c06134a21a6881614";
 
 /// Число кейсов по видам ожидания: `records`, `classification`, `declared-4b`.
-const COUNTS: (usize, usize, usize) = (114, 45, 18);
+const COUNTS: (usize, usize, usize) = (191, 4, 18);
 
 fn read(path: &Path) -> Vec<u8> {
     fs::read(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
@@ -402,6 +402,47 @@ fn c_split_evidence_matches_the_reference() {
         assert_eq!(sent(out.given.as_ref().expect("given")), 1, "{name}: given");
         assert_eq!(sent(&out.bytewise), 1, "{name}: bytewise");
     }
+    // E2.4: после байта остановки SSH C целиком дописывает ровно один байт, а по сегментам ещё первый байт
+    // каждого следующего (здесь по байту, поэтому весь поток).
+    let (c, out) = by_name("ssh-ident-nul");
+    assert_eq!(
+        out.whole.records,
+        [(app_id::SSH2, c.stream()[..11].to_vec())]
+    );
+    assert!(
+        out.bytewise.records.contains(&(app_id::SSH2, c.stream())),
+        "ssh-ident-nul bytewise"
+    );
+    // E2.5: UNKNOWN у RDP дописывает у C текущий сегмент с его начала: в заданной нарезке только хвост второго
+    // сегмента, целиком весь поток.
+    let (c, out) = by_name("rdp-second-non3");
+    assert!(
+        out.whole.records.contains(&(app_id::HEUR, c.stream())),
+        "rdp-second-non3 whole"
+    );
+    assert!(
+        out.given
+            .expect("given run")
+            .records
+            .contains(&(app_id::HEUR, b"Xtail".to_vec())),
+        "rdp-second-non3 given"
+    );
+    // E2.9: RFB_DONE у C закрывает на первом байте каждого следующего сегмента; записи от нарезки не зависят.
+    let (_, out) = by_name("vnc38-error-lowbyte");
+    let closes = |r: &CRun| {
+        r.actions
+            .iter()
+            .filter(|a| **a == StreamAction::Close)
+            .count()
+    };
+    assert_eq!(closes(&out.whole), 2, "vnc38-error-lowbyte whole");
+    assert_eq!(closes(&out.bytewise), 4, "vnc38-error-lowbyte bytewise");
+    assert!(
+        out.bytewise
+            .records
+            .contains(&(app_id::VNC_INFO, b"ERROR: bad".to_vec())),
+        "vnc38-error-lowbyte bytewise records"
+    );
 }
 
 #[test]

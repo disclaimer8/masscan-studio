@@ -266,21 +266,21 @@ pub fn cases() -> Vec<Case> {
     ));
     v.push(case(
         "ssh1",
-        Classification,
+        Records,
         "SSH-1. (app 2)",
         22,
         &[b"SSH-1.99-OpenSSH_3.9p1\r\n"],
     ));
     v.push(case(
         "ssh2",
-        Classification,
+        Records,
         "SSH-2. (app 3)",
         22,
         &[b"SSH-2.0-OpenSSH_9.6\r\n"],
     ));
     v.push(case(
         "ssh2-lowercase",
-        Classification,
+        Records,
         "ssh-2. строчными: регистр A-Z не важен",
         2222,
         &[b"ssh-2.0-dropbear\r\n"],
@@ -386,7 +386,7 @@ pub fn cases() -> Vec<Case> {
     ] {
         v.push(case(
             name,
-            Classification,
+            Records,
             "строка версии RFB (app 33, версия = extra шаблона)",
             5900,
             &[line],
@@ -429,7 +429,7 @@ pub fn cases() -> Vec<Case> {
         };
         v.push(Case {
             name,
-            expect: Classification,
+            expect: Records,
             about: "безъякорная последовательность IAC (app 29)",
             port: 23,
             capture_html: false,
@@ -446,24 +446,18 @@ pub fn cases() -> Vec<Case> {
         ("telnet-login-uppercase", b"LOGIN: "),
         ("telnet-password-capital", b"Password: "),
     ] {
-        v.push(case(
-            name,
-            Classification,
-            "якорный шаблон Telnet",
-            23,
-            &[stream],
-        ));
+        v.push(case(name, Records, "якорный шаблон Telnet", 23, &[stream]));
     }
     v.push(case(
         "rdp-beef",
-        Classification,
+        Records,
         "12 байт ответа RDP с cookie beef",
         3389,
         &[b"\x03\x00\x00\x13\x0e\xd0\xbe\xef\x12\x34\x00\x02\x0f\x08\x00\x00\x00\x00\x00"],
     ));
     v.push(case(
         "rdp-zero",
-        Classification,
+        Records,
         "12 байт ответа RDP с нулевым cookie",
         3389,
         &[b"\x03\x00\x00\x13\x0e\xd0\x00\x00\x12\x34\x00\x02\x0f\x08\x00\x08\x00\x00\x00"],
@@ -477,7 +471,7 @@ pub fn cases() -> Vec<Case> {
     ));
     v.push(case(
         "telnet-split-in-pattern",
-        Classification,
+        Records,
         "безъякорный IAC через границу сегментов (состояние smack между сегментами)",
         23,
         &[b"xx\xff\xfb", b"\x01\xff\xfd\x03"],
@@ -1046,5 +1040,132 @@ fn text_cases() -> Vec<Case> {
         110,
         &[b"+OK ready\r\n+OK\r\n.\r\n+OK go\r\n", b"+OK again\r\n"],
     ));
+
+    // Задача 11: независимые синтетические потоки D6-D9 и векторы C selftest.
+    for (name, data) in [
+        ("ssh-ident-nul", &b"SSH-2.0-x\0ABC\r\n"[..]),
+        ("ssh-ident-utf8", b"SSH-2.0-x \xc3\xa9tail\r\n"),
+        ("ssh-ident-ws", b"SSH-1.5-x\t\x0b\x0c\r\n"),
+        ("ssh-leading-line", b"notice\r\nSSH-2.0-x\r\n"),
+        (
+            "ssh-two-packets",
+            b"SSH-2.0-x\r\n\0\0\0\x08\x04\x14abcde\0\0\0\x08\x04\x15abcde",
+        ),
+        ("ssh-length-underflow", b"SSH-2.0-x\n\0\0\0\0\0\x14abcd"),
+    ] {
+        v.push(case(
+            name,
+            Records,
+            "SSH ident/raw bytes и fallthrough framing",
+            22,
+            &[data],
+        ));
+    }
+    for (name, data) in [
+        ("telnet-selftest-1", &b"\xff\xfd\x1flogin:"[..]),
+        ("telnet-selftest-2", b"\xff\xfd\x27\xff\xfd\x18 "),
+        ("telnet-selftest-3", b"\xff\xfb\x25\xff\xfd\x03\xff\xfb\x18\xff\xfb\x1f\xff\xfb\x20\xff\xfb\x21\xff\xfb\x22\xff\xfb\x27\xff\xfd\x05\xff\xfb\x01\xff\xfb\x03\xff\xfd\x18\xff\xfd\x1f\xff\xfa\x18\x01\xff\xf0\r\nUser Access Verification\r\n\r\n"),
+        ("telnet-selftest-4", b"\xff\xfd\x01\xff\xfd\x1f\xff\xfd\x21\xff\xfb\x01\xff\xfb\x03F670\r\n\rLogin: "),
+        ("telnet-iac-iac-stop", b"login: \xff\xffABC"),
+        ("telnet-invalid-stop", b"login: \xff\x01ABC"),
+        ("telnet-last-command", b"login: \xff\xfd\x20\xff\xfb\x01\xff\xfd\x01\xff\xfb\x20"),
+        ("telnet-sb", b"login: \xff\xfa\x18hi\xff\xf0bye\xff\xf6"),
+    ] { v.push(case(name, Records, "Telnet raw bytes, SB, invalid и negotiation", 23, &[data])); }
+    let rdp = b"\x03\0\0\x13\x0e\xd0\0\0\x12\x34\0\x02\x0f\x08\0\x02\0\0\0";
+    v.push(case(
+        "rdp-selftest-success",
+        Records,
+        "C selftest success",
+        3389,
+        &[rdp],
+    ));
+    for (name, tail) in [
+        (
+            "rdp-selftest-failure",
+            &b"\x03\0\0\x13\x0e\xd0\0\0\x12\x34\0\x03\0\x08\0\x05\0\0\0"[..],
+        ),
+        (
+            "rdp-other-failure",
+            b"\x03\0\0\x13\x0e\xd0\0\0\x12\x34\0\x03\0\x08\0\x01\0\0\0",
+        ),
+        ("rdp-second-non3", b"Xtail"),
+        ("rdp-short-tpkt", b"\x03\0\0\x03tail"),
+        ("rdp-short-tpkt-no-tail", b"\x03\0\0\x03"),
+        ("rdp-empty-tpkt", b"\x03\0\0\x04"),
+        (
+            "rdp-high-length",
+            b"\x03\0\x01\x13\x0e\xd0\0\0\x12\x34\0\x02\0\x08\0\0\0\0\0",
+        ),
+        ("rdp-cotp-unknown", b"\x03\0\0\x0c\x07\xe0\0\0\0\0\0X"),
+        ("rdp-short-cotp", b"\x03\0\0\x09\x03abcd"),
+        (
+            "rdp-short-neg",
+            b"\x03\0\0\x13\x0e\xd0\0\0\x12\x34\0\x02\0\x03\0abcd",
+        ),
+    ] {
+        v.push(case(
+            name,
+            Records,
+            "RDP C selftest или malformed second TPKT",
+            3389,
+            &[rdp, tail],
+        ));
+    }
+    let init = b"\x04\0\x03\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\x03labTAIL";
+    for (name, version, sec) in [
+        ("vnc33-none-init", &b"RFB 003.003\n"[..], &b"\0\0\0\x01"[..]),
+        ("vnc37-none-init", b"RFB 003.007\n", b"\x01\x01"),
+        ("vnc37-not-offered-init", b"RFB 003.007\n", b"\x01\x02"),
+        ("vnc38-none-init", b"RFB 003.008\n", b"\x01\x01\0\0\0\0"),
+        (
+            "vnc38-not-offered-init",
+            b"RFB 003.008\n",
+            b"\x02\x02\x13\0\0\0\0",
+        ),
+    ] {
+        v.push(case(
+            name,
+            Records,
+            "VNC выбор None и ServerInit",
+            5900,
+            &[version, sec, init],
+        ));
+    }
+    for (name, version, sec) in [
+        ("vnc33-chap", &b"RFB 003.003\n"[..], &b"\0\0\0\x02tail"[..]),
+        (
+            "vnc33-error-lowbyte",
+            b"RFB 003.003\n",
+            b"\0\0\0\0\0\0\x01\x03badTAIL",
+        ),
+        (
+            "vnc38-error-lowbyte",
+            b"RFB 003.008\n",
+            b"\0\0\0\x01\x03badTAIL",
+        ),
+        (
+            "vnc38-result-error",
+            b"RFB 003.008\n",
+            b"\x01\x01\0\0\0\x01\0\0\0\x03badTAIL",
+        ),
+        (
+            "vnc38-security-names",
+            b"RFB 003.008\n",
+            b"\x13\0\x01\x02\x05\x06\x07\x08\x10\x11\x12\x13\x14\x15\x16\x1e\x23\x03\xff\x04",
+        ),
+        (
+            "vnc38-zero-name",
+            b"RFB 003.008\n",
+            b"\x01\x01\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0TAIL",
+        ),
+    ] {
+        v.push(case(
+            name,
+            Records,
+            "VNC security types и error length",
+            5900,
+            &[version, sec],
+        ));
+    }
     v
 }

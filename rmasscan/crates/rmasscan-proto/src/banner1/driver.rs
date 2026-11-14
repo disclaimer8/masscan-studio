@@ -49,7 +49,7 @@ pub fn banner_stream(
         actions: acts
             .into_iter()
             .map(|a| match a {
-                SessionAction::Send(b) => StreamAction::Send(b),
+                SessionAction::Send(b) | SessionAction::SendCopy(b) => StreamAction::Send(b),
                 SessionAction::Close => StreamAction::Close,
             })
             .collect(),

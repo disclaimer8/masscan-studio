@@ -1,0 +1,12 @@
+tcp-oracle v1 port=22 capture=none segments=1 bytes=14
+run whole calls=1
+app_proto 2
+action send flags=0 21 "SSH-2.0-OPENSSH_7.9\x0d\x0a"
+record 3 14 =stream
+end
+run bytewise calls=14
+app_proto 2
+action send flags=0 21 "SSH-2.0-OPENSSH_7.9\x0d\x0a"
+record 1 5 =stream
+record 3 14 =stream
+end

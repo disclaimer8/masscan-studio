@@ -14,39 +14,7 @@
       "default": "-std=gnu99 -g -O2 (masscan Makefile CFLAGS)",
       "asan": "-std=gnu99 -g -O1 -fno-omit-frame-pointer -fsanitize=address,undefined -fsanitize-recover=address"
     },
-    "linked_sources": [
-      "proto-banner1",
-      "proto-banout",
-      "smack1",
-      "smackqueue",
-      "proto-http",
-      "proto-ftp",
-      "proto-smtp",
-      "proto-pop3",
-      "proto-imap4",
-      "proto-ssh",
-      "proto-vnc",
-      "proto-tcp-telnet",
-      "proto-tcp-rdp",
-      "proto-memcached",
-      "proto-mc",
-      "crypto-base64",
-      "proto-ssl",
-      "proto-ssl-test",
-      "proto-x509",
-      "proto-smb",
-      "proto-ntlmssp",
-      "proto-versioning",
-      "scripting-banner",
-      "stub-lua",
-      "util-malloc",
-      "util-logger",
-      "util-safefunc",
-      "pixie-timer",
-      "crypto-siphash24",
-      "massip-addr",
-      "massip-rangesv4"
-    ],
+    "linked_sources": ["proto-banner1", "proto-banout", "smack1", "smackqueue", "proto-http", "proto-ftp", "proto-smtp", "proto-pop3", "proto-imap4", "proto-ssh", "proto-vnc", "proto-tcp-telnet", "proto-tcp-rdp", "proto-memcached", "proto-mc", "crypto-base64", "proto-ssl", "proto-ssl-test", "proto-x509", "proto-smb", "proto-ntlmssp", "proto-versioning", "scripting-banner", "stub-lua", "util-malloc", "util-logger", "util-safefunc", "pixie-timer", "crypto-siphash24", "massip-addr", "massip-rangesv4"],
     "linked_sources_sha256": {
       "proto-banner1.c": "4e0c677048c5392e0df115621d408cc4a9af3827454ff3032cf0696790b74e0f",
       "proto-banout.c": "e59a6e46e62afff8644a44e581e24efdef06293cefb33b0de90b8ce423e2b814",
@@ -84,7 +52,7 @@
     "calls": "banner1_create once; per run a zeroed StreamState with the case's port, banout_init, banner1_parse per piece (whole stream, every byte, the given segments), then the records banner_flush reports (list order, length && protocol, app = protocol & 0x0FFFFFFF); each run in a forked child with a 2-second alarm"
   },
   "host": "Darwin 27.2.0, arm64",
-  "captured_at": "2026-11-14T17:16:57Z",
+  "captured_at": "2026-11-14T17:44:19Z",
   "expected": "rmasscan banner_stream on the whole stream, byte by byte, the given segments and 8 random splits: records (each C record cut at 65 536 bytes, R5) and app_proto equal C's whole run for expect=records, actions too on the whole stream; app_proto only for expect=classification; for expect=declared-4b the named 4b rule and C's app_proto: unknown-stream (the whole stream as one unknown record, no action) or starttls-unknown (the first segment ends with the STARTTLS go-ahead line: the text parser record and the actions before the TLS hello of C's run over that segment, the given run when there is a second segment, else the whole run; the bytes of the second segment as one unknown record; no TLS hello)",
   "tables": [
     {
@@ -575,7 +543,7 @@
     {
       "name": "ssh1",
       "about": "SSH-1. (app 2)",
-      "expect": "classification",
+      "expect": "records",
       "declared": "-",
       "port": 22,
       "capture": "none",
@@ -595,7 +563,7 @@
     {
       "name": "ssh2",
       "about": "SSH-2. (app 3)",
-      "expect": "classification",
+      "expect": "records",
       "declared": "-",
       "port": 22,
       "capture": "none",
@@ -615,7 +583,7 @@
     {
       "name": "ssh2-lowercase",
       "about": "ssh-2. строчными: регистр A-Z не важен",
-      "expect": "classification",
+      "expect": "records",
       "declared": "-",
       "port": 2222,
       "capture": "none",
@@ -895,7 +863,7 @@
     {
       "name": "vnc-000-000",
       "about": "строка версии RFB (app 33, версия = extra шаблона)",
-      "expect": "classification",
+      "expect": "records",
       "declared": "-",
       "port": 5900,
       "capture": "none",
@@ -915,7 +883,7 @@
     {
       "name": "vnc-003-003",
       "about": "строка версии RFB (app 33, версия = extra шаблона)",
-      "expect": "classification",
+      "expect": "records",
       "declared": "-",
       "port": 5900,
       "capture": "none",
@@ -935,7 +903,7 @@
     {
       "name": "vnc-003-005",
       "about": "строка версии RFB (app 33, версия = extra шаблона)",
-      "expect": "classification",
+      "expect": "records",
       "declared": "-",
       "port": 5900,
       "capture": "none",
@@ -955,7 +923,7 @@
     {
       "name": "vnc-003-006",
       "about": "строка версии RFB (app 33, версия = extra шаблона)",
-      "expect": "classification",
+      "expect": "records",
       "declared": "-",
       "port": 5900,
       "capture": "none",
@@ -975,7 +943,7 @@
     {
       "name": "vnc-003-007",
       "about": "строка версии RFB (app 33, версия = extra шаблона)",
-      "expect": "classification",
+      "expect": "records",
       "declared": "-",
       "port": 5900,
       "capture": "none",
@@ -995,7 +963,7 @@
     {
       "name": "vnc-003-008",
       "about": "строка версии RFB (app 33, версия = extra шаблона)",
-      "expect": "classification",
+      "expect": "records",
       "declared": "-",
       "port": 5900,
       "capture": "none",
@@ -1015,7 +983,7 @@
     {
       "name": "vnc-003-889",
       "about": "строка версии RFB (app 33, версия = extra шаблона)",
-      "expect": "classification",
+      "expect": "records",
       "declared": "-",
       "port": 5900,
       "capture": "none",
@@ -1035,7 +1003,7 @@
     {
       "name": "vnc-003-009",
       "about": "строка версии RFB (app 33, версия = extra шаблона)",
-      "expect": "classification",
+      "expect": "records",
       "declared": "-",
       "port": 5900,
       "capture": "none",
@@ -1055,7 +1023,7 @@
     {
       "name": "vnc-004-000",
       "about": "строка версии RFB (app 33, версия = extra шаблона)",
-      "expect": "classification",
+      "expect": "records",
       "declared": "-",
       "port": 5900,
       "capture": "none",
@@ -1075,7 +1043,7 @@
     {
       "name": "vnc-004-001",
       "about": "строка версии RFB (app 33, версия = extra шаблона)",
-      "expect": "classification",
+      "expect": "records",
       "declared": "-",
       "port": 5900,
       "capture": "none",
@@ -1095,7 +1063,7 @@
     {
       "name": "vnc-004-002",
       "about": "строка версии RFB (app 33, версия = extra шаблона)",
-      "expect": "classification",
+      "expect": "records",
       "declared": "-",
       "port": 5900,
       "capture": "none",
@@ -1115,7 +1083,7 @@
     {
       "name": "vnc-lowercase",
       "about": "строка версии RFB (app 33, версия = extra шаблона)",
-      "expect": "classification",
+      "expect": "records",
       "declared": "-",
       "port": 5900,
       "capture": "none",
@@ -1155,7 +1123,7 @@
     {
       "name": "telnet-iac-37",
       "about": "безъякорная последовательность IAC (app 29)",
-      "expect": "classification",
+      "expect": "records",
       "declared": "-",
       "port": 23,
       "capture": "none",
@@ -1175,7 +1143,7 @@
     {
       "name": "telnet-iac-38",
       "about": "безъякорная последовательность IAC (app 29)",
-      "expect": "classification",
+      "expect": "records",
       "declared": "-",
       "port": 23,
       "capture": "none",
@@ -1195,7 +1163,7 @@
     {
       "name": "telnet-iac-39",
       "about": "безъякорная последовательность IAC (app 29)",
-      "expect": "classification",
+      "expect": "records",
       "declared": "-",
       "port": 23,
       "capture": "none",
@@ -1215,7 +1183,7 @@
     {
       "name": "telnet-iac-40",
       "about": "безъякорная последовательность IAC (app 29)",
-      "expect": "classification",
+      "expect": "records",
       "declared": "-",
       "port": 23,
       "capture": "none",
@@ -1235,7 +1203,7 @@
     {
       "name": "telnet-iac-41",
       "about": "безъякорная последовательность IAC (app 29)",
-      "expect": "classification",
+      "expect": "records",
       "declared": "-",
       "port": 23,
       "capture": "none",
@@ -1255,7 +1223,7 @@
     {
       "name": "telnet-iac-42",
       "about": "безъякорная последовательность IAC (app 29)",
-      "expect": "classification",
+      "expect": "records",
       "declared": "-",
       "port": 23,
       "capture": "none",
@@ -1275,7 +1243,7 @@
     {
       "name": "telnet-iac-43",
       "about": "безъякорная последовательность IAC (app 29)",
-      "expect": "classification",
+      "expect": "records",
       "declared": "-",
       "port": 23,
       "capture": "none",
@@ -1295,7 +1263,7 @@
     {
       "name": "telnet-iac-44",
       "about": "безъякорная последовательность IAC (app 29)",
-      "expect": "classification",
+      "expect": "records",
       "declared": "-",
       "port": 23,
       "capture": "none",
@@ -1315,7 +1283,7 @@
     {
       "name": "telnet-iac-45",
       "about": "безъякорная последовательность IAC (app 29)",
-      "expect": "classification",
+      "expect": "records",
       "declared": "-",
       "port": 23,
       "capture": "none",
@@ -1335,7 +1303,7 @@
     {
       "name": "telnet-iac-46",
       "about": "безъякорная последовательность IAC (app 29)",
-      "expect": "classification",
+      "expect": "records",
       "declared": "-",
       "port": 23,
       "capture": "none",
@@ -1355,7 +1323,7 @@
     {
       "name": "telnet-iac-47",
       "about": "безъякорная последовательность IAC (app 29)",
-      "expect": "classification",
+      "expect": "records",
       "declared": "-",
       "port": 23,
       "capture": "none",
@@ -1375,7 +1343,7 @@
     {
       "name": "telnet-iac-48",
       "about": "безъякорная последовательность IAC (app 29)",
-      "expect": "classification",
+      "expect": "records",
       "declared": "-",
       "port": 23,
       "capture": "none",
@@ -1395,7 +1363,7 @@
     {
       "name": "telnet-iac-49",
       "about": "безъякорная последовательность IAC (app 29)",
-      "expect": "classification",
+      "expect": "records",
       "declared": "-",
       "port": 23,
       "capture": "none",
@@ -1415,7 +1383,7 @@
     {
       "name": "telnet-iac-50",
       "about": "безъякорная последовательность IAC (app 29)",
-      "expect": "classification",
+      "expect": "records",
       "declared": "-",
       "port": 23,
       "capture": "none",
@@ -1435,7 +1403,7 @@
     {
       "name": "telnet-iac-51",
       "about": "безъякорная последовательность IAC (app 29)",
-      "expect": "classification",
+      "expect": "records",
       "declared": "-",
       "port": 23,
       "capture": "none",
@@ -1455,7 +1423,7 @@
     {
       "name": "telnet-anchored-esc",
       "about": "якорный шаблон Telnet",
-      "expect": "classification",
+      "expect": "records",
       "declared": "-",
       "port": 23,
       "capture": "none",
@@ -1475,7 +1443,7 @@
     {
       "name": "telnet-anchored-input",
       "about": "якорный шаблон Telnet",
-      "expect": "classification",
+      "expect": "records",
       "declared": "-",
       "port": 23,
       "capture": "none",
@@ -1495,7 +1463,7 @@
     {
       "name": "telnet-anchored-spaces",
       "about": "якорный шаблон Telnet",
-      "expect": "classification",
+      "expect": "records",
       "declared": "-",
       "port": 23,
       "capture": "none",
@@ -1515,7 +1483,7 @@
     {
       "name": "telnet-anchored-login-iac",
       "about": "якорный шаблон Telnet",
-      "expect": "classification",
+      "expect": "records",
       "declared": "-",
       "port": 23,
       "capture": "none",
@@ -1535,7 +1503,7 @@
     {
       "name": "telnet-login",
       "about": "якорный шаблон Telnet",
-      "expect": "classification",
+      "expect": "records",
       "declared": "-",
       "port": 23,
       "capture": "none",
@@ -1555,7 +1523,7 @@
     {
       "name": "telnet-password",
       "about": "якорный шаблон Telnet",
-      "expect": "classification",
+      "expect": "records",
       "declared": "-",
       "port": 23,
       "capture": "none",
@@ -1575,7 +1543,7 @@
     {
       "name": "telnet-login-uppercase",
       "about": "якорный шаблон Telnet",
-      "expect": "classification",
+      "expect": "records",
       "declared": "-",
       "port": 23,
       "capture": "none",
@@ -1595,7 +1563,7 @@
     {
       "name": "telnet-password-capital",
       "about": "якорный шаблон Telnet",
-      "expect": "classification",
+      "expect": "records",
       "declared": "-",
       "port": 23,
       "capture": "none",
@@ -1615,7 +1583,7 @@
     {
       "name": "rdp-beef",
       "about": "12 байт ответа RDP с cookie beef",
-      "expect": "classification",
+      "expect": "records",
       "declared": "-",
       "port": 3389,
       "capture": "none",
@@ -1635,7 +1603,7 @@
     {
       "name": "rdp-zero",
       "about": "12 байт ответа RDP с нулевым cookie",
-      "expect": "classification",
+      "expect": "records",
       "declared": "-",
       "port": 3389,
       "capture": "none",
@@ -1675,7 +1643,7 @@
     {
       "name": "telnet-split-in-pattern",
       "about": "безъякорный IAC через границу сегментов (состояние smack между сегментами)",
-      "expect": "classification",
+      "expect": "records",
       "declared": "-",
       "port": 23,
       "capture": "none",
@@ -3049,6 +3017,726 @@
         "whole": 9,
         "bytewise": 9,
         "given": 9
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "ssh-ident-nul",
+      "about": "SSH ident/raw bytes и fallthrough framing",
+      "expect": "records",
+      "declared": "-",
+      "port": 22,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 15,
+      "input": "cases/ssh-ident-nul.in.txt",
+      "input_sha256": "45858fe0524b1b8ba5fc18f0c8d3cd79bc7018b1387647bf0bad70cef0df0eb7",
+      "output": "cases/ssh-ident-nul.out",
+      "output_sha256": "07683da3e7fd006e7bb2c1ddef8174847fee8d7752ccf30a3d3f68169cf676d5",
+      "c_app_proto": {
+        "whole": 3,
+        "bytewise": 3,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "ssh-ident-utf8",
+      "about": "SSH ident/raw bytes и fallthrough framing",
+      "expect": "records",
+      "declared": "-",
+      "port": 22,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 18,
+      "input": "cases/ssh-ident-utf8.in.txt",
+      "input_sha256": "98cbe015bec567fcdcb610945b14e01de8451182f448a03ec9a0cf33a70bcb19",
+      "output": "cases/ssh-ident-utf8.out",
+      "output_sha256": "16384f1169462d360aa3a18f7a406e5a6258f715dc69d3d8b5159d556d9a53db",
+      "c_app_proto": {
+        "whole": 3,
+        "bytewise": 3,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "ssh-ident-ws",
+      "about": "SSH ident/raw bytes и fallthrough framing",
+      "expect": "records",
+      "declared": "-",
+      "port": 22,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 14,
+      "input": "cases/ssh-ident-ws.in.txt",
+      "input_sha256": "18b198827fefb07f591bfad287489d96d3d1b6557826db30610db23384eb7264",
+      "output": "cases/ssh-ident-ws.out",
+      "output_sha256": "4056d1a6b2f826c7f1ef48a43e13d246edcf0133b86bf2739845fd29526d1632",
+      "c_app_proto": {
+        "whole": 2,
+        "bytewise": 2,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "ssh-leading-line",
+      "about": "SSH ident/raw bytes и fallthrough framing",
+      "expect": "records",
+      "declared": "-",
+      "port": 22,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 19,
+      "input": "cases/ssh-leading-line.in.txt",
+      "input_sha256": "c3484a1782978fc31e397c090fce2f09a7e5b513c51fa17240983377210b95ec",
+      "output": "cases/ssh-leading-line.out",
+      "output_sha256": "4e385c889fb56c2b3c625fd9c5643f92ead5b7d595a975128247ee051cc459d5",
+      "c_app_proto": {
+        "whole": 0,
+        "bytewise": 0,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "ssh-two-packets",
+      "about": "SSH ident/raw bytes и fallthrough framing",
+      "expect": "records",
+      "declared": "-",
+      "port": 22,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 33,
+      "input": "cases/ssh-two-packets.in.txt",
+      "input_sha256": "13dcb0d33ff4e65328803aff1eb12ad9a2228d59eef422b4003ecbb12417b40e",
+      "output": "cases/ssh-two-packets.out",
+      "output_sha256": "a32f360aceb3fd3c69044228d71c420e12b8b3eb8231fcf00f8b1b07f1f4474f",
+      "c_app_proto": {
+        "whole": 3,
+        "bytewise": 3,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "ssh-length-underflow",
+      "about": "SSH ident/raw bytes и fallthrough framing",
+      "expect": "records",
+      "declared": "-",
+      "port": 22,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 20,
+      "input": "cases/ssh-length-underflow.in.txt",
+      "input_sha256": "d98507f82da3867b01dd3a19199a665c3ceca7ee3fcf131fcb24696c025c6847",
+      "output": "cases/ssh-length-underflow.out",
+      "output_sha256": "74aba9cd58c45c5162f3c7973d30ffcd5106ebacf0ea69e433130ad57838e3b2",
+      "c_app_proto": {
+        "whole": 3,
+        "bytewise": 3,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "telnet-selftest-1",
+      "about": "Telnet raw bytes, SB, invalid и negotiation",
+      "expect": "records",
+      "declared": "-",
+      "port": 23,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 9,
+      "input": "cases/telnet-selftest-1.in.txt",
+      "input_sha256": "55516006b984c61b7f613684971c155cdb80953b12939f206619de8a03b9ad69",
+      "output": "cases/telnet-selftest-1.out",
+      "output_sha256": "8f371c3a11f6e2c0ae81bf2d6bf5f2415f2ff2dfb7f846502acebdf5d3f80c75",
+      "c_app_proto": {
+        "whole": 0,
+        "bytewise": 0,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "telnet-selftest-2",
+      "about": "Telnet raw bytes, SB, invalid и negotiation",
+      "expect": "records",
+      "declared": "-",
+      "port": 23,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 7,
+      "input": "cases/telnet-selftest-2.in.txt",
+      "input_sha256": "76204dfd7e6961acecf47dca75a8fc9a7dc07228d949bbffcdd3f058c930e8c3",
+      "output": "cases/telnet-selftest-2.out",
+      "output_sha256": "71d0781aa1bac2a837fa3296739cfdc06ac5bed13f4346d65714c5405153fb68",
+      "c_app_proto": {
+        "whole": 29,
+        "bytewise": 29,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "telnet-selftest-3",
+      "about": "Telnet raw bytes, SB, invalid и negotiation",
+      "expect": "records",
+      "declared": "-",
+      "port": 23,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 75,
+      "input": "cases/telnet-selftest-3.in.txt",
+      "input_sha256": "9115f55c2d3499e208544d40302cfe07ef79373ba7fdc2dc6f929fa849c9ae42",
+      "output": "cases/telnet-selftest-3.out",
+      "output_sha256": "1fbc6173fe7e48747108c5f91a4c1334c566e7d53a33068e30230c0da1f33e4b",
+      "c_app_proto": {
+        "whole": 29,
+        "bytewise": 29,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "telnet-selftest-4",
+      "about": "Telnet raw bytes, SB, invalid и negotiation",
+      "expect": "records",
+      "declared": "-",
+      "port": 23,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 29,
+      "input": "cases/telnet-selftest-4.in.txt",
+      "input_sha256": "8e6a775f07a778886378f9cf91ebd8a3bf7a27683d1501ee80be3dbd59f05401",
+      "output": "cases/telnet-selftest-4.out",
+      "output_sha256": "61c907f31b5c664516c861ec05af66159f8fb1208983735b31bae6d3fff2214b",
+      "c_app_proto": {
+        "whole": 29,
+        "bytewise": 29,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "telnet-iac-iac-stop",
+      "about": "Telnet raw bytes, SB, invalid и negotiation",
+      "expect": "records",
+      "declared": "-",
+      "port": 23,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 12,
+      "input": "cases/telnet-iac-iac-stop.in.txt",
+      "input_sha256": "3df124e485a070e4bd1ad66eaf4cbaaf4035cd5ad8138ff0d95230796f439a1a",
+      "output": "cases/telnet-iac-iac-stop.out",
+      "output_sha256": "4107bba0e2975e10bcdfc8ddc48a8a58dcf19beeab5ddc41f78507d8e79a4d28",
+      "c_app_proto": {
+        "whole": 29,
+        "bytewise": 29,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "telnet-invalid-stop",
+      "about": "Telnet raw bytes, SB, invalid и negotiation",
+      "expect": "records",
+      "declared": "-",
+      "port": 23,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 12,
+      "input": "cases/telnet-invalid-stop.in.txt",
+      "input_sha256": "a8cc9ab1757264e5c22a0b0e753112ba49bb282e26777a6b8d797b2c44404516",
+      "output": "cases/telnet-invalid-stop.out",
+      "output_sha256": "4107bba0e2975e10bcdfc8ddc48a8a58dcf19beeab5ddc41f78507d8e79a4d28",
+      "c_app_proto": {
+        "whole": 29,
+        "bytewise": 29,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "telnet-last-command",
+      "about": "Telnet raw bytes, SB, invalid и negotiation",
+      "expect": "records",
+      "declared": "-",
+      "port": 23,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 19,
+      "input": "cases/telnet-last-command.in.txt",
+      "input_sha256": "29f8f0f45b8a98bb2fb5601660954396d8084c10f8bc86259ee8da17cfeccff4",
+      "output": "cases/telnet-last-command.out",
+      "output_sha256": "1eaa4aac7dbef4b1ef63081e56726c27fe10e2a87002e20bb7f81b4c51e6fda7",
+      "c_app_proto": {
+        "whole": 29,
+        "bytewise": 29,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "telnet-sb",
+      "about": "Telnet raw bytes, SB, invalid и negotiation",
+      "expect": "records",
+      "declared": "-",
+      "port": 23,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 19,
+      "input": "cases/telnet-sb.in.txt",
+      "input_sha256": "6c9e53240c74d3b3a2c965f0ff1420cef32dd45e074de52e315d6753194c3a72",
+      "output": "cases/telnet-sb.out",
+      "output_sha256": "7e2886c23016536b2b6b4e8a9486536a2f75c2e10abbd5bb251a900eaeccfee7",
+      "c_app_proto": {
+        "whole": 29,
+        "bytewise": 29,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "rdp-selftest-success",
+      "about": "C selftest success",
+      "expect": "records",
+      "declared": "-",
+      "port": 3389,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 19,
+      "input": "cases/rdp-selftest-success.in.txt",
+      "input_sha256": "82a4723e031e819f89510ac807d52013026b11e615920f68fa4bcc27991d76ec",
+      "output": "cases/rdp-selftest-success.out",
+      "output_sha256": "221433706d5cb29e42d0c26690ed1f08d87691fdd72ff991f0511cbd5e3d652d",
+      "c_app_proto": {
+        "whole": 30,
+        "bytewise": 30,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "rdp-selftest-failure",
+      "about": "RDP C selftest или malformed second TPKT",
+      "expect": "records",
+      "declared": "-",
+      "port": 3389,
+      "capture": "none",
+      "segments": 2,
+      "bytes": 38,
+      "input": "cases/rdp-selftest-failure.in.txt",
+      "input_sha256": "d2ef7a547f6bae1ed5f92603efe5e927e241ee36e6ddb9d80d55fae1e454fc87",
+      "output": "cases/rdp-selftest-failure.out",
+      "output_sha256": "6f299c5c945e402c3d967b3da331d4d04ba42fccc54a501427a510763d0ae586",
+      "c_app_proto": {
+        "whole": 30,
+        "bytewise": 30,
+        "given": 30
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "rdp-other-failure",
+      "about": "RDP C selftest или malformed second TPKT",
+      "expect": "records",
+      "declared": "-",
+      "port": 3389,
+      "capture": "none",
+      "segments": 2,
+      "bytes": 38,
+      "input": "cases/rdp-other-failure.in.txt",
+      "input_sha256": "4d16a4d951f21c04953087217dedef21ff1fa5de3b4c831a3f827715deebe8a5",
+      "output": "cases/rdp-other-failure.out",
+      "output_sha256": "33382c643caf959eef976f2976ceac38869ca345ff7e365962e55ee38f569119",
+      "c_app_proto": {
+        "whole": 30,
+        "bytewise": 30,
+        "given": 30
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "rdp-second-non3",
+      "about": "RDP C selftest или malformed second TPKT",
+      "expect": "records",
+      "declared": "-",
+      "port": 3389,
+      "capture": "none",
+      "segments": 2,
+      "bytes": 24,
+      "input": "cases/rdp-second-non3.in.txt",
+      "input_sha256": "debee4f1add57d3c0ee06af3890cd55f84998e51d3a17e7047c83f56d7db90a2",
+      "output": "cases/rdp-second-non3.out",
+      "output_sha256": "f281a87ea56ba937ccccbc53f8ebda0775951b090e68f3849a3bce07001fc10a",
+      "c_app_proto": {
+        "whole": 30,
+        "bytewise": 30,
+        "given": 30
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "rdp-short-tpkt",
+      "about": "RDP C selftest или malformed second TPKT",
+      "expect": "records",
+      "declared": "-",
+      "port": 3389,
+      "capture": "none",
+      "segments": 2,
+      "bytes": 27,
+      "input": "cases/rdp-short-tpkt.in.txt",
+      "input_sha256": "7aaee5562fcbcc31714a3b86fa9f9063f55ca760f0906f187416a7e646185547",
+      "output": "cases/rdp-short-tpkt.out",
+      "output_sha256": "61a5c6a1970c169ffa0e6bb0348f5cb5f144dc886a82c98a1269c8f5e6102d07",
+      "c_app_proto": {
+        "whole": 30,
+        "bytewise": 30,
+        "given": 30
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "rdp-short-tpkt-no-tail",
+      "about": "RDP C selftest или malformed second TPKT",
+      "expect": "records",
+      "declared": "-",
+      "port": 3389,
+      "capture": "none",
+      "segments": 2,
+      "bytes": 23,
+      "input": "cases/rdp-short-tpkt-no-tail.in.txt",
+      "input_sha256": "c13785ce0f836edaea8b845d352e96220a5553a44b34b0c66de95a7d1e56ef4d",
+      "output": "cases/rdp-short-tpkt-no-tail.out",
+      "output_sha256": "5f86437acbee34a68c7375771fc981ef61b0d068a2b53c92bde871c77e76a486",
+      "c_app_proto": {
+        "whole": 30,
+        "bytewise": 30,
+        "given": 30
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "rdp-empty-tpkt",
+      "about": "RDP C selftest или malformed second TPKT",
+      "expect": "records",
+      "declared": "-",
+      "port": 3389,
+      "capture": "none",
+      "segments": 2,
+      "bytes": 23,
+      "input": "cases/rdp-empty-tpkt.in.txt",
+      "input_sha256": "813dc7eadc1d81f05290173d543cf753f14265852f2a98320964b9243281d552",
+      "output": "cases/rdp-empty-tpkt.out",
+      "output_sha256": "5f86437acbee34a68c7375771fc981ef61b0d068a2b53c92bde871c77e76a486",
+      "c_app_proto": {
+        "whole": 30,
+        "bytewise": 30,
+        "given": 30
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "rdp-high-length",
+      "about": "RDP C selftest или malformed second TPKT",
+      "expect": "records",
+      "declared": "-",
+      "port": 3389,
+      "capture": "none",
+      "segments": 2,
+      "bytes": 38,
+      "input": "cases/rdp-high-length.in.txt",
+      "input_sha256": "d072c3f18d2224c2a17167526f00d2841cd5c90d23b69fd5fce858c58b8ce83e",
+      "output": "cases/rdp-high-length.out",
+      "output_sha256": "aeb547d96817c98d9769655f8162b8e1d5f76d52a8f274dc811fea5a05c991f5",
+      "c_app_proto": {
+        "whole": 30,
+        "bytewise": 30,
+        "given": 30
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "rdp-cotp-unknown",
+      "about": "RDP C selftest или malformed second TPKT",
+      "expect": "records",
+      "declared": "-",
+      "port": 3389,
+      "capture": "none",
+      "segments": 2,
+      "bytes": 31,
+      "input": "cases/rdp-cotp-unknown.in.txt",
+      "input_sha256": "5e262e4bc1a0f2144d1dd72707f85ad76ce034b2cd42070b2e6accafbc814055",
+      "output": "cases/rdp-cotp-unknown.out",
+      "output_sha256": "73c5b5a6ca3e004bc0e9db5da1da0700406d0ddaf76107ebfd7bf009bf770b65",
+      "c_app_proto": {
+        "whole": 30,
+        "bytewise": 30,
+        "given": 30
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "rdp-short-cotp",
+      "about": "RDP C selftest или malformed second TPKT",
+      "expect": "records",
+      "declared": "-",
+      "port": 3389,
+      "capture": "none",
+      "segments": 2,
+      "bytes": 28,
+      "input": "cases/rdp-short-cotp.in.txt",
+      "input_sha256": "3847eadeca40a2a8f979c893ddc0723506f9cbb72c5411493fc3bbee657e502e",
+      "output": "cases/rdp-short-cotp.out",
+      "output_sha256": "4a1812cc5871ca6070ace20ddf81ba886df5e4e9f78fef5eb29526f1d92a91f0",
+      "c_app_proto": {
+        "whole": 30,
+        "bytewise": 30,
+        "given": 30
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "rdp-short-neg",
+      "about": "RDP C selftest или malformed second TPKT",
+      "expect": "records",
+      "declared": "-",
+      "port": 3389,
+      "capture": "none",
+      "segments": 2,
+      "bytes": 38,
+      "input": "cases/rdp-short-neg.in.txt",
+      "input_sha256": "66779f403d5013ee4ed5689c8ffee455b4c30baf5637aa95fd3e35f442e6dd0d",
+      "output": "cases/rdp-short-neg.out",
+      "output_sha256": "64e6beb0cc6bf9db9b8d9a9a85c54f5728fd2b8e7ff7ce1dedfdc8ec781e4b57",
+      "c_app_proto": {
+        "whole": 30,
+        "bytewise": 30,
+        "given": 30
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "vnc33-none-init",
+      "about": "VNC выбор None и ServerInit",
+      "expect": "records",
+      "declared": "-",
+      "port": 5900,
+      "capture": "none",
+      "segments": 3,
+      "bytes": 47,
+      "input": "cases/vnc33-none-init.in.txt",
+      "input_sha256": "eb12b5a824d4f6197dd6d26906a140c24011e5d3f58256fe4219d8eba6ec20c6",
+      "output": "cases/vnc33-none-init.out",
+      "output_sha256": "2988be1d1c651065498d6aab2582ef38d020d27be6a2e00e848570a7b938b345",
+      "c_app_proto": {
+        "whole": 33,
+        "bytewise": 33,
+        "given": 33
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "vnc37-none-init",
+      "about": "VNC выбор None и ServerInit",
+      "expect": "records",
+      "declared": "-",
+      "port": 5900,
+      "capture": "none",
+      "segments": 3,
+      "bytes": 45,
+      "input": "cases/vnc37-none-init.in.txt",
+      "input_sha256": "2fa60826ba05d9aaa7be98af0ffe542fcefdc058f635b92c244c328920320582",
+      "output": "cases/vnc37-none-init.out",
+      "output_sha256": "b67fa740937b1cc5c6bec13eea538003956793b5d6d7dd12b7bb32a99f6f0f34",
+      "c_app_proto": {
+        "whole": 33,
+        "bytewise": 33,
+        "given": 33
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "vnc37-not-offered-init",
+      "about": "VNC выбор None и ServerInit",
+      "expect": "records",
+      "declared": "-",
+      "port": 5900,
+      "capture": "none",
+      "segments": 3,
+      "bytes": 45,
+      "input": "cases/vnc37-not-offered-init.in.txt",
+      "input_sha256": "2bca6ce148ebad603350a1de115af1bf5b618270040f051adc02fa9a1c441131",
+      "output": "cases/vnc37-not-offered-init.out",
+      "output_sha256": "5b60b7c3497ee5daefd9f6cb9f8106c6de5b1725e3eaaae6f3cc962cd4c987fc",
+      "c_app_proto": {
+        "whole": 33,
+        "bytewise": 33,
+        "given": 33
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "vnc38-none-init",
+      "about": "VNC выбор None и ServerInit",
+      "expect": "records",
+      "declared": "-",
+      "port": 5900,
+      "capture": "none",
+      "segments": 3,
+      "bytes": 49,
+      "input": "cases/vnc38-none-init.in.txt",
+      "input_sha256": "19b150b115ea08e14fb4a4a3b004f8daadba4fa970cb25694e2b18c1b31fb016",
+      "output": "cases/vnc38-none-init.out",
+      "output_sha256": "050d2201742d36ebdd061a415850f73642177928bbe7e83186148fa2229d825b",
+      "c_app_proto": {
+        "whole": 33,
+        "bytewise": 33,
+        "given": 33
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "vnc38-not-offered-init",
+      "about": "VNC выбор None и ServerInit",
+      "expect": "records",
+      "declared": "-",
+      "port": 5900,
+      "capture": "none",
+      "segments": 3,
+      "bytes": 50,
+      "input": "cases/vnc38-not-offered-init.in.txt",
+      "input_sha256": "2b6e83c485242399732083fa292c488cd289af731d99d330d0caa1586c51218c",
+      "output": "cases/vnc38-not-offered-init.out",
+      "output_sha256": "b5d94760ebb0a031c71af97b1af70512c3b1b504ee715054f89a4aa710a343d3",
+      "c_app_proto": {
+        "whole": 33,
+        "bytewise": 33,
+        "given": 33
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "vnc33-chap",
+      "about": "VNC security types и error length",
+      "expect": "records",
+      "declared": "-",
+      "port": 5900,
+      "capture": "none",
+      "segments": 2,
+      "bytes": 20,
+      "input": "cases/vnc33-chap.in.txt",
+      "input_sha256": "d73d763a09f21b603e10444e83245aefdba237caafa49446b1de43359966e60e",
+      "output": "cases/vnc33-chap.out",
+      "output_sha256": "79dc87f4114586668aaf4897dc88f78a2334f28cb120e0181458e4623380ccc0",
+      "c_app_proto": {
+        "whole": 33,
+        "bytewise": 33,
+        "given": 33
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "vnc33-error-lowbyte",
+      "about": "VNC security types и error length",
+      "expect": "records",
+      "declared": "-",
+      "port": 5900,
+      "capture": "none",
+      "segments": 2,
+      "bytes": 27,
+      "input": "cases/vnc33-error-lowbyte.in.txt",
+      "input_sha256": "c3eed18341f4ff797e1dceff839c1b7bb3239b6ae64ba1e565f5559c6ee022de",
+      "output": "cases/vnc33-error-lowbyte.out",
+      "output_sha256": "39fbe68bbca0ff4a7149afca189c27ee5fa7f97df4b0d209898480c0b9b0c8b8",
+      "c_app_proto": {
+        "whole": 33,
+        "bytewise": 33,
+        "given": 33
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "vnc38-error-lowbyte",
+      "about": "VNC security types и error length",
+      "expect": "records",
+      "declared": "-",
+      "port": 5900,
+      "capture": "none",
+      "segments": 2,
+      "bytes": 24,
+      "input": "cases/vnc38-error-lowbyte.in.txt",
+      "input_sha256": "9d924d2146270450b8af76a3c806e27679d50977934ae61c99e09cd80b3b22ef",
+      "output": "cases/vnc38-error-lowbyte.out",
+      "output_sha256": "fa7c662f802eed57ed96c8b0cc4105d6bc877d2ff63a5ec809565610410f3d9e",
+      "c_app_proto": {
+        "whole": 33,
+        "bytewise": 33,
+        "given": 33
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "vnc38-result-error",
+      "about": "VNC security types и error length",
+      "expect": "records",
+      "declared": "-",
+      "port": 5900,
+      "capture": "none",
+      "segments": 2,
+      "bytes": 29,
+      "input": "cases/vnc38-result-error.in.txt",
+      "input_sha256": "20f8d320684eb5f4b69782e0667f8704ecdb667425f68285b2cb71fcd324e14f",
+      "output": "cases/vnc38-result-error.out",
+      "output_sha256": "0886fd622cb24dbd34d0c7d770c876ea3b42b1a33df81c4a4075de39fba796ec",
+      "c_app_proto": {
+        "whole": 33,
+        "bytewise": 33,
+        "given": 33
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "vnc38-security-names",
+      "about": "VNC security types и error length",
+      "expect": "records",
+      "declared": "-",
+      "port": 5900,
+      "capture": "none",
+      "segments": 2,
+      "bytes": 32,
+      "input": "cases/vnc38-security-names.in.txt",
+      "input_sha256": "c5ee4e18c80da60f25dd93d45621e33e44252faaaa5c2585bad52881220bb770",
+      "output": "cases/vnc38-security-names.out",
+      "output_sha256": "9faed8c841511b847c32df59828f636d1ad687bec87c8294cf4f6f72f66a46da",
+      "c_app_proto": {
+        "whole": 33,
+        "bytewise": 33,
+        "given": 33
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "vnc38-zero-name",
+      "about": "VNC security types и error length",
+      "expect": "records",
+      "declared": "-",
+      "port": 5900,
+      "capture": "none",
+      "segments": 2,
+      "bytes": 46,
+      "input": "cases/vnc38-zero-name.in.txt",
+      "input_sha256": "6103ea0b2044c7a112724d6a4f19b7d147ce21d86eb2db60586221c3ee43641f",
+      "output": "cases/vnc38-zero-name.out",
+      "output_sha256": "cd2ef9723fbf56ae1004808a64a4d82f3f358e58a366a8fc716029fba92fff68",
+      "c_app_proto": {
+        "whole": 33,
+        "bytewise": 33,
+        "given": 33
       },
       "asan": {"same_output": true, "reports": 0}
     },

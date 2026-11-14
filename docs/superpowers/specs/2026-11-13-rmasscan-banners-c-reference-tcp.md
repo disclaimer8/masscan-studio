@@ -400,7 +400,7 @@ Common shape: byte-at-a-time state machine over `pstate->state` (+ `sub`), may `
 | D4 | POP3 (`src/proto-pop3.c:20-152`), `"+OK "` | `"CAPA\r\n"`, then `"STLS\r\n"` | `pop` (12): every non-CR byte through the STLS reply; `-` to CAPA -> line, stop; `+OK` STLS reply line -> hand-off | E2.8 |
 | D5 | IMAP4 (`src/proto-imap4.c:20-193`), `"* OK "` | none (CAPABILITY unreachable) | `imap` (13) = `"* OK"` (spaces after `*` kept), then `tcpapi_close` twice (`:54-55`, then after the fall-through `:63-64`); on `"* ok "` the classifier (case-insensitive) matches but the parser's `'O'` test (`:60`) is not, so the record is `"* o"`, again two closes (`:49-66` ✓) | none |
 | D6 | SSH (`src/proto-ssh.c:52-178`), `"SSH-1."`/`"SSH-2."` | `"SSH-2.0-OPENSSH_7.9\r\n"` at the first `\n`; the 1248-byte KEX blob on every server packet (fallthrough) | `ssh` (always 3): **every byte received**, until stop | E2.4 |
-| D7 | VNC (`src/proto-vnc.c:93-337`), `"RFB ..."` | 12-byte version reply; `"\x01"` / `"\x01\x01"` choosing None even if not offered | `vnc` (33): version bytes, ` width=%u`, ` height=%u`; `vnc-info` (34): `Security types:\n`, `  <name>`(+`\n` in 3.7+), `ERROR: `+reason, `Name: `+name+`\n` | none |
+| D7 | VNC (`src/proto-vnc.c:93-337`), `"RFB ..."` | 12-byte version reply; `"\x01"` / `"\x01\x01"` choosing None even if not offered | `vnc` (33): version bytes, ` width=%u`, ` height=%u`; `vnc-info` (34): `Security types:\n`, `  <name>`(+`\n` in 3.7+), `ERROR: `+reason, `Name: `+name+`\n` | E2.9 (closes only) |
 | D8 | Telnet (`src/proto-tcp-telnet.c:93-252`), IAC/login patterns | per call: one reply per option, ascending option order, `IAC WONT x` for DO/DONT, `IAC DONT x` for WILL/WONT (`TCP__copy`) | `telnet` (29): every byte received, raw | E2.4 |
 | D9 | RDP (`src/proto-tcp-rdp.c:201-289`), 12-byte success prefix | none | `rdp` (30): ` NLA-supported`/` NLA-unused`/` NLA-unsupported`/` failure`/` COTPPDU=unknown`; non-3 TPKT -> whole current segment to `unknown` (`:281` ✓) | E2.5 |
 | D10 | memcached (`src/proto-memcached.c:106-223` ✓), `"STAT pid "` | none (hello `stats\r\n` on 11211) | `memcached` (25): `uptime=`, `time=`, `version=` + value + `' '` | E2.6, E1.4 |
@@ -413,6 +413,8 @@ Details the tests must pin:
   ERROR + close + `continue`, so the **next byte is still appended** before `default` ends the loop (`:92-96`, `:172-173`).
 - Telnet: append precedes the switch (`:123`); IAC IAC or an unknown command -> INVALID (`:180` ✓), the next byte is
   appended, then `default` ends the loop (`:212` ✓).
+- SSH packet length with first byte >= 0x80 is UB in C (E1.19); RDP COTP LI 6 with content aborts C (E1.18); VNC
+  `RFB_DONE` re-closes on the first byte of every later segment (E2.9).
 - memcached: smack tables built by `memcached_init` (`:227-293`), each word + one of ` \t\r\n`; state 0 resets the
   matcher on every entry, including the start of the next segment (`:129-137`); state 2 reads `px[length]` (`:165` ✓).
 - FTP/SMTP greeting grammar, POP3 CAPA/STLS states, VNC security names (`  none`, `  VNC-chap`, ..., decimal), RDP
@@ -441,6 +443,8 @@ Details the tests must pin:
 | E1.15 | - (receive rule of every rmasscan receiver, not а-г; ruling of task 3 review) | no checksum verified on receive (`src/proto-preprocess.c:10`, `:96` `TODO: verify checksum`; `src/main.c:808-1043` goes from `preprocess_frame` to `is_my_ip`/`is_my_port` and `stack_incoming_tcp`): a segment with a wrong IPv4 header or TCP sum reaches the stack (ACK advances, payload reaches the banner parser, FIN/RST change state) | `tcp_segment` drops it before the stack, as `parse_reply` (`ChecksumPolicy::Verify`, the default) drops a bad-sum SYN-ACK; `tcp_segment` has no `ChecksumPolicy` parameter, so the stack path always verifies | - |
 | E1.16 | б | a FIN at the next sequence number in FIN_WAIT2 or TIME_WAIT re-arms the timer at `secs + 5` (`src/stack-tcp-core.c:2243-2253`) and the lifetime is checked only on TIMEOUT (`:1970-1980`): a peer sending such FINs less than 5 s apart keeps a TCB for ever (slot leak) | every deadline is capped at `created + lifetime + 2 s` (the 2 s grid tick on which the automaton RSTs by lifetime); the table capacity itself is D7, not an E1 fix | - |
 | E1.17 | а | `_http_insert` calls `REALLOC(new_header_length + 1)` before moving the old tail (`src/proto-http.c:110-114`); shrinking method/URL/version can read bytes beyond the new allocation into the visible request (ASan differs from ordinary C for empty method, empty version, version `a\r\nb`) | safe logical splice preserves the full tail; no rejection of short/empty values and no allocator-dependent bytes | request fixtures `method-2`, `version-8`, `version-9` |
+| E1.18 | а/б | RDP: a COTP header with LI 6 and a following content byte calls `cc_parse(..., 0)`, which returns 0 and trips `assert(bytes_parsed != 0)` (`src/proto-tcp-rdp.c:158-169`; ordinary oracle aborts, whole and bytewise) | the malformed COTP scope is appended to `unknown` like the neighbouring UNKNOWN branches (`:188-190`, `:280-282`), prior records are kept, no action is invented and the loop always advances; no golden can pin it (C does not return), so a unit test does | `rdp_zero_length_cotp_never_asserts` |
+| E1.19 | а | SSH: the first packet-length byte is shifted as a signed `int` (`packet_length = px[i] << 24`, `src/proto-ssh.c:105`): a byte >= 0x80 is signed-shift UB (UBSan reports it) | the length is assembled unsigned in the field's own width (`size_t packet_length`, `src/proto-banner1.h:240-242`) and the countdown wraps explicitly, so a huge length simply never re-syncs, as a defined C build behaves | `ssh_high_bit_length_is_unsigned_and_does_not_resync` |
 
 ### E2. Segmentation dependencies (Р13: the reference is C on the unsplit stream)
 
@@ -457,10 +461,11 @@ call, expressed so a streaming parser can do it.
 | E2.6 | memcached (`src/proto-memcached.c:129-137`) | a keyword split across segments is lost (matcher reset in state 0) | the matcher continues across segments (C state 1) |
 | E2.7 | Minecraft (`src/proto-mc.c:59-89`) | favicon stripping with zeroed bytes and lost segments | record = every byte the parser saw, raw, if the brace count over them is <= 0 at flush, else none; close when the running count drops <= 0 after a segment |
 | E2.8 | FTP (`src/proto-ftp.c:93-104`), SMTP (`:139-150`), POP3 (`:122-133`), STARTTLS go-ahead | after the go-ahead C sets `state = 0` and keeps parsing the rest of that segment (`src/proto-ftp.c:101`, `src/proto-smtp.c:147`, `src/proto-pop3.c:129`): on a single segment the tail is a new greeting, a second `AUTH TLS` / `EHLO` / `CAPA` is sent and the tail can be appended to the text record; split at the go-ahead (or byte by byte) the next segment goes to the TLS parser (app 9), which records nothing here | every byte after the go-ahead line is one `unknown` record (app 1), in any split, app_proto 9, no TLS hello and no second command. This is the B6 boundary, not "C on the unsplit stream", until 4c ports TLS. Record order as B3: the `unknown` record after the text record while that is under 200 bytes, before it from 200 bytes on |
+| E2.9 | VNC (`src/proto-vnc.c:328-336`) | `RFB_DONE` closes and ends the call (`i = length`) but stays the state, so the first byte of every later segment closes again (`vnc38-error-lowbyte`: whole 2 closes, bytewise 4); records do not depend on the split | exactly one more close after entering `RFB_DONE` (on the next byte, if any), then nothing: C on the unsplit stream |
 
-Parsers without an entry (IMAP4, VNC; FTP, SMTP and POP3 except for the STARTTLS go-ahead, E2.8) are split-invariant
+Parsers without an entry (IMAP4; FTP, SMTP and POP3 except for the STARTTLS go-ahead, E2.8) are split-invariant
 in C: their stop states append nothing.
-Sends are compared only on the unsplit run: Telnet replies per segment by design.
+Sends are compared only on the unsplit run: Telnet replies per segment by design, and VNC re-closes per segment (E2.9).
 
 ### E3. Deterministic C behaviour kept (Р1)
 

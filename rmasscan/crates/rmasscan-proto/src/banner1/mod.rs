@@ -14,8 +14,12 @@ pub(crate) mod hello;
 mod http;
 mod imap4;
 mod pop3;
+mod rdp;
 pub(crate) mod session;
 mod smtp;
+mod ssh;
+mod telnet;
+mod vnc;
 
 use std::fmt;
 use std::sync::Arc;
@@ -536,3 +540,6 @@ mod tests {
         assert!(long > 100, "{long}");
     }
 }
+
+#[cfg(test)]
+mod terminal_tests;

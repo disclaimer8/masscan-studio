@@ -27,7 +27,11 @@ use super::hello::{HelloTable, TcpBannerSettings};
 use super::http::Http;
 use super::imap4::Imap4;
 use super::pop3::Pop3;
+use super::rdp::Rdp;
 use super::smtp::Smtp;
+use super::ssh::Ssh;
+use super::telnet::Telnet;
+use super::vnc::Vnc;
 
 /// Парсер, который выбрал классификатор (ветки `switch (tcb_state->app_proto)`, `src/proto-banner1.c:187-316`), в
 /// границах 4b: SMB, TLS и всё после STARTTLS это [`AppProto::Unported`] (справка B6).
@@ -89,6 +93,11 @@ impl ParseCx<'_> {
         self.acts.push(SessionAction::Send(bytes.to_vec()));
     }
 
+    /// `tcpapi_send(socket, bytes, length, TCP__copy)` (`src/proto-tcp-telnet.c:248`).
+    pub(crate) fn send_copy(&mut self, bytes: &[u8]) {
+        self.acts.push(SessionAction::SendCopy(bytes.to_vec()));
+    }
+
     /// `tcpapi_close(socket)` парсера; C зовёт его и повторно (IMAP4 закрывает дважды), каждый вызов записан.
     pub(crate) fn close(&mut self) {
         self.acts.push(SessionAction::Close);
@@ -127,13 +136,11 @@ pub(crate) fn parser_for(p: AppProto) -> Box<dyn Parser> {
         AppProto::Pop3 => Box::<Pop3>::default(),
         AppProto::Imap4 => Box::<Imap4>::default(),
         AppProto::Http => Box::<Http>::default(),
-        AppProto::Ssh
-        | AppProto::Vnc(_)
-        | AppProto::Memcached
-        | AppProto::Telnet
-        | AppProto::Rdp
-        | AppProto::Minecraft
-        | AppProto::Unported => Box::new(Unported),
+        AppProto::Ssh => Box::<Ssh>::default(),
+        AppProto::Telnet => Box::<Telnet>::default(),
+        AppProto::Vnc(version) => Box::new(Vnc::new(version)),
+        AppProto::Rdp => Box::<Rdp>::default(),
+        AppProto::Memcached | AppProto::Minecraft | AppProto::Unported => Box::new(Unported),
     }
 }
 
@@ -633,7 +640,7 @@ mod tests {
             assert_eq!(app, Some(force));
             assert_eq!(recs, [(42, [tag, b"\x16\x03\x01"].concat())]);
         }
-        // Через офлайн-драйвер (заглушки задачи 8): всё в unknown, номер заданный.
+        // Через офлайн-драйвер: принудительный SSH получает HTTP-байты и сохраняет их как SSH (`src/proto-ssh.c:84`).
         let r = banner_stream(
             &TcpBannerSettings::default(),
             80,
@@ -641,7 +648,7 @@ mod tests {
             &[b"HTTP/1.0 200\r\n"],
         );
         assert_eq!(r.app_proto, Some(app_id::SSH2));
-        assert_eq!(r.records, [(app_id::HEUR, b"HTTP/1.0 200\r\n".to_vec())]);
+        assert_eq!(r.records, [(app_id::SSH2, b"HTTP/1.0 200\r\n".to_vec())]);
     }
 
     /// Передача STARTTLS: парсер ставит `starttls`, номер C становится SSL3 (9), со следующего сегмента всё в

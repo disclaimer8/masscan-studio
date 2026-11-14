@@ -1,0 +1,14 @@
+tcp-oracle v1 port=3389 capture=none segments=2 bytes=38
+run whole calls=1
+app_proto 30
+record 30 30 " NLA-supported NLA-unsupported"
+end
+run bytewise calls=38
+app_proto 30
+record 1 11 =stream
+record 30 30 " NLA-supported NLA-unsupported"
+end
+run given calls=2
+app_proto 30
+record 30 30 " NLA-supported NLA-unsupported"
+end

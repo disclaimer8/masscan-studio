@@ -1508,6 +1508,14 @@ fn tcp_segment_rejects_foreign_address_port_and_bad_checksum() {
     // Без `source_ipv6` IPv6 не наш никогда.
     let p4 = plan(LinkType::Ethernet, &PacketModifiers::default(), None);
     assert_eq!(tcp_segment(&v6_in().frame(eth), eth, &p4), None);
+    // Тег 802.1Q (VLAN 100) перед IPv4 или IPv6: теги не снимаются, кадр не наш (`Unsupported::Vlan`, как у
+    // `parse_reply`; C разбирает 802.1Q, `src/proto-preprocess.c:334-338`, `:506`).
+    for base in [In::default(), v6_in()] {
+        let f = base.frame(eth);
+        assert!(tcp_segment(&f, eth, &p).is_some());
+        let tagged = [&f[..12], &[0x81, 0x00, 0x00, 0x64][..], &f[12..]].concat();
+        assert_eq!(tcp_segment(&tagged, eth, &p), None, "802.1Q v6={}", base.v6);
+    }
     // ARP и кадр длиннее 1514 байт.
     let mut arp = vec![0xff; 6];
     arp.extend_from_slice(&MAC_R4);
@@ -1526,6 +1534,41 @@ fn tcp_segment_rejects_foreign_address_port_and_bad_checksum() {
         ..In::default()
     };
     assert_eq!(tcp_segment(&max.frame(eth), eth, &p), Some(max.expected()));
+}
+
+/// IPv6 с расширением Hop-by-Hop перед TCP: цепочка проходится (длина по RFC 8200, `(Hdr Ext Len + 1) * 8`, как у
+/// `parse_reply`; C считает `px[offset+1] + 8` байт, `src/proto-preprocess.c:306`), сегмент тот же, что без
+/// расширения. За Hop-by-Hop не TCP: не наш.
+#[test]
+fn tcp_segment_walks_ipv6_hop_by_hop() {
+    let p = plan(LinkType::Ethernet, &PacketModifiers::default(), Some(ME6));
+    let eth = LinkType::Ethernet;
+    let base = v6_in();
+    let f = base.frame(eth);
+    // Вставить расширение после 40 байт заголовка: Next Header 0 в заголовке, в расширении Next Header 6.
+    let with_hbh = |ext_len: u8, next: u8| {
+        let len = (usize::from(ext_len) + 1) * 8;
+        let mut ext = vec![next, ext_len, 1, (len - 4) as u8];
+        ext.resize(len, 0);
+        let mut g = [&f[..54], &ext[..], &f[54..]].concat();
+        g[14 + 6] = 0;
+        let plen = u16::from_be_bytes([g[18], g[19]]) + len as u16;
+        g[18..20].copy_from_slice(&plen.to_be_bytes());
+        g
+    };
+    for ext_len in [0u8, 1, 2] {
+        let g = with_hbh(ext_len, 6);
+        assert_eq!(
+            tcp_segment(&g, eth, &p),
+            Some(base.expected()),
+            "Hdr Ext Len {ext_len}"
+        );
+        assert_eq!(
+            tcp_segment(&with_hbh(ext_len, 17), eth, &p),
+            None,
+            "UDP after Hop-by-Hop"
+        );
+    }
 }
 
 /// Нагрузка кончается с IP-пакетом: набивка Ethernet до 60 и хвост вроде FCS в нагрузку не входят.
@@ -1594,7 +1637,7 @@ proptest! {
 }
 
 /// Кадр, не помещающийся в буфер C (`sizeof(response->px)` 2040, `src/stack-queue.h:13`), не строится: C печатает
-/// `too much payload` и отдаёт длину 0 (`src/templ-pkt.c:438-441`, `:525-528`).
+/// `too much payload` и отдаёт длину 0 (`src/templ-pkt.c:440-443`, `:521-524`).
 #[test]
 fn build_refuses_payload_past_c_buffer() {
     let b = builder(LinkType::Ethernet, &DEFAULT_TEMPLATE);

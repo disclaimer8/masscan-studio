@@ -429,6 +429,7 @@ Details the tests must pin:
 | E1.12 | б | blocking packet pool stalls RX (`src/stack-queue.c:8-22`) | bounded queue, overflow counted (Р7) | - |
 | E1.13 | а | Minecraft multi-segment path: overlapping `memcpy`, freed `banmem` not cleared, first byte of every accumulated segment zeroed (`src/proto-mc.c:68-89`) | unsplit rule E2.7 | `minecraft-unsplit` |
 | E1.14 | б | `--hello-file` silently truncated to 12285 bytes (`src/main-conf.c:1237-1246`) | longer file refused, exit 1 (Р17) | - |
+| E1.15 | - (receive rule of every rmasscan receiver, not а-г; ruling of task 3 review) | no checksum verified on receive (`src/proto-preprocess.c:10`, `:96` `TODO: verify checksum`; `src/main.c:808-1043` goes from `preprocess_frame` to `is_my_ip`/`is_my_port` and `stack_incoming_tcp`): a segment with a wrong IPv4 header or TCP sum reaches the stack (ACK advances, payload reaches the banner parser, FIN/RST change state) | `tcp_segment` drops it before the stack, as `parse_reply` (`ChecksumPolicy::Verify`, the default) drops a bad-sum SYN-ACK; `tcp_segment` has no `ChecksumPolicy` parameter, so the stack path always verifies | - |
 
 ### E2. Segmentation dependencies (Р13: the reference is C on the unsplit stream)
 

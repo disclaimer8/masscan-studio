@@ -68,7 +68,7 @@ C behaviour reproduced as it is (deterministic, R1): the frame is a copy of the 
 the SYN's TCP options and data offset, and TTL, TOS and DF of IPv4; the window is 1200 in every frame
 (`src/templ-pkt.c:497-498`, the SYN's is 1024); the flags byte is overwritten whole (`:495`); IP ID is
 `(ip_them ^ port_them ^ seqno) & 0xFFFF` (`:432`); an IPv4 frame shorter than 60 bytes is padded with zeros to 60 on
-every link, raw IP included, while the IP total length stays (`:509-512`); IPv6 is never padded and its hop limit is
+every link, raw IP included, while the IP total length stays (`:510-513`); IPv6 is never padded and its hop limit is
 always 255, `--ttl` included (`template_set_ttl` touches only the IPv4 template, `:1473-1488`).
 
 Named differences (the test derives C's frame from rmasscan's for each and compares that byte for byte):

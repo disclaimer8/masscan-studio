@@ -4,8 +4,9 @@
 //! `src/stack-tcp-core.c:1176-1219`), masscan © Robert David Graham (github.com/robertdavidgraham/masscan, HEAD
 //! 8e6b3b0). Справка: `docs/superpowers/specs/2026-11-13-rmasscan-banners-c-reference-tcp.md` A6, A7, E1.9, E1.10.
 //!
-//! Вход недоверенный: разбор тотален (границы через `get`, никаких паник на данных кадра). Кадры совпадают с кадрами
-//! C побайтно (эталоны `tests/golden/tcp-frames`), кроме двух названных отличий:
+//! Вход недоверенный: разбор тотален (границы через `get`, никаких паник на данных кадра). Приём отличается от C тем,
+//! что сегмент с неверной суммой отбрасывается ([`tcp_segment`], справка E1.15). Кадры совпадают с кадрами C побайтно
+//! (эталоны `tests/golden/tcp-frames`), кроме двух названных отличий:
 //! - сумма заголовка IPv4 всегда полная (E1.10, класс г): C обновляет её приращением и сворачивает дважды
 //!   (`src/templ-pkt.c:466-473`), и примерно в 1e-5 кадров стека она неверна;
 //! - TSval `--tcp-tsecho` целиком, как в SYN rmasscan (C пишет `field[2]` дважды, `src/templ-tcp-hdr.c:1111-1112`):
@@ -28,7 +29,7 @@ pub const STACK_WINDOW: u16 = 1200;
 /// `src/templ-pkt.c:440-443`, `:521-524`).
 const C_FRAME_BUFFER: usize = 2040;
 
-/// Минимум Ethernet, до которого C добивает кадр IPv4 нулями на любом канале (`src/templ-pkt.c:509-512`).
+/// Минимум Ethernet, до которого C добивает кадр IPv4 нулями на любом канале (`src/templ-pkt.c:510-513`).
 const MIN_FRAME_LEN: usize = 60;
 
 const FLAG_RST: u8 = 0x04;
@@ -43,6 +44,12 @@ const FLAG_SYNACK_MASK: u8 = 0x12;
 /// IPv6 свой, только если у плана есть `source_ipv6` (как у `parse_reply`). `ttl` это TTL IPv4 или hop limit IPv6
 /// (E1.9: C для IPv6 его не заполняет, `src/proto-preprocess.c:127`). Нагрузка кончается с IP-пакетом (полная длина
 /// IPv4, `payload_length` IPv6), без набивки Ethernet и хвоста захвата.
+///
+/// Отличие от C (справка E1.15): C на приёме сумм не проверяет вовсе (`src/proto-preprocess.c:10`, `:96` `TODO: verify
+/// checksum`; `src/main.c:808-1043` идёт от `preprocess_frame` прямо к `is_my_ip`/`is_my_port` и стеку), и сегмент с
+/// неверной суммой заголовка IPv4 или TCP доходит до его стека (ACK, нагрузка парсеру баннера, FIN и RST); rmasscan
+/// отбрасывает такой сегмент до стека, как `parse_reply` с политикой по умолчанию `Verify` отбрасывает SYN-ACK с
+/// неверной суммой. Параметра [`crate::receive::ChecksumPolicy`] у функции нет: путь стека проверяет суммы всегда.
 pub fn tcp_segment<'a>(frame: &'a [u8], link: LinkType, plan: &ReadyPlan) -> Option<SegmentIn<'a>> {
     if frame.len() > MAX_FRAME_LEN {
         return None;
@@ -253,7 +260,7 @@ fn build_v4(t: &FrameTemplate, local: u32, remote: u32, s: &SegmentOut) -> Vec<u
         .map_or(0, |seg| checksum_ipv4(local, remote, 6, seg));
     put(&mut px, ot + 16, &tcp_sum.to_be_bytes());
 
-    // :509-512: набивка нулями до 60 на любом канале.
+    // :510-513: набивка нулями до 60 на любом канале.
     if px.len() < MIN_FRAME_LEN {
         px.resize(MIN_FRAME_LEN, 0);
     }
@@ -291,6 +298,9 @@ fn build_v6(t: &FrameTemplate, local: u128, remote: u128, s: &SegmentOut) -> Vec
 /// `tcp_send_RST(templ, stack, ip_them, ip_me, port_them, port_me, 0, seqno_me)`). seq это наш ack ответа
 /// (`seqno_me`, равный `cookie + 1` после проверки `src/main.c:1059`), ack 0, флаги `0x04`, окно шаблона стека.
 /// C отвечает так и на RST закрытого порта (справка E3.6).
+///
+/// Вызывающий отдаёт сюда только ответ, прошедший и дедупликацию: C шлёт RST после `dedup_is_duplicate`
+/// (`src/main.c:1066-1068` раньше `:1094`), поэтому повтор того же SYN-ACK или RST второго RST не получает.
 ///
 /// `None`, если ответ не TCP или флаги не SYN-ACK (`(flags & 0x12) == 0x12`) и не RST (`flags & 0x04`): ICMP Port
 /// Unreachable на зонд TCP (`ip_proto` 6, флагов нет), UDP, SCTP, ICMP, ARP. Cookie считается заново по адресам

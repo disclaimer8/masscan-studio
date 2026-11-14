@@ -211,6 +211,13 @@ impl TcpSynTemplate {
         self.checksum_ip
     }
 
+    /// Байты шаблона (канал, IPv4, TCP с опциями SYN) и смещения IP и TCP: кадры стека копируют шаблон целиком
+    /// (`memcpy(px + 0, tmpl->ipv4.packet, ...)`, templ-pkt.c:445) и пишут поверх свои поля
+    /// ([`crate::tcp_frame::TcpFrameBuilder`]).
+    pub(crate) fn frame_template(&self) -> (&[u8], usize, usize) {
+        (&self.packet, self.offset_ip, self.offset_tcp)
+    }
+
     /// `template_set_target_ipv4`, ветка `Proto_TCP`, templ-pkt.c:942-1021.
     /// `out` очищается и получает кадр целиком.
     pub fn build_syn(
@@ -364,6 +371,12 @@ impl Tcp6SynTemplate {
     /// `tmpl->proto == Proto_TCP`: Next Header шаблона это 6.
     pub fn proto_is_tcp(&self) -> bool {
         self.packet.get(self.offset_ip + 6) == Some(&6)
+    }
+
+    /// Байты шаблона и смещения IP и TCP, как у [`TcpSynTemplate`] (`memcpy(px, tmpl->ipv6.packet, ...)`,
+    /// templ-pkt.c:527).
+    pub(crate) fn frame_template(&self) -> (&[u8], usize, usize) {
+        (&self.packet, self.offset_ip, self.offset_tcp)
     }
 
     /// `template_set_target_ipv6`, ветка `Proto_TCP`, templ-pkt.c:662-804 (payload_length :747, адреса :748-786, порты

@@ -167,11 +167,11 @@ pub fn link_type_from_dlt(dlt: u32) -> Result<LinkType, ParseError> {
     }
 }
 
-fn be16(b: &[u8], i: usize) -> Option<u16> {
+pub(crate) fn be16(b: &[u8], i: usize) -> Option<u16> {
     Some(u16::from_be_bytes([*b.get(i)?, *b.get(i + 1)?]))
 }
 
-fn be32(b: &[u8], i: usize) -> Option<u32> {
+pub(crate) fn be32(b: &[u8], i: usize) -> Option<u32> {
     Some(u32::from_be_bytes([
         *b.get(i)?,
         *b.get(i + 1)?,
@@ -278,7 +278,7 @@ pub fn ndp_reply_for(
 /// Находит заголовок IPv6 (`parse_ethertype` `0x86dd`, proto-preprocess.c:505; Null :522-531; Raw :534-538).
 /// `Ok(None)`: кадр не IPv6. Вызывается только после [`locate_ipv4`] вернул `None`, поэтому ошибки VLAN и версии
 /// там уже обработаны.
-fn locate_ipv6(frame: &[u8], link: LinkType) -> Result<Option<&[u8]>, ParseError> {
+pub(crate) fn locate_ipv6(frame: &[u8], link: LinkType) -> Result<Option<&[u8]>, ParseError> {
     match link {
         LinkType::Ethernet => match be16(frame, 12) {
             Some(0x86dd) if frame.len() >= 14 => Ok(Some(&frame[14..])),
@@ -301,7 +301,7 @@ fn locate_ipv6(frame: &[u8], link: LinkType) -> Result<Option<&[u8]>, ParseError
 }
 
 /// Находит IPv4-заголовок. `Ok(None)`: кадр не IPv4 (ARP, IPv6, прочее).
-fn locate_ipv4(frame: &[u8], link: LinkType) -> Result<Option<&[u8]>, ParseError> {
+pub(crate) fn locate_ipv4(frame: &[u8], link: LinkType) -> Result<Option<&[u8]>, ParseError> {
     match link {
         LinkType::Ethernet => {
             let ethertype = be16(frame, 12).ok_or(ParseError::Truncated("ethernet header"))?;
@@ -345,19 +345,19 @@ fn in_sorted_ranges(list: &RangeList, value: u32) -> bool {
 }
 
 /// Проверенный пакет IPv4: обрезан по полю полной длины, заголовок и его поля прочитаны.
-struct Ipv4Packet<'a> {
+pub(crate) struct Ipv4Packet<'a> {
     /// Пакет до `total_length` (трейлер Ethernet отброшен).
-    ip: &'a [u8],
-    header_len: usize,
-    ttl: u8,
-    proto: u8,
-    ip_them: u32,
-    ip_me: u32,
+    pub(crate) ip: &'a [u8],
+    pub(crate) header_len: usize,
+    pub(crate) ttl: u8,
+    pub(crate) proto: u8,
+    pub(crate) ip_them: u32,
+    pub(crate) ip_me: u32,
 }
 
-/// Заголовок IPv4 (proto-preprocess.c:104-146): общий разбор [`parse_reply`] и [`udp_payload`], поэтому оба видят
-/// один и тот же пакет.
-fn ipv4_packet(ip: &[u8]) -> Result<Ipv4Packet<'_>, ParseError> {
+/// Заголовок IPv4 (proto-preprocess.c:104-146): общий разбор [`parse_reply`], [`udp_payload`] и
+/// [`crate::tcp_frame::tcp_segment`], поэтому все видят один и тот же пакет.
+pub(crate) fn ipv4_packet(ip: &[u8]) -> Result<Ipv4Packet<'_>, ParseError> {
     let b0 = *ip.first().ok_or(ParseError::Truncated("ipv4 header"))?;
     if ip.len() < 20 {
         return Err(ParseError::Truncated("ipv4 header"));
@@ -427,30 +427,21 @@ fn parse_ipv4_tcp(
 
     // proto-preprocess.c:208-218.
     let seg = &ip[header_len..];
-    if seg.len() < 20 {
-        return Err(ParseError::Truncated("tcp header"));
-    }
-    let data_offset = seg[12] >> 4;
-    if data_offset < 5 {
-        return Err(ParseError::BadTcpDataOffset(data_offset));
-    }
-    if seg.len() < usize::from(data_offset) * 4 {
-        return Err(ParseError::Truncated("tcp options"));
-    }
-    let port_them = be16(seg, 0).ok_or(ParseError::Truncated("tcp header"))?;
-    let port_me = be16(seg, 2).ok_or(ParseError::Truncated("tcp header"))?;
-    let ackno = be32(seg, 8).ok_or(ParseError::Truncated("tcp header"))?;
-    let flags = seg[13];
+    let TcpHeader {
+        port_them,
+        port_me,
+        ackno,
+        flags,
+        checksum: stored,
+        ..
+    } = tcp_header(seg)?;
 
     // main.c:829: is_my_ip. `--adapter-ip A-B`: любой адрес диапазона `first..=last` адаптера `nic[0]` плана.
-    let binding = plan.binding();
-    let ip_last = plan.nics()[0].source_ipv4_last;
-    if !(binding.source_ipv4..=ip_last).contains(&ip_me) {
+    if !is_my_ip(plan, ip_me) {
         return Ok(None);
     }
     // main.c:935: is_my_port.
-    let (first, last) = binding.source_ports;
-    if port_me < first || port_me > last {
+    if !is_my_port(plan, port_me) {
         return Ok(None);
     }
     // Ответ должен относиться к текущему заданию: отбрасывает поздние ответы
@@ -491,7 +482,6 @@ fn parse_ipv4_tcp(
         if ip_header_checksum(ip, 0, header_len) != 0xffff {
             return Err(ParseError::BadIpChecksum);
         }
-        let stored = be16(seg, 16).ok_or(ParseError::Truncated("tcp header"))?;
         if checksum_ipv4(ip_them, ip_me, 6, seg) != stored {
             return Err(ParseError::BadTcpChecksum);
         }
@@ -555,21 +545,21 @@ fn parse_ipv6_tcp(
 }
 
 /// Проверенный пакет IPv6: обрезан по `payload_length`, цепочка Hop-by-Hop пройдена.
-struct Ipv6Packet<'a> {
+pub(crate) struct Ipv6Packet<'a> {
     /// Пакет до `40 + payload_length` (трейлер Ethernet отброшен).
-    ip: &'a [u8],
+    pub(crate) ip: &'a [u8],
     /// Смещение транспортного заголовка в `ip` (после расширений Hop-by-Hop).
-    offset: usize,
+    pub(crate) offset: usize,
     /// Next Header транспорта: первый заголовок цепочки, который не Hop-by-Hop.
-    next: u8,
-    hop_limit: u8,
-    ip_them: u128,
-    ip_me: u128,
+    pub(crate) next: u8,
+    pub(crate) hop_limit: u8,
+    pub(crate) ip_them: u128,
+    pub(crate) ip_me: u128,
 }
 
-/// Заголовок IPv6 и цепочка Hop-by-Hop (proto-preprocess.c:215-312): общий разбор [`parse_reply`] и
-/// [`udp_payload`].
-fn ipv6_packet(ip: &[u8]) -> Result<Ipv6Packet<'_>, ParseError> {
+/// Заголовок IPv6 и цепочка Hop-by-Hop (proto-preprocess.c:215-312): общий разбор [`parse_reply`], [`udp_payload`]
+/// и [`crate::tcp_frame::tcp_segment`].
+pub(crate) fn ipv6_packet(ip: &[u8]) -> Result<Ipv6Packet<'_>, ParseError> {
     let b0 = *ip.first().ok_or(ParseError::Truncated("ipv6 header"))?;
     if ip.len() < 40 {
         return Err(ParseError::Truncated("ipv6 header"));
@@ -623,28 +613,21 @@ fn parse_ipv6_segment(
     plan: &ReadyPlan,
     policy: ChecksumPolicy,
 ) -> Result<Option<Reply>, ParseError> {
-    if seg.len() < 20 {
-        return Err(ParseError::Truncated("tcp header"));
-    }
-    let data_offset = seg[12] >> 4;
-    if data_offset < 5 {
-        return Err(ParseError::BadTcpDataOffset(data_offset));
-    }
-    if seg.len() < usize::from(data_offset) * 4 {
-        return Err(ParseError::Truncated("tcp options"));
-    }
-    let port_them = be16(seg, 0).ok_or(ParseError::Truncated("tcp header"))?;
-    let port_me = be16(seg, 2).ok_or(ParseError::Truncated("tcp header"))?;
-    let ackno = be32(seg, 8).ok_or(ParseError::Truncated("tcp header"))?;
-    let flags = seg[13];
+    let TcpHeader {
+        port_them,
+        port_me,
+        ackno,
+        flags,
+        checksum: stored,
+        ..
+    } = tcp_header(seg)?;
 
     // main.c:829: is_my_ip (stack-src.c:13-14, один адрес IPv6).
-    if plan.nics()[0].source_ipv6 != Some(ip_me) {
+    if !is_my_ip6(plan, ip_me) {
         return Ok(None);
     }
     // main.c:935: is_my_port.
-    let (first, last) = plan.binding().source_ports;
-    if port_me < first || port_me > last {
+    if !is_my_port(plan, port_me) {
         return Ok(None);
     }
     // Как у IPv4: ответ относится к текущему заданию (итоговые цели и порты).
@@ -677,11 +660,8 @@ fn parse_ipv6_segment(
         return Ok(None);
     }
 
-    if policy == ChecksumPolicy::Verify {
-        let stored = be16(seg, 16).ok_or(ParseError::Truncated("tcp header"))?;
-        if checksum_ipv6(ip_them, ip_me, 6, seg) != stored {
-            return Err(ParseError::BadTcpChecksum);
-        }
+    if policy == ChecksumPolicy::Verify && checksum_ipv6(ip_them, ip_me, 6, seg) != stored {
+        return Err(ParseError::BadTcpChecksum);
     }
 
     Ok(Some(Reply {
@@ -741,8 +721,59 @@ fn parse_arp_reply(frame: &[u8], plan: &ReadyPlan) -> Option<Reply> {
 }
 
 /// Наш ли адрес назначения (`is_my_ip`, main.c:829): диапазон адресов источника адаптера `nic[0]` плана.
-fn is_my_ip(plan: &ReadyPlan, ip_me: u32) -> bool {
+pub(crate) fn is_my_ip(plan: &ReadyPlan, ip_me: u32) -> bool {
     (plan.binding().source_ipv4..=plan.nics()[0].source_ipv4_last).contains(&ip_me)
+}
+
+/// Наш ли адрес назначения IPv6 (`is_my_ip`, stack-src.c:13-14): ровно `source_ipv6` адаптера `nic[0]`; без него ни
+/// один адрес не наш.
+pub(crate) fn is_my_ip6(plan: &ReadyPlan, ip_me: u128) -> bool {
+    plan.nics()[0].source_ipv6 == Some(ip_me)
+}
+
+/// Наш ли порт назначения (`is_my_port`, main.c:935): диапазон портов источника адаптера `nic[0]`.
+pub(crate) fn is_my_port(plan: &ReadyPlan, port_me: u16) -> bool {
+    let (first, last) = plan.binding().source_ports;
+    (first..=last).contains(&port_me)
+}
+
+/// Поля заголовка TCP входящего сегмента (proto-preprocess.c:208-218; main.c:813-815 `TCP_SEQNO`, `TCP_ACKNO`).
+pub(crate) struct TcpHeader {
+    pub(crate) port_them: u16,
+    pub(crate) port_me: u16,
+    pub(crate) seqno: u32,
+    pub(crate) ackno: u32,
+    pub(crate) flags: u8,
+    /// Смещение данных в байтах (`doff * 4`, не меньше 20 и не дальше сегмента).
+    pub(crate) header_len: usize,
+    /// Поле суммы сегмента.
+    pub(crate) checksum: u16,
+}
+
+/// Заголовок TCP сегмента `seg` (от начала TCP до конца IP-пакета): общий разбор [`parse_reply`] и
+/// [`crate::tcp_frame::tcp_segment`]. Смещение данных меньше 5 отклоняется (C берёт `px[12]>>2` без проверки).
+pub(crate) fn tcp_header(seg: &[u8]) -> Result<TcpHeader, ParseError> {
+    if seg.len() < 20 {
+        return Err(ParseError::Truncated("tcp header"));
+    }
+    let data_offset = seg[12] >> 4;
+    if data_offset < 5 {
+        return Err(ParseError::BadTcpDataOffset(data_offset));
+    }
+    let header_len = usize::from(data_offset) * 4;
+    if seg.len() < header_len {
+        return Err(ParseError::Truncated("tcp options"));
+    }
+    let t = ParseError::Truncated("tcp header");
+    Ok(TcpHeader {
+        port_them: be16(seg, 0).ok_or(t.clone())?,
+        port_me: be16(seg, 2).ok_or(t.clone())?,
+        seqno: be32(seg, 4).ok_or(t.clone())?,
+        ackno: be32(seg, 8).ok_or(t.clone())?,
+        flags: seg[13],
+        header_len,
+        checksum: be16(seg, 16).ok_or(t)?,
+    })
 }
 
 /// Один из адресов и портов источника ЛЮБОГО адаптера плана (`matches_me`, proto-icmp.c:12-22: цикл по `out->src[8]`).

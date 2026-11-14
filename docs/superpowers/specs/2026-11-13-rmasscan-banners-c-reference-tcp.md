@@ -288,8 +288,11 @@ ever: later server bytes are ACKed and never parsed (Р1, reproduce).
   recorded as `unknown` (app 1); an SSL3 match is rejected as in C (no hello sent, B1.2) and lands in `unknown` too.
 - STARTTLS hand-offs (FTP 234, SMTP 220, POP3 `+OK`, IMAP4 unreachable): C `memset`s the stream state, sets
   `app_proto = PROTO_SSL3`, `is_sent_sslhello = 1`, restores the port and sends `banner_ssl.hello`
-  (`src/proto-ftp.c:93-104`, `src/proto-smtp.c:139-150`, `src/proto-pop3.c:122-133`). 4b performs the switch but sends
-  nothing.
+  (`src/proto-ftp.c:93-104`, `src/proto-smtp.c:139-150`, `src/proto-pop3.c:122-133`). 4b performs the switch to app 9
+  but sends nothing (no TLS hello). C then sets `state = 0` and the parser loop goes on (`src/proto-ftp.c:101`,
+  `src/proto-smtp.c:147`, `src/proto-pop3.c:129`): the rest of that segment is parsed as a new greeting. 4b does not
+  follow C there: every byte after the go-ahead line, in the rest of that segment and in every later one, is one
+  `unknown` record, app_proto 9, in any split (E2.8).
 
 ## C. Options
 
@@ -386,10 +389,10 @@ Common shape: byte-at-a-time state machine over `pstate->state` (+ `sub`), may `
 | § | Parser, trigger | Sends | Records (app) | Split |
 | --- | --- | --- | --- | --- |
 | D1 | HTTP (`src/proto-http.c:487-691`), `"HTTP/1."` | none | `http.server` (31): each `Server:` value byte except CR/LF, values concatenated; `title` (17): bytes after `<title...>` up to `<`, again per match; `html` (18) with `--capture html`: every body byte; `http` (4): header bytes through the CR of the final CRLF | E2.3 |
-| D2 | FTP (`src/proto-ftp.c:13-123`), `"220-"` any port, `"220 "` not 25/587 | `"AUTH TLS\r\n"` after the greeting | `ftp` (5): greeting lines (code, separator, text, `\n`; CR skipped), then the AUTH reply without its final `\n`; 234 -> STARTTLS (B6) | none |
-| D3 | SMTP (`src/proto-smtp.c:34-169`), `"220 "` on 25/587, `"521 "` | `"EHLO masscan\r\n"`, then `"STARTTLS\r\n"` whatever EHLO said | `smtp` (11): greeting, EHLO reply lines; 220 to STARTTLS -> hand-off | none |
-| D4 | POP3 (`src/proto-pop3.c:20-152`), `"+OK "` | `"CAPA\r\n"`, then `"STLS\r\n"` | `pop` (12): every non-CR byte through the STLS reply; `-` to CAPA -> line, stop | none |
-| D5 | IMAP4 (`src/proto-imap4.c:20-193`), `"* OK "` | none (CAPABILITY unreachable) | `imap` (13) = `"* OK"` (spaces after `*` kept), then close (`:49-66` ✓) | none |
+| D2 | FTP (`src/proto-ftp.c:13-123`), `"220-"` any port, `"220 "` not 25/587 | `"AUTH TLS\r\n"` after the greeting | `ftp` (5): greeting lines (code, separator, text, `\n`; CR skipped only inside the text, states 5 and 105, `src/proto-ftp.c:69`, `:89`; a CR where a code digit or the separator is due closes, `:43-45`), then the AUTH reply without its final `\n`; 234 -> STARTTLS (B6) | E2.8 |
+| D3 | SMTP (`src/proto-smtp.c:34-169`), `"220 "` on 25/587, `"521 "` | `"EHLO masscan\r\n"`, then `"STARTTLS\r\n"` whatever EHLO said | `smtp` (11): greeting, EHLO reply lines; 220 to STARTTLS -> hand-off | E2.8 |
+| D4 | POP3 (`src/proto-pop3.c:20-152`), `"+OK "` | `"CAPA\r\n"`, then `"STLS\r\n"` | `pop` (12): every non-CR byte through the STLS reply; `-` to CAPA -> line, stop; `+OK` STLS reply line -> hand-off | E2.8 |
+| D5 | IMAP4 (`src/proto-imap4.c:20-193`), `"* OK "` | none (CAPABILITY unreachable) | `imap` (13) = `"* OK"` (spaces after `*` kept), then `tcpapi_close` twice (`:54-55`, then after the fall-through `:63-64`); on `"* ok "` the classifier (case-insensitive) matches but the parser's `'O'` test (`:60`) is not, so the record is `"* o"`, again two closes (`:49-66` ✓) | none |
 | D6 | SSH (`src/proto-ssh.c:52-178`), `"SSH-1."`/`"SSH-2."` | `"SSH-2.0-OPENSSH_7.9\r\n"` at the first `\n`; the 1248-byte KEX blob on every server packet (fallthrough) | `ssh` (always 3): **every byte received**, until stop | E2.4 |
 | D7 | VNC (`src/proto-vnc.c:93-337`), `"RFB ..."` | 12-byte version reply; `"\x01"` / `"\x01\x01"` choosing None even if not offered | `vnc` (33): version bytes, ` width=%u`, ` height=%u`; `vnc-info` (34): `Security types:\n`, `  <name>`(+`\n` in 3.7+), `ERROR: `+reason, `Name: `+name+`\n` | none |
 | D8 | Telnet (`src/proto-tcp-telnet.c:93-252`), IAC/login patterns | per call: one reply per option, ascending option order, `IAC WONT x` for DO/DONT, `IAC DONT x` for WILL/WONT (`TCP__copy`) | `telnet` (29): every byte received, raw | E2.4 |
@@ -446,8 +449,10 @@ call, expressed so a streaming parser can do it.
 | E2.5 | RDP (`src/proto-tcp-rdp.c:223-283`) | UNKNOWN appends the whole current segment (from its offset 0) | on entering UNKNOWN with at least one more byte, append every byte the RDP parser has seen since its start, and all later bytes |
 | E2.6 | memcached (`src/proto-memcached.c:129-137`) | a keyword split across segments is lost (matcher reset in state 0) | the matcher continues across segments (C state 1) |
 | E2.7 | Minecraft (`src/proto-mc.c:59-89`) | favicon stripping with zeroed bytes and lost segments | record = every byte the parser saw, raw, if the brace count over them is <= 0 at flush, else none; close when the running count drops <= 0 after a segment |
+| E2.8 | FTP (`src/proto-ftp.c:93-104`), SMTP (`:139-150`), POP3 (`:122-133`), STARTTLS go-ahead | after the go-ahead C sets `state = 0` and keeps parsing the rest of that segment (`src/proto-ftp.c:101`, `src/proto-smtp.c:147`, `src/proto-pop3.c:129`): on a single segment the tail is a new greeting, a second `AUTH TLS` / `EHLO` / `CAPA` is sent and the tail can be appended to the text record; split at the go-ahead (or byte by byte) the next segment goes to the TLS parser (app 9), which records nothing here | every byte after the go-ahead line is one `unknown` record (app 1), in any split, app_proto 9, no TLS hello and no second command. This is the B6 boundary, not "C on the unsplit stream", until 4c ports TLS. Record order as B3: the `unknown` record after the text record while that is under 200 bytes, before it from 200 bytes on |
 
-Parsers without an entry (FTP, SMTP, POP3, IMAP4, VNC) are split-invariant in C: their stop states append nothing.
+Parsers without an entry (IMAP4, VNC; FTP, SMTP and POP3 except for the STARTTLS go-ahead, E2.8) are split-invariant
+in C: their stop states append nothing.
 Sends are compared only on the unsplit run: Telnet replies per segment by design.
 
 ### E3. Deterministic C behaviour kept (Р1)
@@ -456,7 +461,7 @@ Sends are compared only on the unsplit run: Telnet replies per segment by design
 2. One segment in flight, head-only transmit, FIN behind a hello leaves a tick later, partial ACK stall, no ACK in SEND
    states, out-of-order data dropped, double ACKs (A4, A5).
 3. Port only picks the hello: `"220-"` SMTP on 25 is parsed as FTP (sends `AUTH TLS`), `"220 "` SMTP on 2525 is FTP.
-4. IMAP always `"* OK"`; SSH dumps every byte and re-sends the KEX blob per packet; HTTP `Server` values concatenated;
+4. IMAP always `"* OK"` (two closes; `"* ok "` gives `"* o"`); SSH dumps every byte and re-sends the KEX blob per packet; HTTP `Server` values concatenated;
    VNC selects None; RDP labels code 5 `NLA-unsupported`; memcached never closes; telnet stops at IAC IAC.
 5. `--hello-string` first-given wins per port; `--hello` echo prints one value; `--hello-string` on a TLS port keeps
    `SF__close` and `next` (4c).
@@ -493,3 +498,13 @@ Sends are compared only on the unsplit run: Telnet replies per segment by design
    returns that position, and `_field_length` there is 0, so `http_change_field` takes it as the end of the header
    and inserts there (`src/proto-http.c:226-254`, `:319-332` ✓). The other two defects it lists (`hdr[-1]`, the
    `_http_append` assignment) need a header without an empty line, which no option can produce (C3).
+5. Parsers ref §7.3 and E2 here (before this fix) list FTP, SMTP and POP3 as split-invariant. They are not after a
+   STARTTLS go-ahead: C continues the same segment from state 0 (`src/proto-ftp.c:101`, `src/proto-smtp.c:147`,
+   `src/proto-pop3.c:129`), so on one segment the tail is a new greeting with a second `AUTH TLS` / `EHLO` / `CAPA`,
+   and split at the go-ahead it goes to TLS (E2.8; oracle `*-tail` cases).
+6. D2 "CR skipped" holds only inside the text (states 5 and 105, `src/proto-ftp.c:69`, `:89`); a CR where a code digit
+   is due closes the connection (`:43-45`, oracle `ftp-cr-before-code`).
+7. D5 / E3.4 "IMAP `* OK`, then close": C closes twice (`src/proto-imap4.c:54-55`, `:63-64`), and `"* ok "` yields
+   `"* o"`: the classifier is case-insensitive, the parser's `'O'` (`:60`) is not (oracle `imap4-lowercase`).
+8. B6 said "4b performs the switch but sends nothing" and omitted that C keeps parsing the rest of the segment after
+   the switch; B6 now states it and the 4b rule for it (E2.8).

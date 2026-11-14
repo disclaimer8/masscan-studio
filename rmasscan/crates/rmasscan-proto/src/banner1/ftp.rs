@@ -9,7 +9,7 @@
 
 use crate::app::app_id;
 
-use super::session::{ParseCx, Parser};
+use super::session::{ParseCx, Parser, c_isprint};
 
 /// `state = 0xffffffff`: разбор кончен, остаток потока не читается (`default: i = length`, `src/proto-ftp.c:117-119`).
 const DONE: u32 = u32::MAX;
@@ -20,11 +20,6 @@ pub(crate) struct Ftp {
     state: u32,
     code: u32,
     is_last: bool,
-}
-
-/// `isprint` локали C (masscan `setlocale` не зовёт): 0x20-0x7E; NUL (`px[i] == '\0'`) в это не входит.
-fn c_isprint(c: u8) -> bool {
-    matches!(c, 0x20..=0x7e)
 }
 
 impl Parser for Ftp {

@@ -265,7 +265,8 @@ const STARTTLS_APPS: [u16; 3] = [app_id::FTP, app_id::SMTP, app_id::POP3];
 /// второй (если есть) это хвост. Прогон C над первым сегментом (`given`, а без хвоста `whole`) даёт записи парсера и
 /// его действия до hello TLS (`tcpapi_send(banner_ssl.hello)`, `src/proto-ftp.c:103`, `src/proto-smtp.c:149`,
 /// `src/proto-pop3.c:131`; единственная отправка, которая начинается байтом записи TLS 0x16). В 4b hello не шлётся, а
-/// хвост это одна запись `unknown` за записью парсера (записи короче 200 байт, голова списка не переезжает).
+/// хвост это одна запись `unknown` в порядке списка banout: за записью парсера, пока она короче 200 байт (голова списка
+/// не переезжает; это утверждает проверка ниже), и перед ней от 200 байт (юнит-тест `starttls_success_switches_to_unported_tls`).
 fn starttls_expect(c: &Case, cout: &COut) -> (Vec<(u16, Vec<u8>)>, Vec<StreamAction>) {
     let segs = c.segment_bytes();
     let run = match segs.len() {

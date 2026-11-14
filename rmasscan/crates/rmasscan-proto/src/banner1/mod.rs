@@ -370,6 +370,28 @@ mod tests {
                 "{dialogue:?}: no TLS hello, no second command"
             );
         }
+
+        // Запись парсера от 200 байт: хвост `unknown` идёт ПЕРЕД ней (порядок списка banout у C, справка B3: голова
+        // списка переезжает, когда запись дорастает до 200 байт). От нарезки порядок не зависит.
+        let long_greeting = [&b"220-"[..], &[b'x'; 300], b"\r\n220 ok\r\n234 go\r\n"].concat();
+        let want_rec = [&b"220-"[..], &[b'x'; 300], b"\n220 ok\n234 go"].concat();
+        let stream = [&long_greeting[..], b"TAILTAIL"].concat();
+        let whole = stream_in_splits(21, None, &stream, 21);
+        let at_go_ahead = banner_stream(
+            &TcpBannerSettings::default(),
+            21,
+            None,
+            &[&long_greeting[..], b"TAILTAIL"],
+        );
+        assert_eq!(whole, at_go_ahead);
+        assert_eq!(whole.app_proto, Some(app_id::SSL3));
+        assert_eq!(
+            whole.records,
+            [
+                (app_id::HEUR, b"TAILTAIL".to_vec()),
+                (app_id::FTP, want_rec)
+            ]
+        );
     }
 
     /// Р1 класс б: случайные потоки из обломков диалогов FTP, SMTP, POP3, IMAP4 (коды, разделители, CR, LF, TAB, NUL,

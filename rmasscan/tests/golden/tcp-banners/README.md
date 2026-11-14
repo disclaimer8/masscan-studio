@@ -74,7 +74,10 @@ at the pin or is dirty and copies the sources before compiling (the clone is nev
 - `hellos.out`: every port with a `payloads.tcp[]` stream after `banner1_create`: `hello port=P name=NAME flags=0xF
   next=0|1 len=L HEX`. The bytes are printed only for the streams 4b sends (`http`, `telnet`, `rdp`, `memcached`,
   `mc`); the others print `withheld` (TLS ClientHello is 4c, SMB 4d, and the nmap-service-probes hellos are never
-  ported, R3: their bytes stay out of this repository).
+  ported, R3: their bytes stay out of this repository). The `starttls-unknown` case outputs are not in conflict with
+  that: they show C's `action send` of the masscan-authored `ssl_hello_template` (`src/proto-ssl.c:1077`, AGPL like
+  the rest of the port, not NPSL), because C's text parser sends it at the go-ahead and the cases are C evidence;
+  `hellos.out` is about the hellos rmasscan 4b sends from the port table, and it does not send this one.
 - `banout.in.txt`, `banout.out`: direct `banout_append` scripts (`append APP LEN SEED`, byte `k` is
   `(SEED + 131 * k) & 0xFF`) and per script the node list (`node protocol=0xP length=L`, head first) and the records.
 - `manifest.json`: the oracle block above, `host` (OS and kernel only), `captured_at`, the three tables and per case
@@ -104,7 +107,9 @@ given segments and 8 random splits):
   - `starttls-unknown` (7): the server agrees to STARTTLS (FTP 234, SMTP 220, POP3 `+OK`). The first segment of the
     case ends with that line. Expected: the text parser's record and the actions before the TLS hello of C's run over
     that segment (the `given` run when the case has a second segment, else `whole`), no TLS hello, and the bytes of
-    the second segment as one `unknown` record after it; `app_proto` is C's, 9. C sends `banner_ssl.hello`
+    the second segment as one `unknown` record, in banout list order: after the parser record while that is under
+    200 bytes (all these cases), before it from 200 bytes on (C moves the list head, B3; pinned by a unit test, not a
+    case); `app_proto` is C's, 9. C sends `banner_ssl.hello`
     (`src/proto-ftp.c:103`, `src/proto-smtp.c:149`, `src/proto-pop3.c:131`; its bytes are in these outputs as an
     `action send`) and parses what follows as TLS, which is 4c.
 

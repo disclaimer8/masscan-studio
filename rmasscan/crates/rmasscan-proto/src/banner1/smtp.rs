@@ -9,7 +9,7 @@
 
 use crate::app::app_id;
 
-use super::session::{ParseCx, Parser};
+use super::session::{ParseCx, Parser, c_isprint};
 
 /// `state = 0xffffffff`: разбор кончен (`default: i = length`, `src/proto-smtp.c:163-165`).
 const DONE: u32 = u32::MAX;
@@ -20,11 +20,6 @@ pub(crate) struct Smtp {
     state: u32,
     code: u32,
     is_last: bool,
-}
-
-/// `isprint` локали C: 0x20-0x7E (как у FTP).
-fn c_isprint(c: u8) -> bool {
-    matches!(c, 0x20..=0x7e)
 }
 
 impl Parser for Smtp {

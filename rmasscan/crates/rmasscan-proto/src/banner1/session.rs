@@ -53,22 +53,22 @@ pub(crate) trait Parser: Send {
     fn parse(&mut self, cx: &mut ParseCx<'_>, px: &[u8]);
 }
 
-/// Что видит парсер: буферы баннеров и бюджет таблицы, действия (`tcpapi_send` и `tcpapi_close` по порядку), порт
-/// сервера (`tcb_state->port`), `--capture html`. `starttls` ставит передача STARTTLS (у C `app_proto =
-/// PROTO_SSL3`, `src/proto-ftp.c:93-104`, `src/proto-smtp.c:139-150`, `src/proto-pop3.c:122-133`): со следующего
+/// `isprint` локали C (masscan `setlocale` не зовёт): 0x20-0x7E; NUL в это не входит. Общий для FTP, SMTP и следующих
+/// текстовых парсеров.
+pub(super) fn c_isprint(c: u8) -> bool {
+    matches!(c, 0x20..=0x7e)
+}
+
+/// Что видит парсер: буферы баннеров и бюджет таблицы, действия (`tcpapi_send` и `tcpapi_close` по порядку),
+/// `--capture html`. Порта нет: ни один парсер 4b его не читает (FTP, SMTP и POP3 только сохраняют и возвращают
+/// `pstate->port` вокруг `memset` передачи STARTTLS, `src/proto-ftp.c:96-100`; порт решает классификатор).
+/// `starttls` ставит передача STARTTLS (у C `app_proto = PROTO_SSL3`, `src/proto-ftp.c:93-104`, `src/proto-smtp.c:139-150`, `src/proto-pop3.c:122-133`): со следующего
 /// сегмента поток идёт в `unknown`; остаток своего сегмента парсер решает сам, текстовые парсеры отдают его в `unknown`
 /// ([`ParseCx::hand_off_starttls`]).
 pub(crate) struct ParseCx<'a> {
     pub(crate) banout: &'a mut Banout,
     pub(crate) budget: &'a mut ByteBudget,
     pub(crate) acts: &'a mut Vec<SessionAction>,
-    /// Парсеры FTP и SMTP читают `pstate->port` только затем, чтобы вернуть его после `memset` передачи STARTTLS
-    /// (`src/proto-ftp.c:96-100`, `src/proto-smtp.c:142-146`); порт 25/587 решает классификатор (`classified`).
-    #[expect(
-        dead_code,
-        reason = "ни один парсер 4b порт не читает (`src/proto-*.c` задач 9-12)"
-    )]
-    pub(crate) port: u16,
     #[expect(dead_code, reason = "`--capture html` читает парсер HTTP, задачи 9-12")]
     pub(crate) capture_html: bool,
     pub(crate) starttls: bool,
@@ -280,7 +280,6 @@ impl Banner1Session {
             banout: &mut self.banout,
             budget,
             acts,
-            port: self.port,
             capture_html: self.scan.capture_html,
             starttls: false,
         };

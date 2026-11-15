@@ -729,6 +729,8 @@ enum Peer {
     ProtoUnreachable,
     /// The peer's ARP reply for the default gateway to the scanner's next-hop resolution (a case that is no ARP scan).
     NextHop,
+    /// The peer's who-has for the scanner's address ([`av::peer_request_for`]): both scanners answer it.
+    RequestForScanner,
     Unexpected(String),
 }
 /// The ports and protocol an ICMP error quotes: the probe it answers.
@@ -774,6 +776,9 @@ fn answer(t: f64, f: &[u8], st: &Stand, probes: &[Probe]) -> Peer {
         })
     };
     if f.get(12..14) == Some(&[8, 6][..]) {
+        if av::peer_request_for(f, st.peer_mac, st.scanner_ip) {
+            return Peer::RequestForScanner;
+        }
         let ok = f.len() >= 42
             && f[14..22] == [0, 1, 8, 0, 6, 4, 0, 2]
             && f[38..42] == st.scanner_ip.octets();
@@ -861,6 +866,13 @@ pub struct WireView {
     pub scanner_unexplained: Vec<String>,
     /// ARP requests of the scanner MAC that are no probe (the next-hop who-has among them).
     pub arp_requests_not_probes: usize,
+    /// The peer's who-has for the scanner's address, with its time (none while the peer keeps its permanent neighbour
+    /// entry; both scanners answer one, [`own_frame_checks`]).
+    pub peer_requests: Vec<(f64, Vec<u8>)>,
+    /// The scanner MAC's ARP replies that are not its kernel's: the scanner's own, judged against `peer_requests`.
+    pub scanner_arp_replies: Vec<(f64, Vec<u8>)>,
+    /// The probe each stateless RST of the scanner resets the reply of (R8), by index into `probes`.
+    pub stateless_rsts: Vec<usize>,
     /// Frames of the peer MAC that answer nothing the scan sent.
     pub peer_unexpected: Vec<String>,
     /// Probes or replies outside the witness window (last start marker .. first end marker).
@@ -883,14 +895,14 @@ impl pair_verify::StepView for WireView {
 /// The frames of the scanner MAC that are no probe of the scan and that the stand makes the scanner side send: the
 /// key they are counted under in the notes, and what they are. Any other frame of the scanner MAC is the scanner's own
 /// extra frame: a FAIL on rmasscan's step, INVALID on the oracle's.
-pub const SCANNER_CLASSES: [(&str, &str); 4] = [
+pub const SCANNER_CLASSES: [(&str, &str); 7] = [
     (
         "next_hop_who_has",
         "the scanner's next-hop resolution: an ARP who-has 198.18.0.2 from 198.18.0.1, 60 bytes zero-padded (the resolver form of C stack-arpv4.c and rmasscan), in a scan that is no ARP scan",
     ),
     (
         "rst_to_syn_ack",
-        "a TCP RST (no other flag) from 198.18.0.1 whose sequence number is the acknowledgment of a SYN-ACK of the stand: the scanner namespace kernel resets a SYN-ACK no socket owns (198.18.0.1 is its address), and C resets each distinct SYN-ACK itself once it passed its dedup (main.c:1067-1068 then main.c:1095)",
+        "the scanner namespace kernel's reset of a SYN-ACK no socket owns (198.18.0.1 is its address): a TCP RST (no other flag) from 198.18.0.1 whose sequence number is the acknowledgment of a SYN-ACK of the stand, in any form but the SYN template's (that one is stateless_rst)",
     ),
     (
         "port_unreachable_to_udp_reply",
@@ -900,7 +912,23 @@ pub const SCANNER_CLASSES: [(&str, &str); 4] = [
         "protocol_unreachable_to_sctp_reply",
         "an ICMP 3/2 from 198.18.0.1 quoting an SCTP INIT-ACK or ABORT of the stand: the scanner namespace kernel, no SCTP",
     ),
+    (
+        "stateless_rst",
+        "the scanner's own stateless RST (R8), both scanners alike: C resets each distinct TCP reply (SYN-ACK or RST) that passed its cookie check and dedup (src/main.c:1048-1101: TCP_IS_SYNACK || TCP_IS_RST, dedup_is_duplicate, then tcp_send_RST when neither --banners nor --noreset), rmasscan the same (rmasscan_core::tcp_frame::stateless_rst); the frame is the probe's SYN template with seq the reply's acknowledgment, ack 0, flags 0x04, window 1200 (autodetect_verify::is_stateless_rst)",
+    ),
+    (
+        "arp_reply_for_scanner",
+        "the scanner's own ARP reply to the peer's who-has for 198.18.0.1, both scanners alike: C answers from its receive loop (src/main.c:878-887, stack_arp_incoming_request src/stack-arpv4.c:282-363), rmasscan's responder the same, 60 bytes to the requester; judged against the requests (none while the peer keeps its permanent neighbour entry)",
+    ),
+    (
+        "kernel_arp_reply_for_scanner",
+        "the scanner namespace kernel's 42-byte ARP reply to the same who-has (198.18.0.1 is its address)",
+    ),
 ];
+/// The names of the two scanner-side frame checks of a step ([`scanner_frames`], and the banners window's UDP cases):
+/// every frame named, and every class within its bound ([`scanner_bounds`]).
+pub const SCANNER_FRAMES_RULE: &str = "every frame of the scanner MAC is a probe of the scan or of a named class the stand makes the scanner side send (next-hop who-has, the kernel's RST to a SYN-ACK, ICMP 3/3 to a UDP reply, ICMP 3/2 to an SCTP reply, the scanner's stateless RST, ARP replies for the scanner's address)";
+pub const SCANNER_BOUNDS_RULE: &str = "the named scanner-side frames stay within their bounds (the kernel's RST to a SYN-ACK: one per SYN-ACK frame of the stand; the stateless RST: one per distinct TCP reply; next-hop who-has: the resolver's request count; ICMP 3/3 and 3/2: one per UDP or SCTP reply frame; ARP replies of the scanner and of its kernel: one each per who-has of the peer)";
 /// The most next-hop who-has rmasscan's resolver sends before it gives up: one per `ARP_INTERVAL` while less than
 /// `ARP_TIMEOUT` has passed (rmasscan-net `arp_resolve.rs`, `resolve_next_hop_until`: t = 0..9 s, 10 requests).
 pub const NEXT_HOP_WHO_HAS_MAX_RMASSCAN: usize = (rmasscan_net::arp_resolve::ARP_TIMEOUT.as_secs()
@@ -911,56 +939,104 @@ pub const NEXT_HOP_WHO_HAS_MAX_RMASSCAN: usize = (rmasscan_net::arp_resolve::ARP
 /// send), 12 requests.
 pub const NEXT_HOP_WHO_HAS_MAX_C: usize = 12;
 /// How many frames of each [`SCANNER_CLASSES`] entry a step may hold, from what its scanner side can send for the
-/// stand's replies on the same wire: one kernel reset per SYN-ACK frame (the scanner namespace kernel resets every
-/// SYN-ACK frame; rmasscan has no RST path), plus on the oracle's step one `tcp_send_RST` of C per distinct SYN-ACK
-/// (C resets only a reply that passed its dedup, main.c:1067-1068 then :1095, so a repeated SYN-ACK gets the
-/// kernel's reset and no second one of C's), the resolver's request count ([`NEXT_HOP_WHO_HAS_MAX_RMASSCAN`],
-/// [`NEXT_HOP_WHO_HAS_MAX_C`]), and one kernel ICMP error per UDP or SCTP reply frame (neither scanner sends one
-/// itself). `(class, count, at most)` in [`SCANNER_CLASSES`] order.
-pub fn scanner_bounds(v: &WireView, who: Who) -> [(&'static str, usize, usize); 4] {
+/// stand's replies and requests on the same wire, on both steps alike: one kernel reset per SYN-ACK frame (the
+/// scanner namespace kernel resets every SYN-ACK frame, a repeated one again), one stateless RST per distinct TCP
+/// reply (both scanners reset only a reply that passed their dedup, src/main.c:1066-1068 then :1094, so a repeated
+/// SYN-ACK gets the kernel's reset and no second one of the scanner's; the exact count is [`own_frame_checks`]), the
+/// resolver's request count ([`NEXT_HOP_WHO_HAS_MAX_RMASSCAN`], [`NEXT_HOP_WHO_HAS_MAX_C`]), one kernel ICMP error per
+/// UDP or SCTP reply frame (neither scanner sends one itself), and per who-has of the peer for the scanner's address
+/// one ARP reply of the scanner and one of its kernel. `(class, count, at most)` in [`SCANNER_CLASSES`] order.
+pub fn scanner_bounds(v: &WireView, who: Who) -> [(&'static str, usize, usize); 7] {
     let replies = |proto: Proto, st: Option<St>| {
         v.replies
             .iter()
             .filter(|r| r.proto == proto && !r.via_icmp && st.is_none_or(|s| r.st == s))
             .count()
     };
-    // C's dedup key is (ip_them, port_them, ip_me, port_me) (main.c:1067); on the stand ip_me and port_me are fixed.
-    let distinct_syn_acks = v
-        .replies
-        .iter()
-        .filter(|r| r.proto == Proto::Tcp && !r.via_icmp && r.st == St::Open)
-        .map(|r| (r.ip, r.port))
-        .collect::<BTreeSet<_>>()
-        .len();
-    let (c_resets, who_has) = match who {
-        Who::Rmasscan => (0, NEXT_HOP_WHO_HAS_MAX_RMASSCAN),
-        Who::Oracle => (distinct_syn_acks, NEXT_HOP_WHO_HAS_MAX_C),
+    let who_has = match who {
+        Who::Rmasscan => NEXT_HOP_WHO_HAS_MAX_RMASSCAN,
+        Who::Oracle => NEXT_HOP_WHO_HAS_MAX_C,
     };
     let max = [
         who_has,
-        replies(Proto::Tcp, Some(St::Open)) + c_resets,
+        replies(Proto::Tcp, Some(St::Open)),
         replies(Proto::Udp, None),
         replies(Proto::Sctp, None),
+        distinct_tcp_replies(v).len(),
+        v.peer_requests.len(),
+        v.peer_requests.len(),
     ];
-    let mut out = [("", 0, 0); 4];
+    let mut out = [("", 0, 0); 7];
     for (i, (k, _)) in SCANNER_CLASSES.iter().enumerate() {
         out[i] = (*k, v.scanner_named.get(k).copied().unwrap_or(0), max[i]);
     }
     out
+}
+/// A connection of the scan by C's dedup key (ip_them, port_them, ip_me, port_me; src/main.c:1067), ip_me fixed.
+fn conn_key(p: &Probe) -> String {
+    format!("{}:{} (scanner port {})", p.ip, p.port, p.sport())
+}
+/// The distinct TCP replies of the stand (SYN-ACK or RST, not an ICMP error), by [`conn_key`]: each is owed one
+/// stateless RST.
+fn distinct_tcp_replies(v: &WireView) -> BTreeSet<String> {
+    v.replies
+        .iter()
+        .filter(|r| r.proto == Proto::Tcp && !r.via_icmp)
+        .filter_map(|r| v.probes.get(r.probe).map(conn_key))
+        .collect()
+}
+/// The probe whose SYN template a stateless RST `f` carries ([`av::is_stateless_rst`]).
+fn stateless_probe(f: &[u8], probes: &[Probe]) -> Option<usize> {
+    probes
+        .iter()
+        .position(|p| p.proto == Proto::Tcp && av::is_stateless_rst(&p.frame, f))
+}
+/// The scanner's own frames that the stand's replies and requests make it send, both scanners alike, each exact
+/// ([`pair_verify::own_frame_checks`]): the stateless RST (R8) of every distinct TCP reply and the ARP replies to the
+/// peer's who-has for the scanner's address (Task 14a). The stand (`st`) gives the scanner's MAC and address.
+pub(crate) fn own_frame_checks<V>(r: &mut Run, s: &Side<V>, v: &WireView, st: &Stand) {
+    let rsts: Vec<String> = v
+        .stateless_rsts
+        .iter()
+        .filter_map(|i| v.probes.get(*i).map(conn_key))
+        .collect();
+    pair_verify::own_frame_checks(
+        r,
+        s,
+        &distinct_tcp_replies(v),
+        &rsts,
+        &v.peer_requests,
+        &v.scanner_arp_replies,
+        v.probes
+            .first()
+            .zip(v.probes.last())
+            .map(|(a, b)| (a.t, b.t)),
+        st,
+    );
 }
 /// The scanner's next-hop who-has for the default gateway, in its resolver form.
 fn next_hop_who_has(f: &[u8], st: &Stand) -> bool {
     av::resolver_request(f) && f[28..32] == st.scanner_ip.octets() && f[38..42] == GATEWAY.octets()
 }
 /// What a frame of the scanner MAC that is no probe is: the key of its [`SCANNER_CLASSES`] entry, when it answers a
-/// reply of the stand (`replies`) the way the scanner side does, or what it is otherwise.
-fn scanner_frame(
-    f: &[u8],
-    st: &Stand,
-    arp: bool,
-    replies: &[Reply],
-) -> Result<&'static str, String> {
+/// reply or a request of the stand (`v`) the way the scanner side does, or what it is otherwise.
+fn scanner_frame(f: &[u8], st: &Stand, arp: bool, v: &WireView) -> Result<&'static str, String> {
     if f.get(12..14) == Some(&[8, 6][..]) {
+        if f.get(20..22) == Some(&[0, 2][..]) {
+            // An ARP reply: the kernel's to a who-has of the peer for its address, or the scanner's own (judged
+            // against the requests in `own_frame_checks`).
+            return if v
+                .peer_requests
+                .iter()
+                .any(|(_, q)| av::kernel_arp_reply(q, f, st.scanner_mac, st.scanner_ip))
+            {
+                Ok(SCANNER_CLASSES[6].0)
+            } else if f.len() == 60 {
+                Ok(SCANNER_CLASSES[5].0)
+            } else {
+                Err(describe(f))
+            };
+        }
         return match (next_hop_who_has(f, st), arp) {
             (true, false) => Ok(SCANNER_CLASSES[0].0),
             (true, true) => Err(
@@ -973,9 +1049,12 @@ fn scanner_frame(
         return Err(describe(f));
     }
     if av::is_reset(f) {
-        let answers = verify::tcp(f).is_some_and(|t| {
+        if stateless_probe(f, &v.probes).is_some() {
+            return Ok(SCANNER_CLASSES[4].0);
+        }
+        let kernel = verify::tcp(f).is_some_and(|t| {
             t.flags == 0x04
-                && replies.iter().any(|r| {
+                && v.replies.iter().any(|r| {
                     r.proto == Proto::Tcp
                         && r.st == St::Open
                         && !r.via_icmp
@@ -984,11 +1063,11 @@ fn scanner_frame(
                             .is_some_and(|y| (y.sp, y.dp, y.ack) == (t.dp, t.sp, t.seq))
                 })
         });
-        return if answers {
+        return if kernel {
             Ok(SCANNER_CLASSES[1].0)
         } else {
             Err(format!(
-                "{}, which resets no SYN-ACK of the stand",
+                "{}, which resets no SYN-ACK of the stand the kernel's way and is no stateless RST of a probe",
                 describe(f)
             ))
         };
@@ -998,7 +1077,7 @@ fn scanner_frame(
         let quotes = |proto: Proto| {
             f.get(42..66).is_some_and(|q| {
                 q[0] == 0x45
-                    && replies.iter().any(|r| {
+                    && v.replies.iter().any(|r| {
                         r.proto == proto
                             && !r.via_icmp
                             && r.frame.get(23) == Some(&q[9])
@@ -1052,8 +1131,8 @@ pub fn view(fr: &Frames, st: &Stand, arp: bool) -> WireView {
     let w = av::classify(fr, st.scanner_mac);
     let (start, end) = av::window(&w);
     let mut v = WireView::default();
-    // The scanner MAC's frames that are no probe, judged once every reply of the capture is known.
-    let mut mine: Vec<&Vec<u8>> = Vec::new();
+    // The scanner MAC's frames that are no probe, judged once every reply and request of the capture is known.
+    let mut mine: Vec<(f64, &Vec<u8>)> = Vec::new();
     let marker = |f: &[u8]| f.get(12..14) == Some(&crate::link::MARKER_ETHERTYPE[..]);
     for (t, f) in fr {
         if marker(f) {
@@ -1065,7 +1144,7 @@ pub fn view(fr: &Frames, st: &Stand, arp: bool) -> WireView {
             continue;
         }
         if f.get(6..12) == Some(&st.scanner_mac[..]) {
-            mine.push(f);
+            mine.push((*t, f));
             continue;
         }
         if f.get(6..12) == Some(&st.peer_mac[..]) {
@@ -1076,16 +1155,24 @@ pub fn view(fr: &Frames, st: &Stand, arp: bool) -> WireView {
                 }
                 Peer::ProtoUnreachable => v.proto_unreachable += 1,
                 Peer::NextHop => v.next_hop_replies += 1,
+                Peer::RequestForScanner => v.peer_requests.push((*t, f.clone())),
                 Peer::Unexpected(why) => v.peer_unexpected.push(why),
             }
         }
     }
-    for f in mine {
+    for (t, f) in mine {
         if f.get(12..14) == Some(&[8, 6][..]) && f.get(20..22) == Some(&[0, 1][..]) {
             v.arp_requests_not_probes += 1;
         }
-        match scanner_frame(f, st, arp, &v.replies) {
-            Ok(key) => *v.scanner_named.entry(key).or_insert(0) += 1,
+        match scanner_frame(f, st, arp, &v) {
+            Ok(key) => {
+                if key == SCANNER_CLASSES[4].0 {
+                    v.stateless_rsts.extend(stateless_probe(f, &v.probes));
+                } else if key == SCANNER_CLASSES[5].0 {
+                    v.scanner_arp_replies.push((t, f.clone()));
+                }
+                *v.scanner_named.entry(key).or_insert(0) += 1;
+            }
             Err(what) => v.scanner_unexplained.push(what),
         }
     }
@@ -1120,6 +1207,10 @@ pub fn foreign_probes(fr: &Frames, st: &Stand) -> Vec<String> {
 /// cursor): the stand's binding, `--seed 1`, `--source-port 40000`, the case's ports (an ARP scan's next hop is the
 /// broadcast MAC).
 pub fn plan_stream(c: &CaseSpec) -> Result<Vec<Vec<u8>>, String> {
+    Ok(plan_probes(&ready_plan(c)?)?.0)
+}
+/// The product's plan of a case ([`plan_stream`]).
+pub fn ready_plan(c: &CaseSpec) -> Result<ReadyPlan, String> {
     let st = stand();
     let router = if c.arp { [0xff; 6] } else { st.peer_mac };
     let binding = AdapterBinding {
@@ -1147,9 +1238,7 @@ pub fn plan_stream(c: &CaseSpec) -> Result<Vec<Vec<u8>>, String> {
         ..ScanConfig::default()
     };
     let eff = validate(&cfg, Operation::Scan).map_err(|e| e.to_string())?;
-    let plan =
-        ReadyPlan::new_cli(eff, vec![NicBinding::from(binding)]).map_err(|e| e.to_string())?;
-    Ok(plan_probes(&plan)?.0)
+    ReadyPlan::new_cli(eff, vec![NicBinding::from(binding)]).map_err(|e| e.to_string())
 }
 
 /// rmasscan's probe `rm` and C's probe `c` are the same probe: equal, or (R12) two UDP datagrams that differ only in a
@@ -1709,11 +1798,12 @@ pub(crate) fn scanner_frames(r: &mut Run, s: &Side<WireView>, v: &WireView) {
     scanner_frame_checks(
         r,
         s,
-        "every frame of the scanner MAC is a probe of the scan or of a named class the stand makes the scanner side send (next-hop who-has, RST to a SYN-ACK, ICMP 3/3 to a UDP reply, ICMP 3/2 to an SCTP reply)",
+        SCANNER_FRAMES_RULE,
         &v.scanner_unexplained,
-        "the named scanner-side frames stay within their bounds (RST to a SYN-ACK: one per SYN-ACK frame of the stand, on the oracle's step plus one per distinct SYN-ACK for C's own reset after its dedup; next-hop who-has: the resolver's request count; ICMP 3/3 and 3/2: one per UDP or SCTP reply frame)",
+        SCANNER_BOUNDS_RULE,
         &scanner_bounds(v, s.spec.who),
     );
+    own_frame_checks(r, s, v, &stand());
 }
 
 /// What a case proves beyond the common checks.

@@ -3821,11 +3821,14 @@ pub fn foreign(fr: &Frames, st: &Stand) -> Vec<String> {
 // ------------------------------------------------------------------ the plan of the shared verifier
 
 /// The scanner-side frame classes of the window: the protocols verifier's (UDP cases) and the TCP cases'.
-pub const SCANNER_CLASSES: [(&str, &str); 8] = [
+pub const SCANNER_CLASSES: [(&str, &str); 11] = [
     pv::SCANNER_CLASSES[0],
     pv::SCANNER_CLASSES[1],
     pv::SCANNER_CLASSES[2],
     pv::SCANNER_CLASSES[3],
+    pv::SCANNER_CLASSES[4],
+    pv::SCANNER_CLASSES[5],
+    pv::SCANNER_CLASSES[6],
     (
         "stack_segments",
         "TCP cases: the scanner's segments of a connection the stand opened (its user-mode stack with --banners, the stateless RST without), compared with C's per connection",
@@ -4010,11 +4013,12 @@ impl PairPlan for Banners {
                 pair_verify::scanner_frame_checks(
                     r,
                     s,
-                    "every frame of the scanner MAC is a probe of the scan or of a named class the stand makes the scanner side send (next-hop who-has, RST to a SYN-ACK, ICMP 3/3 to a UDP reply, ICMP 3/2 to an SCTP reply)",
+                    pv::SCANNER_FRAMES_RULE,
                     &own,
-                    "the named scanner-side frames stay within their bounds (RST to a SYN-ACK: one per SYN-ACK frame of the stand, on the oracle's step plus one per distinct SYN-ACK for C's own reset after its dedup; next-hop who-has: the resolver's request count; ICMP 3/3 and 3/2: one per UDP or SCTP reply frame)",
+                    pv::SCANNER_BOUNDS_RULE,
                     &pv::scanner_bounds(v, s.spec.who),
                 );
+                pv::own_frame_checks(r, s, v, &stand());
                 scanner_counts(
                     &pv::SCANNER_CLASSES,
                     &v.scanner_named,

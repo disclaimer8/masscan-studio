@@ -25,7 +25,11 @@ use crate::{
 };
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value, json};
-use std::{collections::BTreeMap, fs, path::Path};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs,
+    path::Path,
+};
 
 // ------------------------------------------------------------------ what a plan defines
 
@@ -1140,6 +1144,55 @@ pub(crate) fn scanner_frame_checks<V>(
             .map(|(k, n, max)| format!("{k} {n} of at most {max}"))
             .collect::<Vec<_>>()
             .join(", "),
+    );
+}
+/// The scanner's own frames that the stand's replies and requests make it send, both scanners alike, each exact (FAIL
+/// on rmasscan's step, INVALID on the oracle's): the stateless RST (R8) of every distinct TCP reply (`replies`, by C's
+/// dedup key) against the key of each stateless RST on the wire (`rsts`), none with `--banners` or `--noreset`
+/// ([`av::stateless_rst_problems`]); and the scanner's ARP replies (`answers`) to the peer's who-has for its address
+/// (`requests`, [`av::scanner_arp_answer_problems`]), owed while the scanner certainly runs (`probes`: its first and
+/// last probe, [`av::answering`]). The stand (`st`) gives the scanner's MAC and IPv4 address.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn own_frame_checks<V>(
+    r: &mut Run,
+    s: &Side<V>,
+    replies: &BTreeSet<String>,
+    rsts: &[String],
+    requests: &[(f64, Vec<u8>)],
+    answers: &[(f64, Vec<u8>)],
+    probes: Option<(f64, f64)>,
+    st: &Stand,
+) {
+    let first4 = |p: &[String]| p.iter().take(4).cloned().collect::<Vec<_>>().join("; ");
+    let p = av::stateless_rst_problems(av::stateless_rst_on(&s.spec.argv), replies, rsts);
+    cap(
+        r,
+        s,
+        "the scanner's stateless RST (R8, C src/main.c:1094-1100): exactly one per distinct TCP reply of the stand (SYN-ACK or RST, C's dedup key), in the SYN template's form (seq the reply's acknowledgment, ack 0, flags 0x04, window 1200, the SYN's options), none with --banners or --noreset",
+        p.is_empty(),
+        if p.is_empty() {
+            format!("{} RSTs for {} replies", rsts.len(), replies.len())
+        } else {
+            first4(&p)
+        },
+    );
+    let p = av::scanner_arp_answer_problems(
+        requests,
+        answers,
+        av::answering(probes, &s.spec.argv),
+        st.scanner_mac,
+        st.scanner_ip,
+    );
+    cap(
+        r,
+        s,
+        "the scanner answers the peer's who-has for its address in C's form (60 bytes to the requester, src/stack-arpv4.c:282-363): exactly once for a request between its first probe and 1 s after its last, at most once for any other, never without a request",
+        p.is_empty(),
+        if p.is_empty() {
+            format!("{} replies for {} requests", answers.len(), requests.len())
+        } else {
+            first4(&p)
+        },
     );
 }
 /// Each named deviation of a case (`names`, their rules in `table`): `judge(name)` gives whether the wire condition

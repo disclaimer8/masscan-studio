@@ -1902,13 +1902,19 @@ pub(crate) struct Wire {
     pub(crate) scanner_arp: Vec<(f64, Vec<u8>)>,
     /// 42-byte ARP requests from the scanner MAC: the scanner host's kernel.
     os_requests: usize,
-    /// ARP replies from the scanner MAC: the scanner host's kernel (the Windows guest answers `who-has .1`).
+    /// 42-byte ARP replies from the scanner MAC: the scanner host's kernel (the Windows guest answers the peer's
+    /// `who-has .1` in this form, 42 bytes).
     os_replies: usize,
+    /// Every other ARP reply from the scanner MAC: the scanner's own answers to the peer's who-has for its address
+    /// (C's receive loop, src/main.c:878-887, and rmasscan's responder), judged by [`scanner_arp_answer_problems`].
+    pub(crate) scanner_replies: Vec<(f64, Vec<u8>)>,
     /// Any other ARP frame from the scanner MAC (neither form above).
     odd_arp: usize,
     /// TCP SYNs from the scanner MAC.
     pub(crate) syns: Vec<(f64, Vec<u8>)>,
-    /// Resets of the scanner host's kernel (half-open connections the scan provoked).
+    /// The scanner's stateless RSTs (R8, [`is_stateless_rst`] of one of `syns`).
+    pub(crate) stateless: Vec<(f64, Vec<u8>)>,
+    /// Every other reset from the scanner MAC: the scanner host's kernel (half-open connections the scan provoked).
     rst_from_scanner: usize,
 }
 
@@ -1921,13 +1927,199 @@ pub(crate) fn resolver_request(f: &[u8]) -> bool {
         && f[42..].iter().all(|b| *b == 0)
 }
 /// A TCP segment with RST set: from the scanner MAC, a reset of a reply (the scanner host's kernel resets a SYN-ACK
-/// no socket owns; C resets each first reply itself, main.c:1095).
+/// no socket owns; both scanners reset each first reply themselves, [`is_stateless_rst`]).
 pub(crate) fn is_reset(f: &[u8]) -> bool {
     tcp(f).is_some_and(|i| i.flags & 4 != 0)
 }
 
+/// The start of the TCP header and the end of the IP packet of an Ethernet frame that carries TCP over IPv4 or IPv6
+/// (IPv6 without extension headers), and whether it is IPv4.
+fn tcp_bounds(f: &[u8]) -> Option<(usize, usize, bool)> {
+    let be16 = |i: usize| {
+        Some(usize::from(u16::from_be_bytes([
+            *f.get(i)?,
+            *f.get(i + 1)?,
+        ])))
+    };
+    match f.get(12..14)? {
+        [0x08, 0x00] => {
+            let ihl = usize::from(f.get(14)? & 15) * 4;
+            let end = 14 + be16(16)?;
+            (ihl >= 20 && *f.get(23)? == 6 && end >= 14 + ihl + 20 && end <= f.len()).then_some((
+                14 + ihl,
+                end,
+                true,
+            ))
+        }
+        [0x86, 0xdd] => {
+            let end = 54 + be16(18)?;
+            (*f.get(20)? == 6 && end >= 74 && end <= f.len()).then_some((54, end, false))
+        }
+        _ => None,
+    }
+}
+/// Is `f` the stateless RST (R8) a scanner sends for the reply to its probe `syn`, in C's form? C sends it with
+/// `tcp_send_RST(templ, .., 0, seqno_me)` (src/main.c:1094-1100, src/stack-tcp-core.c:1176-1219), which builds it with
+/// `tcp_create_packet` (src/templ-pkt.c:419-613) from the template of the SYN: the frame is the SYN's (Ethernet header,
+/// IP header, ports, TCP options, TTL or hop limit) but for the sequence number (the SYN's + 1, the reply's
+/// acknowledgment `seqno_me`), the acknowledgment (0), the flags (0x04, RST alone), the window (1200,
+/// src/templ-pkt.c:497-498 and :598-599), the IPv4 identification (`ip_them ^ port_them ^ seqno`, :432) and the
+/// checksums; an IPv4 frame is zero-padded to 60 bytes (:510-513), an IPv6 frame is not. rmasscan builds the same frame
+/// (`rmasscan_core::tcp_frame::stateless_rst`, `TcpFrameBuilder`). A kernel resets a SYN-ACK in its own form (window 0,
+/// no options, its own TTL), never in this one.
+pub(crate) fn is_stateless_rst(syn: &[u8], f: &[u8]) -> bool {
+    let (Some((ot, end, v4)), Some(s)) = (tcp_bounds(f), tcp_bounds(syn)) else {
+        return false;
+    };
+    let field = |b: &[u8], i: usize, n: usize| b.get(ot + i..ot + i + n).map(<[u8]>::to_vec);
+    // What the RST shares with its SYN: everything up to the end of the IP packet but the fields named above.
+    let shared = |b: &[u8]| {
+        let mut x = b.get(..end)?.to_vec();
+        if v4 {
+            x[18..20].fill(0);
+            x[24..26].fill(0);
+        }
+        x[ot + 4..ot + 12].fill(0);
+        x[ot + 13..ot + 18].fill(0);
+        Some(x)
+    };
+    let seq = |b: &[u8]| field(b, 4, 4).map(|x| u32::from_be_bytes([x[0], x[1], x[2], x[3]]));
+    let padded = if v4 {
+        f.len() == end.max(60) && f[end..].iter().all(|b| *b == 0)
+    } else {
+        f.len() == end
+    };
+    s == (ot, end, v4)
+        && padded
+        && shared(f).is_some()
+        && shared(f) == shared(syn)
+        && seq(f) == seq(syn).map(|x| x.wrapping_add(1))
+        && field(f, 8, 4) == Some(vec![0; 4])
+        && field(f, 13, 3) == Some(vec![0x04, 0x04, 0xb0])
+}
+/// Whether an argv turns the stateless RST on (R8): the CLI sends it unless `--banners` (a user-mode stack, which
+/// resets on its own terms) or `--noreset` is given (`src/main.c:1094`: `tcpcon == NULL && !masscan->is_noreset`).
+pub(crate) fn stateless_rst_on(argv: &[String]) -> bool {
+    !argv.iter().any(|a| a == "--banners" || a == "--noreset")
+}
+/// R8 on one capture, the same for both scanners: `replies` are the distinct TCP replies of the stand (a SYN-ACK or an
+/// RST answering a probe, not an ICMP error) by C's dedup key (ip_them, port_them, ip_me, port_me; src/main.c:1066-1068
+/// before the reset at :1094, rmasscan's `DedupCache` the same for TCP), `rsts` the key of every stateless RST on the
+/// wire. With the RST on, each reply is owed exactly one; without it, none; an RST for a key without a reply is extra.
+pub(crate) fn stateless_rst_problems(
+    on: bool,
+    replies: &BTreeSet<String>,
+    rsts: &[String],
+) -> Vec<String> {
+    let mut out = Vec::new();
+    for k in replies {
+        let n = rsts.iter().filter(|x| *x == k).count();
+        if n != usize::from(on) {
+            out.push(format!("{k}: {n} stateless RSTs, want {}", usize::from(on)));
+        }
+    }
+    let mut extra: Vec<&String> = rsts.iter().filter(|x| !replies.contains(*x)).collect();
+    extra.sort();
+    extra.dedup();
+    out.extend(
+        extra
+            .into_iter()
+            .map(|k| format!("{k}: a stateless RST without a reply of the stand")),
+    );
+    out
+}
+
+/// A who-has of the peer for the scanner's address `ip`: an ARP request (operation 1, Ethernet and IPv4) from the
+/// peer MAC whose target protocol address is `ip`. C answers it from its receive loop (src/main.c:878-887,
+/// `stack_arp_incoming_request`), rmasscan's responder the same (Task 14a); the scanner host's kernel too when `ip` is
+/// one of its addresses.
+pub(crate) fn peer_request_for(f: &[u8], peer_mac: [u8; 6], ip: Ipv4Addr) -> bool {
+    f.get(6..12) == Some(&peer_mac[..])
+        && f.get(12..22) == Some(&[8, 6, 0, 1, 8, 0, 6, 4, 0, 1][..])
+        && f.get(38..42) == Some(&ip.octets()[..])
+}
+/// The scanner's answer to the who-has `req` in C's form (`stack_arp_incoming_request`, src/stack-arpv4.c:282-363;
+/// rmasscan's responder byte for byte): 60 bytes, to the request's sender hardware address, from the scanner MAC,
+/// operation 2, the scanner's MAC and `ip` as sender, the request's sender MAC and address as target, zero padding.
+pub(crate) fn c_form_arp_reply(req: &[u8], ans: &[u8], mac: [u8; 6], ip: Ipv4Addr) -> bool {
+    req.len() >= 42
+        && ans.len() == 60
+        && ans[..6] == req[22..28]
+        && ans[6..12] == mac
+        && ans[12..22] == [8, 6, 0, 1, 8, 0, 6, 4, 0, 2]
+        && ans[22..28] == mac
+        && ans[28..32] == ip.octets()
+        && ans[32..42] == req[22..32]
+        && ans[42..].iter().all(|b| *b == 0)
+}
+/// The scanner host kernel's answer to the who-has `req`: 42 bytes (no kernel of the stands pads it), operation 2,
+/// the scanner's MAC and `ip` as sender, the requester's address as target.
+pub(crate) fn kernel_arp_reply(req: &[u8], ans: &[u8], mac: [u8; 6], ip: Ipv4Addr) -> bool {
+    req.len() >= 42
+        && ans.len() == 42
+        && ans[12..22] == [8, 6, 0, 1, 8, 0, 6, 4, 0, 2]
+        && ans[22..28] == mac
+        && ans[28..32] == ip.octets()
+        && ans[38..42] == req[28..32]
+}
+/// The interval in which a scanner certainly answers a who-has for its address: from its first probe to `--wait`
+/// seconds after its last (both scanners keep their receive loop that long, C's default 10 s), at most 1 s of it
+/// (the scanner may exit at the end of its wait). `None` without a probe.
+pub(crate) fn answering(probes: Option<(f64, f64)>, argv: &[String]) -> Option<(f64, f64)> {
+    let wait = argv
+        .iter()
+        .position(|a| a == "--wait")
+        .and_then(|i| argv.get(i + 1))
+        .and_then(|w| w.parse::<f64>().ok())
+        .unwrap_or(10.0);
+    probes.map(|(first, last)| (first, last + wait.clamp(0.0, 1.0)))
+}
+/// The scanner's own ARP replies (`answers`) against the peer's who-has for its address (`requests`), the same for
+/// both scanners: a reply answers the last request at or before it and must be in C's form for it
+/// ([`c_form_arp_reply`]); a request made while the scanner certainly runs (`owed`, [`answering`]) gets exactly one
+/// reply, any other request at most one; a reply before any request is extra.
+pub(crate) fn scanner_arp_answer_problems(
+    requests: &[(f64, Vec<u8>)],
+    answers: &[(f64, Vec<u8>)],
+    owed: Option<(f64, f64)>,
+    mac: [u8; 6],
+    ip: Ipv4Addr,
+) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut per = vec![0usize; requests.len()];
+    for (t, a) in answers {
+        match requests.iter().rposition(|(q, _)| q <= t) {
+            None => out.push(format!(
+                "an ARP reply of {} bytes at {t:.6} s before any who-has of the peer for {ip}",
+                a.len()
+            )),
+            Some(i) if !c_form_arp_reply(&requests[i].1, a, mac, ip) => out.push(format!(
+                "the ARP reply at {t:.6} s ({} bytes) is not in C's form for the who-has at {:.6} s",
+                a.len(),
+                requests[i].0
+            )),
+            Some(i) => per[i] += 1,
+        }
+    }
+    for ((t, _), n) in requests.iter().zip(per) {
+        let must = owed.is_some_and(|(a, b)| (a..=b).contains(t));
+        if n > 1 || (must && n != 1) {
+            out.push(format!(
+                "the who-has at {t:.6} s{}: {n} replies",
+                if must {
+                    " (while the scanner runs: exactly one)"
+                } else {
+                    " (at most one)"
+                }
+            ));
+        }
+    }
+    out
+}
+
 pub(crate) fn classify(fr: &Frames, mac: [u8; 6]) -> Wire {
     let mut w = Wire::default();
+    let mut resets = Vec::new();
     for (t, f) in fr {
         if is_marker(f, START_PAYLOAD) {
             w.starts.push(*t);
@@ -1941,12 +2133,21 @@ pub(crate) fn classify(fr: &Frames, mac: [u8; 6]) -> Wire {
             match decode(f).map(|p| p.op) {
                 Ok(ArpOp::Request) if resolver_request(f) => w.scanner_arp.push((*t, f.clone())),
                 Ok(ArpOp::Request) if f.len() == 42 => w.os_requests += 1,
-                Ok(ArpOp::Reply) => w.os_replies += 1,
+                Ok(ArpOp::Reply) if f.len() == 42 => w.os_replies += 1,
+                Ok(ArpOp::Reply) => w.scanner_replies.push((*t, f.clone())),
                 _ => w.odd_arp += 1,
             }
         } else if pcap::is_syn(f) {
             w.syns.push((*t, f.clone()));
         } else if is_reset(f) {
+            resets.push((*t, f.clone()));
+        }
+    }
+    // Judged once every SYN of the capture is known.
+    for (t, f) in resets {
+        if w.syns.iter().any(|(_, s)| is_stateless_rst(s, &f)) {
+            w.stateless.push((t, f));
+        } else {
             w.rst_from_scanner += 1;
         }
     }
@@ -2583,8 +2784,12 @@ fn behaviour(r: &mut Run, ev: &Ev, d: &Path) {
         );
         r.notes
             .insert("rst_from_scanner".into(), json!(w.rst_from_scanner));
+        r.notes
+            .insert("stateless_rst".into(), json!(w.stateless.len()));
+        r.notes
+            .insert("scanner_arp_replies".into(), json!(w.scanner_replies.len()));
         r.inv(
-            "no ARP frame from the scanner MAC outside the two known forms (60-byte request, 42-byte OS request or a reply)",
+            "no ARP frame from the scanner MAC outside the known forms (60-byte request of the resolver, 42-byte request or reply of the OS, any other reply judged as the scanner's own)",
             w.odd_arp == 0,
             w.odd_arp,
         );
@@ -2639,21 +2844,106 @@ fn behaviour(r: &mut Run, ev: &Ev, d: &Path) {
         }
         _ => {
             refusal_text(r, ev, x, det);
+            // A refusal starts no engine, so the scanner's ARP responder never runs either.
             r.cap(
-                "no scanner frame (ARP request or SYN) in a refusal",
-                w.scanner_arp.is_empty() && w.syns.is_empty(),
+                "no scanner frame (ARP request, ARP reply of the scanner or SYN) in a refusal",
+                w.scanner_arp.is_empty() && w.scanner_replies.is_empty() && w.syns.is_empty(),
                 format!(
-                    "{} ARP requests, {} SYNs",
+                    "{} ARP requests, {} ARP replies, {} SYNs",
                     w.scanner_arp.len(),
+                    w.scanner_replies.len(),
                     w.syns.len()
                 ),
             );
         }
     }
+    own_answers(r, ev, w);
     results(r, ev, det, w);
     if ev.kind == CaseKind::Parity {
         parity(r, ev, d, w);
     }
+}
+
+/// The R8 rule on one capture of the run ([`stateless_rst_problems`]): the distinct replies of the peer (SYN-ACK or
+/// RST) to the capture's SYNs inside its window, by C's dedup key, against the key of each stateless RST.
+fn stateless_rsts_of(fr: &Frames, w: &Wire, st: &Stand, argv: &[String]) -> (Vec<String>, usize) {
+    let key = |ip: &str, port: u16, sport: u16| format!("{ip}:{port} (scanner port {sport})");
+    let asked: BTreeSet<(String, u16, u16, u32)> = w
+        .syns
+        .iter()
+        .filter_map(|(_, f)| tcp(f))
+        .map(|i| (i.dst, i.dp, i.sp, i.seq.wrapping_add(1)))
+        .collect();
+    let (start, end) = window(w);
+    let (sm, src) = (colon(st.scanner_mac), st.scanner_ip.to_string());
+    let replies: BTreeSet<String> = fr
+        .iter()
+        .filter(|(t, _)| (start..=end).contains(t))
+        .filter_map(|(_, f)| tcp(f))
+        .filter(|i| {
+            (i.flags & 0x12 == 0x12 || i.flags & 0x04 != 0)
+                && i.dm == sm
+                && i.dst == src
+                && asked.contains(&(i.src.clone(), i.sp, i.dp, i.ack))
+        })
+        .map(|i| key(&i.src, i.sp, i.dp))
+        .collect();
+    let rsts: Vec<String> = w
+        .stateless
+        .iter()
+        .filter_map(|(_, f)| tcp(f))
+        .map(|i| key(&i.dst, i.dp, i.sp))
+        .collect();
+    (
+        stateless_rst_problems(stateless_rst_on(argv), &replies, &rsts),
+        replies.len(),
+    )
+}
+/// The rmasscan CLI's own frames that the stand's replies and requests make it send: its stateless RST (R8, one per
+/// distinct reply) and its ARP replies to the peer's who-has for its address (Task 14a, C src/main.c:878-887). On the
+/// Windows stand the peer asks; there and wherever the address is the host's own, the OS's 42-byte reply stays
+/// `os_arp`.
+fn own_answers(r: &mut Run, ev: &Ev, w: &Wire) {
+    let Some(fr) = ev.peer else { return };
+    let argv = ev.argv.as_ref().map(|a| a.argv.as_slice()).unwrap_or(&[]);
+    let (p, replies) = stateless_rsts_of(fr, w, &ev.st, argv);
+    r.cap(
+        "the scanner's stateless RST (R8, C src/main.c:1094-1100): exactly one per distinct reply of the peer to its SYNs (open or closed, by C's dedup key), in the SYN template's form (seq the reply's ack, ack 0, flags 0x04, window 1200, the SYN's options), none with --banners or --noreset",
+        p.is_empty(),
+        if p.is_empty() {
+            format!("{} RSTs for {replies} replies", w.stateless.len())
+        } else {
+            p.iter().take(4).cloned().collect::<Vec<_>>().join("; ")
+        },
+    );
+    let requests: Vec<(f64, Vec<u8>)> = fr
+        .iter()
+        .filter(|(_, f)| peer_request_for(f, ev.st.peer_mac, ev.st.scanner_ip))
+        .cloned()
+        .collect();
+    r.notes
+        .insert("peer_arp_requests".into(), json!(requests.len()));
+    let syns = w.syns.first().zip(w.syns.last()).map(|(a, b)| (a.0, b.0));
+    let p = scanner_arp_answer_problems(
+        &requests,
+        &w.scanner_replies,
+        answering(syns, argv),
+        ev.st.scanner_mac,
+        ev.st.scanner_ip,
+    );
+    r.cap(
+        "the scanner answers the peer's who-has for its address in C's form (60 bytes to the requester, src/stack-arpv4.c:282-363): exactly once for a request between its first SYN and 1 s after its last, at most once for any other, never without a request",
+        p.is_empty(),
+        if p.is_empty() {
+            format!(
+                "{} replies for {} requests",
+                w.scanner_replies.len(),
+                requests.len()
+            )
+        } else {
+            p.iter().take(4).cloned().collect::<Vec<_>>().join("; ")
+        },
+    );
 }
 
 fn detection(r: &mut Run, ev: &Ev, x: &ExpectRecord, det: &DetectedRecord) {
@@ -3014,6 +3304,18 @@ fn parity(r: &mut Run, ev: &Ev, d: &Path, w: &Wire) {
         "the oracle's SYNs equal rmasscan's in order (compare_streams)",
         rc == 0 && !exp.is_empty(),
         msg,
+    );
+    // The same R8 rule on the oracle's wire: an oracle that resets otherwise is a broken stand, not rmasscan's fault.
+    let argv = ev.argv.as_ref().map(|a| a.argv.as_slice()).unwrap_or(&[]);
+    let (p, replies) = stateless_rsts_of(ofr, &o, &ev.st, argv);
+    r.inv(
+        "the oracle's stateless RST follows the same rule (one per distinct reply, in the SYN template's form)",
+        p.is_empty(),
+        if p.is_empty() {
+            format!("{} RSTs for {replies} replies", o.stateless.len())
+        } else {
+            p.iter().take(4).cloned().collect::<Vec<_>>().join("; ")
+        },
     );
     if let (Some(os), Some(ms)) = (&o_stdout, &ev.stdout) {
         let set = |t: &str| -> BTreeSet<String> {

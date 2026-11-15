@@ -1,6 +1,7 @@
 //! Synthetic, hermetic autodetect evidence. Every frame is built here: ARP from `rmasscan_core::arp`, SYNs from the
-//! scan plan (`ReadyPlan` + `ProbeCursor`, independent of the verifier's `plan_args_from`), peer SYN-ACK/RST and the
-//! scanner kernel's RST by hand. The `[+]` lines are rendered from the case's detection record (not with the
+//! scan plan (`ReadyPlan` + `ProbeCursor`, independent of the verifier's `plan_args_from`), the scanner's stateless RST
+//! with the product's own code (`tcp_frame::stateless_rst` + `TcpFrameBuilder`, [`product_rst`]), peer SYN-ACK/RST and
+//! the scanner kernel's RST by hand. The `[+]` lines are rendered from the case's detection record (not with the
 //! verifier's parser), so the parser is checked against an independent writer. One rule at a time is broken.
 //! Nothing touches a network or a real evidence directory; scratch names come from `windows_suite::nonce`.
 use super::*;
@@ -16,7 +17,9 @@ use rmasscan_core::{
     massip::MassIp,
     packet::LinkType,
     probe::{AdapterBinding, ProbeCursor, ReadyPlan},
+    receive::{PortStatus, Reply, ReplyIpv6},
     targets::{add_target_string, parse_ports},
+    tcp_frame::{TcpFrameBuilder, stateless_rst},
 };
 use sha2::{Digest, Sha256};
 use std::{
@@ -163,6 +166,27 @@ pub(crate) fn plan_syns_at(
     router_mac: [u8; 6],
     rate: &str,
 ) -> Vec<Vec<u8>> {
+    let plan = plan_at(st, targets, ports, sp, router_mac, rate);
+    let mut c = ProbeCursor::new(&plan, 0).unwrap();
+    let mut out = Vec::new();
+    loop {
+        let b: Vec<Vec<u8>> = c.preload(64).iter().map(|p| p.frame.clone()).collect();
+        if b.is_empty() {
+            return out;
+        }
+        c.advance_sent_n(b.len());
+        out.extend(b);
+    }
+}
+/// The plan of [`plan_syns_at`].
+pub(crate) fn plan_at(
+    st: &Stand,
+    targets: &str,
+    ports: &str,
+    sp: &str,
+    router_mac: [u8; 6],
+    rate: &str,
+) -> ReadyPlan {
     let mut ips = MassIp::new();
     add_target_string(ips.ipv4_mut(), targets).unwrap();
     parse_ports(ips.ports_mut(), ports).unwrap();
@@ -179,7 +203,7 @@ pub(crate) fn plan_syns_at(
         adapter_name: Some(st.iface.into()),
         ..ScanConfig::default()
     };
-    let plan = ReadyPlan::new(
+    ReadyPlan::new(
         validate(&cfg, Operation::Scan).unwrap(),
         AdapterBinding {
             interface_id: st.iface.into(),
@@ -190,17 +214,48 @@ pub(crate) fn plan_syns_at(
             source_ports: sp,
         },
     )
-    .unwrap();
-    let mut c = ProbeCursor::new(&plan, 0).unwrap();
-    let mut out = Vec::new();
-    loop {
-        let b: Vec<Vec<u8>> = c.preload(64).iter().map(|p| p.frame.clone()).collect();
-        if b.is_empty() {
-            return out;
-        }
-        c.advance_sent_n(b.len());
-        out.extend(b);
-    }
+    .unwrap()
+}
+/// The product's own stateless RST (R8) for the reply to the probe `syn`, as the engine sends it: the reply it takes
+/// from the SYN-ACK (`Reply`, the SYN's addresses and ports turned round), `tcp_frame::stateless_rst` on it with the
+/// plan's seed, framed by the plan's `TcpFrameBuilder` (rmasscan-engine `engine.rs`, the RX loop). Never the verifier's
+/// rule ([`is_stateless_rst`]), which these frames check.
+pub(crate) fn product_rst(plan: &ReadyPlan, syn: &[u8]) -> Vec<u8> {
+    let be = |a: usize, n: usize| {
+        syn[a..a + n]
+            .iter()
+            .fold(0u128, |x, b| x << 8 | u128::from(*b))
+    };
+    let (o, ip6) = match syn[12..14] {
+        [0x86, 0xdd] => (
+            54,
+            Some(ReplyIpv6 {
+                remote: be(38, 16),
+                local: be(22, 16),
+            }),
+        ),
+        _ => (14 + usize::from(syn[14] & 15) * 4, None),
+    };
+    let v4 = |a: usize| if ip6.is_some() { 0 } else { be(a, 4) as u32 };
+    let reply = Reply {
+        remote_ip: v4(30),
+        remote_port: be(o + 2, 2) as u16,
+        local_ip: v4(26),
+        local_port: be(o, 2) as u16,
+        status: PortStatus::Open,
+        tcp_flags: 0x12,
+        ttl: 64,
+        ip_proto: 6,
+        mac: None,
+        ip6,
+    };
+    let seg = stateless_rst(&reply, plan.effective().seed()).unwrap();
+    assert_eq!(
+        seg.seq,
+        (be(o + 4, 4) as u32).wrapping_add(1),
+        "the SYN's sequence is the cookie"
+    );
+    TcpFrameBuilder::from_plan(plan).build(&seg)
 }
 
 /// A TCP frame answering `syn` (peer to scanner, or the scanner kernel back to the peer with `back`).
@@ -366,6 +421,7 @@ impl Sim {
                 });
                 let sp = sp.unwrap_or_else(|| TIME_PORT.into());
                 syns = plan_syns(&st, c.targets, c.ports, &sp, router_mac);
+                let plan = plan_at(&st, c.targets, c.ports, &sp, router_mac, "100");
                 for (i, s) in syns.iter().enumerate() {
                     let t = start + i as f64 * 0.01;
                     fr.push((t, s.clone()));
@@ -382,6 +438,8 @@ impl Sim {
                             fr.push((t + 0.0007, tcp_answer(s, 0x04, st.peer_mac, true)));
                         }
                     }
+                    // The CLI's stateless RST (R8) of each reply, the SYN-ACK and the RST alike.
+                    fr.push((t + 0.0009, product_rst(&plan, s)));
                     last = t + 0.001;
                 }
                 det.finished = Some(Finished {
@@ -3052,4 +3110,484 @@ fn the_aborted_attempt_names_are_the_suites_rule() {
     );
     assert!(aborted_attempts(&root, "l03_adapter").is_empty());
     fs::remove_dir_all(&root).unwrap();
+}
+
+// ------------------------------------------------------------------ the scanner's own answers (R8, Task 14a)
+
+/// The scanner's frame of `syn` with its TCP field at `at` (an offset in the TCP header) changed by `edit`.
+fn tcp_edit(f: &[u8], at: usize, edit: impl Fn(&mut [u8])) -> Vec<u8> {
+    let mut f = f.to_vec();
+    let o = 14 + usize::from(f[14] & 15) * 4;
+    edit(&mut f[o + at..]);
+    f
+}
+
+#[test]
+fn the_stateless_rst_form_is_the_syn_template_and_nothing_near_it() {
+    let st = stand(Plan::Linux);
+    let plan = plan_at(
+        &st,
+        "198.18.0.2-198.18.0.3",
+        "80,81",
+        "40000",
+        st.peer_mac,
+        "100",
+    );
+    let syns = plan_syns(&st, "198.18.0.2-198.18.0.3", "80,81", "40000", st.peer_mac);
+    assert_eq!(syns.len(), 4);
+    for (i, s) in syns.iter().enumerate() {
+        let rst = product_rst(&plan, s);
+        assert!(is_stateless_rst(s, &rst), "the product's RST of SYN {i}");
+        // C's IPv4 stack frame is zero-padded to 60 bytes (src/templ-pkt.c:510-513), the SYN need not be
+        assert_eq!(rst.len(), 60);
+        for (j, other) in syns.iter().enumerate() {
+            assert_eq!(
+                is_stateless_rst(other, &rst),
+                i == j,
+                "SYN {j} for the RST of {i}"
+            );
+        }
+        // the kernel's own reset of the same reply: window 0, no options, TTL 64
+        assert!(!is_stateless_rst(
+            s,
+            &tcp_answer(s, 0x04, st.peer_mac, true)
+        ));
+        // the fields C sets (the identification and the checksums) may be anything
+        let mut f = rst.clone();
+        f[18] ^= 0xff;
+        f[24] ^= 0xff;
+        assert!(
+            is_stateless_rst(s, &f),
+            "IPv4 identification and header checksum"
+        );
+        assert!(
+            is_stateless_rst(s, &tcp_edit(&rst, 16, |t| t[0] ^= 0xff)),
+            "TCP checksum"
+        );
+        // everything else is the SYN's or R8's
+        let near: Vec<(&str, Vec<u8>)> = vec![
+            (
+                "seq of the SYN",
+                tcp_edit(&rst, 4, |t| t[3] = t[3].wrapping_sub(1)),
+            ),
+            (
+                "seq + 2",
+                tcp_edit(&rst, 4, |t| t[3] = t[3].wrapping_add(1)),
+            ),
+            ("ack 1", tcp_edit(&rst, 8, |t| t[3] = 1)),
+            ("RST-ACK", tcp_edit(&rst, 13, |t| t[0] = 0x14)),
+            ("window 1201", tcp_edit(&rst, 15, |t| t[0] = 0xb1)),
+            ("window 0", tcp_edit(&rst, 14, |t| t[..2].fill(0))),
+            ("another option", tcp_edit(&rst, 22, |t| t[0] ^= 1)),
+            ("another source port", tcp_edit(&rst, 0, |t| t[1] ^= 1)),
+            ("TTL 64", {
+                let mut f = rst.clone();
+                f[22] = 64;
+                f
+            }),
+            ("DF set", {
+                let mut f = rst.clone();
+                f[20] |= 0x40;
+                f
+            }),
+            ("another destination MAC", {
+                let mut f = rst.clone();
+                f[5] ^= 1;
+                f
+            }),
+            ("no padding", rst[..58].to_vec()),
+            ("non-zero padding", {
+                let mut f = rst.clone();
+                f[59] = 1;
+                f
+            }),
+            ("one byte more", {
+                let mut f = rst.clone();
+                f.push(0);
+                f
+            }),
+        ];
+        for (what, f) in near {
+            assert!(!is_stateless_rst(s, &f), "{what}");
+        }
+    }
+}
+
+/// Every TCP frame with RST of the scanner MAC in a committed live capture, with whether it carries the template of one
+/// of the capture's SYNs, and its window.
+fn live_resets(rel: &str) -> Vec<(bool, u16, bool)> {
+    let p = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../docs/experiments")
+        .join(rel);
+    let (_, fr) = pcap::read_pcap_records(&fs::read(&p).unwrap()).unwrap();
+    let mac = [2, 0xaa, 0, 0, 0, 1];
+    let mine: Vec<&Vec<u8>> = fr
+        .iter()
+        .map(|(_, f)| f)
+        .filter(|f| f[6..12] == mac)
+        .collect();
+    let flags = |f: &[u8]| {
+        tcp_bounds(f).map(|(o, _, v4)| (f[o + 13], u16::from_be_bytes([f[o + 14], f[o + 15]]), v4))
+    };
+    let syns: Vec<&Vec<u8>> = mine
+        .iter()
+        .copied()
+        .filter(|f| flags(f).is_some_and(|x| x.0 == 2))
+        .collect();
+    mine.iter()
+        .filter_map(|f| flags(f).filter(|x| x.0 & 4 != 0).map(|x| (f, x)))
+        .map(|(f, (_, win, v4))| (syns.iter().any(|s| is_stateless_rst(s, f)), win, v4))
+        .collect()
+}
+
+#[test]
+fn the_oracles_live_resets_are_the_syn_template_and_the_kernels_are_not() {
+    // C's own RSTs (window 1200) and the scanner namespace kernel's (window 0) as two committed live windows caught
+    // them: the mixed IPv4 + IPv6 scan of the IPv6 acceptance r3 (resets of SYN-ACKs and of closed ports' RSTs, both
+    // families) and the autodetect parity run.
+    for rel in [
+        "2026-11-12-rmasscan-ipv6-postmerge-raw/linux-ipv6-r3/runs/v02_mixed_v4_v6/oracle-list/peer.pcap",
+        "2026-10-27-rmasscan-autodetect-acceptance-raw/linux-r1/runs/l11_parity/oracle.pcap",
+    ] {
+        let r = live_resets(rel);
+        let c = r.iter().filter(|x| x.1 == 1200).count();
+        let k = r.iter().filter(|x| x.1 == 0).count();
+        assert_eq!(c + k, r.len(), "{rel}: only windows 1200 and 0");
+        assert!(c > 0 && k > 0, "{rel}: {c} of C, {k} of the kernel");
+        for (template, win, v4) in &r {
+            assert_eq!(*template, *win == 1200, "{rel}: window {win}, IPv4 {v4}");
+        }
+        if rel.contains("v02") {
+            assert!(r.iter().any(|x| x.0 && !x.2), "{rel}: C's IPv6 RSTs");
+            assert!(r.iter().any(|x| x.0 && x.2), "{rel}: C's IPv4 RSTs");
+        }
+    }
+}
+
+#[test]
+fn the_stateless_rst_count_is_exact_both_ways_and_none_without_it() {
+    let k = |s: &str| s.to_owned();
+    let replies: BTreeSet<String> = [k("a"), k("b")].into();
+    assert!(stateless_rst_problems(true, &replies, &[k("b"), k("a")]).is_empty());
+    let p = stateless_rst_problems(true, &replies, &[k("a")]);
+    assert_eq!(p, ["b: 0 stateless RSTs, want 1"]);
+    let p = stateless_rst_problems(true, &replies, &[k("a"), k("b"), k("a")]);
+    assert_eq!(p, ["a: 2 stateless RSTs, want 1"]);
+    let p = stateless_rst_problems(true, &replies, &[k("c"), k("a"), k("b"), k("c")]);
+    assert_eq!(p, ["c: a stateless RST without a reply of the stand"]);
+    // --banners or --noreset: none at all
+    assert!(stateless_rst_problems(false, &replies, &[]).is_empty());
+    assert_eq!(
+        stateless_rst_problems(false, &replies, &[k("a")]),
+        ["a: 1 stateless RSTs, want 0"]
+    );
+    let argv = |a: &[&str]| a.iter().map(|x| (*x).to_owned()).collect::<Vec<_>>();
+    assert!(stateless_rst_on(&argv(&[
+        "198.18.0.2",
+        "-p80",
+        "--wait",
+        "3"
+    ])));
+    assert!(!stateless_rst_on(&argv(&[
+        "198.18.0.2",
+        "-p80",
+        "--banners"
+    ])));
+    assert!(!stateless_rst_on(&argv(&[
+        "198.18.0.2",
+        "-p80",
+        "--noreset"
+    ])));
+}
+
+/// The peer's who-has for the scanner's address, in the peer kernel's form (42 bytes), and the scanner's answer to it
+/// from the product's own responder (`receive::arp_reply_for` of a plan on the stand).
+pub(crate) fn peer_who_has(st: &Stand) -> Vec<u8> {
+    let mut f = encode_request(
+        st.peer_mac,
+        u32::from(st.peer_ips[0]),
+        u32::from(st.scanner_ip),
+    )
+    .to_vec();
+    f.truncate(42);
+    f
+}
+pub(crate) fn responder_reply(st: &Stand, req: &[u8]) -> Vec<u8> {
+    let plan = plan_at(st, "198.18.0.2", "80", "40000", st.peer_mac, "100");
+    rmasscan_core::receive::arp_reply_for(req, LinkType::Ethernet, &plan)
+        .unwrap()
+        .to_vec()
+}
+/// The scanner host kernel's answer to `req` (42 bytes).
+pub(crate) fn os_reply(st: &Stand) -> Vec<u8> {
+    let mut f = encode_reply(
+        st.scanner_mac,
+        u32::from(st.scanner_ip),
+        st.peer_mac,
+        u32::from(st.peer_ips[0]),
+    )
+    .to_vec();
+    f.truncate(42);
+    f
+}
+
+#[test]
+fn the_scanner_answers_each_who_has_once_in_cs_form_while_it_runs() {
+    for plan in [Plan::Linux, Plan::Windows, Plan::Macos] {
+        let st = stand(plan);
+        let (req, ans) = (peer_who_has(&st), responder_reply(&st, &peer_who_has(&st)));
+        assert!(peer_request_for(&req, st.peer_mac, st.scanner_ip));
+        assert!(!peer_request_for(&req, st.peer_mac, st.peer_ips[0]));
+        assert!(
+            !peer_request_for(&req, st.scanner_mac, st.scanner_ip),
+            "from the peer only"
+        );
+        assert!(
+            c_form_arp_reply(&req, &ans, st.scanner_mac, st.scanner_ip),
+            "{plan:?}"
+        );
+        assert!(!kernel_arp_reply(&req, &ans, st.scanner_mac, st.scanner_ip));
+        assert!(kernel_arp_reply(
+            &req,
+            &os_reply(&st),
+            st.scanner_mac,
+            st.scanner_ip
+        ));
+        assert!(!c_form_arp_reply(
+            &req,
+            &os_reply(&st),
+            st.scanner_mac,
+            st.scanner_ip
+        ));
+        for (what, f) in [
+            ("to the broadcast", {
+                let mut f = ans.clone();
+                f[..6].fill(0xff);
+                f
+            }),
+            ("a request", {
+                let mut f = ans.clone();
+                f[21] = 1;
+                f
+            }),
+            ("another sender address", {
+                let mut f = ans.clone();
+                f[31] ^= 1;
+                f
+            }),
+            ("non-zero padding", {
+                let mut f = ans.clone();
+                f[59] = 1;
+                f
+            }),
+        ] {
+            assert!(
+                !c_form_arp_reply(&req, &f, st.scanner_mac, st.scanner_ip),
+                "{what}"
+            );
+        }
+    }
+    let st = stand(Plan::Windows);
+    let (req, ans) = (peer_who_has(&st), responder_reply(&st, &peer_who_has(&st)));
+    let argv: Vec<String> = ["198.18.0.2", "-p80", "--wait", "3"]
+        .map(str::to_owned)
+        .to_vec();
+    // the scanner runs from its first probe to 1 s after its last (its --wait is 3 s)
+    let owed = answering(Some((10.0, 11.0)), &argv);
+    assert_eq!(owed, Some((10.0, 12.0)));
+    assert_eq!(
+        answering(Some((10.0, 11.0)), &[]),
+        Some((10.0, 12.0)),
+        "C's default --wait 10"
+    );
+    assert_eq!(
+        answering(Some((10.0, 11.0)), &["--wait".into(), "0".into()]),
+        Some((10.0, 11.0))
+    );
+    assert_eq!(answering(None, &argv), None);
+    let p = |q: &[(f64, &Vec<u8>)], a: &[(f64, &Vec<u8>)]| {
+        let q: Vec<(f64, Vec<u8>)> = q.iter().map(|(t, f)| (*t, (*f).clone())).collect();
+        let a: Vec<(f64, Vec<u8>)> = a.iter().map(|(t, f)| (*t, (*f).clone())).collect();
+        scanner_arp_answer_problems(&q, &a, owed, st.scanner_mac, st.scanner_ip)
+    };
+    // owed (during the scan): exactly one
+    assert!(p(&[(10.5, &req)], &[(10.5001, &ans)]).is_empty());
+    assert_eq!(p(&[(10.5, &req)], &[]).len(), 1);
+    assert!(p(&[(10.5, &req)], &[])[0].contains("0 replies"));
+    assert!(p(&[(10.5, &req)], &[(10.5001, &ans), (10.5002, &ans)])[0].contains("2 replies"));
+    // a reply answers the last request before it: one each for two requests, none for the second is missing
+    assert!(
+        p(
+            &[(10.5, &req), (11.5, &req)],
+            &[(10.5001, &ans), (11.5001, &ans)]
+        )
+        .is_empty()
+    );
+    assert_eq!(
+        p(
+            &[(10.5, &req), (11.5, &req)],
+            &[(10.5001, &ans), (10.6, &ans)]
+        )
+        .len(),
+        2
+    );
+    // not owed (before the scan or after it may have ended): at most one
+    for t in [9.0, 12.5] {
+        assert!(p(&[(t, &req)], &[]).is_empty(), "{t}");
+        assert!(p(&[(t, &req)], &[(t + 0.0001, &ans)]).is_empty(), "{t}");
+        assert_eq!(
+            p(&[(t, &req)], &[(t + 0.0001, &ans), (t + 0.0002, &ans)]).len(),
+            1,
+            "{t}"
+        );
+    }
+    // a reply without a request before it, or not in C's form
+    assert!(p(&[(10.5, &req)], &[(10.4, &ans), (10.5001, &ans)])[0].contains("before any who-has"));
+    let mut wrong = ans.clone();
+    wrong[..6].fill(0xff);
+    let e = p(&[(10.5, &req)], &[(10.5001, &wrong)]);
+    assert!(
+        e[0].contains("not in C's form") && e[1].contains("0 replies"),
+        "{e:?}"
+    );
+}
+
+/// `sim`'s scanner frames that are the product's stateless RST of one of its SYNs, by index into `peer`.
+fn stateless_at(sim: &Sim) -> Vec<usize> {
+    sim.peer
+        .iter()
+        .enumerate()
+        .filter(|(_, (_, f))| sim.syns.iter().any(|s| is_stateless_rst(s, f)))
+        .map(|(i, _)| i)
+        .collect()
+}
+const RST_CHECK: &str = "the scanner's stateless RST (R8";
+const ARP_CHECK: &str = "the scanner answers the peer's who-has for its address";
+
+#[test]
+fn a_run_with_its_stateless_rst_passes_without_it_or_with_one_more_fails() {
+    for (plan, tag) in [
+        (Plan::Linux, "l01_auto"),
+        (Plan::Windows, "w01_auto"),
+        (Plan::Macos, "m02_user_explicit"),
+    ] {
+        // present (the generator: one per reply, the SYN-ACK and the closed port's RST alike)
+        let sim = Sim::new(plan, tag);
+        let n = stateless_at(&sim).len();
+        assert_eq!(n, sim.syns.len(), "{tag}: every SYN is answered");
+        let r = judge(&sim);
+        assert_verdict(&r, PASS);
+        assert_eq!(r["notes"]["stateless_rst"], n, "{tag}");
+        // missing: all, or one
+        for drop in [n, 1] {
+            let mut sim = Sim::new(plan, tag);
+            for i in stateless_at(&sim).into_iter().take(drop).rev() {
+                sim.peer.remove(i);
+            }
+            let r = judge(&sim);
+            assert_verdict(&r, FAIL);
+            assert_eq!(check(&r, RST_CHECK)["result"], FAIL, "{tag} without {drop}");
+            assert!(s(&check(&r, RST_CHECK)["detail"]).contains("0 stateless RSTs, want 1"));
+        }
+        // one more for the same reply
+        let mut sim = Sim::new(plan, tag);
+        let i = stateless_at(&sim)[0];
+        let (t, f) = sim.peer[i].clone();
+        sim.insert(t + 0.00001, f);
+        let r = judge(&sim);
+        assert_verdict(&r, FAIL);
+        assert!(
+            s(&check(&r, RST_CHECK)["detail"]).contains("2 stateless RSTs, want 1"),
+            "{tag}"
+        );
+        // in another form (window 1201): no stateless RST of its SYN, so that reply has none
+        let mut sim = Sim::new(plan, tag);
+        let i = stateless_at(&sim)[0];
+        sim.peer[i].1 = tcp_edit(&sim.peer[i].1, 15, |t| t[0] = 0xb1);
+        let r = judge(&sim);
+        assert_verdict(&r, FAIL);
+        assert!(
+            s(&check(&r, RST_CHECK)["detail"]).contains("0 stateless RSTs, want 1"),
+            "{tag}"
+        );
+    }
+    // the parity run's oracle wire is held to the same rule: a missing reset of C's is a broken stand (INVALID)
+    let mut sim = Sim::new(Plan::Linux, "l11_parity");
+    assert_verdict(&judge(&sim), PASS);
+    let syns = sim.syns.clone();
+    let o = sim.oracle.as_mut().unwrap();
+    let i = o
+        .pcap
+        .iter()
+        .position(|(_, f)| syns.iter().any(|s| is_stateless_rst(s, f)))
+        .unwrap();
+    o.pcap.remove(i);
+    let r = judge(&sim);
+    assert_verdict(&r, INVALID);
+    assert_eq!(check(&r, "the oracle's stateless RST")["result"], INVALID);
+    assert_eq!(bad(&r).len(), 1, "{:#?}", bad(&r));
+}
+
+#[test]
+fn rmasscan_answers_the_windows_peers_who_has_during_the_scan_once_in_cs_form() {
+    // The n2 stand: the peer kernel asks who has 198.18.0.1; the guest kernel answers (42 bytes, os_arp) and, while
+    // it runs, so does rmasscan (60 bytes, C's form). The generator's own request comes before the scan: not owed.
+    let base = Sim::new(Plan::Windows, "w01_auto");
+    let r = judge(&base);
+    assert_verdict(&r, PASS);
+    assert_eq!(r["notes"]["peer_arp_requests"], 1);
+    assert_eq!(check(&r, ARP_CHECK)["detail"], "0 replies for 1 requests");
+    let st = base.st.clone();
+    let (req, ans, os) = (
+        peer_who_has(&st),
+        responder_reply(&st, &peer_who_has(&st)),
+        os_reply(&st),
+    );
+    let t = base.first_syn_time() + 0.0003;
+    let with = |answers: &[(f64, &Vec<u8>)]| {
+        let mut sim = Sim::new(Plan::Windows, "w01_auto");
+        sim.insert(t, req.clone());
+        sim.insert(t + 0.00002, os.clone());
+        for (dt, f) in answers {
+            sim.insert(t + dt, (*f).clone());
+        }
+        judge(&sim)
+    };
+    // present: PASS, the guest's reply stays os_arp
+    let r = with(&[(0.00005, &ans)]);
+    assert_verdict(&r, PASS);
+    assert_eq!(r["notes"]["os_arp"]["replies"], 2);
+    assert_eq!(r["notes"]["scanner_arp_replies"], 1);
+    assert_eq!(check(&r, ARP_CHECK)["detail"], "1 replies for 2 requests");
+    // missing, twice, or not in C's form: FAIL
+    let mut wrong = ans.clone();
+    wrong[..6].fill(0xff);
+    for (what, answers, detail) in [
+        ("missing", vec![], "0 replies"),
+        ("twice", vec![(0.00005, &ans), (0.00007, &ans)], "2 replies"),
+        ("not C's form", vec![(0.00005, &wrong)], "not in C's form"),
+    ] {
+        let r = with(&answers);
+        assert_verdict(&r, FAIL);
+        assert_eq!(check(&r, ARP_CHECK)["result"], FAIL, "{what}");
+        assert!(
+            s(&check(&r, ARP_CHECK)["detail"]).contains(detail),
+            "{what}: {}",
+            check(&r, ARP_CHECK)
+        );
+    }
+    // a reply of rmasscan without a request of the peer before it
+    let mut sim = Sim::new(Plan::Windows, "w01_auto");
+    sim.insert(T0 + 0.1, ans.clone());
+    let r = judge(&sim);
+    assert_verdict(&r, FAIL);
+    assert!(s(&check(&r, ARP_CHECK)["detail"]).contains("before any who-has"));
+    // a refusal starts no responder: any reply of the scanner is a scanner frame there
+    let mut sim = Sim::new(Plan::Windows, "w06_multi_no_gateway");
+    assert_verdict(&judge(&sim), PASS);
+    sim.insert(T0 + 0.25, req.clone());
+    sim.insert(T0 + 0.2501, ans.clone());
+    let r = judge(&sim);
+    assert_verdict(&r, FAIL);
+    assert_eq!(check(&r, "no scanner frame")["result"], FAIL);
 }

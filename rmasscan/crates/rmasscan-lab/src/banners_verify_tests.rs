@@ -9,7 +9,10 @@ use super::*;
 use crate::{
     autodetect_verify::{
         HASHES, MANIFEST_JSON, TEARDOWN_JSON,
-        tests::{LAB_ID, Sim as AdSim, T0, TEARDOWN, marker, status_fragments},
+        tests::{
+            LAB_ID, Sim as AdSim, T0, TEARDOWN, marker, peer_who_has, responder_reply,
+            status_fragments,
+        },
     },
     ipv6_verify::tests::ipv6_isolation,
     link::{END_PAYLOAD, START_PAYLOAD},
@@ -1425,6 +1428,42 @@ fn the_whole_directory_passes() {
     );
     assert_eq!(array(&b01["notes"]["scenarios"]).len(), 36);
     fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn the_udp_cases_judge_the_scanners_arp_replies_like_the_protocols_window() {
+    // The UDP cases take the scanner-side classes of the protocols window, its own-frame checks included: a C-form ARP
+    // reply of the scanner answering a who-has of the peer passes, the same reply without a request fails rmasscan's
+    // step and makes the oracle's INVALID (no stateless RST here: --banners, and no TCP).
+    let st = stand();
+    let req = peer_who_has(&st);
+    let ans = responder_reply(&st, &req);
+    for (step, want) in [("binary", FAIL), ("oracle-binary", INVALID)] {
+        let mut sim = Sim::new("b01_banners");
+        let s = sim.step_mut(step);
+        let t = s.frames[2].0 + 0.0001;
+        s.frames
+            .extend([(t, req.clone()), (t + 0.00005, ans.clone())]);
+        s.frames.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let (v, b) = judge_one(&sim);
+        assert_eq!(v, PASS, "{step}: {b:#?}");
+        let mut sim = Sim::new("b01_banners");
+        let s = sim.step_mut(step);
+        let t = s.frames[2].0 + 0.0001;
+        s.frames.push((t, ans.clone()));
+        s.frames.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let (v, b) = judge_one(&sim);
+        assert_eq!(v, want, "{step}: {b:#?}");
+        assert!(
+            b.iter()
+                .any(|x| x.contains("arp_reply_for_scanner 1 of at most 0"))
+                && b.iter().any(|x| {
+                    x.contains("the scanner answers the peer's who-has for its address")
+                        && x.contains("before any who-has")
+                }),
+            "{step}: {b:#?}"
+        );
+    }
 }
 
 #[test]

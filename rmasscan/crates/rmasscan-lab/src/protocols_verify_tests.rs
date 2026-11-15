@@ -1,12 +1,16 @@
 //! Synthetic, hermetic protocols evidence. The probes come from the scan plan (`ReadyPlan` + its cursor, the product's
-//! own plan); every answer of the peer, the kernel noise of both hosts, the documents in the byte forms of the C
-//! reference and the `[+]` lines are built here by hand, never with the verifier's parsers. One rule at a time is
+//! own plan), the scanner's stateless RST and ARP replies from the product's own code (`product_rst`,
+//! `receive::arp_reply_for`); every answer of the peer, the kernel noise of both hosts, the documents in the byte forms
+//! of the C reference and the `[+]` lines are built here by hand, never with the verifier's parsers. One rule at a time is
 //! broken. Nothing touches a network or a real evidence directory.
 use super::*;
 use crate::{
     autodetect_verify::{
         HASHES,
-        tests::{LAB_ID, Sim as AdSim, T0, TEARDOWN, linux_isolation, marker, status_fragments},
+        tests::{
+            LAB_ID, Sim as AdSim, T0, TEARDOWN, linux_isolation, marker, os_reply, peer_who_has,
+            product_rst, responder_reply, status_fragments,
+        },
     },
     link::{END_PAYLOAD, START_PAYLOAD},
     pcap,
@@ -355,10 +359,11 @@ pub(crate) fn stack() -> PeerStack {
 }
 
 /// The peer capture of one step and the records the stand's answers give: the start marker, the next-hop ARP (a scan
-/// that is no ARP scan), each probe 10 ms apart with its answer 1 ms later (and the kernel noise both hosts add), the
-/// end markers.
+/// that is no ARP scan), each probe 10 ms apart with its answer 1 ms later (and the kernel noise both hosts add, and
+/// either scanner's stateless RST of a TCP reply), the end markers.
 fn wire(c: &CaseSpec, t0: f64, probes: &[Vec<u8>]) -> (Frames, Vec<Rec>) {
     let st = stand();
+    let plan = ready_plan(c).unwrap();
     let mut fr: Frames = vec![(t0, marker(&st, START_PAYLOAD))];
     if !c.arp {
         fr.push((t0 + 0.2, next_hop_request()));
@@ -380,8 +385,12 @@ fn wire(c: &CaseSpec, t0: f64, probes: &[Vec<u8>]) -> (Frames, Vec<Rec>) {
                     let r = tcp_reply(p, 0x12);
                     fr.push((a, r.clone()));
                     fr.push((a + 0.0005, scanner_rst(&r)));
+                    fr.push((a + 0.0007, product_rst(&plan, p)));
                 }
-                (Proto::Tcp, _) => fr.push((a, tcp_reply(p, 0x14))),
+                (Proto::Tcp, _) => {
+                    fr.push((a, tcp_reply(p, 0x14)));
+                    fr.push((a + 0.0007, product_rst(&plan, p)));
+                }
                 (Proto::Udp, St::Open) => {
                     let r = udp_reply(p);
                     fr.push((a, r.clone()));
@@ -1480,22 +1489,30 @@ fn class_counts(v: &WireView) -> Vec<usize> {
 
 #[test]
 fn the_scanner_sides_frames_of_the_stand_are_named_and_counted_in_the_notes() {
-    // p05 on four peers: T:80 open (a reset per SYN-ACK), U:53 open (an ICMP 3/3 per UDP reply), S:2905 open (an
-    // ICMP 3/2 per INIT-ACK), the next-hop who-has once; nothing else from the scanner MAC.
+    // p05 on four peers: T:80 open (a kernel reset and a stateless RST of the scanner per SYN-ACK), U:53 open (an
+    // ICMP 3/3 per UDP reply), S:2905 open (an ICMP 3/2 per INIT-ACK), the next-hop who-has once; no who-has of the
+    // peer for the scanner, so no ARP reply; nothing else from the scanner MAC.
     let c = case("p05_mixed_protos").unwrap();
     let (fr, _) = wire(&c, T0, &plan_stream(&c).unwrap());
     let v = view(&fr, &stand(), false);
-    assert_eq!(class_counts(&v), [1, 4, 4, 4]);
+    assert_eq!(class_counts(&v), [1, 4, 4, 4, 4, 0, 0]);
     assert!(
         v.scanner_unexplained.is_empty(),
         "{:?}",
         v.scanner_unexplained
     );
+    // each stateless RST is matched to its probe, a TCP one
+    assert_eq!(v.stateless_rsts.len(), 4);
+    assert!(
+        v.stateless_rsts
+            .iter()
+            .all(|i| v.probes[*i].proto == Proto::Tcp)
+    );
     // an ARP scan: no class at all
     let c = case("p04_arp_scan").unwrap();
     let (fr, _) = wire(&c, T0, &plan_stream(&c).unwrap());
     let v = view(&fr, &stand(), true);
-    assert_eq!(class_counts(&v), [0, 0, 0, 0]);
+    assert_eq!(class_counts(&v), [0; 7]);
     assert!(v.scanner_unexplained.is_empty());
     // the notes carry each step's counts and what each class is
     let root = scratch();
@@ -1504,19 +1521,23 @@ fn the_scanner_sides_frames_of_the_stand_are_named_and_counted_in_the_notes() {
     let res = verify_dir(&root);
     let run = run_of(&res, "p05_mixed_protos");
     assert_eq!(run["verdict"], PASS, "{:#?}", bad(run));
-    for (step, rst, who_has) in [("json", 4, 10), ("oracle-json", 8, 12)] {
+    for (step, who_has) in [("json", 10), ("oracle-json", 12)] {
         assert_eq!(
             run["notes"]["scanner_frames"][step],
             json!({"next_hop_who_has": 1, "rst_to_syn_ack": 4, "port_unreachable_to_udp_reply": 4,
-                   "protocol_unreachable_to_sctp_reply": 4, "unexplained": 0,
-                   "at_most": {"next_hop_who_has": who_has, "rst_to_syn_ack": rst,
-                               "port_unreachable_to_udp_reply": 4, "protocol_unreachable_to_sctp_reply": 4}}),
+                   "protocol_unreachable_to_sctp_reply": 4, "stateless_rst": 4, "arp_reply_for_scanner": 0,
+                   "kernel_arp_reply_for_scanner": 0, "unexplained": 0,
+                   "at_most": {"next_hop_who_has": who_has, "rst_to_syn_ack": 4,
+                               "port_unreachable_to_udp_reply": 4, "protocol_unreachable_to_sctp_reply": 4,
+                               "stateless_rst": 4, "arp_reply_for_scanner": 0,
+                               "kernel_arp_reply_for_scanner": 0}}),
             "{step}"
         );
     }
     let classes = run["notes"]["scanner_frame_classes"].as_object().unwrap();
     assert_eq!(classes.len(), SCANNER_CLASSES.len());
-    assert!(s(&classes["rst_to_syn_ack"]).contains("main.c:1095"));
+    assert!(s(&classes["stateless_rst"]).contains("src/main.c:1048-1101"));
+    assert!(s(&classes["arp_reply_for_scanner"]).contains("src/main.c:878-887"));
     fs::remove_dir_all(&root).unwrap();
 }
 
@@ -1651,42 +1672,45 @@ fn with_frames(fr: &Frames, f: &[u8], n: usize) -> Frames {
 
 #[test]
 fn the_named_classes_count_no_more_frames_than_the_scanner_side_can_send() {
-    // The bounds themselves: rmasscan's resolver sends at most 10 who-has (one a second for 10 s), C's 12
-    // (stack-arpv4.c:175-187); a kernel reset per SYN-ACK frame, and on C's step one more per distinct SYN-ACK (C
-    // resets after its dedup, main.c:1067-1068 then :1095); one ICMP error per UDP or SCTP reply frame.
+    // The bounds themselves, the same on both steps but the resolver's: rmasscan's resolver sends at most 10 who-has
+    // (one a second for 10 s), C's 12 (stack-arpv4.c:175-187); a kernel reset per SYN-ACK frame; a stateless RST per
+    // distinct TCP reply (both scanners reset only after their dedup, src/main.c:1066-1068 then :1094); one ICMP error
+    // per UDP or SCTP reply frame; one ARP reply of the scanner and one of its kernel per who-has of the peer.
     assert_eq!(NEXT_HOP_WHO_HAS_MAX_RMASSCAN, 10);
     assert_eq!(NEXT_HOP_WHO_HAS_MAX_C, 12);
     let c = case("p05_mixed_protos").unwrap();
     let (fr, _) = wire(&c, T0, &plan_stream(&c).unwrap());
     let v = view(&fr, &stand(), false);
-    assert_eq!(
-        scanner_bounds(&v, Who::Rmasscan),
+    let want = |who_has| {
         [
-            ("next_hop_who_has", 1, 10),
+            ("next_hop_who_has", 1, who_has),
             ("rst_to_syn_ack", 4, 4),
             ("port_unreachable_to_udp_reply", 4, 4),
-            ("protocol_unreachable_to_sctp_reply", 4, 4)
+            ("protocol_unreachable_to_sctp_reply", 4, 4),
+            ("stateless_rst", 4, 4),
+            ("arp_reply_for_scanner", 0, 0),
+            ("kernel_arp_reply_for_scanner", 0, 0),
         ]
-    );
-    assert_eq!(
-        scanner_bounds(&v, Who::Oracle)[0],
-        ("next_hop_who_has", 1, 12)
-    );
-    assert_eq!(scanner_bounds(&v, Who::Oracle)[1], ("rst_to_syn_ack", 4, 8));
-    // A repeated SYN-ACK of the stand allows one more reset: the bound follows the SYN-ACK frames, not the probes.
+    };
+    assert_eq!(scanner_bounds(&v, Who::Rmasscan), want(10));
+    assert_eq!(scanner_bounds(&v, Who::Oracle), want(12));
+    // A repeated SYN-ACK of the stand allows one more kernel reset and no second stateless RST: the kernel's bound
+    // follows the SYN-ACK frames, the scanner's the distinct replies (on both steps; C's own reset is no longer counted
+    // with the kernel's).
     let syn_ack = fr
         .iter()
         .map(|(_, f)| f.clone())
         .find(|f| f[6..12] == PEER_MAC && f.get(23) == Some(&6))
         .unwrap();
     let v = view(&with_frame(&fr, syn_ack.clone()), &stand(), false);
-    assert_eq!(
-        scanner_bounds(&v, Who::Rmasscan)[1],
-        ("rst_to_syn_ack", 4, 5)
-    );
-    // ... and on C's step one more of the kernel's only: C's own reset follows its dedup, so the repeat gets none
-    // (5 SYN-ACK frames + 4 distinct SYN-ACKs, not 2 x 5).
-    assert_eq!(scanner_bounds(&v, Who::Oracle)[1], ("rst_to_syn_ack", 4, 9));
+    for who in [Who::Rmasscan, Who::Oracle] {
+        let b = scanner_bounds(&v, who);
+        assert_eq!(
+            (b[1], b[4]),
+            (("rst_to_syn_ack", 4, 5), ("stateless_rst", 4, 4)),
+            "{who:?}"
+        );
+    }
 
     // One rule broken at a time, each on rmasscan's step (FAIL) and on the oracle's (INVALID).
     const CHECK: &str = "the named scanner-side frames stay within their bounds";
@@ -1704,52 +1728,38 @@ fn the_named_classes_count_no_more_frames_than_the_scanner_side_can_send() {
         .unwrap();
     let proto_unreachable = icmp_error(&sctp_reply, 2, true);
     // (step, frame, copies within the bound, copies over it, the detail over it)
-    let cases: Vec<(&str, Vec<u8>, usize, usize, &str)> = vec![
-        ("json", rst.clone(), 0, 1, "rst_to_syn_ack 5 of at most 4"),
-        ("oracle-json", rst, 4, 5, "rst_to_syn_ack 9 of at most 8"),
-        (
-            "json",
-            next_hop_request(),
-            9,
-            10,
-            "next_hop_who_has 11 of at most 10",
-        ),
-        (
-            "oracle-json",
-            next_hop_request(),
-            11,
-            12,
-            "next_hop_who_has 13 of at most 12",
-        ),
-        (
-            "json",
+    let mut cases: Vec<(&str, Vec<u8>, usize, usize, &str)> = Vec::new();
+    for step in ["json", "oracle-json"] {
+        cases.push((step, rst.clone(), 0, 1, "rst_to_syn_ack 5 of at most 4"));
+        cases.push((
+            step,
             port_unreachable.clone(),
             0,
             1,
             "port_unreachable_to_udp_reply 5 of at most 4",
-        ),
-        (
-            "oracle-json",
-            port_unreachable,
-            0,
-            1,
-            "port_unreachable_to_udp_reply 5 of at most 4",
-        ),
-        (
-            "json",
+        ));
+        cases.push((
+            step,
             proto_unreachable.clone(),
             0,
             1,
             "protocol_unreachable_to_sctp_reply 5 of at most 4",
-        ),
-        (
-            "oracle-json",
-            proto_unreachable,
-            0,
-            1,
-            "protocol_unreachable_to_sctp_reply 5 of at most 4",
-        ),
-    ];
+        ));
+    }
+    cases.push((
+        "json",
+        next_hop_request(),
+        9,
+        10,
+        "next_hop_who_has 11 of at most 10",
+    ));
+    cases.push((
+        "oracle-json",
+        next_hop_request(),
+        11,
+        12,
+        "next_hop_who_has 13 of at most 12",
+    ));
     for (step, f, within, over, detail) in cases {
         let mut sim = Sim::new("p05_mixed_protos");
         let s = sim.step_mut(step);
@@ -1768,23 +1778,206 @@ fn the_named_classes_count_no_more_frames_than_the_scanner_side_can_send() {
             "{step} {detail}: {b:#?}"
         );
     }
-    // C resetting a repeated SYN-ACK a second time: with the stand's SYN-ACK repeated on the oracle's wire, kernel and
-    // C together may send 9 resets (5 + 4); a 10th, which the old bound of 2 x 5 let through, is INVALID.
-    let rst = scanner_rst(&syn_ack);
-    for (extra, want) in [(5, PASS), (6, INVALID)] {
+    // The scanner resetting a repeated SYN-ACK a second time: with the stand's SYN-ACK repeated on the oracle's wire,
+    // the kernel may reset it again (5 kernel resets pass), but C's own reset follows its dedup, so a second
+    // stateless RST for the repeat is INVALID (over the bound and off the exact count).
+    let plan = ready_plan(&c).unwrap();
+    let probe = plan_stream(&c)
+        .unwrap()
+        .into_iter()
+        .find(|p| p[23] == 6 && peer_ip(p) == src(&syn_ack) && ports(p).1 == ports(&syn_ack).0)
+        .unwrap();
+    let stateless = product_rst(&plan, &probe);
+    for (extra, want) in [(0, PASS), (1, INVALID)] {
         let mut sim = Sim::new("p05_mixed_protos");
         let s = sim.step_mut("oracle-json");
-        s.frames = with_frames(&with_frame(&s.frames, syn_ack.clone()), &rst, extra);
+        let repeated = with_frame(&with_frame(&s.frames, syn_ack.clone()), rst.clone());
+        s.frames = with_frames(&repeated, &stateless, extra);
         let (v, b) = judge_one(&sim);
-        assert_eq!(v, want, "{extra} more resets: {b:#?}");
+        assert_eq!(v, want, "{extra} more stateless RSTs: {b:#?}");
         if want == INVALID {
-            assert_eq!(b.len(), 1, "{b:#?}");
+            assert_eq!(b.len(), 2, "{b:#?}");
             assert!(
                 has(&b, INVALID, &format!("oracle-json: {CHECK}"))
-                    && b[0].contains("rst_to_syn_ack 10 of at most 9"),
+                    && b.iter().any(|x| x.contains("stateless_rst 5 of at most 4")),
+                "{b:#?}"
+            );
+            assert!(
+                has(&b, INVALID, "oracle-json: the scanner's stateless RST (R8")
+                    && b.iter().any(|x| x.contains("2 stateless RSTs, want 1")),
                 "{b:#?}"
             );
         }
+    }
+}
+
+/// `f` inserted into a step's capture at time `t`, the capture kept in time order.
+fn at(fr: &Frames, t: f64, f: Vec<u8>) -> Frames {
+    let mut fr = fr.clone();
+    let i = fr.iter().position(|(x, _)| *x > t).unwrap_or(fr.len());
+    fr.insert(i, (t, f));
+    fr
+}
+/// The product's stateless RST of every probe of p05 (what either scanner sends for a TCP probe's first reply).
+fn p05_own_rsts() -> Vec<Vec<u8>> {
+    let c = case("p05_mixed_protos").unwrap();
+    let plan = ready_plan(&c).unwrap();
+    plan_stream(&c)
+        .unwrap()
+        .iter()
+        .filter(|p| p[23] == 6)
+        .map(|p| product_rst(&plan, p))
+        .collect()
+}
+const EXACT_RST: &str = "the scanner's stateless RST (R8";
+const ARP_ANSWERS: &str = "the scanner answers the peer's who-has for its address";
+const BOUND: &str = "the named scanner-side frames stay within their bounds";
+
+#[test]
+fn both_scanners_send_exactly_one_stateless_rst_per_reply_in_cs_form() {
+    // Present on both steps (the generator): PASS.
+    let (v, b) = judge_one(&Sim::new("p05_mixed_protos"));
+    assert_eq!(v, PASS, "{b:#?}");
+    let own = p05_own_rsts();
+    assert_eq!(own.len(), 4);
+    for (step, want) in [("json", FAIL), ("oracle-json", INVALID)] {
+        // missing, all or one: only the exact count fails (no bound is passed)
+        for keep in [0, 3] {
+            let mut sim = Sim::new("p05_mixed_protos");
+            let s = sim.step_mut(step);
+            let drop: Vec<&Vec<u8>> = own.iter().skip(keep).collect();
+            s.frames.retain(|(_, f)| !drop.contains(&f));
+            let (v, b) = judge_one(&sim);
+            assert_eq!(v, want, "{step} keeping {keep}: {b:#?}");
+            assert_eq!(b.len(), 1, "{step} keeping {keep}: {b:#?}");
+            assert!(
+                has(&b, want, &format!("{step}: {EXACT_RST}"))
+                    && b[0].contains("0 stateless RSTs, want 1"),
+                "{step} keeping {keep}: {b:#?}"
+            );
+        }
+        // one more for the same reply: over the bound and off the exact count
+        let mut sim = Sim::new("p05_mixed_protos");
+        let s = sim.step_mut(step);
+        s.frames = with_frame(&s.frames, own[0].clone());
+        let (v, b) = judge_one(&sim);
+        assert_eq!(v, want, "{step}: {b:#?}");
+        assert_eq!(b.len(), 2, "{step}: {b:#?}");
+        assert!(
+            has(&b, want, &format!("{step}: {BOUND}"))
+                && b.iter().any(|x| x.contains("stateless_rst 5 of at most 4")),
+            "{step}: {b:#?}"
+        );
+        assert!(
+            b.iter()
+                .any(|x| x.contains(EXACT_RST) && x.contains("2 stateless RSTs, want 1")),
+            "{step}: {b:#?}"
+        );
+        // not in the SYN template's form (window 1201, or TTL 64): no stateless RST of that reply, and one more reset
+        // in the kernel's class than the kernel sends
+        for (what, edit) in [("window 1201", 34 + 15), ("TTL 64", 22)] {
+            let mut sim = Sim::new("p05_mixed_protos");
+            let s = sim.step_mut(step);
+            let i = s.frames.iter().position(|(_, f)| *f == own[0]).unwrap();
+            if edit == 22 {
+                s.frames[i].1[22] = 64;
+            } else {
+                s.frames[i].1[edit] = 0xb1;
+            }
+            let (v, b) = judge_one(&sim);
+            assert_eq!(v, want, "{step} {what}: {b:#?}");
+            assert!(
+                b.iter()
+                    .any(|x| x.contains(EXACT_RST) && x.contains("0 stateless RSTs, want 1"))
+                    && b.iter()
+                        .any(|x| x.contains("rst_to_syn_ack 5 of at most 4")),
+                "{step} {what}: {b:#?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn both_scanners_answer_the_peers_who_has_for_their_address_once_in_cs_form() {
+    // The stand keeps a permanent neighbour entry, so no peer asks; were one to ask, both scanners answer it (C from
+    // its receive loop, rmasscan's responder), and the scanner namespace kernel too (198.18.0.1 is its address).
+    let st = stand();
+    let req = peer_who_has(&st);
+    let ans = responder_reply(&st, &req);
+    let os = os_reply(&st);
+    // the time of the step's second probe: inside the scan
+    let during = |s: &StepSim| s.frames.iter().find(|(_, f)| *f == s.probes[1]).unwrap().0 + 0.0001;
+    let after = |s: &StepSim| {
+        s.frames
+            .iter()
+            .find(|(_, f)| *f == *s.probes.last().unwrap())
+            .unwrap()
+            .0
+            + 1.5
+    };
+    let with = |step: &str, when: &dyn Fn(&StepSim) -> f64, answers: &[(f64, &Vec<u8>)]| {
+        let mut sim = Sim::new("p05_mixed_protos");
+        let s = sim.step_mut(step);
+        let t = when(s);
+        let mut fr = at(&s.frames, t, req.clone());
+        fr = at(&fr, t + 0.00002, os.clone());
+        for (dt, f) in answers {
+            fr = at(&fr, t + dt, (*f).clone());
+        }
+        s.frames = fr;
+        judge_one(&sim)
+    };
+    let mut wrong = ans.clone();
+    wrong[..6].fill(0xff);
+    for (step, want) in [("json", FAIL), ("oracle-json", INVALID)] {
+        // present: PASS (the peer's request is no unexpected frame any more, the kernel's reply its own class)
+        let (v, b) = with(step, &during, &[(0.00005, &ans)]);
+        assert_eq!(v, PASS, "{step}: {b:#?}");
+        // missing: only the answers' check
+        let (v, b) = with(step, &during, &[]);
+        assert_eq!(v, want, "{step}: {b:#?}");
+        assert_eq!(b.len(), 1, "{step}: {b:#?}");
+        assert!(
+            has(&b, want, &format!("{step}: {ARP_ANSWERS}")) && b[0].contains("0 replies"),
+            "{step}: {b:#?}"
+        );
+        // twice: over the bound and off the count
+        let (v, b) = with(step, &during, &[(0.00005, &ans), (0.00007, &ans)]);
+        assert_eq!(v, want, "{step}: {b:#?}");
+        assert_eq!(b.len(), 2, "{step}: {b:#?}");
+        assert!(
+            b.iter()
+                .any(|x| x.contains("arp_reply_for_scanner 2 of at most 1"))
+                && b.iter()
+                    .any(|x| x.contains(ARP_ANSWERS) && x.contains("2 replies")),
+            "{step}: {b:#?}"
+        );
+        // not in C's form (to the broadcast)
+        let (v, b) = with(step, &during, &[(0.00005, &wrong)]);
+        assert_eq!(v, want, "{step}: {b:#?}");
+        assert!(
+            b.iter()
+                .any(|x| x.contains(ARP_ANSWERS) && x.contains("not in C's form")),
+            "{step}: {b:#?}"
+        );
+        // after the scan may have ended (1.5 s after the last probe, --wait 3): not owed, at most one
+        let (v, b) = with(step, &after, &[]);
+        assert_eq!(v, PASS, "{step}: {b:#?}");
+        let (v, b) = with(step, &after, &[(0.00005, &ans)]);
+        assert_eq!(v, PASS, "{step}: {b:#?}");
+        // a reply of the scanner without any request: over the bound (0) and extra
+        let mut sim = Sim::new("p05_mixed_protos");
+        let s = sim.step_mut(step);
+        s.frames = with_frame(&s.frames, ans.clone());
+        let (v, b) = judge_one(&sim);
+        assert_eq!(v, want, "{step}: {b:#?}");
+        assert!(
+            b.iter()
+                .any(|x| x.contains("arp_reply_for_scanner 1 of at most 0"))
+                && b.iter()
+                    .any(|x| x.contains(ARP_ANSWERS) && x.contains("before any who-has")),
+            "{step}: {b:#?}"
+        );
     }
 }
 

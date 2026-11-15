@@ -1,0 +1,5 @@
+Post-fix run of the `stack` fuzz family (commit.txt: 012ec7ae, the post-acceptance fix on the detached checkout; its `rmasscan/crates` tree is identical to F = 6b8d880f, which is the same code after cherry-pick; only README.md differs).
+Same corpus and the same 29 captures (`peer.pcap` of `linux-banners-r1`, listed with their sha256 in `pcaps.manifest.sha256`) as the `fuzz-tcp-r1` stack run. The captures and the binary are not copied here; `binary.sha256` is the sha256 of the lab binary of that run.
+`run.sh` is the launcher as run; its paths are neutral `/private/tmp/rmasscan-...` ones and were not changed. Nothing in these files was edited.
+- `fuzz-tcp-stack-1511202619.*`: fresh seed 1511202619, 3700 s, 43 657 865 inputs, CLEAN.
+- `repro-stack-413-count-29093011.*`: seed 413 over the same 29 093 011 inputs as the `fuzz-tcp-r1` run (equal `inputs_sha256`), CLEAN; `seed413-replay.txt` replays the three inputs that were findings then (indexes 21020920, 21462895, 22933086) with the excuse off and on: the stack stopped on the scanner's own queued unsent data (C: EST_SEND, `src/stack-tcp-core.c:2053-2076`), counted as `stalled_on_own_queue`.

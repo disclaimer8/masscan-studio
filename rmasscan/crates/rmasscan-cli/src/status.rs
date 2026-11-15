@@ -43,8 +43,9 @@ pub struct StatusLine {
     last_totals: InfiniteTotals,
 }
 
-/// Итоги, по которым `--infinite` считает скорости: отправленные SYN, SYN-ACK (open-ответы) и TCB (без баннеров
-/// всегда 0), `main-status.c:29-33`.
+/// Итоги, по которым `--infinite` считает скорости: отправленные SYN, SYN-ACK (open-ответы) и созданные TCB стека
+/// (`EngineHandle::stack_stats`, `(*status_tcb_count)++` в `src/main.c:984`; без `--banners` всегда 0),
+/// `main-status.c:29-33`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct InfiniteTotals {
     pub syns: u64,

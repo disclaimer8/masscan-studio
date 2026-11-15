@@ -48,7 +48,7 @@ const REDIS_REFUSAL: &str =
     version,
     about = "Rust port of masscan: TCP SYN scan with adapter and gateway auto-detection, masscan output formats, --readscan, --offline, -sL, --echo and --iflist",
     disable_help_subcommand = true,
-    after_help = "Examples:\n  sudo rmasscan 198.51.100.0/24 -p80,443\n  rmasscan --offline 198.51.100.0/24 -p80 --seed 1\n  rmasscan --iflist\n  rmasscan -sL 10.0.0.0/24 -p80,443 --seed 1\n  rmasscan --echo 10.0.0.0/24 -p80 --seed 1\n  rmasscan --offline --packet-trace 10.0.0.0/30 -p80 --seed 1 \\\n    --adapter-ip 10.255.0.1 --adapter-mac 00-11-22-33-44-55 --source-port 40000-40003\n  sudo rmasscan 198.51.100.0/24 -p80 -oB scan.bin\n  rmasscan -p80 --readscan scan.bin -oJ scan.json\n  sudo rmasscan 198.51.100.0/24 -pU:53,123,161 --banners -oB udp.bin\n\nOutput (scan and --readscan only): -oL list, -oJ json, -oD ndjson, -oG grepable, -oX xml, -oB binary,\n-oH hostonly, -oU unicornscan, each followed by FILE (- is stdout); --output-format certs\n--output-filename FILE prints banners as PEM certificates on stdout. With a file format stdout is silent\nunless --interactive is given. --banners (UDP ports only in this version) adds banner records.\n\nWithout an operation flag rmasscan scans: it picks the interface that routes to the targets, its first IPv4\naddress and MAC, resolves the next hop with ARP (unless --router-mac is given) and needs root/Administrator\nonly to open the adapter. IPv6 targets (TCP only) take the source address and next hop of the IPv6 route,\nresolved with an NDP neighbor solicitation (unless --router-mac-ipv6 is given). Detection, --offline and\n--iflist only read the OS and never transmit.\nOperations: -sL, --echo, --echo-all, --offline [--packet-trace], --iflist, --readscan (mutually exclusive).\n--seed is required (and must be non-zero) for -sL, --echo and --offline; a live scan without --seed uses\nOS entropy and prints it. [+] lines go to stderr. Any other masscan option is an error."
+    after_help = "Examples:\n  sudo rmasscan 198.51.100.0/24 -p80,443\n  rmasscan --offline 198.51.100.0/24 -p80 --seed 1\n  rmasscan --iflist\n  rmasscan -sL 10.0.0.0/24 -p80,443 --seed 1\n  rmasscan --echo 10.0.0.0/24 -p80 --seed 1\n  rmasscan --offline --packet-trace 10.0.0.0/30 -p80 --seed 1 \\\n    --adapter-ip 10.255.0.1 --adapter-mac 00-11-22-33-44-55 --source-port 40000-40003\n  sudo rmasscan 198.51.100.0/24 -p80 -oB scan.bin\n  rmasscan -p80 --readscan scan.bin -oJ scan.json\n  sudo rmasscan 198.51.100.0/24 --banners -p80 -oB tcp.bin\n  sudo rmasscan 198.51.100.0/24 -pU:53,123,161 --banners -oB udp.bin\n\nOutput (scan and --readscan only): -oL list, -oJ json, -oD ndjson, -oG grepable, -oX xml, -oB binary,\n-oH hostonly, -oU unicornscan, each followed by FILE (- is stdout); --output-format certs\n--output-filename FILE prints banners as PEM certificates on stdout. With a file format stdout is silent\nunless --interactive is given. --banners adds banner records: UDP replies, and TCP connections through a\nuser-mode TCP stack (give --adapter-ip an address the OS does not own, or the kernel resets them).\n\nWithout an operation flag rmasscan scans: it picks the interface that routes to the targets, its first IPv4\naddress and MAC, resolves the next hop with ARP (unless --router-mac is given) and needs root/Administrator\nonly to open the adapter. IPv6 targets (TCP only) take the source address and next hop of the IPv6 route,\nresolved with an NDP neighbor solicitation (unless --router-mac-ipv6 is given). Detection, --offline and\n--iflist only read the OS and never transmit.\nOperations: -sL, --echo, --echo-all, --offline [--packet-trace], --iflist, --readscan (mutually exclusive).\n--seed is required (and must be non-zero) for -sL, --echo and --offline; a live scan without --seed uses\nOS entropy and prints it. [+] lines go to stderr. Any other masscan option is an error."
 )]
 pub struct Cli {
     // Цели: IP, CIDR, `a.b.c.d-e.f.g.h`, списки через запятую.
@@ -260,6 +260,7 @@ pub struct Cli {
     )]
     pub badsum: bool,
     // Р9: `F_BOOL` (main-conf.c:2381), singleton (:3083): значение только `--noreset=<bool>`, следующее слово не берётся.
+    // Снимает RST без состояния (Р8 этапа баннеров, `src/main.c:1094-1100`); RST стека `--banners` идут и с ним.
     #[arg(
         long,
         num_args = 0..=1,
@@ -267,7 +268,7 @@ pub struct Cli {
         default_missing_value = "",
         action = clap::ArgAction::Append,
         value_name = "BOOL",
-        help = "Accepted for masscan compatibility (rmasscan sends no RST anyway)"
+        help = "Send no RST to a SYN-ACK or RST reply (without --banners every fresh reply gets one, like masscan)"
     )]
     pub noreset: Vec<String>,
     // Р9: `F_NUMABLE` (main-conf.c:2419): `--tcp-mss [N|BOOL]`; значение берётся из следующего слова, если оно
@@ -447,7 +448,7 @@ pub struct Cli {
         default_missing_value = "",
         action = clap::ArgAction::Append,
         value_name = "BOOL",
-        help = "Report banners of UDP replies (dns-ver, ntp, nbtstat, snmp, isakmp, coap, memcached, zeroaccess and raw); TCP banners arrive in the next sub-stage, so TCP ports are refused (alias: --banner)"
+        help = "Report banners: UDP replies (dns-ver, ntp, nbtstat, snmp, isakmp, coap, memcached, zeroaccess and raw) and TCP connections through a user-mode TCP stack (http, ftp, smtp, pop3, imap4, ssh, telnet, vnc, rdp, memcached, minecraft; alias: --banner)"
     )]
     pub banners: Vec<String>,
     // `nobanners`/`nobanner` (`F_BOOL`, `src/main-conf.c:1546-1554`, :2379): `is_banners = !parseBoolean(value)`.
@@ -474,12 +475,12 @@ pub struct Cli {
     )]
     pub rawudp: Vec<String>,
     // `capture` и `nocapture`/`no-capture` (`src/main-conf.c:1132-1180`, :2402-2403): значение следующим словом или
-    // после `=`. В 4a только разбор и `--echo`: их читают TCP-баннеры.
+    // после `=`. В 4b действует только `html` (`banner1->is_capture_html`); остальные читают баннеры TLS (4c).
     #[arg(
         long = "capture",
         value_name = "TYPE",
         action = clap::ArgAction::Append,
-        help = "TCP banner capture: cert (default on), servername, html, heartbleed or ticketbleed; parsed and echoed, used once TCP banners arrive"
+        help = "TCP banner capture: cert (default on), servername, html, heartbleed or ticketbleed; html adds the whole page to HTTP banners, the others act with TLS banners (not in this version)"
     )]
     pub capture: Vec<String>,
     #[arg(

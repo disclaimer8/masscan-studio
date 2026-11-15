@@ -35,7 +35,6 @@ use output::{
 };
 use rmasscan_core::config::{ConfigError, EchoExtras, Operation, ScanConfig, echo_with, validate};
 use rmasscan_core::scan::{format_list_line_v46, list_scan_v46};
-use rmasscan_core::targets::TEMPL_TCP_LAST;
 
 /// Ошибка [`run`], строки которой уже записаны в `log` (`[-] FAIL: --readscan`, `[-] <файл>: …`, `[-] file
 /// corrupt`, `in-binary.c`): exit 1 без второй копии. [`error_text`] даёт для неё пустую строку.
@@ -66,26 +65,6 @@ fn refuse_arp_with_ports(cfg: &ScanConfig) -> Result<(), String> {
     let ports = cfg.targets.ports();
     if rmasscan_core::probe::is_arp_scan_ports(ports) && ports.count() != 1 {
         return Err(ARP_PORTSCAN_REFUSAL.into());
-    }
-    Ok(())
-}
-
-/// Подэтап 4a: баннеры только UDP. TCP-баннерам нужен собственный стек TCP (`src/stack-tcp-core.c`), он появится в
-/// подэтапе 4b; без него скан `--banners -p80` молча дал бы меньше записей, чем C.
-const TCP_BANNERS_REFUSAL: &str = "--banners with TCP ports is not supported yet: TCP banners need the \
-     user-mode TCP stack, which arrives in the next sub-stage (4b); UDP ports (-pU:53) are supported now";
-
-/// Отказ 4a: `--banners` (или `--rawudp`, который его включает) вместе с портом TCP в скане (живом и `--offline`),
-/// до обнаружения адаптера и до первого кадра. `-sL`, `--echo` и `--readscan` ничего не сканируют и не отказывают.
-fn refuse_tcp_banners(cfg: &ScanConfig) -> Result<(), String> {
-    let tcp = cfg
-        .targets
-        .ports()
-        .as_slice()
-        .iter()
-        .any(|r| r.begin <= TEMPL_TCP_LAST);
-    if cfg.banners && tcp {
-        return Err(TCP_BANNERS_REFUSAL.into());
     }
     Ok(())
 }
@@ -344,7 +323,6 @@ pub fn run(
         if validate(&probe, Operation::Scan).is_ok() {
             refuse_arp_with_ports(&cfg)?;
         }
-        refuse_tcp_banners(&cfg)?;
         live::run_offline(&cfg, backend, cli.packet_trace, out, log)?;
         return finish(out);
     }
@@ -359,7 +337,6 @@ pub fn run(
     }
     // main.c:1224-1229: сразу после проверок пустых целей и портов, до вывода и адаптера.
     refuse_arp_with_ports(&cfg)?;
-    refuse_tcp_banners(&cfg)?;
     // Опции проверяются до обнаружения: отказ не стоит ни строки `[+]`, ни кадра. Начало скана - момент `open`.
     let opts = checked_output_options(cli)?;
     // Файл `-` это stdout C (`output.c:216`), и `close_rotate` закрывает его (`output.c:268`) до `printf` времени
@@ -604,60 +581,6 @@ mod tests {
             .unwrap()
             .to_config()
             .unwrap()
-    }
-
-    /// Задача 6, шаг 2: в 4a `--banners` (и `--rawudp`, который его включает) с портом TCP отказывает с кодом 1 до
-    /// обнаружения и любого кадра (живой скан и `--offline`): TCP-баннерам нужен стек TCP, он придёт в 4b. `-pU:53`
-    /// проходит; `--nobanners` правее снимает отказ; `-sL` и `--echo` ничего не сканируют и принимают любые порты.
-    #[test]
-    fn banners_with_tcp_ports_is_refused_in_4a() {
-        for extra in [
-            &["-p80", "--banners"][..],
-            &["-p80,U:53", "--rawudp"],
-            &["--banners", "-pU:53,T:443"],
-            &["-pU:53", "--top-ports", "5", "--banner"],
-        ] {
-            // `FakeBackend::open` и `interrupts` паникуют: отказ раньше обнаружения и Ctrl-C.
-            for op in [&["rmasscan"][..], &["rmasscan", "--offline", "--seed", "1"]] {
-                let e = run_args(&[op, &["198.51.100.1"], extra].concat()).unwrap_err();
-                assert!(
-                    e.contains("TCP banners") && e.contains("next sub-stage"),
-                    "{extra:?}: {e}"
-                );
-                assert_eq!(error_text(&e), format!("rmasscan: error: {e}"));
-            }
-        }
-        for ok in [
-            &[
-                "--offline",
-                "198.51.100.1",
-                "-pU:53",
-                "--banners",
-                "--seed",
-                "1",
-            ][..],
-            &[
-                "--offline",
-                "198.51.100.1",
-                "-pU:53,S:2905,I:0",
-                "--rawudp",
-                "--seed",
-                "1",
-            ],
-            &[
-                "--offline",
-                "198.51.100.1",
-                "-p80",
-                "--banners",
-                "--nobanners",
-                "--seed",
-                "1",
-            ],
-            &["--echo", "198.51.100.1", "-p80", "--banners", "--seed", "1"],
-            &["-sL", "198.51.100.1", "-p80", "--rawudp", "--seed", "1"],
-        ] {
-            run_args(&[&["rmasscan"][..], ok].concat()).unwrap();
-        }
     }
 
     /// `--banners`/`--banner` (`src/main-conf.c:1106-1116`) и `--rawudp` (`:1118-1130`, ставит и `banners`) в `--echo`

@@ -22,12 +22,16 @@
 //! передача успела закончиться до нажатия. Второе нажатие завершает процесс с кодом 1 из самого обработчика, а
 //! `paused.conf` к этому времени уже на диске.
 //!
-//! Баннеры (`--banners`, `--rawudp`, подэтап 4a, только UDP): движок разбирает датаграмму ответа, прошедшего дедуп,
-//! функцией `rmasscan_proto::udp_banner_parser` (`handle_udp`) и выдаёт баннеры сразу за пачкой, которая этим ответом
-//! кончается (`rmasscan_engine::Output`); цикл событий пишет их в [`Sink::report_reply_banner`] со временем записи
-//! статуса того же ответа. Без `--banners` движок датаграммы не разбирает. Баннеры соединений TCP
-//! (`Output::ConnectionBanner`, только когда движку передан стек `EngineOptions::tcp_stack`) цикл событий пишет в
-//! [`Sink::report_connection_banner`], время ставит приёмник в момент обработки.
+//! Баннеры (`--banners`, `--rawudp`): движок разбирает датаграмму ответа UDP, прошедшего дедуп, функцией
+//! `rmasscan_proto::udp_banner_parser` (`handle_udp`) и выдаёт баннеры сразу за пачкой, которая этим ответом кончается
+//! (`rmasscan_engine::Output`); цикл событий пишет их в [`Sink::report_reply_banner`] со временем записи статуса того же
+//! ответа. С `--banners` движку передаётся и стек TCP `rmasscan_proto::tcp_stack_factory` (подэтап 4b, как `tcpcon` C
+//! при `is_banners`, `src/main.c:605-660`): таблица [`table_capacity`], бюджет [`BANNER_BYTE_BUDGET`]; баннеры
+//! соединений (`Output::ConnectionBanner`) цикл событий пишет в [`Sink::report_connection_banner`], время ставит
+//! приёмник в момент обработки, а после цикла печатает итог счётчиков стека ([`stack_summary`]). Без `--banners` и
+//! `--noreset` движок шлёт RST без состояния на каждый свежий SYN-ACK и RST-ответ (Р8, `src/main.c:1094-1100`). Если
+//! адрес источника выбран автоопределением, скан с `--banners` печатает одно предупреждение Р9: ядро ОС сбросит
+//! соединения стека.
 
 #![forbid(unsafe_code)]
 
@@ -52,7 +56,7 @@ use rmasscan_core::receive::PortStatus;
 use rmasscan_core::throttle::Clock;
 use rmasscan_engine::{
     AdapterPair, BannerOptions, Engine, EngineOptions, Event, Outcome, Output, Progress, Reason,
-    RxHealth,
+    RxHealth, StackSummary, TcpStackOptions,
 };
 use rmasscan_net::arp_resolve::{ArpPolicy, NextHopKind, arp_binding, resolve_next_hop_until};
 use rmasscan_net::discover::{NextHopWhy, Source, usable_source_mac};
@@ -64,6 +68,7 @@ use rmasscan_net::{
 };
 
 use crate::args::SeedPolicy;
+use crate::banner_settings::tcp_banner_settings;
 use crate::output::{ServiceNames, Sink, Wall, io_fail};
 use crate::pcap_writer::{PcapTarget, PcapWriter};
 
@@ -866,6 +871,112 @@ fn ids(backend: &dyn Backend) -> [u8; 16] {
     id
 }
 
+/// Срок жизни соединения баннеров по умолчанию: `--connection-timeout 0` это 30 с (`tcpcon_create_table`,
+/// `src/stack-tcp-core.c:665-667`).
+const DEFAULT_CONNECTION_LIFETIME_SECS: u32 = 30;
+
+/// Бюджет байтов баннеров живых соединений на скан (решение 8, вне Р5: Р5 ограничивает запись 65 536 байтами, но не
+/// таблицу; у C предела нет). Сверх него запись режется с конца, недостача считается и печатается в итоге.
+pub const BANNER_BYTE_BUDGET: usize = 512 * 1024 * 1024;
+
+/// Ёмкость таблицы соединений скана (Р5, решение D7): `max(1024, rate × (жизнь + 4))`, где жизнь это
+/// `--connection-timeout` или 30 при 0, а 4 с покрывают тик RST по сроку жизни (`created + жизнь + 2 с`) и шаг сетки
+/// 2 с. Верхнего предела нет: таблица ленивая (записи есть только у живых соединений), так что это предел, а не
+/// выделение. Произведение насыщается: дробная, огромная и бесконечная скорость не паникуют (`as` от `f64` насыщает).
+pub fn table_capacity(rate: f64, connection_timeout_secs: u32) -> usize {
+    let life = if connection_timeout_secs == 0 {
+        DEFAULT_CONNECTION_LIFETIME_SECS
+    } else {
+        connection_timeout_secs
+    };
+    let want = (rate * (f64::from(life) + 4.0)).ceil();
+    (want as usize).max(1024)
+}
+
+/// Сколько записей баннеров даёт одно соединение не больше: одна запись на тип приложения (banout, справка B3), больше
+/// всех у HTTP: `http`, `http.server`, `title` и `html` (`src/proto-http.c:487-691`).
+const RECORDS_PER_CONNECTION: usize = 4;
+
+/// Очередь результатов при `--banners` (перенос ревью задачи 4, N3) поверх обычного запаса `base` (записи и байты, как
+/// без баннеров). Наборы баннеров посреди скана (тик таблицы, FIN, RST) кладутся без ожидания (Р7: приём не встаёт),
+/// и полная очередь это `ConsumerTooSlow`. Один тик может уничтожить разом каждое живое соединение: соединения,
+/// созданные одной пачкой SYN-ACK, вместе доходят до RST по сроку жизни, чаще всего в окне `--wait`, когда новых
+/// соединений уже нет. Поэтому сверх запаса очередь вмещает такой всплеск целиком: по записям наибольший набор каждого
+/// соединения таблицы, по байтам весь бюджет баннеров таблицы ([`BANNER_BYTE_BUDGET`]). Это пределы, а не выделение.
+fn banner_queue(base: (usize, usize), table_capacity: usize) -> (usize, usize) {
+    (
+        base.0
+            .saturating_add(table_capacity.saturating_mul(RECORDS_PER_CONNECTION)),
+        base.1.saturating_add(BANNER_BYTE_BUDGET),
+    )
+}
+
+/// Записей во всех таблицах скана: движок даёт таблице каждого адаптера `max(1024, ёмкость / адаптеров)`
+/// ([`TcpStackOptions`]).
+fn table_entries(capacity: usize, adapters: usize) -> usize {
+    let n = adapters.max(1);
+    (capacity / n).max(1024).saturating_mul(n)
+}
+
+/// Итог счётчиков стека TCP в stderr после цикла событий (решение 20; Р5, Р7): строка на счётчик, только ненулевые.
+/// `table_entries` это записи всех таблиц, `budget_mib` бюджет байтов баннеров в МиБ.
+pub fn stack_summary(s: &StackSummary, table_entries: usize, budget_mib: usize) -> String {
+    let mut out = String::new();
+    if s.stack.table_full > 0 {
+        out.push_str(&format!(
+            "[-] banners: {} SYN-ACKs got no connection (table full, {table_entries} entries)\n",
+            s.stack.table_full
+        ));
+    }
+    if s.frames_dropped > 0 {
+        out.push_str(&format!(
+            "[-] banners: {} stack frames dropped (transmit queue full)\n",
+            s.frames_dropped
+        ));
+    }
+    if s.stack.banner_bytes_dropped > 0 {
+        out.push_str(&format!(
+            "[-] banners: {} banner bytes dropped (memory budget {budget_mib} MiB)\n",
+            s.stack.banner_bytes_dropped
+        ));
+    }
+    out
+}
+
+/// Адреса источника, выбранные автоопределением (Р9): они принадлежат ОС, и её ядро, не найдя сокета, отвечает RST на
+/// SYN-ACK и сегменты соединений стека баннеров. C этого не проверяет, его README советует отдельный адрес или правило
+/// файрвола (справка стека §8.5). По адаптерам `nic[0..n)`, IPv4 (только при целях IPv4), затем IPv6 в скобках, как в
+/// строках `[+] source-ip`; повторы убраны.
+fn os_owned_sources(p: &Prepared) -> Vec<String> {
+    let mut ips = Vec::new();
+    for k in 0..=p.extra.len() {
+        let d = p.detected(k);
+        if has_ipv4(&p.eff) && matches!(d.source_ipv4.1, Source::Detected) {
+            ips.push(d.source_ipv4.0.to_string());
+        }
+        if let Some(d6) = p.detected6(k)
+            && matches!(d6.source_ipv6.1, Source::Detected)
+        {
+            ips.push(bracket6(d6.source_ipv6.0));
+        }
+    }
+    let mut seen = std::collections::HashSet::new();
+    ips.retain(|ip| seen.insert(ip.clone()));
+    ips
+}
+
+/// Предупреждение Р9 (решение D19): одна строка на скан на любой ОС, с адресами через ` and `; `None`, если все
+/// адреса источника заданы.
+fn banners_warning(ips: &[String]) -> Option<String> {
+    (!ips.is_empty()).then(|| {
+        format!(
+            "[-] warning: --banners uses the OS's own address {}: its kernel resets the banner connections; \
+             give --adapter-ip an unused address on the subnet or drop the --source-port traffic in the firewall\n",
+            ips.join(" and ")
+        )
+    })
+}
+
 /// `[+] finished: <итог>, sent N, …` с `sent` engine (верификатор сверяет его с SYN на проводе).
 fn print_finished(
     outcome: &Outcome,
@@ -964,10 +1075,23 @@ pub fn run_live_conf(
     let mut best_effort = BestEffort::new(log);
     let log: &mut dyn Write = &mut best_effort;
     let p = prepare(cfg, SeedPolicy::Entropy, backend, false)?;
+    // Настройки баннеров TCP (hello, запрос HTTP, `--capture html`) до любого кадра: отказ их сборки ничего не стоит.
+    let banner_settings = if cfg.banners {
+        Some(tcp_banner_settings(cfg)?)
+    } else {
+        None
+    };
     // Ограничения плана (rounds, shard, `resume-index` за пределом, ширина портов, R3) до ARP и NDP: отказ плана не
     // стоит кадра. Next hop в binding тут ещё нулевой; настоящий план строится после ARP/NDP (binding неизменяем).
     cli_plan(&p.eff, &p.bindings(), &p.ipv6_bindings(), &p.payloads)?;
     print_detection(&p, log)?;
+    // Р9: сразу за строками адаптеров, до ARP; одна строка на скан, ошибки записи stderr не важны (`BestEffort`).
+    if cfg.banners
+        && let Some(w) = banners_warning(&os_owned_sources(&p))
+    {
+        let _ = log.write_all(w.as_bytes());
+        let _ = log.flush();
+    }
     // Р8: файл открывается до ARP и engine; отказ не стоит ни одного кадра.
     sink.open()?;
     let clock = backend.clock();
@@ -1100,6 +1224,25 @@ pub fn run_live_conf(
         // `handle_udp` (`src/proto-udp.c:54-132`): движок от `rmasscan-proto` не зависит (Р11), разбор передаёт CLI.
         udp_parser: rmasscan_proto::udp_banner_parser,
     });
+    // Стек TCP при `--banners` (C создаёт `tcpcon` при `is_banners`, в том числе у скана только UDP, `src/main.c:605-660`):
+    // таблица `max(1024, rate × (жизнь + 4))` (Р5, D7), бюджет 512 МиБ (решение 8) и очередь результатов под всплеск
+    // сброса соединений. Фабрика `rmasscan-proto` приходит через движок, который от неё не зависит (Р11).
+    let table_cap = table_capacity(p.eff.max_rate(), cfg.connection_timeout);
+    let entries = table_entries(table_cap, plan.nics().len());
+    if let Some(settings) = banner_settings {
+        options.tcp_stack = Some(TcpStackOptions {
+            factory: rmasscan_proto::tcp_stack_factory(settings, cfg.connection_timeout),
+            table_capacity: table_cap,
+            banner_byte_budget: BANNER_BYTE_BUDGET,
+        });
+        (options.result_capacity, options.result_byte_capacity) = banner_queue(
+            (options.result_capacity, options.result_byte_capacity),
+            table_cap,
+        );
+    }
+    // Р8 (`src/main.c:1094-1100`: `tcpcon == NULL && !is_noreset`): RST без состояния на каждый свежий SYN-ACK и
+    // RST-ответ, если нет ни `--banners`, ни `--noreset`. `EngineOptions::new` его не включает (Р11, так у Studio).
+    options.stateless_rst = !cfg.banners && !cfg.noreset;
     // Решение 4: те же часы, что у резолвера; в `OsBackend` это `SystemClock`, то есть поведение `Engine::start`.
     let started = clock.now_micros();
     // Конец передачи для строки статуса: `min_k effective_end(k)`, то есть эффективный конец самого медленного адаптера. При усечённом `resume-count`
@@ -1193,10 +1336,11 @@ pub fn run_live_conf(
                     .map(|t| wait_secs.saturating_sub((now.saturating_sub(t) / 1_000_000) as i64));
                 let _ = if infinite {
                     // `status->is_infinite` (`main-status.c:210-225`): строка `*` вместо процента, и в передаче, и в ожидании.
+                    // `total_tcbs` это созданные TCB (`(*status_tcb_count)++`, `src/main.c:984`); без стека 0.
                     let totals = InfiniteTotals {
                         syns: prog.sent,
                         synacks: open_count,
-                        tcbs: 0,
+                        tcbs: handle.stack_stats().stack.tcbs_created,
                         index: prog.next_index,
                     };
                     status.tick_infinite(now, totals, prog.rate, exiting.is_some(), log)
@@ -1256,11 +1400,18 @@ pub fn run_live_conf(
             Err(TryRecvError::Empty) => {}
         }
     }
+    // Счётчики стека окончательны после `Finished` и читаются до `join` (`EngineHandle::stack_stats`).
+    let stack = handle.stack_stats();
     // `join` и `sink.finish()` идут всегда, до любого `?`: ошибка engine не оставляет файл
     // вывода без подвала.
     let joined = handle.join().map_err(|e| format!("scan engine error: {e}"));
     let elapsed_ms = clock.now_micros().saturating_sub(started) / 1000;
     let _ = status.finish(log);
+    // Итог счётчиков стека (решение 20): после стёртой строки статуса, до `[+] finished`, только с `--banners`.
+    if cfg.banners {
+        let _ = log.write_all(stack_summary(&stack, entries, BANNER_BYTE_BUDGET >> 20).as_bytes());
+        let _ = log.flush();
+    }
     let sunk = match sink_error {
         Some(e) => Err(e),
         None => sink.finish(),
@@ -1480,4 +1631,152 @@ pub fn iflist(backend: &dyn Backend, out: &mut dyn Write) -> Result<(), String> 
         .map_err(fail)?;
     out.write_all(iflist_text(&list, &defaults).as_bytes())
         .map_err(io_fail)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rmasscan_core::stack::StackStats;
+
+    /// Р5, решение D7 (перенос 6): `max(1024, rate × (жизнь + 4))`, жизнь это `--connection-timeout` или 30 при 0
+    /// (`tcpcon_create_table`, `src/stack-tcp-core.c:665-667`); верхнего предела нет, таблица ленивая (это предел, а не
+    /// выделение), переполнение насыщается, дробная и огромная скорость не паникуют.
+    #[test]
+    fn table_capacity_uses_effective_timeout() {
+        assert_eq!(table_capacity(100.0, 0), 3400);
+        assert_eq!(table_capacity(100.0, 30), 3400);
+        assert_eq!(table_capacity(100.0, 6), 1024);
+        assert_eq!(table_capacity(1000.0, 6), 10_000);
+        assert_eq!(table_capacity(0.5, 0), 1024);
+        assert_eq!(table_capacity(100.5, 0), 3417);
+        // Без верхнего предела (прежний clamp 1 048 576 из notes.md снят решением D7).
+        assert_eq!(table_capacity(1_000_000.0, 0), 34_000_000);
+        assert_eq!(table_capacity(1e300, u32::MAX), usize::MAX);
+        assert_eq!(table_capacity(f64::MAX, 0), usize::MAX);
+        assert_eq!(table_capacity(f64::INFINITY, 0), usize::MAX);
+        assert_eq!(table_capacity(0.0, u32::MAX), 1024);
+    }
+
+    /// Итог счётчиков стека (решение 20, Р5, Р7): три строки, каждая только при ненулевом счётчике, точные тексты.
+    #[test]
+    fn stack_summary_only_when_nonzero() {
+        let zero = StackSummary::default();
+        assert_eq!(stack_summary(&zero, 3400, 512), "");
+        // Созданные и живые соединения, отправленные кадры и `flush_abandoned` итог не печатает.
+        let quiet = StackSummary {
+            stack: StackStats {
+                tcbs_created: 9,
+                tcbs_live: 2,
+                ..StackStats::default()
+            },
+            frames_sent: 40,
+            flush_abandoned: 5,
+            ..StackSummary::default()
+        };
+        assert_eq!(stack_summary(&quiet, 3400, 512), "");
+        let full = StackSummary {
+            stack: StackStats {
+                table_full: 7,
+                ..StackStats::default()
+            },
+            ..StackSummary::default()
+        };
+        assert_eq!(
+            stack_summary(&full, 3400, 512),
+            "[-] banners: 7 SYN-ACKs got no connection (table full, 3400 entries)\n"
+        );
+        let all = StackSummary {
+            stack: StackStats {
+                tcbs_created: 1,
+                tcbs_live: 0,
+                table_full: 1,
+                banner_bytes_dropped: 65_536,
+            },
+            frames_sent: 3,
+            frames_dropped: 12,
+            flush_abandoned: 0,
+        };
+        assert_eq!(
+            stack_summary(&all, 1024, 512),
+            "[-] banners: 1 SYN-ACKs got no connection (table full, 1024 entries)\n\
+             [-] banners: 12 stack frames dropped (transmit queue full)\n\
+             [-] banners: 65536 banner bytes dropped (memory budget 512 MiB)\n"
+        );
+        let frames = StackSummary {
+            frames_dropped: 1,
+            ..StackSummary::default()
+        };
+        assert_eq!(
+            stack_summary(&frames, 1024, 512),
+            "[-] banners: 1 stack frames dropped (transmit queue full)\n"
+        );
+        let bytes = StackSummary {
+            stack: StackStats {
+                banner_bytes_dropped: 3,
+                ..StackStats::default()
+            },
+            ..StackSummary::default()
+        };
+        assert_eq!(
+            stack_summary(&bytes, 1024, 64),
+            "[-] banners: 3 banner bytes dropped (memory budget 64 MiB)\n"
+        );
+    }
+
+    /// Ёмкость в строке «table full» это сумма таблиц RX-потоков: движок даёт каждому адаптеру
+    /// `max(1024, ёмкость / адаптеров)` (`EngineOptions::tcp_stack`).
+    #[test]
+    fn table_entries_sum_the_per_adapter_tables() {
+        assert_eq!(table_entries(3400, 1), 3400);
+        assert_eq!(table_entries(3400, 2), 3400);
+        assert_eq!(table_entries(1024, 2), 2048);
+        assert_eq!(table_entries(3401, 2), 3400);
+        assert_eq!(table_entries(usize::MAX, 8), usize::MAX / 8 * 8);
+        assert_eq!(table_entries(usize::MAX, 1), usize::MAX);
+    }
+
+    /// README называет память одного живого соединения числом не меньше `connection_memory_floor()` (перенос 5: в нём
+    /// и сессия `Banner1Session`) и говорит, что память идёт за пиком живых соединений (перенос 2).
+    #[test]
+    fn readme_names_connection_memory_cost() {
+        const README: &str = include_str!("../../../README.md");
+        let marker = "Память одного живого соединения: не меньше ";
+        let at = README
+            .find(marker)
+            .unwrap_or_else(|| panic!("README has no {marker:?}"));
+        let rest = &README[at + marker.len()..];
+        let digits: String = rest
+            .chars()
+            .take_while(|c| c.is_ascii_digit() || *c == '\u{a0}' || *c == ' ')
+            .filter(char::is_ascii_digit)
+            .collect();
+        let named: usize = digits.parse().expect("a number after the marker");
+        let floor = rmasscan_proto::connection_memory_floor();
+        assert!(
+            named >= floor,
+            "README names {named} bytes, connection_memory_floor() is {floor}"
+        );
+        assert!(
+            README.contains("за пиком живых соединений"),
+            "README must say memory follows the peak of live connections"
+        );
+        assert!(README.contains("512 МиБ"), "the banner budget is named");
+    }
+
+    /// Очередь результатов с `--banners` (перенос 4): один тик таблицы может уничтожить разом каждое живое соединение,
+    /// а наборы баннеров посреди скана кладутся без ожидания. Очередь вмещает такой всплеск поверх обычного запаса.
+    #[test]
+    fn banner_queue_absorbs_a_whole_table_burst() {
+        let o = EngineOptions::new([0; 16], [0; 16]);
+        let base = (o.result_capacity, o.result_byte_capacity);
+        assert_eq!(base, (4096, rmasscan_engine::DEFAULT_RESULT_BYTE_CAPACITY));
+        let (entries, bytes) = banner_queue(base, 3400);
+        assert_eq!(entries, 4096 + 3400 * RECORDS_PER_CONNECTION);
+        assert_eq!(
+            bytes,
+            rmasscan_engine::DEFAULT_RESULT_BYTE_CAPACITY + BANNER_BYTE_BUDGET
+        );
+        assert_eq!(banner_queue(base, usize::MAX).0, usize::MAX);
+        assert_eq!(banner_queue((1, usize::MAX), 0), (1, usize::MAX));
+    }
 }

@@ -1274,11 +1274,12 @@ pub fn parse_bool(value: &str) -> bool {
 /// `router-mac-ipv6` хранятся раздельно в `nics` (как в C).
 pub fn read_paused_conf(text: &str) -> Result<ScanConfig, ConfigError> {
     let mut cfg = ScanConfig::default();
-    for raw in text.lines() {
-        let Some((name, value)) = conf_line_kv(raw) else {
+    let mut line = ConfLineBuffer::default();
+    for raw in text.split_inclusive('\n') {
+        let Some((name, value)) = line.feed(raw) else {
             continue;
         };
-        if apply_core_kv(&mut cfg, name, value)? {
+        if apply_core_conf_kv(&mut cfg, name, value, &line)? {
             continue;
         }
         match normalize_key(name).as_str() {
@@ -1337,6 +1338,79 @@ pub fn conf_line_kv(raw: &str) -> Option<(&str, &str)> {
         name.trim_matches(is_c_space),
         value.trim_matches(is_c_space),
     ))
+}
+
+/// Буфер строки одного вызова `masscan_read_config_file` (`char line[65536]`, `src/main-conf.c:3886`), байты в
+/// том виде, в каком их оставляет C: `fgets` пишет строку и её NUL (`:3902`), `trim` строки сдвигает начальные
+/// пробелы `memmove` и пишет NUL на месте конечных (`:3869-3878`, `:3906`), `=` становится NUL (`:3915`), `trim`
+/// имени пишет NUL на месте его конечных пробелов, `trim` значения сдвигает его влево на число начальных пробелов
+/// (`:3917-3918`). Байты дальше NUL этой строки остаются от прошлых строк того же файла. Буфер нужен ровно одному
+/// ключу: `SET_http_header` делает `name += 11` (`:1361`), и у имени короче 11 байт это `line[11]`
+/// ([`ConfLineBuffer::name_plus_11`]). Новый файл (вложенный `conf`/`resume`, ещё один `-c`) это новый буфер; у C это
+/// новый кадр стека, его содержимое не определено. Строка длиннее 65 535 байт (`fgets` режет её на части) здесь
+/// одна строка, как у [`conf_line_kv`].
+#[derive(Debug, Default)]
+pub struct ConfLineBuffer {
+    /// Байты `line[0..written)`: всё, что строки этого файла записали.
+    buf: Vec<u8>,
+}
+
+impl ConfLineBuffer {
+    /// Одна строка файла, как её вернул `fgets` (с `\n`, если он был): буфер принимает вид C, результат это
+    /// [`conf_line_kv`] той же строки.
+    pub fn feed<'r>(&mut self, raw: &'r str) -> Option<(&'r str, &'r str)> {
+        let kv = conf_line_kv(raw);
+        let written = raw.len() + 1;
+        if self.buf.len() < written {
+            self.buf.resize(written, 0);
+        }
+        let line = self.buf.get_mut(..written).unwrap_or_default();
+        line.fill(0);
+        let mut put = |at: usize, s: &str| {
+            if let Some(dst) = line.get_mut(at..at + s.len()) {
+                dst.copy_from_slice(s.as_bytes());
+            }
+        };
+        let content = raw.trim_matches(is_c_space);
+        match kv {
+            // Имя с нулевого байта (начальных пробелов у строки уже нет), значение сразу за NUL на месте `=`.
+            Some((name, value)) => {
+                put(0, name);
+                put(content.find('=').map_or(0, |eq| eq + 1), value);
+            }
+            None => put(0, content),
+        }
+        kv
+    }
+
+    /// Строка C, которую читает `name += 11` (`src/main-conf.c:1361`) у имени короче 11 байт: `line[11]` до
+    /// ближайшего NUL. `None`, если байт 11 не писала ни одна строка этого файла (у C это неопределённые байты
+    /// стека).
+    pub fn name_plus_11(&self) -> Option<&[u8]> {
+        let tail = self.buf.get(11..).filter(|t| !t.is_empty())?;
+        Some(tail.split(|&b| b == 0).next().unwrap_or_default())
+    }
+}
+
+/// Ключ файла конфигурации с буфером строки C: как [`apply_core_kv`], кроме `http-header` с набранным именем короче
+/// 11 байт (`http-field`, `httpheader`, `http.field`, ...). Его `name += 11` (`src/main-conf.c:1361`) читает
+/// `line[11]` после правок `masscan_read_config_file` ([`ConfLineBuffer`]): `[` там это скобочная форма над строкой
+/// с этого байта, иначе форма `Name:value` над значением, как у C. Байт 11, которого не писала ни одна строка файла
+/// (только строка ровно `httpfield=` без перевода строки раньше всех строк длиннее неё), у C неопределённый байт
+/// стека (класс а: чтение неинициализированного `line[]`; E1.7 это только argv); здесь он считается не `[`, и пустое
+/// значение даёт две строки C и код 1, как обычная сборка C на таком файле.
+pub fn apply_core_conf_kv(
+    cfg: &mut ScanConfig,
+    name: &str,
+    value: &str,
+    line: &ConfLineBuffer,
+) -> Result<bool, ConfigError> {
+    if name.len() < 11 && matches!(normalize_key(name).as_str(), "httpheader" | "httpfield") {
+        let header = http_header_at(line.name_plus_11().unwrap_or_default(), value)?;
+        push_http_header(cfg, name, value, header)?;
+        return Ok(true);
+    }
+    apply_core_kv(cfg, name, value)
 }
 
 /// Индекс `[N]` в имени ключа (C `ARRAY`, main-conf.c:2438); без скобок 0.
@@ -1504,32 +1578,23 @@ pub fn hello_port_index(name: &str, value: &str) -> Result<u16, ConfigError> {
     u16::try_from(port).map_err(|_| bad())
 }
 
-/// `SET_http_header` (`src/main-conf.c:1335-1408`): форма выбирается по `name += 11` от набранного имени
-/// (`:1361`): знак `[` на этом месте это скобочная форма (пунктуация по краям внутри скобок снимается), иначе
-/// `Name:value` в значении (пробелы режутся у конца имени и начала значения). Набранное имя короче 11 знаков
-/// у C читает за его NUL (E1.7), здесь это `BadValue`; ни одной формы это две строки C и `exit(1)` (`:1388-1390`).
-fn parse_http_header(name: &str, value: &str) -> Result<(String, String), ConfigError> {
-    let bad = || ConfigError::BadValue {
-        key: name.into(),
-        value: value.into(),
-    };
-    let bytes = name.as_bytes();
-    let rest = bytes.get(11..).ok_or_else(bad)?;
-    if rest.first() == Some(&b'[') {
-        // Незакрытая `[` отказывает и здесь, как в argv (Р17); у C скобка не требовалась.
-        if !rest.contains(&b']') {
-            return Err(bad());
-        }
-        let start = rest
+/// `SET_http_header` (`src/main-conf.c:1361-1391`) после `name += 11`: `at11` это строка C, на которую указывает
+/// `name`. Знак `[` первым это скобочная форма: пунктуация (`ispunct`) снимается с обоих краёв этой строки, `]` не
+/// нужна (`:1362-1371`); иначе форма `Name:value` в значении: имя до первого `:` без пробелов в конце, значение после
+/// него без пробелов в начале (`:1372-1386`); ни одной формы это две строки C и `exit(1)` (`:1388-1390`).
+fn http_header_at(at11: &[u8], value: &str) -> Result<(String, String), ConfigError> {
+    if at11.first() == Some(&b'[') {
+        let start = at11
             .iter()
             .position(|b| !b.is_ascii_punctuation())
-            .unwrap_or(rest.len());
-        let mut end = rest.len();
-        while end > start && rest[end - 1].is_ascii_punctuation() {
-            end -= 1;
-        }
+            .unwrap_or(at11.len());
+        let end = at11
+            .iter()
+            .rposition(|b| !b.is_ascii_punctuation())
+            .map_or(start, |i| (i + 1).max(start));
+        let name = at11.get(start..end).unwrap_or_default();
         return Ok((
-            String::from_utf8_lossy(&rest[start..end]).into_owned(),
+            String::from_utf8_lossy(name).into_owned(),
             value.to_string(),
         ));
     }
@@ -1542,6 +1607,41 @@ fn parse_http_header(name: &str, value: &str) -> Result<(String, String), Config
             .trim_start_matches(is_c_space)
             .to_string(),
     ))
+}
+
+/// Ключ `http-header` с именем не короче 11 байт (`SET_http_header`, `src/main-conf.c:1335-1408`): `name += 11`
+/// (`:1361`) остаётся внутри имени, `[` на этом месте это скобочная форма, иначе форма `Name:value`
+/// ([`http_header_at`]). Незакрытая `[` в имени отказывает (Р17; у C скобка не требовалась); имя опции argv слой CLI
+/// уже обрезал до 63 байт, как `name2[64]` C (`src/main-conf.c:3305-3308`). Имя короче 11 байт это `BadValue`: в
+/// argv `name += 11` у C читает за его NUL байты `name2`, оставшиеся от прошлых опций (E1.7, только argv); ключ файла
+/// конфигурации с таким именем разбирает [`apply_core_conf_kv`] по буферу строки C.
+fn parse_http_header(name: &str, value: &str) -> Result<(String, String), ConfigError> {
+    let bad = || ConfigError::BadValue {
+        key: name.into(),
+        value: value.into(),
+    };
+    let rest = name.as_bytes().get(11..).ok_or_else(bad)?;
+    if rest.first() == Some(&b'[') && !rest.contains(&b']') {
+        return Err(bad());
+    }
+    http_header_at(rest, value)
+}
+
+/// 17-й заголовок отказывает (`src/main-conf.c:1400`: C лишние молча отбрасывает), иначе в конец списка.
+fn push_http_header(
+    cfg: &mut ScanConfig,
+    name: &str,
+    value: &str,
+    header: (String, String),
+) -> Result<(), ConfigError> {
+    if cfg.http.headers.len() >= 16 {
+        return Err(ConfigError::BadValue {
+            key: name.into(),
+            value: value.into(),
+        });
+    }
+    cfg.http.headers.push(header);
+    Ok(())
 }
 
 /// Применяет один ключ `name = value` к `ScanConfig` (main-conf.c
@@ -1708,19 +1808,18 @@ pub fn apply_core_kv(cfg: &mut ScanConfig, key: &str, val: &str) -> Result<bool,
         "httphost" => cfg.http.host = Some(value.to_string()),
         "httpuseragent" => cfg.http.user_agent = Some(value.to_string()),
         "httppayload" => cfg.http.payload = Some(value.to_string()),
+        // 17-я cookie отказывает (Р17; C лишние молча отбрасывает, `src/main-conf.c:1326`).
         "httpcookie" => {
             if cfg.http.cookies.len() >= 16 {
                 return Err(bad());
             }
             cfg.http.cookies.push(value.to_string());
         }
-        // Форма по набранному имени (`parse_http_header`); 17-й отказывает вместо молчаливого отброса C.
+        // Форма по набранному имени (`parse_http_header`); 17-й отказывает вместо молчаливого отброса C
+        // (`src/main-conf.c:1400`).
         "httpheader" | "httpfield" => {
             let header = parse_http_header(name, value)?;
-            if cfg.http.headers.len() >= 16 {
-                return Err(bad());
-            }
-            cfg.http.headers.push(header);
+            push_http_header(cfg, name, value, header)?;
         }
         "adapter" | "if" | "interface" => {
             let idx = nic_index(name, value)?;
@@ -3350,6 +3449,154 @@ mod tests {
         let mut s2 = String::new();
         echo(&back, false, &mut s2);
         assert_eq!(s, s2);
+    }
+
+    /// M8 ревью задач 11-13: два `hello-string` одного порта. Эхо идёт от новой записи к старой, чтение файла
+    /// ставит каждую строку в начало списка (`src/main-conf.c:1281-1284`), поэтому после круга порядок обратный и
+    /// для порта 80 выигрывает другая запись («первая заданная», `src/main.c:727-734`), как у C. Выход C (`--echo`
+    /// без скана): `--hello-string[80] QUJD --hello-string[80] RA== --hello-string[443] aGk=` печатает
+    /// `[443] = aGk=`, `[80] = RA==`, `[80] = QUJD`; этот вывод через `-c` печатает `[80] = QUJD`, `[80] = RA==`,
+    /// `[443] = aGk=`.
+    #[test]
+    fn paused_conf_round_trip_reverses_hello_strings_like_c() {
+        let lines = |cfg: &ScanConfig| {
+            let mut s = String::new();
+            echo(cfg, false, &mut s);
+            s.lines()
+                .filter(|l| l.starts_with("hello-string"))
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        };
+        let winner = |cfg: &ScanConfig| {
+            cfg.hello_strings
+                .iter()
+                .find(|(p, _)| *p == 80)
+                .map(|(_, v)| v.clone())
+        };
+        let mut cfg = cfg_with("10.0.0.0/30", "80");
+        for (k, v) in [
+            ("hello-string[80]", "QUJD"),
+            ("hello-string[80]", "RA=="),
+            ("hello-string[443]", "aGk="),
+        ] {
+            assert_eq!(apply_core_kv(&mut cfg, k, v), Ok(true), "{k}");
+        }
+        assert_eq!(
+            lines(&cfg),
+            [
+                "hello-string[443] = aGk=",
+                "hello-string[80] = RA==",
+                "hello-string[80] = QUJD"
+            ]
+        );
+        assert_eq!(winner(&cfg).as_deref(), Some("QUJD"));
+        let mut s = String::new();
+        echo(&cfg, false, &mut s);
+        let back = read_paused_conf(&s).unwrap();
+        assert_eq!(
+            lines(&back),
+            [
+                "hello-string[80] = QUJD",
+                "hello-string[80] = RA==",
+                "hello-string[443] = aGk="
+            ]
+        );
+        assert_eq!(winner(&back).as_deref(), Some("RA=="));
+    }
+
+    /// I1 ревью задач 11-13: байты `line[]` после правок `masscan_read_config_file` (`src/main-conf.c:3902-3920`),
+    /// которые читает `name += 11` (`:1361`): NUL на месте `=` и конечных пробелов имени, значение, сдвинутое
+    /// влево на свои начальные пробелы, начальные пробелы строки, байты прошлой строки того же файла за NUL короткой
+    /// строки и неписаный байт 11.
+    #[test]
+    fn conf_line_buffer_keeps_c_bytes_for_name_plus_11() {
+        let tail = |lines: &[&str]| {
+            let mut b = ConfLineBuffer::default();
+            for l in lines {
+                b.feed(l);
+            }
+            b.name_plus_11().map(<[u8]>::to_vec)
+        };
+        let some = |s: &str| Some(s.as_bytes().to_vec());
+        assert_eq!(tail(&["http-field = X:v\n"]), some(""));
+        assert_eq!(tail(&["http-field=X:v\n"]), some("X:v"));
+        assert_eq!(tail(&["httpfield=X:v\n"]), some(":v"));
+        assert_eq!(tail(&["http-field= [X]v\n"]), some("[X]v"));
+        assert_eq!(tail(&["http-field =[X]v\n"]), some(""));
+        assert_eq!(tail(&["  http-field=X:v  \n"]), some("X:v"));
+        assert_eq!(tail(&["http-field=[Y]\n", "httpfield="]), some("[Y]"));
+        assert_eq!(tail(&["#  comment [Y]\n", "httpfield="]), some("[Y]"));
+        assert_eq!(
+            tail(&["# comment that is long\n", "httpfield="]),
+            some("hat is long")
+        );
+        // Байт 11 не писала ни одна строка: у C это стек.
+        assert_eq!(tail(&["httpfield="]), None);
+        assert_eq!(tail(&["httpfield=\n"]), some(""));
+        // `feed` отдаёт то же, что `conf_line_kv`.
+        let mut b = ConfLineBuffer::default();
+        assert_eq!(b.feed("  a = b c \r\n"), Some(("a", "b c")));
+        assert_eq!(b.feed("# x = y\n"), None);
+        assert_eq!(b.feed("no equals\n"), None);
+    }
+
+    /// I1 ревью задач 11-13: ключ файла `http-header` с набранным именем короче 11 байт берёт форму по `line[11]`
+    /// буфера строки C, как C. Ожидания это вывод `masscan --echo -c FILE` сборки C 8e6b3b0 (без скана): строки
+    /// `http-header = …` или две строки `needs both a name and value` с кодом 1.
+    #[test]
+    fn http_header_short_config_spelling_like_c() {
+        let header_lines = |text: &str| -> Result<Vec<String>, ConfigError> {
+            let cfg = read_paused_conf(text)?;
+            let mut s = String::new();
+            echo(&cfg, false, &mut s);
+            Ok(s.lines()
+                .filter(|l| l.starts_with("http-header"))
+                .map(str::to_string)
+                .collect())
+        };
+        for (text, want) in [
+            ("http-field = X:v\n", &["X:v"][..]),
+            ("httpheader = X:v\n", &["X:v"]),
+            ("http-field=X:v\n", &["X:v"]),
+            ("httpfield = X:v\n", &["X:v"]),
+            ("httpfield=X:v\n", &["X:v"]),
+            ("HTTP_FIELD = X:v\n", &["X:v"]),
+            ("http.field = X:v\n", &["X:v"]),
+            ("httpfield-=X:v\n", &["X:v"]),
+            ("  http-field=X:v  \n", &["X:v"]),
+            ("http-header = X:v\n", &["X:v"]),
+            ("httpfield=a[X]\n", &["X:a[X]"]),
+            ("http-field=[X-Lab]\n", &["X-Lab:[X-Lab]"]),
+            ("http-field= [X]v\n", &["X]v:[X]v"]),
+            ("http-field=[X] v\n", &["X] v:[X] v"]),
+            ("httpheader=[Y]:z\n", &["Y]:z:[Y]:z"]),
+            ("http-field=[\n", &[":["]),
+            ("http-field=[]\n", &[":[]"]),
+            ("http-field=[X\n", &["X:[X"]),
+            ("http-field=[Y]\nhttpfield=", &["Y:[Y]", "Y:"]),
+            ("#  comment [Y]\nhttpfield=", &["Y:"]),
+            (
+                "http-field = A:b\nhttpheader=[Q]\nhttpfield=",
+                &["A:b", "Q:[Q]", "Q:"],
+            ),
+        ] {
+            let want: Vec<String> = want.iter().map(|w| format!("http-header = {w}")).collect();
+            assert_eq!(header_lines(text), Ok(want), "{text:?}");
+        }
+        for text in [
+            "http-field =[X]v\n",
+            "httpfield=",
+            "httpfield=\n",
+            "  httpfield=\n",
+            "http-header = A:b\nhttpfield=",
+            "# comment that is long\nhttpfield=",
+        ] {
+            assert_eq!(
+                header_lines(text),
+                Err(ConfigError::HttpHeaderNeedsNameValue),
+                "{text:?}"
+            );
+        }
     }
 
     /// `paused.conf` written by `--echo` reads back into the same targets.

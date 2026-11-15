@@ -201,4 +201,8 @@ impl Parser for Vnc {
             }
         }
     }
+    #[cfg(test)]
+    fn probe(&self) -> u32 {
+        u32::from(self.state)
+    }
 }

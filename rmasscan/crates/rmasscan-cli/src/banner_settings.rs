@@ -69,6 +69,18 @@ fn encode_base64(data: &[u8]) -> String {
     out
 }
 
+/// Текст `strerror(errno)` (`src/main-conf.c:1233`): у ошибки ОС это её описание без хвоста ` (os error N)`,
+/// который добавляет `Display` std; у прочих ошибок их текст как есть.
+fn c_strerror(e: &std::io::Error) -> String {
+    let text = e.to_string();
+    match e.raw_os_error() {
+        Some(code) => text
+            .strip_suffix(&format!(" (os error {code})"))
+            .map_or_else(|| text.clone(), str::to_string),
+        None => text,
+    }
+}
+
 /// `--hello-file[PORT] <file>` (`SET_hello_file`, `src/main-conf.c:1207-1254`): файл читается (не больше
 /// [`MAX_HELLO_FILE_BYTES`] байт и ещё один), кодируется и дальше ведёт себя как `hello-string[PORT]`; сам
 /// ключ в эхо не пишется. Пустой файл это текст C `[FAILED] could not read hello file` (`:1239`); ошибка
@@ -87,7 +99,12 @@ pub fn apply_hello_file(cfg: &mut ScanConfig, name: &str, filename: &str) -> Res
     });
     let data = match read {
         Ok(data) => data,
-        Err(e) => return Err(format!("[-] [FAILED] --hello-file\n[-] {filename}: {e}")),
+        Err(e) => {
+            return Err(format!(
+                "[-] [FAILED] --hello-file\n[-] {filename}: {}",
+                c_strerror(&e)
+            ));
+        }
     };
     if data.is_empty() {
         return Err("[FAILED] could not read hello file".to_string());

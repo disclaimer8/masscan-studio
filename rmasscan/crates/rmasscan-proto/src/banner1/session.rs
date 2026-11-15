@@ -61,6 +61,12 @@ pub(crate) trait Parser: Send {
     /// Последние отложенные байты перед `banner_flush` (`src/stack-tcp-core.c:810-828`); у HTTP незавершённый
     /// заголовок ждёт здесь ради порядка C на неразрезанном потоке (`src/proto-http.c:678-681`, E2.3).
     fn flush(&mut self, _cx: &mut ParseCx<'_>) {}
+    /// Состояние автомата для структурных тестов «никогда не паникует» (`terminal_tests`): какие состояния прошёл
+    /// поток. Парсеры без такого теста дают 0.
+    #[cfg(test)]
+    fn probe(&self) -> u32 {
+        0
+    }
 }
 
 /// `isprint` локали C (masscan `setlocale` не зовёт): 0x20-0x7E; NUL в это не входит. Общий для FTP, SMTP и следующих
@@ -279,6 +285,15 @@ const SSL_HELLO_SENT: bool = false;
 impl Banner1Session {
     pub(crate) fn app_proto(&self) -> Option<u16> {
         self.app_proto
+    }
+
+    /// [`Parser::probe`] выбранного парсера; `None`, пока классификатор ищет или поток `unknown`.
+    #[cfg(test)]
+    pub(crate) fn probe(&self) -> Option<u32> {
+        match &self.stage {
+            Stage::Parse(p) => Some(p.probe()),
+            _ => None,
+        }
     }
 
     /// Один вызов парсера. Передача STARTTLS (`cx.starttls`) делает номер C SSL3, а парсер заглушкой: дальше

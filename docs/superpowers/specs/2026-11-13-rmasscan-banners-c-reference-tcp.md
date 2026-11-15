@@ -351,10 +351,24 @@ ever: later server bytes are ACKed and never parsed (Р1, reproduce).
   The setter picks the form by `name += 11` on the option name **as typed** (`:1361` ✓): from index 11 on, a `[` means
   the bracket form, anything else the colon form. So `http-header[X]` and `HTTP_HEADER[X]` use the bracket,
   `httpheader[X]` (10 letters, the rest is `X]`) needs a `:` in the value, and a typed name shorter than 11 characters
-  (`http-field`, `httpheader`, `http.field`) makes `name` point past its NUL: undefined (E1.7). Neither form -> two
+  (`http-field`, `httpheader`, `http.field`) makes `name` point past its NUL. On the command line that lands in
+  `char name2[64]` (`:3281`, `:3309-3310`) on bytes left by earlier options: undefined (E1.7, argv only; C given
+  `--http-header[Abc-Def] q --http-field X:v` prints `http-header = Abc-Def:X:v` ✓). In a config file it is byte 11 of
+  `char line[65536]` as `masscan_read_config_file` leaves it (`:3902-3920` ✓): `fgets` writes the line and its NUL,
+  `trim` NULs trailing whitespace and `memmove`s leading whitespace out (`:3869-3878`), `=` becomes NUL (`:3915`),
+  `trim` of the name NULs its trailing whitespace and `trim` of the value moves the value left over its leading
+  whitespace. That byte is deterministic: `[` runs the bracket form on the string from byte 11 (no `]` needed), anything
+  else the colon form on the value. Pinned with `--echo -c` ✓: `http-field = X:v`, `httpheader = X:v`, `http-field=X:v`,
+  `httpfield=X:v` -> `X:v`; `httpfield=a[X]` -> `X:a[X]`; `http-field= [X]v` -> `X]v:[X]v`; `http-field =[X]v` -> the
+  two lines below and exit 1. Bytes past a short line's NUL are those of earlier lines of the same file
+  (`http-field=[Y]`, then a final `httpfield=` without newline -> `Y:[Y]`, `Y:`); only a byte 11 that no line of the
+  file wrote (a 10-byte `httpfield=` without newline before any longer line) is indeterminate stack, which rmasscan
+  takes as not `[` (task 11-13 review, I1). Neither form -> two
   lines `"[-] --http-header needs both a name and value\n"`, `"    hint: \"--http-header Name:value\"\n"` and `exit(1)`
-  (`:1388-1390` ✓). At most 16 headers and 16 cookies, extras dropped silently. Each `--http-method/-url/-version/-host/
-  -user-agent/-payload` keeps the last value.
+  (`:1388-1390` ✓). At most 16 headers and 16 cookies, extras dropped silently (`:1400`, `:1326` ✓). Each
+  `--http-method/-url/-version/-host/-user-agent/-payload` keeps the last value. A typed option name longer than 63
+  bytes is cut to 63 with `"%.*s: name too long\n"` on stderr before any of this (`:3305-3308` ✓): the index and the
+  header name come from the cut name.
 - Echo: `http-cookie = %.*s` per cookie, `http-header = %s:%.*s` per header, `http-method = `, `http-version = `,
   `http-url = `, `http-user-agent = `, `http-host = `, `http-payload = ` in table order (`:2391-2398` ✓).
 - Builder with user values (`src/proto-http.c:52-118, :125-382` ✓): the output is deterministic for every value an
@@ -432,7 +446,7 @@ Details the tests must pin:
 | E1.4 | а/в | memcached state 2 reads `px[length]` past the segment (`src/proto-memcached.c:165`); a `\n` there ends the line early and changes the next segment's parse | the byte past the segment is never read: treated as "not `\n`" | `memcached-tcp-past-segment` |
 | E1.5 | г | events after a destroying event of the same frame use the scrubbed TCB (`src/main.c:991-1018`), e.g. an ACK to 255.255.255.255:65535 | processing of a frame stops at `Destroyed` | `no-frame-from-destroyed-tcb` |
 | E1.6 | б | `base64_decode` loops for ever on a non-alphabet byte at quad positions 3-4 (`src/crypto-base64.c:134, :146`) | every input outside the C2 definition of valid base64 (this one included) is refused, exit 1 (Р17); valid input decodes as C | - |
-| E1.7 | а | `--http-header` spelled with fewer than 11 characters (`http-field`, `httpheader`, `http.field`): `name += 11` points past the name's NUL (`src/main-conf.c:1361`); replace path of the request builder reads past the header end (`src/proto-http.c:362-364`) without effect on the output | the short spelling is refused, exit 1 (the only `--http-*` input refused for this class); every other spelling and value is reproduced (C3), the builder has no buffer arithmetic | - |
+| E1.7 | а | `--http-header` spelled with fewer than 11 characters **on the command line** (`--http-field`, `--httpheader`, `--http.field`): `name += 11` points past the name's NUL into bytes of `char name2[64]` left by earlier options (`src/main-conf.c:1361`, `:3281`); replace path of the request builder reads past the header end (`src/proto-http.c:362-364`) without effect on the output. A config-file key is not this defect: it reads byte 11 of the line buffer, deterministic (C3) | the short spelling on the command line is refused, exit 1 (the only `--http-*` input refused for this class); in a config file it is reproduced from C's line buffer (C3), a byte 11 no line of the file wrote is taken as not `[`; every other spelling and value is reproduced (C3), the builder has no buffer arithmetic | `http_header_short_spelling_fails`, `http_header_short_config_spelling_like_c` |
 | E1.8 | в | stale `when_created` under `--nostatus` (`src/stack-tcp-core.c:1029`, `src/main.c:94`) | creation time from the engine clock | - |
 | E1.9 | в | IPv6 TTL indeterminate (`src/proto-preprocess.c:127`) | real hop limit | `ipv6-ttl` |
 | E1.10 | г | IPv4 header checksum folded twice (`src/templ-pkt.c:466-473`), ~1e-5 of stack frames wrong (vector: `ip_me=0xd5a30aac ip_them=0x4ba3e552 port_them=55289 seqno=0x3e8f982c`, C `0xffff`, right `0xfffe`) | full checksum | `ipv4-stack-checksum` |
@@ -444,7 +458,7 @@ Details the tests must pin:
 | E1.16 | б | a FIN at the next sequence number in FIN_WAIT2 or TIME_WAIT re-arms the timer at `secs + 5` (`src/stack-tcp-core.c:2243-2253`) and the lifetime is checked only on TIMEOUT (`:1970-1980`): a peer sending such FINs less than 5 s apart keeps a TCB for ever (slot leak) | every deadline is capped at `created + lifetime + 2 s` (the 2 s grid tick on which the automaton RSTs by lifetime); the table capacity itself is D7, not an E1 fix | - |
 | E1.17 | а | `_http_insert` calls `REALLOC(new_header_length + 1)` before moving the old tail (`src/proto-http.c:110-114`); shrinking method/URL/version can read bytes beyond the new allocation into the visible request (ASan differs from ordinary C for empty method, empty version, version `a\r\nb`) | safe logical splice preserves the full tail; no rejection of short/empty values and no allocator-dependent bytes | request fixtures `method-2`, `version-8`, `version-9` |
 | E1.18 | а/б | RDP: a COTP header with LI 6 and a following content byte calls `cc_parse(..., 0)`, which returns 0 and trips `assert(bytes_parsed != 0)` (`src/proto-tcp-rdp.c:158-169`; ordinary oracle aborts, whole and bytewise) | the malformed COTP scope is appended to `unknown` like the neighbouring UNKNOWN branches (`:188-190`, `:280-282`), prior records are kept, no action is invented and the loop always advances; no golden can pin it (C does not return), so a unit test does | `rdp_zero_length_cotp_never_asserts` |
-| E1.19 | а | SSH: the first packet-length byte is shifted as a signed `int` (`packet_length = px[i] << 24`, `src/proto-ssh.c:105`): a byte >= 0x80 is signed-shift UB (UBSan reports it) | the length is assembled unsigned in the field's own width (`size_t packet_length`, `src/proto-banner1.h:240-242`) and the countdown wraps explicitly, so a huge length simply never re-syncs, as a defined C build behaves | `ssh_high_bit_length_is_unsigned_and_does_not_resync` |
+| E1.19 | а | SSH: the first packet-length byte is shifted as a signed `int` (`packet_length = px[i] << 24`, `src/proto-ssh.c:105`): a byte >= 0x80 is signed-shift UB (UBSan reports it); an ordinary LP64 build gets a negative `int` and sign-extends it into `size_t packet_length` (`src/proto-banner1.h:240-242`), so `0x80` becomes `0xFFFFFFFF80000000`. RDP `cc_parse` has the same signed shift, `rdp->cc.result>>8 \| (c << 24)` (`src/proto-tcp-rdp.c:65`), but its target is an `unsigned`, so an ordinary build keeps the 32 bits of the unsigned shift | the SSH length is assembled from unsigned bytes in `usize` (`0x80` gives `0x80000000`) and the countdown wraps explicitly. The two differ only past 2 GiB on one connection: below that neither re-syncs to the next packet; past it rmasscan would re-sync (and send the KEX blob again), C would not. The RDP result is computed unsigned, the same bits as an ordinary C build | `ssh_high_bit_length_is_unsigned_and_does_not_resync`, `rdp_high_bit_result_byte_is_unsigned` |
 
 ### E2. Segmentation dependencies (Р13: the reference is C on the unsplit stream)
 
@@ -459,13 +473,15 @@ call, expressed so a streaming parser can do it.
 | E2.4 | SSH (`src/proto-ssh.c:84, :92-96, :172-173`), Telnet (`src/proto-tcp-telnet.c:123, :180, :212`) | after the stop byte: one more byte of that segment, then the first byte of every later segment | exactly one byte after the stop byte, then nothing |
 | E2.5 | RDP (`src/proto-tcp-rdp.c:223-283`) | UNKNOWN appends the whole current segment (from its offset 0) | on entering UNKNOWN with at least one more byte, append every byte the RDP parser has seen since its start, and all later bytes |
 | E2.6 | memcached (`src/proto-memcached.c:129-137`) | a keyword split across segments is lost (matcher reset in state 0) | the matcher continues across segments (C state 1) |
-| E2.7 | Minecraft (`src/proto-mc.c:59-89`) | favicon stripping with zeroed bytes and lost segments | record = every byte the parser saw, raw, if the brace count over them is <= 0 at flush, else none; close when the running count drops <= 0 after a segment |
+| E2.7 | Minecraft (`src/proto-mc.c:59-89`) | favicon stripping with zeroed bytes and lost segments | record = every byte the parser saw, raw, if the brace count over them is <= 0 at flush, else none; close when the running count is <= 0 at the end of a parse call, as C: a call is one segment, and the classifier's replay of the bytes before `{"` is a call of its own (`src/proto-banner1.c:165-182`), so a first segment without `{` and then `{"…` closes on the replay, before the JSON is parsed. Closes therefore follow the calls, not the unsplit stream; records do not depend on the split |
 | E2.8 | FTP (`src/proto-ftp.c:93-104`), SMTP (`:139-150`), POP3 (`:122-133`), STARTTLS go-ahead | after the go-ahead C sets `state = 0` and keeps parsing the rest of that segment (`src/proto-ftp.c:101`, `src/proto-smtp.c:147`, `src/proto-pop3.c:129`): on a single segment the tail is a new greeting, a second `AUTH TLS` / `EHLO` / `CAPA` is sent and the tail can be appended to the text record; split at the go-ahead (or byte by byte) the next segment goes to the TLS parser (app 9), which records nothing here | every byte after the go-ahead line is one `unknown` record (app 1), in any split, app_proto 9, no TLS hello and no second command. This is the B6 boundary, not "C on the unsplit stream", until 4c ports TLS. Record order as B3: the `unknown` record after the text record while that is under 200 bytes, before it from 200 bytes on |
 | E2.9 | VNC (`src/proto-vnc.c:328-336`) | `RFB_DONE` closes and ends the call (`i = length`) but stays the state, so the first byte of every later segment closes again (`vnc38-error-lowbyte`: whole 2 closes, bytewise 4); records do not depend on the split | exactly one more close after entering `RFB_DONE` (on the next byte, if any), then nothing: C on the unsplit stream |
 
 Parsers without an entry (IMAP4; FTP, SMTP and POP3 except for the STARTTLS go-ahead, E2.8) are split-invariant
 in C: their stop states append nothing.
-Sends are compared only on the unsplit run: Telnet replies per segment by design, and VNC re-closes per segment (E2.9).
+Sends are compared only on the unsplit run: Telnet replies once per parse call by design (a call is one segment, and
+the classifier's HEUR replay is a call of its own, `src/proto-banner1.c:165-182`), and VNC re-closes per segment
+(E2.9); records are unaffected.
 
 ### E3. Deterministic C behaviour kept (Р1)
 

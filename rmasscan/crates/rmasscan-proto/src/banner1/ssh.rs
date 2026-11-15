@@ -62,6 +62,10 @@ impl Parser for Ssh {
             }
         }
     }
+    #[cfg(test)]
+    fn probe(&self) -> u32 {
+        u32::from(self.state)
+    }
 }
 
 // `src/proto-ssh.c:10-41`: masscan-authored fixed KEXINIT + KEXDH_INIT, captured independently from C.

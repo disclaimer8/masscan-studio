@@ -242,6 +242,10 @@ pub fn run(
     out: &mut dyn Write,
     log: &mut dyn Write,
 ) -> Result<(), String> {
+    // Строки, которые C печатает по ходу разбора argv и продолжает (`name too long`, `src/main-conf.c:3305-3308`).
+    for note in cli.parse_notes() {
+        let _ = writeln!(log, "{note}");
+    }
     let other_op = cli.list || cli.echo || cli.echo_all || cli.offline || cli.iflist;
     if cli.output_flags_given() && other_op {
         return Err(OUTPUT_OUTSIDE_SCAN.into());
@@ -573,6 +577,37 @@ mod tests {
     fn echo_of(extra: &[&str]) -> String {
         let base = ["rmasscan", "--echo", "10.0.0.0/30", "-p80", "--seed", "1"];
         run_args(&[&base[..], extra].concat()).unwrap()
+    }
+
+    /// M1 ревью задач 11-13: `--echo` с набранным именем длиннее 63 байт. Сборка C 8e6b3b0 печатает в stderr
+    /// `…Total]: name too long` (`src/main-conf.c:3305-3308`) и в stdout заголовок из обрезанного имени, код 0;
+    /// `run` печатает строку разбора первой.
+    #[test]
+    fn echo_of_long_typed_name_warns_like_c() {
+        let long =
+            "--http-header[X-Very-Long-Header-Name-That-Goes-Beyond-Sixty-Three-Characters-Total]";
+        let cli = Cli::try_parse_masscan([
+            "rmasscan",
+            "--echo",
+            "10.0.0.0/30",
+            "-p80",
+            "--seed",
+            "1",
+            long,
+            "v",
+        ])
+        .unwrap();
+        let (mut out, mut log) = (Vec::new(), Vec::new());
+        run(&cli, &FakeBackend::default(), &mut out, &mut log).unwrap();
+        assert_eq!(
+            String::from_utf8(log).unwrap(),
+            format!("{}: name too long\n", &long[2..])
+        );
+        let out = String::from_utf8(out).unwrap();
+        assert!(
+            out.contains("\nhttp-header = X-Very-Long-Header-Name-That-Goes-Beyond-Sixty-Thre:v\n"),
+            "{out}"
+        );
     }
 
     fn scan_config(extra: &[&str]) -> ScanConfig {

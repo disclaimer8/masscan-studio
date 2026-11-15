@@ -239,4 +239,18 @@ impl Parser for Rdp {
             scope.discard(cx);
         }
     }
+    /// Биты 0-3 `state` TPKT, 4-7 `cotp_state`, 8-11 `cc_state`; 12: счётчик TPKT обернулся (`left` больше 251,
+    /// чего младший байт длины не даёт); 13: обернулась длина COTP (`cotp_len` больше 249); 14: область ждёт
+    /// пропускаемый байт C (`length + 1`); 15: поток уже `unknown` (история отдана).
+    #[cfg(test)]
+    fn probe(&self) -> u32 {
+        let pending = |s: &Option<Scope>| s.as_ref().is_some_and(|s| s.skip && s.seen == s.limit);
+        u32::from(self.state)
+            | u32::from(self.cotp_state) << 4
+            | u32::from(self.cc_state) << 8
+            | u32::from(self.left > 251) << 12
+            | u32::from(self.cotp_len > 249) << 13
+            | u32::from(pending(&self.cotp) || pending(&self.cc)) << 14
+            | u32::from(self.history_sent) << 15
+    }
 }

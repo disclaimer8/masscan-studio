@@ -749,6 +749,9 @@ pub struct Cli {
     /// Разобранная конфигурация с `--resume`: файл читается один раз на `Cli`.
     #[arg(skip)]
     resolved: std::sync::OnceLock<Result<FullConf, String>>,
+    /// Строки stderr, которые C печатает по ходу разбора argv и продолжает ([`preprocess_args_with_notes`]).
+    #[arg(skip)]
+    notes: Vec<String>,
 }
 
 /// Один шаг опций баннеров в порядке argv: обычный ключ ядра или опция, чей смысл читается из набранного
@@ -981,6 +984,18 @@ where
     I: IntoIterator<Item = S>,
     S: Into<String>,
 {
+    preprocess_args_with_notes(args).map(|(argv, _)| argv)
+}
+
+/// [`preprocess_args`] и строки, которые C печатает в stderr по ходу разбора argv и продолжает: сегодня это
+/// `"%.*s: name too long"` набранного имени длиннее 63 байт (`src/main-conf.c:3305-3308`, [`banner_typed_option`]).
+/// [`Cli::try_parse_masscan`] хранит их, а [`crate::run`] печатает первыми.
+fn preprocess_args_with_notes<I, S>(args: I) -> Result<(Vec<String>, Vec<String>), String>
+where
+    I: IntoIterator<Item = S>,
+    S: Into<String>,
+{
+    let mut notes = Vec::new();
     let mut it = args.into_iter().map(Into::into).peekable();
     let mut out: Vec<String> = it.next().into_iter().collect();
     while let Some(raw) = it.next() {
@@ -993,6 +1008,7 @@ where
         // `EQUALS`: индекс и форма заголовка читаются из набранного имени (справка C2, C3).
         if let Some(step) = banner_typed_option(&raw) {
             let step = step?;
+            notes.extend(step.too_long);
             let value = match step.inline {
                 Some(v) => v,
                 None => it
@@ -1049,7 +1065,7 @@ where
             out.push(a);
         }
     }
-    Ok(out)
+    Ok((out, notes))
 }
 
 /// Таблица `EQUALS` (`src/main-conf.c:833-849`): ключ [`normalize_key`] каждого длинного имени и синонима clap (вместе
@@ -1187,19 +1203,29 @@ fn indexed_nic_key(a: &str) -> Option<Result<(&str, Option<&str>), String>> {
     }))
 }
 
-/// `--hello-string`, `--hello-file` (`hello-filename`) и любое написание `--http-header`/`--http-field` по
-/// `EQUALS`, до [`equals_option`]: набранное имя целиком (со скобками) и встроенное значение для скрытой опции
-/// `--rmasscan-…`. Разделитель значения тот же, что у всякого имени ([`equals_option`]): первое `=`, иначе первое
-/// `:` (`masscan_command_line`, :3279-3289), поэтому двоеточие внутри скобок режет набранное имя, как у C.
-/// Индекс от 65536 и незакрытая `[` в набранном имени отказывают как у всякого имени ([`check_c_index`], Р17,
-/// `bad index` раньше незакрытой). `None`, если аргумент не такой.
-/// Результат [`banner_typed_option`]: скрытая опция, набранное имя и встроенное значение.
+/// Результат [`banner_typed_option`]: скрытая опция, набранное имя (как его держит `name2[64]` C) и встроенное
+/// значение.
 struct TypedBannerOption {
     hidden: &'static str,
     typed: String,
     inline: Option<String>,
+    /// `"%.*s: name too long"` (`src/main-conf.c:3305-3308`), если набранное имя длиннее 63 байт.
+    too_long: Option<String>,
 }
 
+/// Длина `char name2[64]` C без NUL (`src/main-conf.c:3281`, `:3305-3308`).
+const C_NAME_MAX: usize = 63;
+
+/// `--hello-string`, `--hello-file` (`hello-filename`) и любое написание `--http-header`/`--http-field` по
+/// `EQUALS`, до [`equals_option`]: набранное имя целиком (со скобками) и встроенное значение для скрытой опции
+/// `--rmasscan-…`. Разделитель значения тот же, что у всякого имени ([`equals_option`]): первое `=`, иначе первое
+/// `:` (`masscan_command_line`, :3279-3289), поэтому двоеточие внутри скобок режет набранное имя, как у C. Имя
+/// длиннее 63 байт C обрезает до 63 и печатает `"%.*s: name too long"` с полным именем (`:3305-3308`), и дальше всё
+/// (индекс, форма заголовка, имя заголовка) читается из обрезанного; здесь так же, только граница отступает до
+/// начала знака UTF-8, если 63-й байт внутри него (значения rmasscan это текст). Индекс от 65536 в обрезанном имени
+/// это `bad index` C (`masscan_set_parameter`, :2437-2441); незакрытая `[` в набранном имени отказывает как у
+/// всякого имени (Р17, `bad index` раньше незакрытой); обрезка, которая отрезала `]`, это не незакрытая скобка.
+/// `None`, если аргумент не такой.
 fn banner_typed_option(a: &str) -> Option<Result<TypedBannerOption, String>> {
     let rest = a.strip_prefix("--")?;
     let base_end = rest.find(['[', '=', ':']).unwrap_or(rest.len());
@@ -1209,24 +1235,38 @@ fn banner_typed_option(a: &str) -> Option<Result<TypedBannerOption, String>> {
         "httpheader" | "httpfield" => "rmasscan-http-header",
         _ => return None,
     };
-    let split = || -> Result<(&str, Option<&str>), String> {
-        let (typed, inline) = match rest.find('=').or_else(|| rest.find(':')) {
+    let split = || -> Result<TypedBannerOption, String> {
+        let (full, inline) = match rest.find('=').or_else(|| rest.find(':')) {
             Some(i) => (&rest[..i], Some(&rest[i + 1..])),
             None => (rest, None),
         };
-        if let Some(open) = typed.find('[') {
-            check_c_index(typed)?;
-            if !typed[open..].contains(']') {
-                return Err(format!("--{typed}: unclosed '[' in the option name"));
-            }
+        let mut cut = full.len().min(C_NAME_MAX);
+        while !full.is_char_boundary(cut) {
+            cut -= 1;
         }
-        Ok((typed, inline))
+        let mut typed = full[..cut].to_string();
+        check_c_index(&typed)?;
+        if let Some(open) = full.find('[')
+            && !full[open..].contains(']')
+        {
+            return Err(format!("--{full}: unclosed '[' in the option name"));
+        }
+        // Скобка набранного имени закрыта; если обрезка отрезала её `]`, она закрывается снова в конце обрезанного
+        // имени: строгий разбор индекса и скобочной формы (Р17) тогда читает ровно байты, которые читает C, то есть
+        // уцелевшие цифры индекса (`parseInt` до конца `name2`) и имя заголовка (конечная пунктуация снимается).
+        if let Some(open) = typed.find('[')
+            && !typed[open..].contains(']')
+        {
+            typed.push(']');
+        }
+        Ok(TypedBannerOption {
+            hidden,
+            typed,
+            inline: inline.map(std::string::ToString::to_string),
+            too_long: (full.len() > C_NAME_MAX).then(|| format!("{full}: name too long")),
+        })
     };
-    Some(split().map(|(typed, inline)| TypedBannerOption {
-        hidden,
-        typed: typed.to_string(),
-        inline: inline.map(std::string::ToString::to_string),
-    }))
+    Some(split())
 }
 
 /// `SET_topports` (main-conf.c:2107-2139): пусто значит 20, логическое значение включает (`1`, `true`, `on`) или
@@ -1396,12 +1436,13 @@ impl Cli {
         I: IntoIterator<Item = S>,
         S: Into<String>,
     {
-        let argv = preprocess_args(args).map_err(ParseError::Masscan)?;
+        let (argv, notes) = preprocess_args_with_notes(args).map_err(ParseError::Masscan)?;
         refuse_json_status(&argv)?;
         let m = Cli::command()
             .try_get_matches_from(argv)
             .map_err(from_clap)?;
         let mut cli = Cli::from_arg_matches(&m).map_err(ParseError::Clap)?;
+        cli.notes = notes;
         // `src/main-conf.c:2688-2696`: неизвестное имя это выход с кодом 1 прямо при разборе.
         for name in &cli.banner_types {
             banner_app(name).map_err(ParseError::Masscan)?;
@@ -1492,6 +1533,12 @@ impl Cli {
             .collect();
         cli.output_options().map_err(ParseError::Masscan)?;
         Ok(cli)
+    }
+
+    /// Строки stderr разбора argv, которые C печатает и продолжает (`name too long`, `src/main-conf.c:3305-3308`),
+    /// по порядку argv; [`crate::run`] печатает их первыми.
+    pub fn parse_notes(&self) -> &[String] {
+        &self.notes
     }
 
     /// Задана ли хоть одна опция вывода или статуса (Р19: они допустимы только со сканом и `--readscan`).
@@ -1616,7 +1663,7 @@ impl Cli {
             if let Some(mk) = self.markers.get(seg) {
                 full.output.touched.clear();
                 full.port_default = self.port_default_at(mk.pos);
-                apply_conf_key(mk.kind, &mk.path, &mut full, &mut loader, 0)?;
+                apply_conf_key(mk.kind, &mk.path, &mut full, &mut loader, 0, None)?;
                 for group in std::mem::take(&mut full.output.touched) {
                     full.output.file_pos.insert(group, mk.pos);
                 }
@@ -1853,6 +1900,7 @@ impl Cli {
                 BannerStep::Kv(key, value) => {
                     apply_core_kv(cfg, key, value).map_err(|e| e.to_string())?;
                 }
+                // Набранное имя уже обрезано до 63 байт, как `name2[64]` C ([`banner_typed_option`]).
                 BannerStep::HelloString(name, value) | BannerStep::HttpHeader(name, value) => {
                     if !apply_core_kv(cfg, name, value).map_err(|e| e.to_string())? {
                         return Err(format!("unknown banner option {name:?}"));
@@ -4193,7 +4241,9 @@ adapter-ip = 198.18.0.9\noutput-filename = base.xml\n",
         assert!(parse(&["--http-header[A:B]:v"]).is_err());
     }
 
-    /// Набранное имя короче 11 знаков: `name += 11` уходит за NUL (E1.7), здесь отказ.
+    /// Набранное в argv имя короче 11 знаков: `name += 11` уходит за NUL в байты `name2[64]`, оставшиеся от прошлых
+    /// опций (E1.7, только argv), здесь отказ. В файле конфигурации то же написание разбирается как у C
+    /// (`http_header_short_spelling_in_config_file_like_c`).
     #[test]
     fn http_header_short_spelling_fails() {
         for a in [
@@ -4291,7 +4341,6 @@ adapter-ip = 198.18.0.9\noutput-filename = base.xml\n",
             ("bad-hello.conf", "hello = tls\n"),
             ("bad-b64.conf", "hello-string[80] = Q\n"),
             ("no-index.conf", "hello-string = QUJD\n"),
-            ("short.conf", "http-field = X:v\n"),
             ("no-form.conf", "http-header = NoColon\n"),
             ("unclosed.conf", "http-header[X = v\n"),
             ("big-index.conf", "hello-string[65536] = QUJD\n"),
@@ -4305,5 +4354,142 @@ adapter-ip = 198.18.0.9\noutput-filename = base.xml\n",
                 "{name}"
             );
         }
+    }
+    /// I1 ревью задач 11-13: короткое написание `http-header` в файле `-c` идёт по буферу строки C
+    /// (`src/main-conf.c:3902-3920`, `name += 11` `:1361`), как у C; в argv оно отказывает (E1.7). Ожидания это
+    /// вывод `masscan --echo -c FILE` сборки C 8e6b3b0 (без скана). Каждый файл, в том числе вложенный `conf` и второй
+    /// `-c`, это свой буфер: байт 11, которого не писала ни одна строка файла, у C неопределённый байт стека (эта
+    /// сборка переносит его даже из прошлого файла `-c`), здесь он не `[`.
+    #[test]
+    fn http_header_short_spelling_in_config_file_like_c() {
+        let dir = crate::scratch::Scratch::new();
+        let headers = |files: &[(&str, &str)]| {
+            let mut a = Vec::new();
+            for (name, text) in files {
+                a.push("-c".to_string());
+                a.push(dir.write(name, text.as_bytes()).display().to_string());
+            }
+            let refs: Vec<&str> = a.iter().map(String::as_str).collect();
+            parse(&refs)
+                .unwrap()
+                .to_config()
+                .map(|cfg| cfg.http.headers)
+        };
+        let h = |n: &str, v: &str| (n.to_string(), v.to_string());
+        assert_eq!(
+            headers(&[("a.conf", "http-field = X:v\n")]),
+            Ok(vec![h("X", "v")])
+        );
+        assert_eq!(
+            headers(&[("b.conf", "httpheader = X:v\n")]),
+            Ok(vec![h("X", "v")])
+        );
+        assert_eq!(
+            headers(&[("c.conf", "http-field=X:v\n")]),
+            Ok(vec![h("X", "v")])
+        );
+        assert_eq!(
+            headers(&[("h.conf", "httpfield=a[X]\n")]),
+            Ok(vec![h("X", "a[X]")])
+        );
+        assert_eq!(
+            headers(&[("p.conf", "http-field=[Y]\nhttpfield=")]),
+            Ok(vec![h("Y", "[Y]"), h("Y", "")])
+        );
+        let both = Err(
+            "[-] --http-header needs both a name and value\n    hint: \"--http-header Name:value\""
+                .to_string(),
+        );
+        assert_eq!(headers(&[("k.conf", "http-field =[X]v\n")]), both);
+        assert_eq!(headers(&[("q.conf", "httpfield=")]), both);
+        // Второй `-c` и вложенный `conf` начинают с чистого буфера.
+        assert_eq!(
+            headers(&[("y.conf", "http-field=[Y]\n"), ("q.conf", "httpfield=")]),
+            both
+        );
+        let inner = dir.write("inner.conf", b"httpfield=");
+        let outer = format!("http-field=[Y]\nconf = {}\n", inner.display());
+        assert_eq!(headers(&[("outer.conf", outer.as_str())]), both);
+        // В argv короткое написание по-прежнему отказ (E1.7: `name2[64]` хранит байты прошлых опций).
+        assert!(
+            parse(&["--http-field", "X:v"])
+                .unwrap()
+                .to_config()
+                .is_err()
+        );
+    }
+
+    /// M1 ревью задач 11-13: набранное имя длиннее 63 байт C обрезает до 63 (`char name2[64]`) и печатает
+    /// `"%.*s: name too long"` с полным именем (`src/main-conf.c:3305-3308`), всё дальше читается из обрезанного.
+    /// Вывод сборки C 8e6b3b0 (`--echo`, без скана): stderr
+    /// `http-header[X-Very-Long-Header-Name-That-Goes-Beyond-Sixty-Three-Characters-Total]: name too long`, stdout
+    /// `http-header = X-Very-Long-Header-Name-That-Goes-Beyond-Sixty-Thre:v`, код 0 (и с `=v`, `:v`);
+    /// `--hello-string[` и 47 нулей и `80]` (63 байта) это порт 80 без строки; с 48 нулями (64 байта) строка и порт
+    /// 80; с 50 нулями (66 байт) строка и порт 0.
+    #[test]
+    fn typed_banner_name_over_63_bytes_is_truncated_like_c() {
+        const LONG: &str =
+            "http-header[X-Very-Long-Header-Name-That-Goes-Beyond-Sixty-Three-Characters-Total]";
+        let note = format!("{LONG}: name too long");
+        for a in [
+            vec![format!("--{LONG}"), "v".to_string()],
+            vec![format!("--{LONG}=v")],
+            vec![format!("--{LONG}:v")],
+        ] {
+            let refs: Vec<&str> = a.iter().map(String::as_str).collect();
+            let cli = parse(&refs).unwrap();
+            assert_eq!(cli.parse_notes(), std::slice::from_ref(&note), "{a:?}");
+            assert_eq!(
+                cli.to_config().unwrap().http.headers,
+                [(
+                    "X-Very-Long-Header-Name-That-Goes-Beyond-Sixty-Thre".to_string(),
+                    "v".to_string()
+                )]
+            );
+        }
+        let at63 = format!("--hello-string[{}80]", "0".repeat(47));
+        assert_eq!(at63.len() - 2, 63);
+        let cli = parse(&[at63.as_str(), "QUJD"]).unwrap();
+        assert!(cli.parse_notes().is_empty());
+        assert_eq!(
+            cli.to_config().unwrap().hello_strings,
+            [(80, "QUJD".to_string())]
+        );
+        // 64 байта: обрезка отрезает только `]`, порт 80; 66 байт: от индекса остаются нули, порт 0.
+        for (zeros, port) in [(48, 80), (50, 0)] {
+            let long = format!("--hello-string[{}80]", "0".repeat(zeros));
+            let cli = parse(&[long.as_str(), "QUJD"]).unwrap();
+            assert_eq!(
+                cli.parse_notes(),
+                [format!("{}: name too long", &long[2..])]
+            );
+            assert_eq!(
+                cli.to_config().unwrap().hello_strings,
+                [(port, "QUJD".to_string())]
+            );
+        }
+        // Незакрытая `[` в набранном имени отказывает и у длинного имени, текстом с полным именем.
+        let open = format!("--http-header[{}", "x".repeat(70));
+        assert_eq!(
+            masscan_err(&[open.as_str(), "v"]),
+            format!("{open}: unclosed '[' in the option name")
+        );
+        // Граница 63 байт внутри знака UTF-8 отступает к его началу.
+        let utf8 = format!("--http-header[{}\u{e9}x]", "a".repeat(50));
+        let cli = parse(&[utf8.as_str(), "v"]).unwrap();
+        assert_eq!(cli.to_config().unwrap().http.headers[0].0, "a".repeat(50));
+    }
+
+    /// M2 ревью задач 11-13: нечитаемый `--hello-file` это две строки C, вторая с текстом `strerror` без хвоста
+    /// ` (os error N)` (`src/main-conf.c:1232-1233`).
+    #[test]
+    fn hello_file_open_failure_prints_c_strerror() {
+        let dir = crate::scratch::Scratch::new();
+        let missing = dir.path("missing.bin");
+        let m = missing.to_str().unwrap();
+        assert_eq!(
+            banner_err(&["--hello-file[80]", m]),
+            format!("[-] [FAILED] --hello-file\n[-] {m}: No such file or directory")
+        );
     }
 }

@@ -9,8 +9,8 @@ use std::fmt::Write as _;
 use std::path::Path;
 
 use rmasscan_core::config::{
-    ConfigError, EchoExtras, ScanConfig, apply_core_kv, conf_line_kv, echo_with, normalize_key,
-    parse_bool,
+    ConfLineBuffer, ConfigError, EchoExtras, ScanConfig, apply_core_conf_kv, apply_core_kv,
+    echo_with, normalize_key, parse_bool,
 };
 use rmasscan_core::ranges::RangeList;
 use rmasscan_core::targets::parse_ports_with;
@@ -230,6 +230,9 @@ pub(crate) fn check_c_index(name: &str) -> Result<(), String> {
 
 /// Применяет одну пару `name = value` в позиции разбора (ключи правее
 /// переопределяют ключи левее, как в `masscan_set_parameter`, main-conf.c:2429).
+/// `line` это буфер строки C, если пара пришла из файла конфигурации (его читает
+/// короткое написание `http-header`, [`apply_core_conf_kv`]); у файлов argv
+/// (`-c`, `--resume`) его нет.
 /// Отличия от C: неизвестный ключ и нечитаемый файл возвращают `Err` (C на
 /// `conf`/`resume` молча продолжает, :3889-3900).
 pub fn apply_conf_key(
@@ -238,6 +241,7 @@ pub fn apply_conf_key(
     base: &mut FullConf,
     include_loader: &mut dyn FnMut(&Path) -> Result<String, String>,
     depth: usize,
+    line: Option<&ConfLineBuffer>,
 ) -> Result<(), String> {
     check_c_index(name)?;
     let o = &mut base.output;
@@ -329,7 +333,11 @@ pub fn apply_conf_key(
         | "outputrotatefilesize"
         | "rotatefilesize" => {}
         _ => {
-            let taken = apply_core_kv(&mut base.scan, name, value).map_err(|e| e.to_string())?;
+            let taken = match line {
+                Some(line) => apply_core_conf_kv(&mut base.scan, name, value, line),
+                None => apply_core_kv(&mut base.scan, name, value),
+            }
+            .map_err(|e| e.to_string())?;
             if !taken {
                 return Err(format!("CONF: unknown config option: {name}={value}"));
             }
@@ -353,9 +361,11 @@ pub fn parse_conf_str(
             "configuration files nested deeper than {MAX_CONF_DEPTH} levels (a conf/resume cycle?)"
         ));
     }
-    for raw in text.lines() {
-        if let Some((name, value)) = conf_line_kv(raw) {
-            apply_conf_key(name, value, base, include_loader, depth)?;
+    // Один буфер строки C на файл (`char line[65536]` кадра `masscan_read_config_file`, main-conf.c:3886).
+    let mut line = ConfLineBuffer::default();
+    for raw in text.split_inclusive('\n') {
+        if let Some((name, value)) = line.feed(raw) {
+            apply_conf_key(name, value, base, include_loader, depth, Some(&line))?;
         }
     }
     Ok(())

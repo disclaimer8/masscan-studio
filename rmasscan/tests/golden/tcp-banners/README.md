@@ -161,8 +161,8 @@ The 30 new response cases and three upgraded task-8 HTTP cases cover `HTTP/1.0 3
 spaced Server names, `<title>`, `<TITLE id=x>`, `<titlex>`, no title, a title without a closing `<`, multiple titles,
 full HTML on/off, failed/incomplete status and fields, 2,000 version digits, bare LF, CR inside a field name and
 banout order around 199/200 bytes. Every response is compared with C whole in all splits (whole, bytewise, given,
-eight seeded random splits); actions on whole too. All 177 response cases and three tables give identical normal
-and sanitizer output, with zero reports.
+eight seeded random splits); actions on whole too. When task 10 captured them, every response case then in the set
+and the three tables gave identical normal and sanitizer output, with zero reports.
 
 `requests/<name>.in.txt` lists edits in the C3 application order: `payload HEX` (including Content-Length),
 `User-Agent: HEX`, `Host: HEX`, `method HEX`, `url HEX`, `version HEX`, `header NAMEHEX VALUEHEX`, `Cookie: HEX`.
@@ -170,7 +170,10 @@ Empty hex means an empty value; field names are C strings (NUL truncates the nam
 `requests/<name>.out` is the exact request bytes, including NUL, CR and LF. The Rust unit fixture generator is
 `http_request.rs::tests::cases`; `RMASSCAN_HTTP_INPUTS=DIR cargo test -p rmasscan-proto --lib
 http_request_golden_matches_c` writes independent oracle inputs. Its ordinary run compares each generated input
-and result with these files. The shared manifest test verifies all 412 response/table/request file hashes.
+and result with these files. The shared manifest test (`manifest_hashes_match_files`,
+`crates/rmasscan-proto/tests/tcp_golden.rs`) verifies the hash of every file in the manifest: input and output of
+each response case, the two banout scenario files, the two tables and input and output of each request case; it also
+asserts that count.
 
 The request adapter, kept off repository, includes the unchanged TCP oracle with renamed main, creates Banner1,
 copies the default hello, then calls the real `http_change_requestline`/`http_change_field` in C3 order. The pinned

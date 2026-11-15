@@ -1096,6 +1096,78 @@ RMASSCAN_LAB_BIN=$PWD/target/release/rmasscan-lab bash scripts/wire-lab.sh --sui
 target/release/rmasscan-lab banners-verify --dir "$OUT" --out "$OUT/verdict.json"
 ```
 
+## TCP-кейс баннеров на Windows VM и macOS `feth` (задача 18)
+
+Один кейс на стенд, таблица и верификатор — `banners_stand.rs` (`StandCase`, `WINDOWS`, `MACOS`): CLI rmasscan с
+`--banners` (у `wire_scan` нет стека TCP) против сценариев HTTP и SSH окна баннеров (`banners_verify::TCP_SCENARIOS`,
+пир `198.18.0.2`: запрос HTTP, ответ с `Server` и заголовком, FIN сервера; идентификатор SSH-2.0 и ответный
+идентификатор сканера). Пир отвечает сокетами ядра со скриптами сценариев: `peer listen --banners PORT[=ПОРТ
+СЦЕНАРИЯ],..` (`capture::run_script`; запись `listeners.json` несёт `banners`). Пульса нет: на этих стендах идёт
+только rmasscan, его таймеры работают на тихом линке (`t09_quiet_timers`). Argv обоих: `198.18.0.2 -p<порты> --banners
+--connection-timeout 8 <привязка стенда> -oL output.txt --seed 1 --rate 100 --wait 14 --source-port 40000 --retries 0`
+(жизнь и wait — `t01_tcp4`; оба сценария кончаются FIN задолго до них).
+
+| Стенд | Кейс | Порты | Привязка | Что ещё доказывает |
+|---|---|---|---|---|
+| Windows VM `n2` | `wb01_banners` | 22, 80 | `--adapter-ip 198.18.0.1 --router-mac 02-57-4c-3d-2e-9b`: собственный адрес гостя | README C: «Windows doesn't respond with RST packets» — ни одного кадра стека TCP/IP гостя на соединениях скана (`windows_no_rst` в notes, состояние файрвола в `guest-firewall.json`) |
+| macOS `feth` `m1` | `mb01_banners` | 2222 (сценарий 22), 8080 (сценарий 80) | привязка `m03_user_router_mac`, BPF выдан, пользователь | адрес сканера `198.18.0.1` не назначен ни одному интерфейсу (`macos-lab status`, правило 2): иначе ядро сбрасывает соединения баннеров; кадр ядра на соединении скана — INVALID |
+
+Порты macOS: процесс без root на Darwin занимает зарезервированный порт только на INADDR_ANY (`in_pcbbind` с 10.14), а у
+стенда нет слушателя от root и нет слушателя на всех адресах (он слушал бы и на uplink). Поэтому HTTP идёт на 8080, SSH
+на 2222: таблица hello C шлёт на 8080 тот же запрос, что на 80, и ничего на 22 и 2222 (`banner1_create`,
+`src/proto-banner1.c:518-610`; верификатор сверяет это по закреплённому выводу C `tests/golden/tcp-banners/hellos.out`),
+а ни один из двух парсеров на порт не смотрит. Записи сравниваются с записями C с отображением порта. Если контролёр
+предпочтёт 80 и 22 со слушателем от root, меняются только порты `MACOS` и способ запуска слушателя.
+
+Эталон — записи C тех же сценариев из окна Linux: шаг C `oracle-list` кейса `t01_tcp4` (`argv.json`, `output.txt`,
+`peer.pcap`). Suite копирует его до любого удалённого шага (`--reference КАТАЛОГ_ОКНА_LINUX`, `banners_stand::
+copy_reference`) в `<out>/reference/` вместе с `verdict.json` окна и `source.json` (имя каталога, вердикт, sha256 из
+`hashes-before-copy.txt` кейса Linux). Окно без `verdict.json`, где `t01_tcp4` не PASS, или файл, чей sha256 не тот,
+что записал кейс Linux, — отказ (NOT RUN). Верификатор выводит из копии записи C для `198.18.0.2:22` и `:80` и то, что C
+послал по этим двум соединениям (сегменты с нагрузкой, каждый номер последовательности один раз).
+
+Вердикт по записям (`windows-verify` и `macos-verify` передают каталог с ключом манифеста `banners_stand` в
+`banners_stand::verify_dir`, как каталог `autodetect` в `autodetect-verify`): записи `-oL` rmasscan по двум соединениям
+равны записям C как мультимножество, поле в поле без времени (на macOS с отображением порта); баннеры соединения идут
+подряд после его `open` (M1) с приложениями сценария; в документе нет ничего другого. Провод: SYN — план продукта на
+привязке стенда; каждый кадр MAC сканера объяснён (кадр стека rmasscan побайтно равен кадру `TcpFrameBuilder::from_plan`
+с его полями, иначе это стек ОС); сегменты rmasscan с нагрузкой на каждом соединении равны сегментам C (чужой hello или
+чужой идентификатор SSH — FAIL, хотя записи совпадают: сервер отвечает и на них); hello через 1,0-3,5 с после SYN-ACK;
+ни одного RST rmasscan (кроме RST на FIN без соединения, Р8); ни одного кадра после конца соединения; ответ на who-has
+пира в форме C. Стенд (INVALID, не FAIL): один SYN-ACK на SYN, поток пира равен сценарию, нет RST и других кадров пира
+(его multicast и шум IPv6 считаются), нет кадров стека ОС, эталон доказан, ворота и свидетель. Порядок проверок —
+своё свидетельство сканера, стенд, остальное, как в окне баннеров.
+
+**Windows.** `windows-suite --plan banners` — машинерия плана `autodetect` (ворота, слушатель, захваты `lab0`/`eno1`,
+гостевой runner, рабочий каталог `.work`, scrub); `rmasscan.exe` собран, как в разделе «Autodetect suite». Runner
+гостя запускается с `-WorkInOutDir` (сканер работает в своём каталоге вывода, `-oL output.txt` ложится туда, `argv.json`
+равен таблице) и `-RecordFirewall` (только чтение: профили файрвола и категория сети лабораторного NIC в
+`firewall.json`). `--rerun`, `--tx-mode`, `--fixtures` плана нет; `--reference` есть только у него.
+
+```sh
+rmasscan/target/release/rmasscan-lab windows-suite --list --plan banners
+rmasscan/target/release/rmasscan-lab windows-suite \
+  --out "$OUT/windows-banners-r1" --suite windows-banners-r1 --plan banners --commit $COMMIT --repo . \
+  --guest-exe 'C:\Users\lab\t4\rmasscan.exe' --reference "$LINUX_BANNERS_OUT" \
+  --remote-lab /home/<LAB_ACCOUNT>/winvm/lab/bin/rmasscan-lab --deploy-manifest ./deploy-manifest.json
+rmasscan/target/release/rmasscan-lab windows-verify --dir "$OUT/windows-banners-r1" --out "$OUT/windows-banners-r1/verdict.json"
+```
+
+**macOS.** `macos-suite --plan banners --out DIR --rmasscan PATH --reference КАТАЛОГ_ОКНА_LINUX [--run-id m1]
+[--manifest LAB_MANIFEST]` — шаги CLI-прогонов этого стенда (`autodetect-suite macos`): ворота `macos-lab status` с
+выданным BPF, Application Firewall, оставшиеся процессы, тишина пары, слушатели сценариев, захват uplink и интерлок
+(код 13), свидетель пира, опубликованный без mDNS хоста, рабочий каталог и хэши. Suite идёт как пользователь, `sudo` не
+вызывает; стенд поднимает пользователь (`macos-lab up`, `bpf-access --grant`). Документ пишется в каталог прогона по
+полному пути (`scanner-argv.json`, `--out` как `$OUT`), `argv.json` — форма таблицы. Опций wire_scan у плана нет.
+
+```sh
+"$BIN" macos-suite --plan banners --out "$OUT/macos-banners-r1" --rmasscan "$RM" --reference "$LINUX_BANNERS_OUT"
+"$BIN" macos-verify --dir "$OUT/macos-banners-r1" --out "$OUT/macos-banners-r1/verdict.json"
+```
+
+`$OUT` — нейтральный каталог вне репозитория (см. «Autodetect suite», «Пути и учётная запись»). Тег кейса без `_tcp`:
+приватность autodetect принимает такой токен за имя DNS-SD.
+
 ## Fuzzing the UDP banner parsers (`fuzz udp`)
 
 `rmasscan-lab fuzz udp --seed N (--duration D | --count N) [--port P] [--corpus DIR...] [--pcap FILE...] [--out FILE]` —

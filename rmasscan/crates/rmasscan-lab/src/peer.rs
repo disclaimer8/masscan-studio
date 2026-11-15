@@ -160,6 +160,80 @@ mod tests {
             assert!(!is_syn(&vec![0; n], &[0; 6]));
         }
     }
+    #[test]
+    fn banner_ports_take_the_scenarios_of_198_18_0_2_and_refuse_the_rest() {
+        let b = banner_ports("22,80").unwrap();
+        assert_eq!(
+            b.iter()
+                .map(|(p, s)| (*p, s.port, s.peer))
+                .collect::<Vec<_>>(),
+            [(22, 22, 2), (80, 80, 2)]
+        );
+        // The macOS stand: the scenarios of 80 and 22 on ports a user may bind.
+        let b = banner_ports("8080=80,2222=22").unwrap();
+        assert_eq!(
+            b.iter().map(|(p, s)| (*p, s.port)).collect::<Vec<_>>(),
+            [(8080, 80), (2222, 22)]
+        );
+        assert!(banner_ports("").unwrap().is_empty());
+        for bad in [
+            "443",
+            "8080",
+            "0=80",
+            "80,80",
+            "80,8080=80",
+            "x",
+            "80=x",
+            "70000",
+        ] {
+            assert!(banner_ports(bad).is_err(), "{bad}");
+        }
+    }
+    #[test]
+    fn a_banner_socket_answers_each_connection_with_its_scenario() {
+        use std::io::{Read, Write};
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        };
+        let sc = |p| banner_ports(p).unwrap()[0].1;
+        let (http, ssh) = (sc("80"), sc("22"));
+        let mut socks = Vec::new();
+        let mut addrs = Vec::new();
+        for s in [http, ssh] {
+            let l = TcpListener::bind("127.0.0.1:0").unwrap();
+            l.set_nonblocking(true).unwrap();
+            addrs.push(l.local_addr().unwrap());
+            socks.push((l, s));
+        }
+        let stop = Arc::new(AtomicBool::new(false));
+        let st = stop.clone();
+        let h = thread::spawn(move || serve_banners(&socks, &move || st.load(Ordering::SeqCst)));
+        let read_all = |c: &mut TcpStream| {
+            let mut got = Vec::new();
+            c.read_to_end(&mut got).unwrap();
+            got
+        };
+        // HTTP: the server waits for the request, answers it, then closes after the client's FIN.
+        let mut c = TcpStream::connect(addrs[0]).unwrap();
+        c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+        c.write_all(b"GET / HTTP/1.0\r\n\r\n").unwrap();
+        let mut head = vec![0u8; http.stream().len()];
+        c.read_exact(&mut head).unwrap();
+        assert_eq!(head, http.stream());
+        c.shutdown(std::net::Shutdown::Write).unwrap();
+        assert!(read_all(&mut c).is_empty());
+        // SSH: the server speaks first, reads the client's ident, then closes.
+        let mut c = TcpStream::connect(addrs[1]).unwrap();
+        c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+        let mut ident = vec![0u8; ssh.stream().len()];
+        c.read_exact(&mut ident).unwrap();
+        assert_eq!(ident, ssh.stream());
+        c.write_all(b"SSH-2.0-OPENSSH_7.9\r\n").unwrap();
+        assert!(read_all(&mut c).is_empty());
+        stop.store(true, Ordering::SeqCst);
+        h.join().unwrap().unwrap();
+    }
 }
 use crate::link;
 use clap::{Parser, Subcommand};
@@ -347,10 +421,14 @@ struct Args {
 #[derive(Subcommand)]
 enum Cmd {
     Listen {
-        #[arg(long)]
+        #[arg(long, default_value = "")]
         open: String,
         #[arg(long, default_value = "")]
         silent: String,
+        /// The TCP banner cases of the Windows VM and macOS feth stands: `PORT[=SCENARIO_PORT],..`
+        /// ([`banner_ports`]).
+        #[arg(long, default_value = "")]
+        banners: String,
         #[arg(long)]
         ready: String,
     },
@@ -424,16 +502,92 @@ enum Cmd {
         out: String,
     },
 }
+/// `--banners PORT[=SCENARIO_PORT],..` of `peer listen` (the TCP banner case of the Windows VM and macOS feth stands,
+/// `banners_stand`): each port answers with the scenario `banners_verify::TCP_SCENARIOS` holds for 198.18.0.2 on
+/// SCENARIO_PORT (the port itself without `=`). The macOS stand needs the mapping: a non-root process cannot bind a
+/// reserved port on a given address there, so its HTTP and SSH scenarios run on 8080 and 2222. A port without a
+/// scenario of 198.18.0.2, a port given twice or a scenario given twice is refused.
+pub(crate) fn banner_ports(
+    spec: &str,
+) -> Result<Vec<(u16, &'static crate::banners_verify::TcpScenario)>, String> {
+    let ip = std::net::IpAddr::V4(Ipv4Addr::new(198, 18, 0, 2));
+    let mut out: Vec<(u16, &'static crate::banners_verify::TcpScenario)> = Vec::new();
+    for item in spec.split(',').filter(|s| !s.is_empty()) {
+        let (p, sp) = item.split_once('=').unwrap_or((item, item));
+        let p: u16 = p
+            .parse()
+            .map_err(|_| format!("invalid banner port {item:?}"))?;
+        let sp: u16 = sp
+            .parse()
+            .map_err(|_| format!("invalid banner scenario port {item:?}"))?;
+        if p == 0 {
+            return Err("invalid banner port 0".into());
+        }
+        let sc = crate::banners_verify::tcp_scenario(sp, ip)
+            .ok_or_else(|| format!("no TCP scenario of 198.18.0.2 on port {sp}"))?;
+        if out.iter().any(|(q, s)| *q == p || std::ptr::eq(*s, sc)) {
+            return Err(format!("banner port or scenario given twice: {item:?}"));
+        }
+        out.push((p, sc));
+    }
+    Ok(out)
+}
+/// Accept on every banner socket until `stop`: each connection runs its scenario's script on its own thread
+/// (`capture::run_script`, the banners window's peer), which ends with the connection.
+fn serve_banners(
+    socks: &[(TcpListener, &'static crate::banners_verify::TcpScenario)],
+    stop: &dyn Fn() -> bool,
+) -> Result<(), String> {
+    while !stop() {
+        for (l, sc) in socks {
+            match l.accept() {
+                Ok((c, _)) => {
+                    let sc: &'static crate::banners_verify::TcpScenario = sc;
+                    thread::spawn(move || {
+                        let _ = crate::capture::run_script(c, sc);
+                    });
+                }
+                // A connection the scanner reset before it was accepted is no failure of the listener.
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        std::io::ErrorKind::WouldBlock
+                            | std::io::ErrorKind::ConnectionAborted
+                            | std::io::ErrorKind::ConnectionReset
+                    ) => {}
+                Err(e) => return Err(format!("banner listener on {:?}: {e}", l.local_addr())),
+            }
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    Ok(())
+}
 /// `peer listen`: TCP listeners on the peer address 198.18.0.2 (it exists only on the peer side of the lab, so
-/// binding it anywhere else fails), the silent ones with a zero backlog. Linux (inside the peer namespace) and macOS.
-fn listen(open: &str, silent: &str, ready: &str) -> Result<i32, String> {
+/// binding it anywhere else fails), the silent ones with a zero backlog, the banner ones ([`banner_ports`]) answering
+/// each connection with their scenario. Linux (inside the peer namespace) and macOS.
+fn listen(open: &str, silent: &str, banners: &str, ready: &str) -> Result<i32, String> {
     let open = parse_ports(open)?;
     let silent = parse_ports(silent)?;
+    let banners = banner_ports(banners)?;
+    if let Some((p, _)) = banners
+        .iter()
+        .find(|(p, _)| open.contains(p) || silent.contains(p))
+    {
+        return Err(format!(
+            "port {p} is both a banner port and an --open or --silent one"
+        ));
+    }
     let ip = Ipv4Addr::new(198, 18, 0, 2);
     let mut sockets = vec![];
     let mut clients = vec![];
+    let mut scenario_socks = vec![];
     for &p in &open {
         sockets.push(TcpListener::bind((ip, p)).map_err(|e| e.to_string())?);
+    }
+    for &(p, sc) in &banners {
+        let l = TcpListener::bind((ip, p)).map_err(|e| format!("banner port {p}: {e}"))?;
+        l.set_nonblocking(true).map_err(|e| e.to_string())?;
+        scenario_socks.push((l, sc));
     }
     for &p in &silent {
         sockets.push(lab_io::silent_listener(ip, p).map_err(|e| e.to_string())?);
@@ -453,14 +607,24 @@ fn listen(open: &str, silent: &str, ready: &str) -> Result<i32, String> {
             _ => proven = false,
         }
     }
-    save(
-        ready,
-        &json!({"open":open,"silent":silent,"silent_proven":if silent.is_empty(){Value::Null}else{json!(proven)},"ready":proven,"bind":"198.18.0.2","pid":std::process::id()}),
-    )?;
-    while !lab_io::stop_requested() {
-        thread::sleep(Duration::from_millis(100));
+    let mut rec = json!({"open":open,"silent":silent,"silent_proven":if silent.is_empty(){Value::Null}else{json!(proven)},"ready":proven,"bind":"198.18.0.2","pid":std::process::id()});
+    if !banners.is_empty() {
+        rec["banners"] = json!(
+            banners
+                .iter()
+                .map(|(p, sc)| json!({"port": p, "scenario_port": sc.port, "peer": sc.peer, "about": sc.about, "apps": sc.apps}))
+                .collect::<Vec<_>>()
+        );
     }
-    drop((sockets, clients));
+    save(ready, &rec)?;
+    if scenario_socks.is_empty() {
+        while !lab_io::stop_requested() {
+            thread::sleep(Duration::from_millis(100));
+        }
+    } else {
+        serve_banners(&scenario_socks, &lab_io::stop_requested)?;
+    }
+    drop((sockets, clients, scenario_socks));
     Ok(0)
 }
 
@@ -541,6 +705,7 @@ pub fn run(args: &[String]) -> Result<i32, String> {
     if let Cmd::Listen {
         open,
         silent,
+        banners,
         ready,
     } = &a.cmd
     {
@@ -560,7 +725,7 @@ pub fn run(args: &[String]) -> Result<i32, String> {
             );
         }
         lab_io::install_signal_handlers().map_err(|e| e.to_string())?;
-        return listen(open, silent, ready);
+        return listen(open, silent, banners, ready);
     }
     guard()?;
     lab_io::install_signal_handlers().map_err(|e| e.to_string())?;
@@ -568,8 +733,9 @@ pub fn run(args: &[String]) -> Result<i32, String> {
         Cmd::Listen {
             open,
             silent,
+            banners,
             ready,
-        } => listen(&open, &silent, &ready),
+        } => listen(&open, &silent, &banners, &ready),
         Cmd::Marker {
             iface,
             src,

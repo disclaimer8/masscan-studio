@@ -336,8 +336,10 @@ impl Stand {
         }
         let guest = dir.join("guest");
         let body: Option<Vec<u8>> = if guest.is_dir()
-            && matches!(name, "stdout.txt" | "stderr.txt" | "exit.txt")
-        {
+            && matches!(
+                name,
+                "stdout.txt" | "stderr.txt" | "exit.txt" | "output.txt" | "firewall.json"
+            ) {
             // An autodetect stand: what the guest runner wrote for this run (or for its `--offline` preflight).
             if name == "stdout.txt" {
                 self.stdout_fetches.borrow_mut().push(local.to_path_buf());
@@ -4153,4 +4155,268 @@ fn an_iflist_stand_line_in_the_windows_cli_format_passes_with_the_e1000e_nic() {
             }
         }
     }
+}
+
+// ---- Task 18: --plan banners, the TCP banner case wb01_banners (HTTP 80, SSH 22) ----
+//
+// The stand serves what the guest runner, the banner listener and the two captures produce for a correct run of the
+// case: the case verifier's simulated stand (`banners_stand::tests::StandSim`, the product's stack on the stand
+// binding). The reference is the Linux window of the same tests (`linux_window`).
+use crate::banners_stand::{
+    self as bs,
+    tests::{StandSim, linux_window},
+};
+
+impl World {
+    /// The `n2` stand running `wb01_banners`; `tweak` changes the simulated run before it is served.
+    fn banners(name: &str, tweak: impl Fn(&mut StandSim)) -> Self {
+        let base = std::env::temp_dir().join(format!(
+            "rmasscan-suite-bn-{name}-{}-{}",
+            std::process::id(),
+            nonce()
+        ));
+        let (root, src, repo) = (base.join("out"), base.join("src"), base.join("repo"));
+        for d in [&root, &src, &repo] {
+            fs::create_dir_all(d).unwrap();
+        }
+        let mut sim = StandSim::new(bs::WINDOWS);
+        tweak(&mut sim);
+        let d = src.join("runs").join(bs::WINDOWS.tag);
+        let g = d.join("guest");
+        fs::create_dir_all(&g).unwrap();
+        fs::write(d.join("peer.pcap"), crate::pcap::encode(&sim.frames)).unwrap();
+        fs::write(d.join("eno1.pcap"), crate::pcap::encode(&Vec::new())).unwrap();
+        // What `peer listen --banners 22,80` writes when it is ready.
+        let banners: Vec<Value> = crate::peer::banner_ports(&bs::WINDOWS.banners_arg())
+            .unwrap()
+            .iter()
+            .map(|(p, sc)| json!({"port": p, "scenario_port": sc.port, "peer": sc.peer, "about": sc.about, "apps": sc.apps}))
+            .collect();
+        write_json(
+            d.join("listeners.json"),
+            &json!({"open":[],"silent":[],"silent_proven":null,"ready":true,"bind":"198.18.0.2","pid":4242,"banners":banners}),
+        )
+        .unwrap();
+        fs::write(g.join("stdout.txt"), "\n").unwrap();
+        fs::write(g.join("stderr.txt"), sim.stderr()).unwrap();
+        fs::write(g.join("exit.txt"), format!("{}\n", sim.exit)).unwrap();
+        fs::write(g.join("output.txt"), sim.render()).unwrap();
+        write_json(
+            g.join("firewall.json"),
+            &json!({"profiles":[{"Name":"Public","Enabled":"True","DefaultInboundAction":"NotConfigured"}],"lab_nic":{"name":"Ethernet 2","category":"Public"}}),
+        )
+        .unwrap();
+        let deploy = base.join("deploy.json");
+        write_json(
+            &deploy,
+            &crate::deploy::build_manifest(COMMIT, REMOTE_LAB, LAB_BINARY, "rustc test", 1.0),
+        )
+        .unwrap();
+        Self {
+            root,
+            src,
+            deploy,
+            repo,
+        }
+    }
+}
+fn banners_args(w: &World, extra: &[&str]) -> Vec<String> {
+    let mut a = autodetect_args(w, &[]);
+    let at = a.iter().position(|x| x == "--plan").unwrap();
+    a[at + 1] = "banners".into();
+    let at = a.iter().position(|x| x == "--suite").unwrap();
+    a[at + 1] = "windows-banners-r1".into();
+    a.extend(strings(&["--reference", linux_window().to_str().unwrap()]));
+    a.extend(strings(extra));
+    a
+}
+
+#[test]
+fn plan_banners_runs_wb01_and_windows_verify_passes_it_by_records() {
+    let stand = Stand::new(Path::new("/nonexistent"));
+    assert_eq!(
+        run_with(&strings(&["--plan", "banners", "--list"]), &stand).unwrap(),
+        0
+    );
+    assert!(stand.calls().is_empty());
+    let w = World::banners("pass", |_| {});
+    let stand = autodetect_stand(&w);
+    assert_eq!(
+        run_with(&banners_args(&w, &[]), &stand).unwrap(),
+        0,
+        "{:?}",
+        stand.calls()
+    );
+    let calls = stand.calls();
+    // The peer's scenario sockets, and no plain listener; the scanner in its output directory with the firewall read.
+    let listen: Vec<&String> = calls
+        .iter()
+        .filter(|c| c.contains(" peer listen"))
+        .collect();
+    assert_eq!(listen.len(), 1, "{listen:?}");
+    assert!(
+        listen[0].contains("listen --banners 22,80 --ready"),
+        "{}",
+        listen[0]
+    );
+    assert!(!listen[0].contains("--open"), "{}", listen[0]);
+    let runner: Vec<&String> = calls
+        .iter()
+        .filter(|c| c.starts_with("guest ") && c.contains("windows_wire_run.ps1 -ArgvFile"))
+        .collect();
+    assert_eq!(runner.len(), 1, "{runner:?}");
+    assert!(
+        runner[0].ends_with(" -WorkInOutDir -RecordFirewall"),
+        "{}",
+        runner[0]
+    );
+    let d = w.root.join("runs").join(bs::WINDOWS.tag);
+    let argv = read_json(d.join("runner-argv.json")).unwrap();
+    assert_eq!(argv_of(&argv), bs::WINDOWS.argv());
+    assert_eq!(argv["exe"], RMASSCAN_EXE);
+    for f in [
+        "output.txt",
+        "guest-firewall.json",
+        "argv.json",
+        "expect.json",
+        "listeners.json",
+    ] {
+        assert!(d.join(f).is_file(), "{f}");
+    }
+    let man = read_json(w.root.join("manifest.json")).unwrap();
+    assert_eq!(man[bs::MANIFEST_KEY], "windows");
+    assert_eq!(man["plan"], "banners");
+    assert!(man.get("autodetect").is_none());
+    assert!(w.root.join("reference/source.json").is_file());
+    let v = crate::verify::verify_dir(&w.root);
+    assert_eq!(v["overall"], "PASS", "{v:#}");
+    let r = v["runs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["tag"] == bs::WINDOWS.tag)
+        .unwrap();
+    assert!(
+        r["notes"]["windows_no_rst"]
+            .as_str()
+            .unwrap()
+            .starts_with("holds")
+    );
+    assert_eq!(
+        r["notes"]["guest_firewall"]["lab_nic"]["category"],
+        "Public"
+    );
+    // The case runs once into one --out.
+    let stand = autodetect_stand(&w);
+    let e = run_with(&banners_args(&w, &[]), &stand).unwrap_err();
+    assert!(
+        matches!(&e, SuiteError::NotRun(m) if m.contains("already has a run")),
+        "{e:?}"
+    );
+}
+
+#[test]
+fn plan_banners_refuses_without_a_pass_reference_and_its_options_before_any_remote_command() {
+    let w = World::banners("refuse", |_| {});
+    let documented = banners_args(&w, &[]);
+    assert!(options_for("windows-suite", &documented, WINDOWS_SUITE_OPTIONS).is_ok());
+    let without = |k: &str| {
+        let mut a = documented.clone();
+        let at = a.iter().position(|x| x == k).unwrap();
+        a.drain(at..at + 2);
+        a
+    };
+    let bad_ref = std::env::temp_dir().join(format!("rmasscan-bn-badref-{}", nonce()));
+    fs::create_dir_all(&bad_ref).unwrap();
+    fs::write(bad_ref.join("manifest.json"), "{\"banners\":\"linux\"}").unwrap();
+    let with_ref = |p: &Path| {
+        let mut a = documented.clone();
+        let at = a.iter().position(|x| x == "--reference").unwrap();
+        a[at + 1] = p.to_string_lossy().into_owned();
+        a
+    };
+    for (args, named) in [
+        (without("--reference"), "--reference"),
+        (without("--suite"), "--suite"),
+        (banners_args(&w, &["--tx-mode", "single"]), "--tx-mode"),
+        (
+            banners_args(&w, &["--rerun", "--only", bs::WINDOWS.tag]),
+            "--rerun",
+        ),
+        (with_ref(&bad_ref), "verdict.json"),
+        (
+            {
+                let mut a = autodetect_args(&w, &[]);
+                a.extend(strings(&["--reference", linux_window().to_str().unwrap()]));
+                a
+            },
+            "--reference",
+        ),
+    ] {
+        let stand = autodetect_stand(&w);
+        let e = run_with(&args, &stand).unwrap_err();
+        assert!(
+            matches!(&e, SuiteError::NotRun(m) if m.contains(named)),
+            "{named}: {e:?}"
+        );
+        assert!(
+            stand.calls().is_empty() && stand.locks.get() == 0,
+            "{named}: {:?}",
+            stand.calls()
+        );
+        assert!(!w.root.join("manifest.json").exists(), "{named}");
+    }
+    let _ = fs::remove_dir_all(&bad_ref);
+}
+
+#[test]
+fn a_banners_run_whose_guest_stack_resets_is_kept_and_judged_invalid_never_pass() {
+    // The guest's own stack resets the SYN-ACK on 80 (what masscan's README says Windows never does).
+    let w = World::banners("guest-rst", |sim| {
+        let st = av::stand(Plan::Windows);
+        let (t, synack) = sim
+            .frames
+            .iter()
+            .find(|(_, f)| {
+                f[6..12] == st.peer_mac
+                    && crate::banners_verify::tcp_head(f)
+                        .is_some_and(|h| h.flags == 0x12 && h.sp == 80)
+            })
+            .cloned()
+            .unwrap();
+        let mut rst = synack.clone();
+        rst[0..6].copy_from_slice(&st.peer_mac);
+        rst[6..12].copy_from_slice(&st.scanner_mac);
+        rst[22] = 128;
+        // Swap the addresses and ports, seq = the SYN-ACK's ack, RST alone; the sums no longer matter to the rule.
+        let (a, b) = (rst[26..30].to_vec(), rst[30..34].to_vec());
+        rst[26..30].copy_from_slice(&b);
+        rst[30..34].copy_from_slice(&a);
+        let (sp, dp) = (rst[34..36].to_vec(), rst[36..38].to_vec());
+        rst[34..36].copy_from_slice(&dp);
+        rst[36..38].copy_from_slice(&sp);
+        let ack = rst[42..46].to_vec();
+        rst[38..42].copy_from_slice(&ack);
+        rst[42..46].fill(0);
+        rst[47] = 0x04;
+        sim.frames.push((t + 0.0001, rst));
+        sim.frames.sort_by(|a, b| a.0.total_cmp(&b.0));
+    });
+    let stand = autodetect_stand(&w);
+    assert_eq!(run_with(&banners_args(&w, &[]), &stand).unwrap(), 0);
+    let v = crate::verify::verify_dir(&w.root);
+    assert_eq!(v["overall"], "INVALID", "{v:#}");
+    let r = v["runs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["tag"] == bs::WINDOWS.tag)
+        .unwrap();
+    assert!(
+        r["notes"]["windows_no_rst"]
+            .as_str()
+            .unwrap()
+            .starts_with("refuted"),
+        "{r:#}"
+    );
 }

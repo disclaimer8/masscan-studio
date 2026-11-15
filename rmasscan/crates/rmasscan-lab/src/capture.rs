@@ -130,12 +130,24 @@ fn port_list(ports: &str) -> Result<Vec<u16>, String> {
 /// - `--sctp-iface IF --sctp-open P,..`: every SCTP INIT on the link `IF` answered on the link with
 ///   `protocols_verify::sctp_reply` (INIT-ACK on the open ports, ABORT elsewhere). The host kernel must have no SCTP
 ///   (the suite checks it): no SCTP socket is ever opened here, so no module is loaded either;
-/// - `--tcp6-ips A,..` (the IPv6 stand): the `--ports` listeners again on each of these IPv6 addresses.
+/// - `--tcp6-ips A,..` (the IPv6 stand): the `--ports` listeners again on each of these IPv6 addresses;
+/// - `--tcp-answer banners --tcp-ips A,.. --tcp-ports P,..` (the TCP cases of the banners stand; `--ports` may then
+///   be left out): a kernel socket on each of these addresses (IPv4 or IPv6) and ports that has a scenario in
+///   `banners_verify::TCP_SCENARIOS`, every connection it accepts running that scenario's script ([`run_script`]);
+///   the peer kernel resets every other port;
+/// - `--heartbeat-iface IF --heartbeat-dst MAC --heartbeat-secs N`: a lab marker frame with
+///   `banners_verify::HEARTBEAT_PAYLOAD` from `IF`'s MAC to `MAC` on the link every `HEARTBEAT_MS` for the first `N`
+///   seconds (it keeps C's receive loop turning), then nothing until the stop request.
 ///
 /// Each UDP socket and the SCTP link has its own thread, so a reply leaves within the probe's own interval.
 fn responder(a: &BTreeMap<String, String>) -> Result<i32, String> {
     lab_io::install_signal_handlers().map_err(err)?;
-    let ports = get(a, "ports")?;
+    let tcp_answer = a.get("tcp-answer").map(String::as_str);
+    let ports = match (a.get("ports"), tcp_answer) {
+        (Some(p), _) => p.as_str(),
+        (None, Some(_)) => "",
+        (None, None) => return Err("--ports required".into()),
+    };
     let mut listeners = Vec::new();
     for p in port_list(ports)? {
         listeners
@@ -175,6 +187,38 @@ fn responder(a: &BTreeMap<String, String>) -> Result<i32, String> {
         if let Some(mode) = a.get("udp-answer") {
             said.push_str(&format!(" answer {mode}"));
         }
+    }
+    if let Some(mode) = tcp_answer {
+        if mode != crate::banners_verify::TCP_ANSWER {
+            return Err(format!("--tcp-answer {mode}: only banners"));
+        }
+        let mut socks = Vec::new();
+        for ip in get(a, "tcp-ips")?.split(',') {
+            let ip: std::net::IpAddr = ip.parse().map_err(err)?;
+            for p in port_list(get(a, "tcp-ports")?)? {
+                if crate::banners_verify::tcp_scenario(p, ip).is_none() {
+                    continue;
+                }
+                let l = std::net::TcpListener::bind((ip, p)).map_err(err)?;
+                l.set_nonblocking(true).map_err(err)?;
+                socks.push(l);
+            }
+        }
+        let h = halt.clone();
+        said.push_str(&format!(" tcp answer {mode} on {} sockets", socks.len()));
+        workers.push(std::thread::spawn(move || tcp_answers(&socks, &h)));
+    }
+    if let Some(iface) = a.get("heartbeat-iface") {
+        let frame = link::marker_frame(
+            mac(get(a, "heartbeat-dst")?)?,
+            link::iface_mac(iface)?,
+            crate::banners_verify::HEARTBEAT_PAYLOAD,
+        );
+        let secs: u64 = get(a, "heartbeat-secs")?.parse().map_err(err)?;
+        let l = link::open(iface)?;
+        let h = halt.clone();
+        said.push_str(&format!(" heartbeat {iface} {secs} s"));
+        workers.push(std::thread::spawn(move || heartbeats(l, &frame, secs, &h)));
     }
     if let Some(iface) = a.get("sctp-iface") {
         let open = port_list(get(a, "sctp-open")?)?;
@@ -274,6 +318,159 @@ fn udp_answers(
             Err(e) if e.kind() == std::io::ErrorKind::ConnectionRefused => {}
             Err(e) => return Err(format!("udp responder: {e}")),
         }
+    }
+    Ok(())
+}
+/// Accept on every scenario socket until the stop request or `halt`; each connection runs its scenario's script on
+/// its own thread (by the connection's local address and port), which ends with the connection.
+fn tcp_answers(socks: &[std::net::TcpListener], halt: &AtomicBool) -> Result<(), String> {
+    while !lab_io::stop_requested() && !halt.load(Ordering::SeqCst) {
+        for l in socks {
+            match l.accept() {
+                Ok((c, _)) => {
+                    let local = c.local_addr().map_err(err)?;
+                    let Some(sc) = crate::banners_verify::tcp_scenario(local.port(), local.ip())
+                    else {
+                        continue;
+                    };
+                    std::thread::spawn(move || {
+                        let _ = run_script(c, sc);
+                    });
+                }
+                // A connection the scanner reset before it was accepted is no failure of the responder.
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        std::io::ErrorKind::WouldBlock
+                            | std::io::ErrorKind::ConnectionAborted
+                            | std::io::ErrorKind::ConnectionReset
+                    ) => {}
+                Err(e) => return Err(format!("tcp responder on {:?}: {e}", l.local_addr())),
+            }
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    Ok(())
+}
+/// How long a script waits for the scanner at one step, and how long it keeps a held connection.
+const SCRIPT_STEP_PATIENCE: Duration = Duration::from_secs(30);
+const SCRIPT_HOLD: Duration = Duration::from_secs(120);
+/// What a wait for the scanner's bytes ended with.
+enum Got {
+    Data,
+    Eof,
+    Gone,
+}
+/// One read (or peek) on `c` within `patience`, polling the stop request every 100 ms.
+fn wait_for(c: &mut std::net::TcpStream, buf: &mut [u8], patience: Duration, peek: bool) -> Got {
+    use std::io::Read;
+    let until = std::time::Instant::now() + patience;
+    while std::time::Instant::now() < until && !lab_io::stop_requested() {
+        let r = if peek { c.peek(buf) } else { c.read(buf) };
+        match r {
+            Ok(0) => return Got::Eof,
+            Ok(_) => return Got::Data,
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) => {}
+            Err(_) => return Got::Gone,
+        }
+    }
+    Got::Gone
+}
+/// Read and drop the scanner's bytes until its FIN or RST, or `patience`.
+fn drain(c: &mut std::net::TcpStream, buf: &mut [u8], patience: Duration) -> Got {
+    let until = std::time::Instant::now() + patience;
+    loop {
+        let left = until.saturating_duration_since(std::time::Instant::now());
+        match wait_for(c, buf, left, false) {
+            Got::Data if !left.is_zero() => {}
+            other => return other,
+        }
+    }
+}
+/// Keep a connection open without reading: until the scanner ends it (its RST, or its FIN when nothing is left
+/// unread), the stop request or `patience`. The caller then closes it with the scanner's bytes unread, so the kernel
+/// resets it and no socket stays on its 4-tuple for the next step.
+fn hold(c: &mut std::net::TcpStream, patience: Duration) {
+    let mut one = [0u8; 1];
+    let until = std::time::Instant::now() + patience;
+    while std::time::Instant::now() < until && !lab_io::stop_requested() {
+        match c.peek(&mut one) {
+            Ok(0) => return,
+            Ok(_) => std::thread::sleep(Duration::from_millis(100)),
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) => {}
+            Err(_) => return,
+        }
+    }
+}
+/// The peer's side of one connection of the banners stand: `sc`'s steps in order (`banners_verify::TcpStep`), each
+/// write one segment (`TCP_NODELAY`) followed by `SCRIPT_PAUSE_MS`. A FIN of the scanner while the script waits for
+/// it ends the script with this side's FIN. After the last step: up to `SCRIPT_END_WAIT_MS` for the scanner's FIN,
+/// then this side's FIN, then the scanner's bytes are read until it ends the connection (no byte is left unread, so
+/// the kernel never resets, except at `Reset` and after `Hold`, which read nothing).
+pub(crate) fn run_script(
+    mut c: std::net::TcpStream,
+    sc: &crate::banners_verify::TcpScenario,
+) -> std::io::Result<()> {
+    use crate::banners_verify::{SCRIPT_END_WAIT_MS, SCRIPT_PAUSE_MS, TcpStep};
+    use std::io::Write;
+    c.set_nonblocking(false)?;
+    c.set_nodelay(true)?;
+    c.set_read_timeout(Some(Duration::from_millis(100)))?;
+    let mut buf = vec![0u8; 65536];
+    for step in sc.steps {
+        match step {
+            TcpStep::Write(b) => {
+                c.write_all(b)?;
+                std::thread::sleep(Duration::from_millis(SCRIPT_PAUSE_MS));
+            }
+            TcpStep::Recv | TcpStep::Peek => {
+                match wait_for(
+                    &mut c,
+                    &mut buf,
+                    SCRIPT_STEP_PATIENCE,
+                    *step == TcpStep::Peek,
+                ) {
+                    Got::Data => {}
+                    Got::Eof => return c.shutdown(std::net::Shutdown::Write),
+                    Got::Gone => return Ok(()),
+                }
+            }
+            // Closed with the scanner's bytes unread: the kernel answers with RST (tcp_close, RFC 2525).
+            TcpStep::Reset => return Ok(()),
+            TcpStep::Hold => {
+                hold(&mut c, SCRIPT_HOLD);
+                return Ok(());
+            }
+        }
+    }
+    match drain(&mut c, &mut buf, Duration::from_millis(SCRIPT_END_WAIT_MS)) {
+        Got::Eof => c.shutdown(std::net::Shutdown::Write),
+        Got::Gone if lab_io::stop_requested() => Ok(()),
+        _ => {
+            c.shutdown(std::net::Shutdown::Write)?;
+            drain(&mut c, &mut buf, SCRIPT_STEP_PATIENCE);
+            Ok(())
+        }
+    }
+}
+/// The heartbeat of the banners stand's TCP cases: `frame` on the link every `HEARTBEAT_MS` for `secs` seconds, then
+/// nothing until the stop request or `halt` (an answerer that ends early would end the responder).
+fn heartbeats(mut l: link::Link, frame: &[u8], secs: u64, halt: &AtomicBool) -> Result<(), String> {
+    let end = std::time::Instant::now() + Duration::from_secs(secs);
+    let stopped = || lab_io::stop_requested() || halt.load(Ordering::SeqCst);
+    while !stopped() {
+        if std::time::Instant::now() < end {
+            link::send_blocking(&mut *l.tx, frame, link::SEND_PATIENCE, &stopped)?;
+        }
+        std::thread::sleep(Duration::from_millis(crate::banners_verify::HEARTBEAT_MS));
     }
     Ok(())
 }
@@ -1533,6 +1730,112 @@ mod tests {
         let started = std::time::Instant::now();
         assert_eq!(w.join().unwrap(), Ok(()));
         assert!(started.elapsed() < Duration::from_secs(2));
+    }
+
+    /// A scenario's script against a client on the loopback (the scanner's part played by hand).
+    fn scripted(
+        port: u16,
+        peer: u8,
+    ) -> (
+        std::net::TcpStream,
+        std::thread::JoinHandle<std::io::Result<()>>,
+    ) {
+        let ip = std::net::IpAddr::V4(std::net::Ipv4Addr::new(198, 18, 0, peer));
+        let sc = crate::banners_verify::tcp_scenario(port, ip).unwrap();
+        let l = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let addr = l.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (c, _) = l.accept()?;
+            run_script(c, sc)
+        });
+        let c = std::net::TcpStream::connect(addr).unwrap();
+        c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+        (c, server)
+    }
+
+    #[test]
+    fn a_scenario_script_speaks_its_part_and_answers_the_scanners_fin_with_its_own() {
+        use std::io::{Read, Write};
+        let (mut c, server) = scripted(21, 2);
+        let mut buf = [0u8; 256];
+        let n = c.read(&mut buf).unwrap();
+        assert_eq!(&buf[..n], b"220 rmasscan-lab FTP server ready\r\n");
+        c.write_all(b"AUTH TLS\r\n").unwrap();
+        let n = c.read(&mut buf).unwrap();
+        assert_eq!(&buf[..n], b"530 Please login with USER and PASS.\r\n");
+        // The scanner's parser closes: the script's end sees its FIN and sends its own at once.
+        let t = std::time::Instant::now();
+        c.shutdown(std::net::Shutdown::Write).unwrap();
+        assert_eq!(c.read(&mut buf).unwrap(), 0);
+        assert!(
+            t.elapsed() < Duration::from_millis(900),
+            "{:?}",
+            t.elapsed()
+        );
+        server.join().unwrap().unwrap();
+    }
+
+    #[test]
+    fn a_scenario_script_closes_by_itself_after_its_end_wait() {
+        use std::io::{Read, Write};
+        // SSH: the scanner's ident goes back, it never closes; the script sends its FIN after the end wait.
+        let (mut c, server) = scripted(22, 2);
+        let mut buf = [0u8; 256];
+        let n = c.read(&mut buf).unwrap();
+        assert!(buf[..n].starts_with(b"SSH-2.0-"));
+        c.write_all(b"SSH-2.0-OPENSSH_7.9\r\n").unwrap();
+        let t = std::time::Instant::now();
+        assert_eq!(c.read(&mut buf).unwrap(), 0);
+        let waited = t.elapsed();
+        assert!(
+            waited >= Duration::from_millis(crate::banners_verify::SCRIPT_END_WAIT_MS),
+            "{waited:?}"
+        );
+        drop(c);
+        server.join().unwrap().unwrap();
+    }
+
+    #[test]
+    fn a_held_scenario_answers_and_then_waits_for_the_scanner_to_end_it() {
+        use std::io::{Read, Write};
+        // 198.18.0.4:80, HTTP/1.1 without close: the response, then nothing until the scanner resets (here: the
+        // client closes with the response unread, which resets on Linux; macOS sends a FIN there, which a held
+        // script cannot see behind the unread hello, so it holds until its patience: not waited for off Linux).
+        let (mut c, server) = scripted(80, 4);
+        c.write_all(b"GET / HTTP/1.0\r\n\r\n").unwrap();
+        let mut buf = [0u8; 256];
+        let n = c.read(&mut buf).unwrap();
+        assert!(buf[..n].starts_with(b"HTTP/1.1 200 OK\r\n"));
+        c.set_read_timeout(Some(Duration::from_millis(300)))
+            .unwrap();
+        assert!(c.read(&mut buf).is_err(), "nothing more while held");
+        let t = std::time::Instant::now();
+        drop(c);
+        if cfg!(target_os = "linux") {
+            server.join().unwrap().unwrap();
+            assert!(t.elapsed() < Duration::from_secs(5), "{:?}", t.elapsed());
+        }
+    }
+
+    #[test]
+    fn a_scenario_script_resets_with_the_hello_unread() {
+        use std::io::{Read, Write};
+        // 198.18.0.5:80: the hello is peeked, never read; the partial response, then the close: RST on Linux.
+        let (mut c, server) = scripted(80, 5);
+        c.write_all(b"GET / HTTP/1.0\r\n\r\n").unwrap();
+        let mut buf = [0u8; 256];
+        let n = c.read(&mut buf).unwrap();
+        assert_eq!(&buf[..n], b"HTTP/1.1 200 OK\r\nServer: rmasscan-lab\r\n");
+        server.join().unwrap().unwrap();
+        let end = c.read(&mut buf);
+        if cfg!(target_os = "linux") {
+            assert_eq!(
+                end.map_err(|e| e.kind()),
+                Err(std::io::ErrorKind::ConnectionReset)
+            );
+        } else {
+            assert!(matches!(end, Ok(0) | Err(_)), "{end:?}");
+        }
     }
 
     #[test]

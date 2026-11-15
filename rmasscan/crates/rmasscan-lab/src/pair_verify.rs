@@ -106,6 +106,14 @@ pub(crate) trait PairPlan {
     }
     /// Frames of the scanner off the stand (a safety finding).
     fn foreign(fr: &Frames, st: &Stand) -> Vec<String>;
+    /// SYNs on a capture from outside the stand binding or to an address off the stand (a safety finding): those of
+    /// the Linux stand's one scanner address unless the plan's cases scan from more (the banners plan's TCP sources).
+    fn foreign_syns(fr: &Frames) -> usize {
+        av::foreign_syns(fr, &av::stand(Plan::Linux))
+    }
+    /// The stand `av::stray_scan` judges the peer captures outside the planned cases by; `None` when the plan's own
+    /// [`Self::foreign_syns`] and the MAC check do it instead (a plan whose cases scan from several addresses).
+    const STRAY_PLAN: Option<Plan> = Some(Plan::Linux);
     /// What a text file names beyond `token_problems`' allowlist.
     fn text_problems(text: &str, scanner_text: bool) -> Vec<String>;
     /// What an `-oB` file names outside the stand.
@@ -766,7 +774,7 @@ fn verify_run<P: PairPlan>(root: &Path, c: &P::Case, root_links: &[String]) -> R
     for s in &sides {
         if let Some(fr) = &s.frames {
             let who = s.spec.name;
-            let n = av::foreign_syns(fr, &st);
+            let n = P::foreign_syns(fr);
             r.safety(
                 &format!(
                     "no {} on the {who} capture from outside the stand binding or to an address off the stand",
@@ -962,7 +970,7 @@ fn stray_scan<P: PairPlan>(root: &Path, tags: &[&'static str], t: &Tree) -> Vec<
             .any(|tag| rel.starts_with(&format!("runs/{tag}/")))
     };
     let st = av::stand(Plan::Linux);
-    let mut out = av::stray_scan(root, Some(Plan::Linux), tags, t);
+    let mut out = av::stray_scan(root, P::STRAY_PLAN, tags, t);
     for f in t
         .files
         .iter()
@@ -971,6 +979,15 @@ fn stray_scan<P: PairPlan>(root: &Path, tags: &[&'static str], t: &Tree) -> Vec<
         let mut r = Run::new(&format!("{f} (every protocol)"));
         r.argv_ok = true;
         if let Some((fr, _)) = verify::load_pcap(&mut r, &root.join(f)) {
+            if P::STRAY_PLAN.is_none() {
+                let n = P::foreign_syns(&fr);
+                r.safety(
+                    "no SYN on the peer capture from outside the stand binding or to an address off the stand",
+                    n == 0,
+                    n,
+                );
+                av::no_foreign_frame(&mut r, "peer", &fr, &st);
+            }
             let off = P::foreign(&fr, &st);
             r.safety(
                 "no frame of the scanner on the capture to an address off the stand or from another source",

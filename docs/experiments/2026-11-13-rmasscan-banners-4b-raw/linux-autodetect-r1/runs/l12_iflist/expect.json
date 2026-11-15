@@ -1,0 +1,8 @@
+{
+  "tag": "l12_iflist",
+  "kind": "iflist",
+  "iflist": {
+    "name": "veth-a",
+    "mac": "02-aa-00-00-00-01"
+  }
+}

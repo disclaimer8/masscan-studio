@@ -1,0 +1,134 @@
+
+Dump of file C:\Users\lab\t4\rmasscan.exe
+
+File Type: EXECUTABLE IMAGE
+
+  Section contains the following load config:
+
+            00000140 size
+                   0 time date stamp
+                0.00 Version
+                   0 GlobalFlags Clear
+                   0 GlobalFlags Set
+                   0 Critical Section Default Timeout
+                   0 Decommit Free Block Threshold
+                   0 Decommit Total Free Threshold
+    0000000000000000 Lock Prefix Table
+                   0 Maximum Allocation Size
+                   0 Virtual Memory Threshold
+                   0 Process Affinity Mask
+                   0 Process Heap Flags
+                   0 CSD Version
+                0800 Dependent Load Flag
+    0000000000000000 Edit List
+    000000014021F340 Security Cookie
+    00000001401B4410 Guard CF address of check-function pointer
+    00000001401B4420 Guard CF address of dispatch-function pointer
+    0000000000000000 Guard CF function table
+                   0 Guard CF function count
+            00000100 Guard Flags
+                       CF instrumented
+                0000 Code Integrity Flags
+                0000 Code Integrity Catalog
+            00000000 Code Integrity Catalog Offset
+            00000000 Code Integrity Reserved
+    0000000000000000 Guard CF address taken IAT entry table
+                   0 Guard CF address taken IAT entry count
+    0000000000000000 Guard CF long jump target table
+                   0 Guard CF long jump target count
+    0000000000000000 Dynamic value relocation table
+    0000000000000000 Hybrid metadata pointer
+    0000000000000000 Guard RF address of failure-function
+    0000000000000000 Guard RF address of failure-function pointer
+            00000000 Dynamic value relocation table offset
+                0000 Dynamic value relocation table section
+                0000 Reserved2
+    0000000000000000 Guard RF address of stack pointer verification function pointer
+            00000000 Hot patching table offset
+                0000 Reserved3
+    0000000000000000 Enclave configuration pointer
+    00000001401E3F14 Volatile metadata pointer
+    0000000000000000 Guard EH continuation table
+                   0 Guard EH continuation count
+    00000001401B4418 Guard XFG address of check-function pointer
+    00000001401B4428 Guard XFG address of dispatch-function pointer
+    00000001401B4430 Guard XFG address of dispatch-table-function pointer
+    00000001401B4438 CastGuard OS determined failure mode
+    00000001401B4440 Guard memcpy function pointer
+
+    Volatile Metadata
+
+                      18 size
+                       3 min version (8003)
+                       3 max version (8003)
+        00000000001E3F2C volatile access RVA table
+                      A4 volatile access RVA table size
+        00000000001E3FD0 volatile range info table
+                      38 volatile range info table size
+
+    Volatile Access RVA Table
+
+          Address
+          --------
+           000000014019F53D
+           000000014019F553
+           000000014019F6E3
+           000000014019F949
+           000000014019F97B
+           000000014019FC8F
+           000000014019FC9E
+           000000014019FD00
+           000000014019FD50
+           000000014019FDA1
+           000000014019FE30
+           00000001401A1AFB
+           00000001401A20B4
+           00000001401A20C7
+           00000001401A219E
+           00000001401A21C5
+           00000001401A2241
+           00000001401A2256
+           00000001401A2287
+           00000001401A22B1
+           00000001401AC16B
+           00000001401AC1E7
+           00000001401AC1FC
+           00000001401B31E1
+           00000001401B3206
+           00000001401B321A
+           00000001401B3263
+           00000001401B326A
+           00000001401B3271
+           00000001401B3287
+           00000001401B3291
+           00000001401B3298
+           00000001401B329C
+           00000001401B32A8
+           00000001401B32B2
+           00000001401B32BF
+           00000001401B32CC
+           00000001401B32DE
+           00000001401B32E6
+           00000001401B32FD
+           00000001401B3304
+
+    Volatile Info Range Table
+
+          Ranges
+          -------
+          000000014019F290 - 00000001401A2050
+          00000001401A20B4 - 00000001401A2450
+          00000001401A24D0 - 00000001401A2580
+          00000001401ABF84 - 00000001401AC010
+          00000001401AC040 - 00000001401AC3E0
+          00000001401B31A0 - 00000001401B33EF
+          00000001401B35B0 - 00000001401B35D0
+
+  Summary
+
+        2000 .data
+        1000 .fptable
+       11000 .pdata
+       6B000 .rdata
+        2000 .reloc
+      1B3000 .text

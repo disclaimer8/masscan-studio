@@ -1,0 +1,57 @@
+{
+  "banners_stand": "windows",
+  "binding": {
+    "argv": [
+      "198.18.0.2",
+      "-p22,80",
+      "--banners",
+      "--connection-timeout",
+      "8",
+      "--adapter-ip",
+      "198.18.0.1",
+      "--router-mac",
+      "02-57-4c-3d-2e-9b",
+      "-oL",
+      "output.txt",
+      "--seed",
+      "1",
+      "--rate",
+      "100",
+      "--wait",
+      "14",
+      "--source-port",
+      "40000",
+      "--retries",
+      "0"
+    ],
+    "source": "198.18.0.1 (the guest's own address)"
+  },
+  "capture_schema": 3,
+  "code_commit": "0d1bdbceab8f63babfad4656f019d77abcea38e9",
+  "created_utc": 1794765092.725314,
+  "exe": {
+    "build": "Rust static CRT rmasscan CLI from code_commit",
+    "guest_path": "C:\\Users\\lab\\t4\\rmasscan.exe",
+    "sha256": "af6486c393606bc5d87f3c9d49cc78b69bc8284bf5282a2499a8d50f3643adbb",
+    "size": 2296832
+  },
+  "listeners": {
+    "banners": "22,80"
+  },
+  "orchestrator": {
+    "binary_name": "rmasscan-lab",
+    "binary_sha256": "c37ea06ca1c260a11c2319c1c5c62b0acab4577b5f6ce1059267f89472bcc892",
+    "build_commit": "0d1bdbceab8f63babfad4656f019d77abcea38e9",
+    "errors": [],
+    "git_commit": "0d1bdbceab8f63babfad4656f019d77abcea38e9",
+    "git_dirty": false
+  },
+  "plan": "banners",
+  "schema": 1,
+  "stand": {
+    "manifest": "$HOME/winvm/lab/n2.json",
+    "netns": "wvp-n2",
+    "run_id": "n2"
+  },
+  "suite": "b4b-windows-banners-r1"
+}

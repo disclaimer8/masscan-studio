@@ -1,0 +1,11 @@
+{
+  "argv": [
+    "--readscan",
+    "input-rmasscan.bin",
+    "input-oracle.bin",
+    "-oL",
+    "output.txt",
+    "--show",
+    "open,closed"
+  ]
+}

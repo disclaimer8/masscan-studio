@@ -1,0 +1,10 @@
+{
+  "tag": "o05_xml",
+  "kind": "scan",
+  "format": "xml",
+  "target": "file",
+  "show_closed": true,
+  "stdout": "silent",
+  "status": "text",
+  "oracle": true
+}

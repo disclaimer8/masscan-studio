@@ -1,0 +1,19 @@
+{
+  "argv_file": "runner-argv.json",
+  "capture_started_utc": 1794763383.847578,
+  "capture_stopped_utc": 1794763437.522858,
+  "end_marker_seen": true,
+  "exe_sha256": "af6486c393606bc5d87f3c9d49cc78b69bc8284bf5282a2499a8d50f3643adbb",
+  "guest_exit": 0,
+  "guest_finished_utc": 1794763402.578056,
+  "guest_ssh_rc": 0,
+  "guest_started_utc": 1794763389.784196,
+  "guest_times": {
+    "finished_utc": 1794763402.41,
+    "started_utc": 1794763399.113
+  },
+  "guest_verify_exit": 0,
+  "invocation_nonce": "r654da6e1e61cd2991b5ebe9309d38f38-c35bfb96f44c864e",
+  "kind": "scan",
+  "tag": "w02_adapter_npf"
+}

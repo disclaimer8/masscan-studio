@@ -1,0 +1,61 @@
+b01_banners binary -oL: C rc=0 rmasscan rc=0 identical lines(non-#)=88 sha256=dc979036e80bf60e
+b01_banners binary -oJ: C rc=0 rmasscan rc=0 identical lines(non-#)=177 sha256=844973b06df3e457
+b01_banners binary -oX: C rc=0 rmasscan rc=0 identical lines(non-#)=97 sha256=b859638dbf5e73bf
+b01_banners binary -oG: C rc=0 rmasscan rc=0 identical lines(non-#)=88 sha256=24b974cea2742402
+b01_banners oracle-binary -oL: C rc=0 rmasscan rc=0 identical lines(non-#)=88 sha256=a8265a1c3632cb67
+b01_banners oracle-binary -oJ: C rc=0 rmasscan rc=0 identical lines(non-#)=177 sha256=317d49fc32158c26
+b01_banners oracle-binary -oX: C rc=0 rmasscan rc=0 identical lines(non-#)=97 sha256=05678a1b12e2b9e4
+b01_banners oracle-binary -oG: C rc=0 rmasscan rc=0 identical lines(non-#)=88 sha256=0c04c80563698218
+  diff: 2c2
+  diff: < banner udp 11211 198.18.0.2  unknown \x93\xdd\x00\x00\x00\x01\x00\x00STAT pid 1234\x0d\x0aSTAT uptime 12345\x0d\x0aSTAT time 1700000000\x0d\x0aSTAT version 1.6.21\x0d\x0aSTAT libevent 2.1.12-stable\x0d\x0aSTAT pointer_size 64\x0d\x0aSTAT rusage_user 0.123456\x0d\x0aSTAT curr_connections 2\x0d\x0aEND\x0d\x0a
+  diff: ---
+  diff: > banner udp 11211 198.18.0.2  unknown STAT time 1700000000\x0d\x0aSTAT version 1.6.21\x0d\x0aSTAT libevent 2.1.12-stable\x0d\x0aSTAT pointer_size 64\x0d\x0aSTAT rusage_user 0.123456\x0d\x0aSTAT curr_connections 2\x0d\x0aEND\x0d\x0a\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00
+  diff: 4c4
+  diff: < banner udp 11211 198.18.0.3  unknown \x3c\xc5\x00\x00\x00\x01\x00\x00STAT pid 1234\x0d\x0aSTAT uptime 12345\x0d\x0aSTAT time 1700000000\x0d\x0aSTAT version 1.6.21\x0d\x0aSTAT libevent 2.1.12-stable\x0d\x0aSTAT pointer_size 64\x0d\x0aSTAT rusage_user 0.123456\x0d\x0aSTAT curr_connections 2\x0d\x0aEND\x0d\x0a
+  diff: ---
+  diff: > banner udp 11211 198.18.0.3  unknown STAT time 1700000000\x0d\x0aSTAT version 1.6.21\x0d\x0aSTAT libevent 2.1.12-stable\x0d\x0aSTAT pointer_size 64\x0d\x0aSTAT rusage_user 0.123456\x0d\x0aSTAT curr_connections 2\x0d\x0aEND\x0d\x0a\x9e\x9f\xa0\xa1\xa2\xa3\xa4\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00
+b01_banners: C --readscan of rmasscan's -oB vs of C's -oB, -oL records without time as multisets: DIFFER (79cbf803a823cfdb 15749fedf90df333)
+b02_rawudp binary -oL: C rc=0 rmasscan rc=0 identical lines(non-#)=96 sha256=67e9415d50fdcc17
+b02_rawudp binary -oJ: C rc=0 rmasscan rc=0 identical lines(non-#)=193 sha256=54525fee28080892
+b02_rawudp binary -oX: C rc=0 rmasscan rc=0 identical lines(non-#)=105 sha256=b7105876f65aedab
+b02_rawudp binary -oG: C rc=0 rmasscan rc=0 identical lines(non-#)=96 sha256=09517901fce7c70d
+b02_rawudp oracle-binary -oL: C rc=0 rmasscan rc=0 identical lines(non-#)=96 sha256=aedc92f8c9075163
+b02_rawudp oracle-binary -oJ: C rc=0 rmasscan rc=0 identical lines(non-#)=193 sha256=519566c86c51574f
+b02_rawudp oracle-binary -oX: C rc=0 rmasscan rc=0 identical lines(non-#)=105 sha256=4ef2c7f33a7101ce
+b02_rawudp oracle-binary -oG: C rc=0 rmasscan rc=0 identical lines(non-#)=96 sha256=27175d45c47f3f8b
+  diff: 2c2
+  diff: < banner udp 11211 198.18.0.2  unknown \x93\xdd\x00\x00\x00\x01\x00\x00STAT pid 1234\x0d\x0aSTAT uptime 12345\x0d\x0aSTAT time 1700000000\x0d\x0aSTAT version 1.6.21\x0d\x0aSTAT libevent 2.1.12-stable\x0d\x0aSTAT pointer_size 64\x0d\x0aSTAT rusage_user 0.123456\x0d\x0aSTAT curr_connections 2\x0d\x0aEND\x0d\x0a
+  diff: ---
+  diff: > banner udp 11211 198.18.0.2  unknown STAT time 1700000000\x0d\x0aSTAT version 1.6.21\x0d\x0aSTAT libevent 2.1.12-stable\x0d\x0aSTAT pointer_size 64\x0d\x0aSTAT rusage_user 0.123456\x0d\x0aSTAT curr_connections 2\x0d\x0aEND\x0d\x0a\x9e\x9f\xa0\xa1\xa2\xa3\xa4\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00
+  diff: 4c4
+  diff: < banner udp 11211 198.18.0.3  unknown \x3c\xc5\x00\x00\x00\x01\x00\x00STAT pid 1234\x0d\x0aSTAT uptime 12345\x0d\x0aSTAT time 1700000000\x0d\x0aSTAT version 1.6.21\x0d\x0aSTAT libevent 2.1.12-stable\x0d\x0aSTAT pointer_size 64\x0d\x0aSTAT rusage_user 0.123456\x0d\x0aSTAT curr_connections 2\x0d\x0aEND\x0d\x0a
+  diff: ---
+  diff: > banner udp 11211 198.18.0.3  unknown STAT time 1700000000\x0d\x0aSTAT version 1.6.21\x0d\x0aSTAT libevent 2.1.12-stable\x0d\x0aSTAT pointer_size 64\x0d\x0aSTAT rusage_user 0.123456\x0d\x0aSTAT curr_connections 2\x0d\x0aEND\x0d\x0a\x9e\x9f\xa0\xa1\xa2\xa3\xa4\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00
+b02_rawudp: C --readscan of rmasscan's -oB vs of C's -oB, -oL records without time as multisets: DIFFER (67ef037d9e19ae84 59cb22be59765bcc)
+t01_tcp4 binary -oL: C rc=0 rmasscan rc=0 identical lines(non-#)=46 sha256=6e666e6353e97341
+t01_tcp4 binary -oJ: C rc=0 rmasscan rc=0 identical lines(non-#)=93 sha256=b91b91f4eab7a313
+t01_tcp4 binary -oX: C rc=0 rmasscan rc=0 identical lines(non-#)=55 sha256=8fe013cb67140142
+t01_tcp4 binary -oG: C rc=0 rmasscan rc=0 identical lines(non-#)=46 sha256=96cb03fd856053ea
+t01_tcp4 oracle-binary -oL: C rc=0 rmasscan rc=0 identical lines(non-#)=46 sha256=04d36a84f83296ef
+t01_tcp4 oracle-binary -oJ: C rc=0 rmasscan rc=0 identical lines(non-#)=93 sha256=fda0cd1fb1081ab4
+t01_tcp4 oracle-binary -oX: C rc=0 rmasscan rc=0 identical lines(non-#)=55 sha256=f1e0a1658b43e287
+t01_tcp4 oracle-binary -oG: C rc=0 rmasscan rc=0 identical lines(non-#)=46 sha256=b2c0fa3d2c06f329
+t01_tcp4: C --readscan of rmasscan's -oB vs of C's -oB, -oL records without time as multisets: equal (f235ae8f9e5ce3cc f235ae8f9e5ce3cc)
+t02_tcp6 binary -oL: C rc=0 rmasscan rc=0 identical lines(non-#)=46 sha256=46493db920a1da76
+t02_tcp6 binary -oJ: C rc=0 rmasscan rc=0 identical lines(non-#)=93 sha256=7c22dae4e0816aeb
+t02_tcp6 binary -oX: C rc=0 rmasscan rc=0 identical lines(non-#)=55 sha256=0712f5f4729f417b
+t02_tcp6 binary -oG: C rc=0 rmasscan rc=0 identical lines(non-#)=46 sha256=bb18953cecbef76e
+t02_tcp6 oracle-binary -oL: C rc=0 rmasscan rc=0 identical lines(non-#)=46 sha256=346c3c6d6c7d2910
+t02_tcp6 oracle-binary -oJ: C rc=0 rmasscan rc=0 identical lines(non-#)=93 sha256=54d909cfe331850c
+t02_tcp6 oracle-binary -oX: C rc=0 rmasscan rc=0 identical lines(non-#)=55 sha256=1b4a6ed358c26435
+t02_tcp6 oracle-binary -oG: C rc=0 rmasscan rc=0 identical lines(non-#)=46 sha256=708ffeb23a74b16a
+t02_tcp6: C --readscan of rmasscan's -oB vs of C's -oB, -oL records without time as multisets: equal (078272383d8bd895 078272383d8bd895)
+t03_teardown binary -oL: C rc=0 rmasscan rc=0 identical lines(non-#)=7 sha256=a025f4821b9dfb77
+t03_teardown binary -oJ: C rc=0 rmasscan rc=0 identical lines(non-#)=15 sha256=7402ad694bc6420a
+t03_teardown binary -oX: C rc=0 rmasscan rc=0 identical lines(non-#)=16 sha256=24b2d826aa95447f
+t03_teardown binary -oG: C rc=0 rmasscan rc=0 identical lines(non-#)=7 sha256=f9385bb1d8f76fa5
+t03_teardown oracle-binary -oL: C rc=0 rmasscan rc=0 identical lines(non-#)=7 sha256=dc2eccbe0ceead39
+t03_teardown oracle-binary -oJ: C rc=0 rmasscan rc=0 identical lines(non-#)=15 sha256=33386baa9356cb23
+t03_teardown oracle-binary -oX: C rc=0 rmasscan rc=0 identical lines(non-#)=16 sha256=8fba49a3c3ec69ab
+t03_teardown oracle-binary -oG: C rc=0 rmasscan rc=0 identical lines(non-#)=7 sha256=9670294a3fa771cc
+t03_teardown: C --readscan of rmasscan's -oB vs of C's -oB, -oL records without time as multisets: equal (f07335903ac3796e f07335903ac3796e)

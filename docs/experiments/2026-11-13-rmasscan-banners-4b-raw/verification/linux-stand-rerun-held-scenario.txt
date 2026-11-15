@@ -1,0 +1,19 @@
+17:35:53
+test capture::tests::a_held_scenario_answers_and_then_waits_for_the_scanner_to_end_it has been running for over 60 seconds
+test capture::tests::a_held_scenario_answers_and_then_waits_for_the_scanner_to_end_it ... FAILED
+thread 'capture::tests::a_held_scenario_answers_and_then_waits_for_the_scanner_to_end_it' (3790897) panicked at crates/rmasscan-lab/src/capture.rs:1816:13:
+119.909774425s
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 982 filtered out; finished in 120.21s
+17:39:42
+test capture::tests::a_held_scenario_answers_and_then_waits_for_the_scanner_to_end_it has been running for over 60 seconds
+test capture::tests::a_held_scenario_answers_and_then_waits_for_the_scanner_to_end_it ... FAILED
+thread 'capture::tests::a_held_scenario_answers_and_then_waits_for_the_scanner_to_end_it' (3793831) panicked at crates/rmasscan-lab/src/capture.rs:1816:13:
+119.901634396s
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 982 filtered out; finished in 120.21s
+17:41:42
+test capture::tests::a_held_scenario_answers_and_then_waits_for_the_scanner_to_end_it has been running for over 60 seconds
+test capture::tests::a_held_scenario_answers_and_then_waits_for_the_scanner_to_end_it ... FAILED
+thread 'capture::tests::a_held_scenario_answers_and_then_waits_for_the_scanner_to_end_it' (3797014) panicked at crates/rmasscan-lab/src/capture.rs:1816:13:
+119.895487949s
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 982 filtered out; finished in 120.20s
+

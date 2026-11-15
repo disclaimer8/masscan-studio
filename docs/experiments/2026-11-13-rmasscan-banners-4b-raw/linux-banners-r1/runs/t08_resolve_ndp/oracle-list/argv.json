@@ -1,0 +1,23 @@
+{
+  "argv": [
+    "[fd00:198:18::2]",
+    "-p80",
+    "--banners",
+    "--adapter-ip",
+    "fd00:198:18::a",
+    "--router-mac-ipv6",
+    "02-aa-00-00-00-02",
+    "-oL",
+    "output.txt",
+    "--seed",
+    "1",
+    "--rate",
+    "100",
+    "--wait",
+    "8",
+    "--source-port",
+    "40000",
+    "--retries",
+    "0"
+  ]
+}

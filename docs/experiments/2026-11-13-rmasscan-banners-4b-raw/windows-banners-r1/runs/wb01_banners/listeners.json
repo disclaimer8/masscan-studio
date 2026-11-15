@@ -1,0 +1,30 @@
+{
+  "banners": [
+    {
+      "about": "an SSH-2.0 server ident: the scanner's ident goes back at the first LF; ssh is every byte received (D6)",
+      "apps": [
+        "ssh"
+      ],
+      "peer": 2,
+      "port": 22,
+      "scenario_port": 22
+    },
+    {
+      "about": "the HTTP hello answered with Server and a title, then the server's FIN: http.server, title, http (D1, B3)",
+      "apps": [
+        "http.server",
+        "title",
+        "http"
+      ],
+      "peer": 2,
+      "port": 80,
+      "scenario_port": 80
+    }
+  ],
+  "bind": "198.18.0.2",
+  "open": [],
+  "pid": 2327589,
+  "ready": true,
+  "silent": [],
+  "silent_proven": null
+}

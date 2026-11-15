@@ -1,0 +1,4 @@
+Linux stand host: Linux 7.0.0-38-generic, tcpdump 4.99.6, iproute2 6.19.0 (libbpf 1.6.3), rustc 1.99.1 (58cf8f9c3 2026-10-13); C oracle masscan 8e6b3b0 (8afc8ec8...).
+VM host: Linux 7.3.0-10-generic, QEMU 10.2.1, tcpdump 4.99.6, rustc 1.99.1 (58cf8f9c3 2026-10-13).
+Guest: Windows 10.0.26300 (Windows 11), elevated, Npcap 1.90 AdminOnly=1, pwsh 7.6.10, rustc 1.99.1 (58cf8f9c3 2026-10-13) msvc.
+Mac: macOS 27.2.1, rustc 1.99.1 (58cf8f9c3 2026-10-13) (Homebrew); orchestrator, offline verifiers, fuzz, privacy-scan; no live frame from the Mac, no sudo.

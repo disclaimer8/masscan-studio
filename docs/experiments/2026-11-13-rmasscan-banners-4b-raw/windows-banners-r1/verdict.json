@@ -1,0 +1,448 @@
+{
+  "aborted": [],
+  "behaviour_fail": [],
+  "dir": "windows-banners-r1",
+  "discarded": [],
+  "discarded_totals": {
+    "FAIL": 0,
+    "INVALID": 0,
+    "NOT RUN": 0,
+    "PASS": 0
+  },
+  "groups": [],
+  "overall": "PASS",
+  "runs": [
+    {
+      "behaviour_fail": false,
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "captures are stored uncompressed; the verifier has no decompression",
+          "name": "no compressed capture anywhere in the evidence directory",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "[]",
+          "name": "no symbolic link in the evidence directory (links are never followed)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "Some(Windows)",
+          "name": "manifest.json names the stand of the TCP banner case (banners_stand: windows or macos)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "C's hello on each scanned port is its hello on the scenario's port in the Linux window (tests/golden/tcp-banners/hellos.out)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[]",
+          "name": "evidence files outside the run carry only the allowed extensions (json pcap txt log err sha256 md)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3 files",
+          "name": "privacy: every text file holds only allowlisted names, addresses and paths",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[]",
+          "name": "runs/ holds only the case's directory",
+          "result": "PASS"
+        }
+      ],
+      "notes": {},
+      "safety_trip": false,
+      "tag": "manifest",
+      "verdict": "PASS"
+    },
+    {
+      "behaviour_fail": false,
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "linux-banners-r1",
+          "name": "reference/source.json names the Linux window by a plain directory name",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "t01_tcp4/oracle-list PASS",
+          "name": "the reference is C's oracle-list step of t01_tcp4, PASS in its window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "linux-banners-r1",
+          "name": "reference/verdict.json is the window's verdict the record names, and it says the same of the case",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "21ed7a8471714cfd421a1d42b49da0be1bfa4cb5084eebe8467af0786b6a59dd",
+          "name": "reference/oracle-list/argv.json has the sha256 t01_tcp4 recorded in its window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "d4d68129bc9d5820f3e388cfc1089fac96ee865f3acb8338eeaf858c4ba62c63",
+          "name": "reference/oracle-list/output.txt has the sha256 t01_tcp4 recorded in its window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "80fba81221d25500a2491996fe12e259b025b876bf0cc4bf48ca876a9f262ab1",
+          "name": "reference/oracle-list/peer.pcap has the sha256 t01_tcp4 recorded in its window",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "the reference ran t01_tcp4's -oL argv (banners_verify::tcp_argv)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "6 records, complete true",
+          "name": "the reference holds C's open record and the scenario's banners for each of the case's scenarios",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "22: 1 segments, 80: 1 segments",
+          "name": "the reference capture holds what C sent on each scenario's connection",
+          "result": "PASS"
+        }
+      ],
+      "notes": {
+        "c_records": [
+          "open 198.18.0.2 80/tcp",
+          "open 198.18.0.2 22/tcp",
+          "banner 198.18.0.2 22/tcp ssh \"SSH-2.0-OpenSSH_9.6 rmasscan-lab\\\\x0d\\\\x0a\"",
+          "banner 198.18.0.2 80/tcp http.server \"rmasscan-lab\"",
+          "banner 198.18.0.2 80/tcp title \"rmasscan-lab\"",
+          "banner 198.18.0.2 80/tcp http \"HTTP/1.0 200 OK\\\\x0d\\\\x0aServer: rmasscan-lab\\\\x0d\\\\x0aContent-Type: text/html\\\\x0d\\\\x0a\\\\x0d\""
+        ],
+        "source": {
+          "case": "t01_tcp4",
+          "files": {
+            "argv.json": "21ed7a8471714cfd421a1d42b49da0be1bfa4cb5084eebe8467af0786b6a59dd",
+            "output.txt": "d4d68129bc9d5820f3e388cfc1089fac96ee865f3acb8338eeaf858c4ba62c63",
+            "peer.pcap": "80fba81221d25500a2491996fe12e259b025b876bf0cc4bf48ca876a9f262ab1"
+          },
+          "overall": "INVALID",
+          "run_verdict": "PASS",
+          "source_dir": "linux-banners-r1",
+          "step": "oracle-list",
+          "verdict_sha256": "bcd5015bb72f19debfee819d1d420076ae2cdcc1b9a6dddc1a4eb860465dd18d"
+        }
+      },
+      "safety_trip": false,
+      "tag": "reference",
+      "verdict": "PASS"
+    },
+    {
+      "behaviour_fail": false,
+      "checks": [
+        {
+          "behaviour": false,
+          "detail": "29",
+          "name": "peer.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "eno1.pcap complete pcap",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "eno1 saw zero lab packets",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "eno1 tcpdump counted zero frames matching the lab filter",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0",
+          "name": "no SYN on the peer capture from outside the stand binding or to an address off the stand",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "0 frames: ",
+          "name": "no frame on the peer capture from a MAC other than the stand's scanner and peer (markers aside)",
+          "result": "PASS",
+          "safety": true
+        },
+        {
+          "behaviour": false,
+          "detail": "25",
+          "name": "hashes-before-copy.txt matches every file of the run directory",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[]",
+          "name": "evidence files carry only the allowed extensions (json pcap txt log err sha256 md)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "[]",
+          "name": "the scanner's files carry the stand's names (Windows: guest-*.txt; macOS: the plain ones)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "true",
+          "name": "status-pre.json: raw_run_allowed true and no isolation violation",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "true",
+          "name": "status-post.json: raw_run_allowed true and no isolation violation",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "22 files",
+          "name": "privacy: every text file holds only allowlisted names, addresses and paths",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "198.18.0.2 -p22,80 --banners --connection-timeout 8 --adapter-ip 198.18.0.1 --router-mac 02-57-4c-3d-2e-9b -oL output.txt --seed 1 --rate 100 --wait 14 --source-port 40000 --retries 0",
+          "name": "argv.json is the case table's argv (banners_stand::StandCase::argv)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "expect.json is the case table's",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "ready true, banners [(22, 22), (80, 80)]",
+          "name": "the peer's banner listeners were ready on the case's ports with their scenarios (peer listen --banners)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "valid true, []",
+          "name": "capture.json: the witness judged its capture complete",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "29 frames recorded, 29 in the file",
+          "name": "capture.json describes peer.pcap (sha256 and frame count)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "3 start, 3 end markers; window 1794765152.964698 .. 1794765193.494603",
+          "name": "peer.pcap: a start marker before and three end markers after every scanner frame",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "Some(0)",
+          "name": "rmasscan exited 0",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "6",
+          "name": "rmasscan's -oL document is complete (its `# end` footer)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "2 SYNs, the plan 2",
+          "name": "rmasscan's SYNs on the wire are the product plan's on the stand binding, each once, in order",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "",
+          "name": "every stack frame of rmasscan belongs to a connection the stand opened",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0",
+          "name": "no ARP request of the scanner (the next hop is given: --router-mac)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "0 requests, 0 answers",
+          "name": "the peer's who-has for the source gets rmasscan's answer in C's form (src/stack-arpv4.c:282-363)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "2 connections",
+          "name": "the stand answered each SYN with one SYN-ACK and streamed the scenario of its port, without a RST",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "no other frame of the peer (its multicast and IPv6 kernel traffic aside)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "no frame of the guest's own TCP/IP stack for the source (masscan README: \"Windows doesn't respond with RST packets\")",
+          "result": "PASS"
+        },
+        {
+          "behaviour": false,
+          "detail": "",
+          "name": "the C reference of the scenarios is proven (run `reference`)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "",
+          "name": "rmasscan's payload segments on each connection are C's on the same scenario (its hello, its SSH ident), in order",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "",
+          "name": "the hello leaves 1-3.5 s after the SYN-ACK where the server waits for it",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "",
+          "name": "no RST of rmasscan on the connections (both scenarios end with FIN; R8's RST to a FIN after a connection's end aside, src/main.c:1019-1041)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "",
+          "name": "no frame of a connection after the connection was destroyed",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "",
+          "name": "every record of rmasscan's document is of a scanned port of 198.18.0.2",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "",
+          "name": "the banners of one connection come in one run, after its open record (M1)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "",
+          "name": "each connection's banners carry, in flush order, the applications its scenario declares (TCP_SCENARIOS)",
+          "result": "PASS"
+        },
+        {
+          "behaviour": true,
+          "detail": "6 records",
+          "name": "rmasscan's records equal C's records of the same scenarios as a multiset, field for field but the time (the Linux window's ports)",
+          "result": "PASS"
+        }
+      ],
+      "notes": {
+        "banners_by_app": {
+          "http": 1,
+          "http.server": 1,
+          "ssh": 1,
+          "title": 1
+        },
+        "finished": "[+] finished: Completed, sent 2, replies 2, open 2",
+        "guest_firewall": {
+          "lab_nic": {
+            "category": "Public",
+            "name": "Ethernet 2"
+          },
+          "profiles": [
+            {
+              "DefaultInboundAction": "NotConfigured",
+              "Enabled": "True",
+              "Name": "Domain"
+            },
+            {
+              "DefaultInboundAction": "NotConfigured",
+              "Enabled": "True",
+              "Name": "Private"
+            },
+            {
+              "DefaultInboundAction": "NotConfigured",
+              "Enabled": "True",
+              "Name": "Public"
+            }
+          ]
+        },
+        "records": [
+          "open 198.18.0.2 80/tcp",
+          "open 198.18.0.2 22/tcp",
+          "banner 198.18.0.2 22/tcp ssh \"SSH-2.0-OpenSSH_9.6 rmasscan-lab\\\\x0d\\\\x0a\"",
+          "banner 198.18.0.2 80/tcp http.server \"rmasscan-lab\"",
+          "banner 198.18.0.2 80/tcp title \"rmasscan-lab\"",
+          "banner 198.18.0.2 80/tcp http \"HTTP/1.0 200 OK\\\\x0d\\\\x0aServer: rmasscan-lab\\\\x0d\\\\x0aContent-Type: text/html\\\\x0d\\\\x0a\\\\x0d\""
+        ],
+        "scanner_payloads": {
+          "22": [
+            "SSH-2.0-OPENSSH_7.9\\x0d\\x0a"
+          ],
+          "80": [
+            "GET / HTTP/1.0\\x0d\\x0aUser-Agent: ivre-masscan/1.3 https://github.com/robertdavidgraham/\\x0d\\x0aAccept: */*\\x0d\\x0a\\x0d\\x0a"
+          ]
+        },
+        "windows_no_rst": "holds on this guest: no frame of its own stack on 2 connections from its own address",
+        "wire": {
+          "connections": 2,
+          "host_arp_replies": 0,
+          "host_frames_counted": 0,
+          "peer_noise": 0,
+          "peer_requests_for_source": 0,
+          "rmasscan_arp_answers": 0,
+          "syns": 2
+        }
+      },
+      "safety_trip": false,
+      "tag": "wb01_banners",
+      "verdict": "PASS"
+    }
+  ],
+  "safety_scan": [],
+  "safety_trips": [],
+  "schema": 1,
+  "totals": {
+    "FAIL": 0,
+    "INVALID": 0,
+    "NOT RUN": 0,
+    "PASS": 3
+  }
+}

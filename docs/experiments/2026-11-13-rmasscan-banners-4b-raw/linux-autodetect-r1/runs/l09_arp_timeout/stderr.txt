@@ -1,0 +1,8 @@
+[+] interface = veth-a (detected: route to 198.18.0.2)
+[+] source-mac = 02-aa-00-00-00-01 (detected)
+[+] source-ip = 198.18.0.1 (detected)
+[+] router-ip = 198.18.0.9 (given)
+[-] FAIL: ARP timed-out resolving MAC address for router veth-a: "198.18.0.9"
+    [hint] try "--router-ip 192.0.2.1" to specify different router
+    [hint] try "--router-mac 66-55-44-33-22-11" instead to bypass ARP
+    [hint] try "--interface eth0" to change interface

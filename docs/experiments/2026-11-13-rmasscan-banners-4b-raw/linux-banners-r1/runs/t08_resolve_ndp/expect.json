@@ -1,0 +1,26 @@
+{
+  "tag": "t08_resolve_ndp",
+  "plan_ports": "80",
+  "rawudp": false,
+  "steps": [
+    {
+      "name": "list",
+      "who": "rmasscan",
+      "out": "list"
+    },
+    {
+      "name": "oracle-list",
+      "who": "oracle",
+      "out": "list"
+    }
+  ],
+  "tcp": {
+    "source": "fd00:198:18::a",
+    "neighbour_entry": false,
+    "banners": true,
+    "noreset": false,
+    "connection_timeout": null,
+    "wait": 8,
+    "heartbeat": true
+  }
+}

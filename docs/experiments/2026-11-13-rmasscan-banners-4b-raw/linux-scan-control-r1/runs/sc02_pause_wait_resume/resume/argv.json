@@ -1,0 +1,10 @@
+{
+  "argv": [
+    "--resume",
+    "paused.conf",
+    "--show",
+    "open,closed",
+    "--wait",
+    "3"
+  ]
+}

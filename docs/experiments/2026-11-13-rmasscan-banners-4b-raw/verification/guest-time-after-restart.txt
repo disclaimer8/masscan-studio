@@ -1,0 +1,7 @@
+w32time before: status Stopped start Manual
+started: Running
+resync 1 rc=0 Sending resync command to local computer The computer did not resync because no time data was available.
+guest utc 2026-11-15T17:15:05.4299629Z
+w32time before: status Running start Manual
+resync 1 rc=0 Sending resync command to local computer The command completed successfully.
+guest utc 2026-11-15T17:15:26.8668383Z

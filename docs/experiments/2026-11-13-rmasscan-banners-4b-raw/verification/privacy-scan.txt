@@ -1,0 +1,76 @@
+# privacy-scan of the 4b acceptance evidence, set r1 (Mac rmasscan-lab of C = 0d1bdbce, c37ea06c...)
+# 11 tokens of at least 4 bytes given with --forbid (by role, never printed): Mac host name, LocalHostName and computer
+# name; Mac account and its two parts; full host names of the Linux stand host and the VM host; ssh aliases of the
+# Linux stand host and the VM host; the old Windows profile name in two spellings. Hits name the token by its number.
+== fuzz-tcp-r1: rc=0
+privacy-scan: 0 hits in $RAW/fuzz-tcp-r1/ (0 frames were the banners stand's own NBNS probes and replies)
+== linux-autodetect-r1: rc=0
+privacy-scan: 0 hits in $RAW/linux-autodetect-r1/ (0 frames were the banners stand's own NBNS probes and replies)
+== linux-banners-r1: rc=0
+privacy-scan: 0 hits in $RAW/linux-banners-r1/ (64 frames were the banners stand's own NBNS probes and replies)
+== linux-ipv6-r1: rc=0
+privacy-scan: 0 hits in $RAW/linux-ipv6-r1/ (0 frames were the banners stand's own NBNS probes and replies)
+== linux-output-r1: rc=0
+privacy-scan: 0 hits in $RAW/linux-output-r1/ (0 frames were the banners stand's own NBNS probes and replies)
+== linux-protocols-r1: rc=0
+privacy-scan: 0 hits in $RAW/linux-protocols-r1/ (0 frames were the banners stand's own NBNS probes and replies)
+== linux-scan-control-r1: rc=0
+privacy-scan: 0 hits in $RAW/linux-scan-control-r1/ (0 frames were the banners stand's own NBNS probes and replies)
+== verification: rc=1
+HIT guest/guest-test-ws.log: line 871: forbidden token #11
+HIT linux-stand-test-ws.log: line 857: forbidden token #11
+privacy-scan: 2 hits in $RAW/verification/ (0 frames were the banners stand's own NBNS probes and replies)
+== windows-autodetect-r1: rc=1
+HIT runs/w01_auto/hashes-before-copy.txt: line 18: forbidden token #7
+HIT runs/w02_adapter_npf/hashes-before-copy.txt: line 18: forbidden token #7
+HIT runs/w03_adapter_friendly/hashes-before-copy.txt: line 18: forbidden token #7
+HIT runs/w04_router_mac/hashes-before-copy.txt: line 18: forbidden token #7
+HIT runs/w05_arp_timeout/hashes-before-copy.txt: line 18: forbidden token #7
+HIT runs/w06_multi_no_gateway/hashes-before-copy.txt: line 18: forbidden token #7
+HIT runs/w07_iflist/hashes-before-copy.txt: line 17: forbidden token #7
+HIT runs/w08a_restricted_iflist/hashes-before-copy.txt: line 19: forbidden token #7
+HIT runs/w08b_restricted_scan/hashes-before-copy.txt: line 20: forbidden token #7
+privacy-scan: 9 hits in $RAW/windows-autodetect-r1/ (0 frames were the banners stand's own NBNS probes and replies)
+== windows-banners-r1: rc=1
+HIT runs/wb01_banners/hashes-before-copy.txt: line 19: forbidden token #7
+privacy-scan: 1 hits in $RAW/windows-banners-r1/ (0 frames were the banners stand's own NBNS probes and replies)
+== (whole directory): rc=1
+HIT verification/guest/guest-test-ws.log: line 871: forbidden token #11
+HIT verification/linux-stand-test-ws.log: line 857: forbidden token #11
+HIT windows-autodetect-r1/runs/w01_auto/hashes-before-copy.txt: line 18: forbidden token #7
+HIT windows-autodetect-r1/runs/w02_adapter_npf/hashes-before-copy.txt: line 18: forbidden token #7
+HIT windows-autodetect-r1/runs/w03_adapter_friendly/hashes-before-copy.txt: line 18: forbidden token #7
+HIT windows-autodetect-r1/runs/w04_router_mac/hashes-before-copy.txt: line 18: forbidden token #7
+HIT windows-autodetect-r1/runs/w05_arp_timeout/hashes-before-copy.txt: line 18: forbidden token #7
+HIT windows-autodetect-r1/runs/w06_multi_no_gateway/hashes-before-copy.txt: line 18: forbidden token #7
+HIT windows-autodetect-r1/runs/w07_iflist/hashes-before-copy.txt: line 17: forbidden token #7
+HIT windows-autodetect-r1/runs/w08a_restricted_iflist/hashes-before-copy.txt: line 19: forbidden token #7
+HIT windows-autodetect-r1/runs/w08b_restricted_scan/hashes-before-copy.txt: line 20: forbidden token #7
+HIT windows-banners-r1/runs/wb01_banners/hashes-before-copy.txt: line 19: forbidden token #7
+privacy-scan: 12 hits in $RAW (64 frames were the banners stand's own NBNS probes and replies)
+== positive control (a file holding one token): rc=1 HIT control.txt: line 1: forbidden token #3
+== a token shorter than 4 bytes: rc=2 (refused, not printed)
+== word grep (LC_ALL=C grep -ralwE over every file: every token incl. the short ones, and the DNS-SD service suffixes of .local), files:
+linux-banners-r1/runs/t01_tcp4/list/peer.pcap
+linux-scan-control-r1/runs/sc03_retries/retries/peer.pcap
+verification/guest/guest-test-ws.log
+verification/linux-stand-test-ws.log
+windows-autodetect-r1/runs/w01_auto/hashes-before-copy.txt
+windows-autodetect-r1/runs/w02_adapter_npf/hashes-before-copy.txt
+windows-autodetect-r1/runs/w03_adapter_friendly/hashes-before-copy.txt
+windows-autodetect-r1/runs/w04_router_mac/hashes-before-copy.txt
+windows-autodetect-r1/runs/w05_arp_timeout/hashes-before-copy.txt
+windows-autodetect-r1/runs/w06_multi_no_gateway/hashes-before-copy.txt
+windows-autodetect-r1/runs/w07_iflist/hashes-before-copy.txt
+windows-autodetect-r1/runs/w08a_restricted_iflist/hashes-before-copy.txt
+windows-autodetect-r1/runs/w08b_restricted_scan/hashes-before-copy.txt
+windows-banners-r1/runs/wb01_banners/hashes-before-copy.txt
+== path grep (the Mac and Linux home-directory roots, the home LAN prefix, the agent scratch root, the macOS user temp root), files:
+== end
+# Every hit above is one of two strings already in the public code of the repository (named in the 4a acceptance too):
+# token #7 (ssh alias of the VM host) = the file name pcap-hashes-on-<alias>.txt that windows-suite gives each Windows run,
+# listed in that run's hashes-before-copy.txt (and in MANIFEST.sha256 of the repository copy); token #11 (ssh alias of the
+# Linux stand host) = the #[ignore] reason of offline_generation_meets_80pct_of_oracle (rmasscan-core/tests/offline_gen.rs:36)
+# that the Linux and guest test logs print. The two pcaps of the word grep hold a two-byte token inside a pcap record header
+# (timestamp bytes), not in a frame. No other hit. The final scan of the repository copy (README.md, MANIFEST.sha256 and
+# rederive-on-committed-copy.txt included) is in the acceptance report, section 13.

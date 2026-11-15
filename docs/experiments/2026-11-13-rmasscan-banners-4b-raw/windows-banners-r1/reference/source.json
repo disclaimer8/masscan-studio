@@ -1,0 +1,13 @@
+{
+  "source_dir": "linux-banners-r1",
+  "case": "t01_tcp4",
+  "step": "oracle-list",
+  "run_verdict": "PASS",
+  "overall": "INVALID",
+  "verdict_sha256": "bcd5015bb72f19debfee819d1d420076ae2cdcc1b9a6dddc1a4eb860465dd18d",
+  "files": {
+    "argv.json": "21ed7a8471714cfd421a1d42b49da0be1bfa4cb5084eebe8467af0786b6a59dd",
+    "output.txt": "d4d68129bc9d5820f3e388cfc1089fac96ee865f3acb8338eeaf858c4ba62c63",
+    "peer.pcap": "80fba81221d25500a2491996fe12e259b025b876bf0cc4bf48ca876a9f262ab1"
+  }
+}

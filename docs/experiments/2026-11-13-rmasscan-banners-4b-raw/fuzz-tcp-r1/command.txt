@@ -1,0 +1,20 @@
+#!/usr/bin/env zsh
+# Live fuzz run of sub-stage 4b (design R15), on the Mac, code C = 0d1bdbceab8f63babfad4656f019d77abcea38e9:
+# rmasscan-lab built at C (release), run from the repository root at C. Thirteen processes in parallel, one per
+# family, each under nice -n 19 for 3700 s. $MACOUT is the neutral evidence directory of the set; the captures are the
+# peer.pcap of every step of linux-banners-r1 (pulled from the Linux stand host into $MACOUT).
+trap 'trap - EXIT INT TERM; kill 0' EXIT INT TERM
+MACOUT=$MACOUT
+cd $REPO
+PCAPS=($MACOUT/linux-banners-r1/runs/*/*/peer.pcap)
+print -r -- "start $(date -u +%FT%TZ) pcaps ${#PCAPS}" > $MACOUT/fuzz/start.txt
+i=0
+for f in http ftp smtp pop3 imap4 ssh vnc telnet rdp memcached minecraft framework stack; do
+  i=$((i+1))
+  ( nice -n 19 $MACOUT/bin/rmasscan-lab fuzz tcp --family $f --seed 4$i --duration 3700 \
+      --corpus rmasscan/tests/golden/tcp-banners --pcap $PCAPS \
+      --out $MACOUT/fuzz/fuzz-tcp-$f.json > $MACOUT/fuzz/fuzz-tcp-$f.log 2>&1; echo $? > $MACOUT/fuzz/fuzz-tcp-$f.rc ) &
+done
+wait
+print -r -- "end $(date -u +%FT%TZ)" >> $MACOUT/fuzz/start.txt
+trap - EXIT INT TERM

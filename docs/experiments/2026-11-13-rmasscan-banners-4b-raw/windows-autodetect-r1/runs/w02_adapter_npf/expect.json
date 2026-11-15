@@ -1,0 +1,26 @@
+{
+  "tag": "w02_adapter_npf",
+  "kind": "scan",
+  "detection": {
+    "interface": {
+      "value": "Ethernet 2",
+      "source": "given"
+    },
+    "source_mac": {
+      "value": "52-54-00-04-80-a9",
+      "source": "detected"
+    },
+    "source_ip": {
+      "value": "198.18.0.1",
+      "source": "detected"
+    },
+    "router_ip": {
+      "value": "198.18.0.2",
+      "source": "on-link target"
+    },
+    "router_mac": {
+      "value": "02-57-4c-3d-2e-9b",
+      "source": "arp"
+    }
+  }
+}

@@ -1,0 +1,116 @@
+{
+  "scanner": {
+    "iface": "veth-a",
+    "sysctls": [
+      [
+        "disable_ipv6",
+        "0"
+      ],
+      [
+        "accept_dad",
+        "0"
+      ],
+      [
+        "accept_ra",
+        "0"
+      ],
+      [
+        "router_solicitations",
+        "0"
+      ],
+      [
+        "forwarding",
+        "0"
+      ],
+      [
+        "addr_gen_mode",
+        "0"
+      ]
+    ],
+    "addresses": [
+      {
+        "address": "fd00:198:18::1",
+        "prefixlen": 64,
+        "scope": "global",
+        "flags": [
+          "nodad"
+        ]
+      },
+      {
+        "address": "fe80::aa:ff:fe00:1",
+        "prefixlen": 64,
+        "scope": "link",
+        "flags": []
+      }
+    ]
+  },
+  "peer": {
+    "iface": "veth-b",
+    "sysctls": [
+      [
+        "disable_ipv6",
+        "0"
+      ],
+      [
+        "accept_dad",
+        "0"
+      ],
+      [
+        "accept_ra",
+        "0"
+      ],
+      [
+        "router_solicitations",
+        "0"
+      ],
+      [
+        "forwarding",
+        "0"
+      ],
+      [
+        "addr_gen_mode",
+        "0"
+      ]
+    ],
+    "addresses": [
+      {
+        "address": "fd00:198:18::5",
+        "prefixlen": 64,
+        "scope": "global",
+        "flags": [
+          "nodad"
+        ]
+      },
+      {
+        "address": "fd00:198:18::4",
+        "prefixlen": 64,
+        "scope": "global",
+        "flags": [
+          "nodad"
+        ]
+      },
+      {
+        "address": "fd00:198:18::3",
+        "prefixlen": 64,
+        "scope": "global",
+        "flags": [
+          "nodad"
+        ]
+      },
+      {
+        "address": "fd00:198:18::2",
+        "prefixlen": 64,
+        "scope": "global",
+        "flags": [
+          "nodad"
+        ]
+      },
+      {
+        "address": "fe80::aa:ff:fe00:2",
+        "prefixlen": 64,
+        "scope": "link",
+        "flags": []
+      }
+    ]
+  }
+}

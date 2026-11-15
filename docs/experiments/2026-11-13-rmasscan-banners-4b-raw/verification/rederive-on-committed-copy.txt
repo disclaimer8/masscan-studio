@@ -1,0 +1,10 @@
+# Re-derivation of every verdict on the committed copy with the Mac rmasscan-lab of C (c37ea06c...): byte-identical?
+linux-banners-r1: Mac banners-verify rc=2, verdict.json identical (bcd5015bb72f19de…)
+linux-ipv6-r1: Mac ipv6-verify rc=0, verdict.json identical (b654b3ef09b2a325…)
+linux-protocols-r1: Mac protocols-verify rc=0, verdict.json identical (e5d629690c5ca483…)
+linux-scan-control-r1: Mac scan-control-verify rc=0, verdict.json identical (13f596b50a3029cf…)
+linux-output-r1: Mac output-verify rc=0, verdict.json identical (a244916204744940…)
+linux-autodetect-r1: Mac autodetect-verify rc=0, verdict.json identical (304edf29ac1d81ab…)
+windows-autodetect-r1: Mac windows-verify rc=0, verdict.json identical (c3ddade1c9dc8007…)
+windows-banners-r1: Mac windows-verify rc=0, verdict.json identical (86008fc7027a0456…)
+# the same on the stand host for the six Linux directories (verdict.json made there) and on the Mac before the copy: identical

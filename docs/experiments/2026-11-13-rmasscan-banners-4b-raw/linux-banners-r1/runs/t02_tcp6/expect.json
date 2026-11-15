@@ -1,0 +1,36 @@
+{
+  "tag": "t02_tcp6",
+  "plan_ports": "21,22,23,25,80,110,143,3389,5900,11211,25565",
+  "rawudp": false,
+  "steps": [
+    {
+      "name": "binary",
+      "who": "rmasscan",
+      "out": "binary"
+    },
+    {
+      "name": "oracle-binary",
+      "who": "oracle",
+      "out": "binary"
+    },
+    {
+      "name": "list",
+      "who": "rmasscan",
+      "out": "list"
+    },
+    {
+      "name": "oracle-list",
+      "who": "oracle",
+      "out": "list"
+    }
+  ],
+  "tcp": {
+    "source": "fd00:198:18::9",
+    "neighbour_entry": true,
+    "banners": true,
+    "noreset": false,
+    "connection_timeout": 8,
+    "wait": 14,
+    "heartbeat": true
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "tag": "p02_udp_payloads_and_closed",
+  "plan_ports": "U:53,161,500,59999",
+  "arp": false,
+  "steps": [
+    {
+      "name": "json",
+      "who": "rmasscan",
+      "out": "json"
+    },
+    {
+      "name": "oracle-json",
+      "who": "oracle",
+      "out": "json"
+    },
+    {
+      "name": "binary",
+      "who": "rmasscan",
+      "out": "binary"
+    },
+    {
+      "name": "oracle-binary",
+      "who": "oracle",
+      "out": "binary"
+    }
+  ]
+}

@@ -1,0 +1,6 @@
+{
+  "rc": 0,
+  "lines": 3,
+  "sha256": "e03448d2f27736e948b74bd6389c5e7cb70c83c5493f57ad513bbe8b6524ec0d",
+  "stand_line": "veth-a index=2 mac=02-aa-00-00-00-01 ipv4=198.18.0.1 up ethernet"
+}

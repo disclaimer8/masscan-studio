@@ -1,0 +1,8 @@
+2026-11-15T16:59:05Z
+BUILD_EXIT=0
+2026-11-15T16:59:20Z
+0bdec3e425a2732a8461652d482f589eddf09f241f43709bfda5c00eff60a4bc  $HOME/winvm/lab/bin/rmasscan-lab
+DEPLOY_EXIT=0
+0bdec3e425a2732a8461652d482f589eddf09f241f43709bfda5c00eff60a4bc  $HOME/winvm/lab/bin/rmasscan-lab
+7.3.0-10-generic
+rustc 1.99.1 (58cf8f9c3 2026-10-13)

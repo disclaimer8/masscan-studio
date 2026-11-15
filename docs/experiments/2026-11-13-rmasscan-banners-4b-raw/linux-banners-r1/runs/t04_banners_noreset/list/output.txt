@@ -1,0 +1,9 @@
+#masscan
+open tcp 80 198.18.0.4 1794762215
+open tcp 80 198.18.0.5 1794762215
+open tcp 3389 198.18.0.5 1794762215
+banner tcp 80 198.18.0.5 1794762217 http.server rmasscan-lab
+banner tcp 80 198.18.0.5 1794762217 http HTTP/1.1 200 OK\x0d\x0aServer: rmasscan-lab\x0d\x0a
+banner tcp 80 198.18.0.4 1794762225 http.server rmasscan-lab
+banner tcp 80 198.18.0.4 1794762225 http HTTP/1.1 200 OK\x0d\x0aServer: rmasscan-lab\x0d\x0aContent-Length: 0\x0d\x0a\x0d
+# end

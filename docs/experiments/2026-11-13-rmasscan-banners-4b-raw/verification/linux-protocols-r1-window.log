@@ -1,0 +1,23 @@
+window linux-protocols-r1: wire-lab.sh --suite protocols, code 0d1bdbceab8f63babfad4656f019d77abcea38e9
+out $R/out/protocols-out/linux-protocols-r1
+SigIgn:	0000000000000004
+SigIgn:	0000000000000000
+8b5f2f41b90afc25889de87b25d6ec5d0893960ef038b5f6ef06122528aa0508  $R/target/release/rmasscan
+f04acdb639a87cec5a0aa4945b69db9399e64ea1376fde850c3968b224964dce  $R/target/release/rmasscan-lab
+8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e  $HOME/rmasscan-oracle/masscan/bin/masscan
+start 2026-11-15T17:09:51Z
+[wire-lab] suite protocols finished rc=0 (see $R/out/protocols-out/linux-protocols-r1/suite.log)
+[wire-lab] done: $R/out/protocols-out/linux-protocols-r1
+[wire-lab] cleanup: rc=0 own_pids=0 stray_processes=0 namespaces_left=0
+wire-lab rc=0
+end 2026-11-15T17:13:13Z
+PASS     manifest 
+PASS     p01_ping 
+PASS     p02_udp_payloads_and_closed 
+PASS     p03_sctp_init_ack_abort 
+PASS     p04_arp_scan 
+PASS     p05_mixed_protos 
+overall: PASS {"FAIL":0,"INVALID":0,"NOT RUN":0,"PASS":6}
+verify rc=0
+e5d629690c5ca4838b35064665180a7b125501a34db91221bcf1d4e25aae0b14  verdict.json
+netns left: 0

@@ -1,0 +1,6 @@
+{
+  "fail": "no such interface \"nosuch0\"",
+  "hints": [
+    "    [hint] did you spell the name correctly?"
+  ]
+}

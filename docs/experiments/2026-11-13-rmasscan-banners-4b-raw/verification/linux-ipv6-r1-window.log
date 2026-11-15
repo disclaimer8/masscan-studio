@@ -1,0 +1,21 @@
+window linux-ipv6-r1: wire-lab.sh --suite ipv6, code 0d1bdbceab8f63babfad4656f019d77abcea38e9
+out $R/out/ipv6-out/linux-ipv6-r1
+SigIgn:	0000000000000004
+SigIgn:	0000000000000000
+8b5f2f41b90afc25889de87b25d6ec5d0893960ef038b5f6ef06122528aa0508  $R/target/release/rmasscan
+f04acdb639a87cec5a0aa4945b69db9399e64ea1376fde850c3968b224964dce  $R/target/release/rmasscan-lab
+8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e  $HOME/rmasscan-oracle/masscan/bin/masscan
+start 2026-11-15T17:07:14Z
+[wire-lab] suite ipv6 finished rc=0 (see $R/out/ipv6-out/linux-ipv6-r1/suite.log)
+[wire-lab] done: $R/out/ipv6-out/linux-ipv6-r1
+[wire-lab] cleanup: rc=0 own_pids=0 stray_processes=0 namespaces_left=0
+wire-lab rc=0
+end 2026-11-15T17:09:24Z
+PASS     manifest 
+PASS     v01_ndp_and_tcp6_syn 
+PASS     v02_mixed_v4_v6 
+PASS     v03_explicit_router_mac_ipv6 
+overall: PASS {"FAIL":0,"INVALID":0,"NOT RUN":0,"PASS":4}
+verify rc=0
+b654b3ef09b2a325db2eefe742344431f0b47d9f06536a93b5f9fbe36c58bae9  verdict.json
+netns left: 0

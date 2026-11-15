@@ -1,0 +1,10 @@
+{
+  "tag": "o13_open_fail",
+  "kind": "open-failure",
+  "format": "list",
+  "target": "unopenable",
+  "show_closed": false,
+  "stdout": "silent",
+  "status": "none",
+  "oracle": false
+}

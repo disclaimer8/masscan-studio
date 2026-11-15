@@ -1,0 +1,2 @@
+[+] --readscan input-rmasscan.bin
+[+] --readscan input-oracle.bin

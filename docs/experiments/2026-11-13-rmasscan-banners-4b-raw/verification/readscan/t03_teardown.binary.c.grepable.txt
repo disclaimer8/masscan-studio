@@ -1,0 +1,10 @@
+# Masscan 1.3.9-integration scan initiated Sun Nov 15 17:03:03 2026
+# Ports scanned: TCP(0;) UDP(0;) SCTP(0;) PROTOCOLS(0;)
+Timestamp: 1794762183	Host: 198.18.0.4 ()	Ports: 80/open/tcp//http//
+Timestamp: 1794762183	Host: 198.18.0.5 ()	Ports: 80/open/tcp//http//
+Timestamp: 1794762183	Host: 198.18.0.5 ()	Ports: 3389/open/tcp//ms-wbt-server//
+Host: 198.18.0.5 ()	Port: 80	Service: http.server	Banner: rmasscan-lab
+Host: 198.18.0.5 ()	Port: 80	Service: http	Banner: HTTP/1.1 200 OK\x0d\x0aServer: rmasscan-lab\x0d\x0a
+Host: 198.18.0.4 ()	Port: 80	Service: http.server	Banner: rmasscan-lab
+Host: 198.18.0.4 ()	Port: 80	Service: http	Banner: HTTP/1.1 200 OK\x0d\x0aServer: rmasscan-lab\x0d\x0aContent-Length: 0\x0d\x0a\x0d
+# Masscan done at Sun Nov 15 17:24:54 2026

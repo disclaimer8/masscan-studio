@@ -1,0 +1,7 @@
+done sc01_shards_union -> runs/sc01_shards_union
+done sc02_pause_wait_resume -> runs/sc02_pause_wait_resume
+done sc03_retries -> runs/sc03_retries
+done sc04_packet_mods_and_pcap -> runs/sc04_packet_mods_and_pcap
+done sc05_infinite_interrupt -> runs/sc05_infinite_interrupt
+done sc06_dual_veth -> runs/sc06_dual_veth
+all selected runs executed; verify offline with rmasscan-lab scan-control-verify --dir $OUT

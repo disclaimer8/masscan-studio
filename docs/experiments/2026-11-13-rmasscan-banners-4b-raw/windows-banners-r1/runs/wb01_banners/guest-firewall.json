@@ -1,0 +1,23 @@
+{
+  "profiles": [
+    {
+      "Name": "Domain",
+      "Enabled": "True",
+      "DefaultInboundAction": "NotConfigured"
+    },
+    {
+      "Name": "Private",
+      "Enabled": "True",
+      "DefaultInboundAction": "NotConfigured"
+    },
+    {
+      "Name": "Public",
+      "Enabled": "True",
+      "DefaultInboundAction": "NotConfigured"
+    }
+  ],
+  "lab_nic": {
+    "name": "Ethernet 2",
+    "category": "Public"
+  }
+}

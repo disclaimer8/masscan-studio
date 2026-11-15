@@ -1,0 +1,5 @@
+PASS     manifest 
+PASS     reference 
+PASS     wb01_banners 
+overall PASS
+verify rc=0

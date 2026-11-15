@@ -1,0 +1,26 @@
+{
+  "tag": "t06_noreset",
+  "plan_ports": "80,81",
+  "rawudp": false,
+  "steps": [
+    {
+      "name": "list",
+      "who": "rmasscan",
+      "out": "list"
+    },
+    {
+      "name": "oracle-list",
+      "who": "oracle",
+      "out": "list"
+    }
+  ],
+  "tcp": {
+    "source": "198.18.0.9",
+    "neighbour_entry": true,
+    "banners": false,
+    "noreset": true,
+    "connection_timeout": null,
+    "wait": 3,
+    "heartbeat": true
+  }
+}

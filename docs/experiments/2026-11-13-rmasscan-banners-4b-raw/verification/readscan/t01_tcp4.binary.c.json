@@ -1,0 +1,93 @@
+[
+{   "ip": "198.18.0.2",   "timestamp": "1794761992", "ports": [ {"port": 25, "proto": "tcp", "status": "open", "reason": "syn-ack", "ttl": 64} ] }
+,
+{   "ip": "198.18.0.3",   "timestamp": "1794761992", "ports": [ {"port": 21, "proto": "tcp", "status": "open", "reason": "syn-ack", "ttl": 64} ] }
+,
+{   "ip": "198.18.0.2",   "timestamp": "1794761992", "ports": [ {"port": 3389, "proto": "tcp", "status": "open", "reason": "syn-ack", "ttl": 64} ] }
+,
+{   "ip": "198.18.0.2",   "timestamp": "1794761992", "ports": [ {"port": 110, "proto": "tcp", "status": "open", "reason": "syn-ack", "ttl": 64} ] }
+,
+{   "ip": "198.18.0.5",   "timestamp": "1794761992", "ports": [ {"port": 21, "proto": "tcp", "status": "open", "reason": "syn-ack", "ttl": 64} ] }
+,
+{   "ip": "198.18.0.2",   "timestamp": "1794761992", "ports": [ {"port": 23, "proto": "tcp", "status": "open", "reason": "syn-ack", "ttl": 64} ] }
+,
+{   "ip": "198.18.0.2",   "timestamp": "1794761992", "ports": [ {"port": 5900, "proto": "tcp", "status": "open", "reason": "syn-ack", "ttl": 64} ] }
+,
+{   "ip": "198.18.0.2",   "timestamp": "1794761992", "ports": [ {"port": 11211, "proto": "tcp", "status": "open", "reason": "syn-ack", "ttl": 64} ] }
+,
+{   "ip": "198.18.0.2",   "timestamp": "1794761992", "ports": [ {"port": 80, "proto": "tcp", "status": "open", "reason": "syn-ack", "ttl": 64} ] }
+,
+{   "ip": "198.18.0.3",   "timestamp": "1794761992", "ports": [ {"port": 80, "proto": "tcp", "status": "open", "reason": "syn-ack", "ttl": 64} ] }
+,
+{   "ip": "198.18.0.5",   "timestamp": "1794761992", "ports": [ {"port": 25, "proto": "tcp", "status": "open", "reason": "syn-ack", "ttl": 64} ] }
+,
+{   "ip": "198.18.0.2",   "timestamp": "1794761992", "ports": [ {"port": 110, "proto": "tcp", "service": {"name": "pop", "banner": "+OK rmasscan-lab POP3 ready\u000a+OK\u000aSTLS\u000a.\u000a-ERR TLS not available\u000a"} } ] }
+,
+{   "ip": "198.18.0.2",   "timestamp": "1794761992", "ports": [ {"port": 25, "proto": "tcp", "service": {"name": "smtp", "banner": "220 rmasscan-lab ESMTP\u000a250-rmasscan-lab\u000a250 STARTTLS\u000a454 4.7.0 TLS not available"} } ] }
+,
+{   "ip": "198.18.0.5",   "timestamp": "1794761992", "ports": [ {"port": 80, "proto": "tcp", "status": "open", "reason": "syn-ack", "ttl": 64} ] }
+,
+{   "ip": "198.18.0.3",   "timestamp": "1794761992", "ports": [ {"port": 21, "proto": "tcp", "service": {"name": "ftp", "banner": "220-rmasscan-lab\u000a220 FTP server ready\u000a530 Please login with USER and PASS."} } ] }
+,
+{   "ip": "198.18.0.3",   "timestamp": "1794761992", "ports": [ {"port": 22, "proto": "tcp", "status": "open", "reason": "syn-ack", "ttl": 64} ] }
+,
+{   "ip": "198.18.0.2",   "timestamp": "1794761993", "ports": [ {"port": 25565, "proto": "tcp", "status": "open", "reason": "syn-ack", "ttl": 64} ] }
+,
+{   "ip": "198.18.0.5",   "timestamp": "1794761993", "ports": [ {"port": 25, "proto": "tcp", "service": {"name": "ftp", "banner": "220-rmasscan-lab ESMTP\u000a220 ready\u000a502 5.5.1 Unrecognized command"} } ] }
+,
+{   "ip": "198.18.0.2",   "timestamp": "1794761993", "ports": [ {"port": 21, "proto": "tcp", "status": "open", "reason": "syn-ack", "ttl": 64} ] }
+,
+{   "ip": "198.18.0.2",   "timestamp": "1794761993", "ports": [ {"port": 143, "proto": "tcp", "status": "open", "reason": "syn-ack", "ttl": 64} ] }
+,
+{   "ip": "198.18.0.2",   "timestamp": "1794761993", "ports": [ {"port": 143, "proto": "tcp", "service": {"name": "imap", "banner": "* OK"} } ] }
+,
+{   "ip": "198.18.0.2",   "timestamp": "1794761993", "ports": [ {"port": 5900, "proto": "tcp", "service": {"name": "vnc", "banner": "RFB 003.008\u000a width=1024 height=768"} } ] }
+,
+{   "ip": "198.18.0.2",   "timestamp": "1794761993", "ports": [ {"port": 5900, "proto": "tcp", "service": {"name": "vnc-info", "banner": "Security types:\u000a  none\u000aName: rmasscan-lab\u000a"} } ] }
+,
+{   "ip": "198.18.0.3",   "timestamp": "1794761993", "ports": [ {"port": 25, "proto": "tcp", "status": "open", "reason": "syn-ack", "ttl": 64} ] }
+,
+{   "ip": "198.18.0.5",   "timestamp": "1794761993", "ports": [ {"port": 3389, "proto": "tcp", "status": "open", "reason": "syn-ack", "ttl": 64} ] }
+,
+{   "ip": "198.18.0.2",   "timestamp": "1794761993", "ports": [ {"port": 21, "proto": "tcp", "service": {"name": "ftp", "banner": "220 rmasscan-lab FTP server ready\u000a530 Please login with USER and PASS."} } ] }
+,
+{   "ip": "198.18.0.4",   "timestamp": "1794761993", "ports": [ {"port": 80, "proto": "tcp", "status": "open", "reason": "syn-ack", "ttl": 64} ] }
+,
+{   "ip": "198.18.0.2",   "timestamp": "1794761993", "ports": [ {"port": 22, "proto": "tcp", "status": "open", "reason": "syn-ack", "ttl": 64} ] }
+,
+{   "ip": "198.18.0.5",   "timestamp": "1794761993", "ports": [ {"port": 21, "proto": "tcp", "service": {"name": "unknown", "banner": "HELLO rmasscan-lab\u000d\u000a"} } ] }
+,
+{   "ip": "198.18.0.2",   "timestamp": "1794761993", "ports": [ {"port": 23, "proto": "tcp", "service": {"name": "telnet", "banner": "\u00ff\u00fb\u0001\u000d\u000armasscan-lab login: "} } ] }
+,
+{   "ip": "198.18.0.3",   "timestamp": "1794761993", "ports": [ {"port": 25, "proto": "tcp", "service": {"name": "smtp", "banner": "220 rmasscan-lab ESMTP\u000a250-rmasscan-lab\u000a250 STARTTLS\u000a454 4.7.0 TLS not available"} } ] }
+,
+{   "ip": "198.18.0.3",   "timestamp": "1794761994", "ports": [ {"port": 22, "proto": "tcp", "service": {"name": "ssh", "banner": "SSH-2.0-OpenSSH_9.6 rmasscan-lab\u000d\u000a"} } ] }
+,
+{   "ip": "198.18.0.2",   "timestamp": "1794761994", "ports": [ {"port": 22, "proto": "tcp", "service": {"name": "ssh", "banner": "SSH-2.0-OpenSSH_9.6 rmasscan-lab\u000d\u000a"} } ] }
+,
+{   "ip": "198.18.0.2",   "timestamp": "1794761995", "ports": [ {"port": 25565, "proto": "tcp", "service": {"name": "minecraft", "banner": "r\u0000p{\u0022version\u0022:{\u0022name\u0022:\u00221.20\u0022,\u0022protocol\u0022:763},\u0022players\u0022:{\u0022max\u0022:20,\u0022online\u0022:0},\u0022description\u0022:{\u0022text\u0022:\u0022rmasscan-lab\u0022}}"} } ] }
+,
+{   "ip": "198.18.0.5",   "timestamp": "1794761995", "ports": [ {"port": 80, "proto": "tcp", "service": {"name": "http.server", "banner": "rmasscan-lab"} } ] }
+,
+{   "ip": "198.18.0.5",   "timestamp": "1794761995", "ports": [ {"port": 80, "proto": "tcp", "service": {"name": "http", "banner": "HTTP/1.1 200 OK\u000d\u000aServer: rmasscan-lab\u000d\u000a"} } ] }
+,
+{   "ip": "198.18.0.2",   "timestamp": "1794761995", "ports": [ {"port": 3389, "proto": "tcp", "service": {"name": "rdp", "banner": " NLA-supported"} } ] }
+,
+{   "ip": "198.18.0.2",   "timestamp": "1794761996", "ports": [ {"port": 11211, "proto": "tcp", "service": {"name": "memcached", "banner": "uptime=42 time=1700000000 version=1.6.21 "} } ] }
+,
+{   "ip": "198.18.0.2",   "timestamp": "1794761996", "ports": [ {"port": 80, "proto": "tcp", "service": {"name": "http.server", "banner": "rmasscan-lab"} } ] }
+,
+{   "ip": "198.18.0.2",   "timestamp": "1794761996", "ports": [ {"port": 80, "proto": "tcp", "service": {"name": "title", "banner": "rmasscan-lab"} } ] }
+,
+{   "ip": "198.18.0.2",   "timestamp": "1794761996", "ports": [ {"port": 80, "proto": "tcp", "service": {"name": "http", "banner": "HTTP/1.0 200 OK\u000d\u000aServer: rmasscan-lab\u000d\u000aContent-Type: text/html\u000d\u000a\u000d"} } ] }
+,
+{   "ip": "198.18.0.3",   "timestamp": "1794761996", "ports": [ {"port": 80, "proto": "tcp", "service": {"name": "http.server", "banner": "rmasscan-lab"} } ] }
+,
+{   "ip": "198.18.0.3",   "timestamp": "1794761996", "ports": [ {"port": 80, "proto": "tcp", "service": {"name": "title", "banner": "rmasscan-lab"} } ] }
+,
+{   "ip": "198.18.0.3",   "timestamp": "1794761996", "ports": [ {"port": 80, "proto": "tcp", "service": {"name": "http", "banner": "HTTP/1.0 200 OK\u000d\u000aServer: rmasscan-lab\u000d\u000aContent-Type: text/html\u000d\u000a\u000d"} } ] }
+,
+{   "ip": "198.18.0.4",   "timestamp": "1794762003", "ports": [ {"port": 80, "proto": "tcp", "service": {"name": "http.server", "banner": "rmasscan-lab"} } ] }
+,
+{   "ip": "198.18.0.4",   "timestamp": "1794762003", "ports": [ {"port": 80, "proto": "tcp", "service": {"name": "http", "banner": "HTTP/1.1 200 OK\u000d\u000aServer: rmasscan-lab\u000d\u000aContent-Length: 0\u000d\u000a\u000d"} } ] }
+]

@@ -1,0 +1,48 @@
+#masscan
+open tcp 25 fd00:198:18::2 1794762112
+open tcp 21 fd00:198:18::3 1794762113
+open tcp 3389 fd00:198:18::2 1794762113
+open tcp 110 fd00:198:18::2 1794762113
+open tcp 21 fd00:198:18::5 1794762113
+open tcp 23 fd00:198:18::2 1794762113
+open tcp 5900 fd00:198:18::2 1794762113
+open tcp 11211 fd00:198:18::2 1794762113
+open tcp 80 fd00:198:18::2 1794762113
+open tcp 80 fd00:198:18::3 1794762113
+open tcp 25 fd00:198:18::5 1794762113
+banner tcp 25 fd00:198:18::2 1794762113 smtp 220 rmasscan-lab ESMTP\x0a250-rmasscan-lab\x0a250 STARTTLS\x0a454 4.7.0 TLS not available
+banner tcp 110 fd00:198:18::2 1794762113 pop +OK rmasscan-lab POP3 ready\x0a+OK\x0aSTLS\x0a.\x0a-ERR TLS not available\x0a
+open tcp 80 fd00:198:18::5 1794762113
+banner tcp 21 fd00:198:18::3 1794762113 ftp 220-rmasscan-lab\x0a220 FTP server ready\x0a530 Please login with USER and PASS.
+open tcp 22 fd00:198:18::3 1794762113
+open tcp 25565 fd00:198:18::2 1794762113
+banner tcp 25 fd00:198:18::5 1794762113 ftp 220-rmasscan-lab ESMTP\x0a220 ready\x0a502 5.5.1 Unrecognized command
+open tcp 21 fd00:198:18::2 1794762113
+open tcp 143 fd00:198:18::2 1794762113
+banner tcp 143 fd00:198:18::2 1794762113 imap * OK
+banner tcp 5900 fd00:198:18::2 1794762113 vnc RFB 003.008\x0a width=1024 height=768
+banner tcp 5900 fd00:198:18::2 1794762113 vnc-info Security types:\x0a  none\x0aName: rmasscan-lab\x0a
+open tcp 25 fd00:198:18::3 1794762113
+open tcp 3389 fd00:198:18::5 1794762113
+open tcp 80 fd00:198:18::4 1794762113
+banner tcp 21 fd00:198:18::2 1794762113 ftp 220 rmasscan-lab FTP server ready\x0a530 Please login with USER and PASS.
+open tcp 22 fd00:198:18::2 1794762114
+banner tcp 21 fd00:198:18::5 1794762114 unknown HELLO rmasscan-lab\x0d\x0a
+banner tcp 23 fd00:198:18::2 1794762114 telnet \xff\xfb\x01\x0d\x0armasscan-lab login: 
+banner tcp 25 fd00:198:18::3 1794762114 smtp 220 rmasscan-lab ESMTP\x0a250-rmasscan-lab\x0a250 STARTTLS\x0a454 4.7.0 TLS not available
+banner tcp 22 fd00:198:18::3 1794762114 ssh SSH-2.0-OpenSSH_9.6 rmasscan-lab\x0d\x0a
+banner tcp 22 fd00:198:18::2 1794762115 ssh SSH-2.0-OpenSSH_9.6 rmasscan-lab\x0d\x0a
+banner tcp 25565 fd00:198:18::2 1794762115 minecraft r\x00p{\x22version\x22:{\x22name\x22:\x221.20\x22,\x22protocol\x22:763},\x22players\x22:{\x22max\x22:20,\x22online\x22:0},\x22description\x22:{\x22text\x22:\x22rmasscan-lab\x22}}
+banner tcp 80 fd00:198:18::5 1794762115 http.server rmasscan-lab
+banner tcp 80 fd00:198:18::5 1794762115 http HTTP/1.1 200 OK\x0d\x0aServer: rmasscan-lab\x0d\x0a
+banner tcp 3389 fd00:198:18::2 1794762116 rdp  NLA-supported
+banner tcp 11211 fd00:198:18::2 1794762116 memcached uptime=42 time=1700000000 version=1.6.21 
+banner tcp 80 fd00:198:18::2 1794762116 http.server rmasscan-lab
+banner tcp 80 fd00:198:18::2 1794762116 title rmasscan-lab
+banner tcp 80 fd00:198:18::2 1794762116 http HTTP/1.0 200 OK\x0d\x0aServer: rmasscan-lab\x0d\x0aContent-Type: text/html\x0d\x0a\x0d
+banner tcp 80 fd00:198:18::3 1794762117 http.server rmasscan-lab
+banner tcp 80 fd00:198:18::3 1794762117 title rmasscan-lab
+banner tcp 80 fd00:198:18::3 1794762117 http HTTP/1.0 200 OK\x0d\x0aServer: rmasscan-lab\x0d\x0aContent-Type: text/html\x0d\x0a\x0d
+banner tcp 80 fd00:198:18::4 1794762121 http.server rmasscan-lab
+banner tcp 80 fd00:198:18::4 1794762121 http HTTP/1.1 200 OK\x0d\x0aServer: rmasscan-lab\x0d\x0aContent-Length: 0\x0d\x0a\x0d
+# end

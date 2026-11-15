@@ -1,0 +1,12 @@
+done b01_banners -> runs/b01_banners
+done b02_rawudp -> runs/b02_rawudp
+done t01_tcp4 -> runs/t01_tcp4
+done t02_tcp6 -> runs/t02_tcp6
+done t03_teardown -> runs/t03_teardown
+done t04_banners_noreset -> runs/t04_banners_noreset
+done t05_stateless_rst -> runs/t05_stateless_rst
+done t06_noreset -> runs/t06_noreset
+done t07_resolve_arp -> runs/t07_resolve_arp
+done t08_resolve_ndp -> runs/t08_resolve_ndp
+done t09_quiet_timers -> runs/t09_quiet_timers
+all selected runs executed; verify offline with rmasscan-lab banners-verify --dir $OUT

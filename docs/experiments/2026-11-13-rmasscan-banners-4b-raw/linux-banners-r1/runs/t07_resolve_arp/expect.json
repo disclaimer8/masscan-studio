@@ -1,0 +1,26 @@
+{
+  "tag": "t07_resolve_arp",
+  "plan_ports": "80",
+  "rawudp": false,
+  "steps": [
+    {
+      "name": "list",
+      "who": "rmasscan",
+      "out": "list"
+    },
+    {
+      "name": "oracle-list",
+      "who": "oracle",
+      "out": "list"
+    }
+  ],
+  "tcp": {
+    "source": "198.18.0.10",
+    "neighbour_entry": false,
+    "banners": true,
+    "noreset": false,
+    "connection_timeout": null,
+    "wait": 8,
+    "heartbeat": true
+  }
+}

@@ -1,0 +1,29 @@
+window linux-banners-r1: wire-lab.sh --suite banners, code 0d1bdbceab8f63babfad4656f019d77abcea38e9
+out $R/out/banners-out/linux-banners-r1
+SigIgn:	0000000000000004
+SigIgn:	0000000000000000
+8b5f2f41b90afc25889de87b25d6ec5d0893960ef038b5f6ef06122528aa0508  $R/target/release/rmasscan
+f04acdb639a87cec5a0aa4945b69db9399e64ea1376fde850c3968b224964dce  $R/target/release/rmasscan-lab
+8afc8ec81f2e051389116908b01a4482b42e020bc48254585b7dcca4b25e2a3e  $HOME/rmasscan-oracle/masscan/bin/masscan
+start 2026-11-15T16:58:07Z
+[wire-lab] suite banners finished rc=0 (see $R/out/banners-out/linux-banners-r1/suite.log)
+[wire-lab] done: $R/out/banners-out/linux-banners-r1
+[wire-lab] cleanup: rc=0 own_pids=0 stray_processes=0 namespaces_left=0
+wire-lab rc=0
+end 2026-11-15T17:06:45Z
+PASS     manifest 
+PASS     b01_banners 
+PASS     b02_rawudp 
+PASS     t01_tcp4 
+PASS     t02_tcp6 
+PASS     t03_teardown 
+PASS     t04_banners_noreset 
+PASS     t05_stateless_rst 
+INVALID  t06_noreset INVALID: oracle-list: the document's status records are the replies on its wire, field for field, in reply order (replies captured at most 50 us apart on the peer link, rounded to the microsecond, may come in either order: REPLY_REORDER_WINDOW_US); its banner records are judged against the stand's replies and the C oracle; INVALID: list: the records equal the C oracle's (oracle-list) field for field but the time, in any order (each document's order is its own wire's reply order, judged above; the two wires' reply orders may differ)
+PASS     t07_resolve_arp 
+PASS     t08_resolve_ndp 
+PASS     t09_quiet_timers 
+overall: INVALID {"FAIL":0,"INVALID":1,"NOT RUN":0,"PASS":11}
+verify rc=2
+bcd5015bb72f19debfee819d1d420076ae2cdcc1b9a6dddc1a4eb860465dd18d  verdict.json
+netns left: 0

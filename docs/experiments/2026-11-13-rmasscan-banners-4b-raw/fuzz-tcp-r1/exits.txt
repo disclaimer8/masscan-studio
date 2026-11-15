@@ -1,0 +1,13 @@
+http 0
+ftp 0
+smtp 0
+pop3 0
+imap4 0
+ssh 0
+vnc 0
+telnet 0
+rdp 0
+memcached 0
+minecraft 0
+framework 0
+stack 1

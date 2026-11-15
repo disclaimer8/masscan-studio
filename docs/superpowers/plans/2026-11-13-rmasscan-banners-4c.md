@@ -18,7 +18,7 @@
 не знает про TLS. CLI добавляет опции проверок и пробрасывает флаги `capture`/`is_*` в `TcpBannerSettings`.
 
 **Tech Stack:** Rust (пин `rmasscan/rust-toolchain.toml`), workspace `rmasscan/`, без новых внешних крейтов и без
-изменений `Cargo.lock` (SipHash-2-4 для отпечатка ClientHello пишется локально по векторам C, а не крейтом).
+изменений `Cargo.lock` (SipHash-2-4 уже есть в ядре: `rmasscan_core::cookie::siphash24`, сверен с векторами C).
 
 **Spec:** [спека этапа](../specs/2026-11-13-rmasscan-banners-design.md) §3 строка 4c, Р1–Р17 (особенно Р1 паритет,
 Р3, Р10, Р12, Р13, Р15, Р17), §10 (И1–И7), §11 (И8–И20). Справка
@@ -73,9 +73,10 @@ heartbleed, план 4b задача 3); `syn_cookie_ipv4/ipv6` (`rmasscan-core/
   потоке, но тогда ServerHello, приехавший одним сегментом с согласием, никогда не разберётся как TLS. Предложение:
   каждый байт после строки согласия — в TLS-парсер в любой нарезке; отличие от C (класс E2, замена E2.8) пишется в
   справку 4c, README и §12 спеки. Живой сервер после согласия ждёт ClientHello, поэтому на практике хвост пуст.
-- **Hello строится один раз на скан**, как у C (один `banner_ssl.hello`): `ssl_hello()` с `time(0)` в момент
-  сборки настроек CLI. Следствие для стенда: hello двух сканеров сравниваются с точностью до поля random
-  (смещения — задача 0) — правило верификатора задачи 12, а не побайтно.
+- **Hello как у C: в Normal статичные, в режимах проверок один на скан** (уточнено задачей 0, справка 4c §A2).
+  Обычные hello и hello второго соединения у C — байты шаблонов как есть, с запечённым random; `ssl_hello()` с
+  `time(0)` и siphash-отпечатком применяется только к трём шаблонам режимов, один раз на скан. Следствие для
+  стенда: в Normal hello сравниваются побайтно; поле random (байты 11..43) прощается только в прогонах режимов.
 
 ## Global Constraints
 
@@ -213,29 +214,30 @@ heartbleed, план 4b задача 3); `syn_cookie_ipv4/ipv6` (`rmasscan-core/
 ### Задача 2: SipHash-2-4 и строители ClientHello
 
 **Files:**
-- Create: `rmasscan/crates/rmasscan-proto/src/banner1/tls_hello.rs`, `rmasscan/crates/rmasscan-proto/src/siphash24.rs`
-- Modify: `rmasscan/crates/rmasscan-proto/src/lib.rs`, `rmasscan/crates/rmasscan-proto/src/banner1/mod.rs`
+- Create: `rmasscan/crates/rmasscan-proto/src/banner1/tls_hello.rs`
+- Modify: `rmasscan/crates/rmasscan-proto/src/banner1/mod.rs`
 - Test data: выгрузка оракула вне репозитория → `rmasscan/tests/golden/tcp-banners/` (случаи hello, манифест)
 
 **Interfaces:**
-- Consumes: задача 0 §1 (шаблоны побайтно, поля динамизации).
+- Consumes: справка 4c §A2; `rmasscan_core::cookie::siphash24` (уже сверен с векторами
+  `src/crypto-siphash24.c` — новой реализации хэша нет).
 - Produces:
-  - `pub(crate) fn siphash24(key: [u64; 2], data: &[u8]) -> u64` (референсный алгоритм, `src/crypto-siphash24.c`
-    CC0; векторы его selftest — эталон).
   - `pub(crate) enum TlsHelloKind { Default, Tls13, Heartbeat, Ticketbleed, Sslv3Poodle }`;
-    `pub(crate) fn tls_hello(kind: TlsHelloKind, now_secs: u64) -> Vec<u8>` — шаблон плюс динамизация как
-    `ssl_hello()` (`src/proto-ssl.c:1224-1254`): время и siphash-отпечаток на тех же смещениях; для
-    `Sslv3Poodle` — плюс `TLS_FALLBACK_SCSV 0x5600` в конец списка шифров с правкой трёх длин
-    (`ssl_add_cipherspec_sslv3`, `:1123-1178`).
-  - Шаблоны — константы байт в байт как C (198, 287, 225, 361, 72 байта до SCSV; сверить с задачей 0).
+    `pub(crate) fn tls_hello(kind: TlsHelloKind, now_secs: u64) -> Vec<u8>`: `Default`/`Tls13` — статичные
+    шаблоны байт в байт как C (`now_secs` игнорируется, справка §A2); остальные три — динамизация как
+    `ssl_hello()` (`src/proto-ssl.c:1224-1254`): `time` BE в байтах 11..15, дальше младший байт
+    `siphash24((i + now) как u32 LE, 0, 0)` для i в 4..32; для `Sslv3Poodle` — плюс `TLS_FALLBACK_SCSV 0x5600`
+    в конец списка шифров с правкой трёх длин (`ssl_add_cipherspec_sslv3`, `:1123-1178`).
+  - Шаблоны — константы байт в байт как C (198, 287, 225, 361, 72 байта до SCSV; справка §A2).
 
 - [ ] **Step 1: выгрузка оракула.** Расширить офлайн-обвязку 4b (`tcp-oracle`, справка TCP E4 уже собирает
   TLS-юниты для `banner1_create`): печать пяти `banner_ssl.hello` после каждой опции режима при фиксированном
   `time()` (переопределение в обвязке) и шаблонов как есть; в репозиторий — байты, `now`, хэш обвязки и коммит C в
   манифест.
-- [ ] **Step 2: тесты** `siphash24_matches_c_reference_vectors`, `tls_hellos_match_c_byte_for_byte` (пять видов при
-  том же `now`, включая динамизацию), `sslv3_scsv_append_fixes_all_lengths`, `hello_random_field_is_time_and_siphash`
-  (смещения по задаче 0), `tls_hello_never_panics`.
+- [ ] **Step 2: тесты** `tls_hellos_match_c_byte_for_byte` (пять видов при том же `now`; Normal — без
+  динамизации при любом `now`), `sslv3_scsv_append_fixes_all_lengths`,
+  `vuln_hello_random_is_time_and_siphash_u32le` (байты 11..43, ключ {0,0}, вход — `(i + now)` как u32 LE),
+  `tls_hello_never_panics`.
 - [ ] **Step 3: FAIL** → реализация.
 - [ ] **Step 4: PASS** `cargo test -p rmasscan-proto`, privacy-scan по эталонам; **коммит**
   `feat(rmasscan-proto): five TLS ClientHello builders and siphash24 fingerprint (C parity)`.
@@ -451,8 +453,9 @@ heartbleed, план 4b задача 3); `syn_cookie_ipv4/ipv6` (`rmasscan-core/
 
 **Interfaces:**
 - Consumes: задачи 0 §5, 5 (`TlsSettings`/`TlsMode`), 2 (строители).
-- Produces: разбор по `EQUALS` (Р17) для `--heartbleed`, `--ticketbleed`, `--sslv3` и `--vuln <v>` со значениями
-  `heartbleed|ticketbleed|poodle|sslv3` (остальные значения C — по решению задачи 0); побочные эффекты как у C:
+- Produces: разбор по `EQUALS` (Р17) для `--heartbleed`, `--ticketbleed` и `--vuln <v>` со значениями
+  `heartbleed|ticketbleed|poodle|sslv3` (опции-имени `--sslv3` у C нет, справка §E2; прочие значения, включая
+  `ntp-monlist`, — фатальный текст C и код 1, именованное отличие); побочные эффекты как у C:
   режим включает `banners`, поток TLS на все порты, умолчания `nocapture` режима (явные `--capture` после него
   побеждают в порядке argv, как `SET_capture`); `tcp_banner_settings` строит пять hello один раз на скан
   (`now_secs` — настенные часы сборки настроек) и заполняет `TlsSettings` из `ScanConfig.capture` и режима.
@@ -508,17 +511,16 @@ heartbleed, план 4b задача 3); `syn_cookie_ipv4/ipv6` (`rmasscan-core/
   (`rmasscan/tests/golden/formats` или сосед по факту), документы C `--readscan` из него
 
 **Interfaces:**
-- Consumes: задачи 0 §4 (что C перекодирует в `src/in-report.c`, флаги subject/issuer), 3, 4.
+- Consumes: справка 4c §E4 (перекодировка в `src/in-report.c` — мёртвый код, вызов закомментирован; subject/issuer
+  при чтении не появляются), задачи 3, 4.
 
 - [ ] **Step 1: сверка.** C `--readscan` на `-oB` с записями `ssl/X509/X509CA/vuln/heartbleed` во все форматы
-  (`-oL/-oJ/-oX/-oG`, `certs` в stdout) против rmasscan `--readscan` того же файла. Отдельно: добавляет ли C
-  `subject[…]`/`issuer[…]` перекодировкой DER при чтении и в каких форматах это видно; `certs`: срез префикса
-  `cert:`, PEM-обёртка 72 колонки, `{finished: 1}` (`src/out-certs.c:24,50-91`); обрезанная на 65 536 запись
-  сертификата при чтении.
+  (`-oL/-oJ/-oX/-oG`, `certs` в stdout) против rmasscan `--readscan` того же файла. Отдельно: `certs` оборачивает
+  в PEM **каждую** запись баннера, не только X509, и печатает в stdout (справка §E4): срез префикса `cert:`,
+  72 колонки, `{finished: 1}`; обрезанная на 65 536 запись сертификата при чтении; две записи `X509CA` одного
+  соединения (цепочка из трёх, справка §B4) во всех форматах.
 - [ ] **Step 2: тесты** по итогам шага 1: `readscan_tls_records_match_c_all_formats`, `certs_format_matches_c`
-  (обёртка, префикс, финальная строка), при наличии перекодировки у C —
-  `readscan_x509_subject_issuer_redecode_matches_c` (переиспользует `x509.rs` задачи 3 с флагами
-  subject/issuer — если задача 0 покажет, что живой путь их не ставит, а readscan ставит оба).
+  (обёртка каждой записи, префикс, финальная строка, stdout против файла).
 - [ ] **Step 3: FAIL** → реализация; если расхождений нет — задача закрывается тестами без кода, это фиксируется в
   заметках.
 - [ ] **Step 4: PASS** `cargo test -p rmasscan-cli`; **коммит**
@@ -541,8 +543,9 @@ heartbleed, план 4b задача 3); `syn_cookie_ipv4/ipv6` (`rmasscan-core/
   STARTTLS на 25 (согласие + case3), отказ STARTTLS, сервер, отвечающий только второму соединению. Всё на IPv4;
   на IPv6 — 443 и STARTTLS (Р16). Пульс `WIRELAB-BEAT` и argv окна — как в 4b (И14/И15).
 - [ ] **Step 2: верификатор.** Записи `ssl/X509/X509CA/vuln/safe` равны C мультимножеством поле в поле без
-  времени; на проводе по соединению: hello равно C с точностью до байтов random (смещения задачи 0; остальные
-  байты, длина, порядок сегментов, относительные seq/ack — точно), FIN после первого hello, SYN реконнекта со
+  времени; на проводе по соединению: hello равно C побайтно (в прогоне `--heartbleed` — с точностью до поля
+  random, байты 11..43, справка §A2; остальные байты, длина, порядок сегментов, относительные seq/ack — точно),
+  FIN после первого hello, SYN реконнекта со
   следующего порта и его cookie, окно 600 в режиме heartbleed; время hello и RST жизни — допуски 4b. Виды
   отличий окна — только из E-списка справки 4c. Вопрос в обе стороны (Global Constraints): сценарий, где пир не
   доиграл поток, — INVALID, а не FAIL rmasscan; пропавший второй SYN — FAIL, а не INVALID. Тесты на фикстурах:

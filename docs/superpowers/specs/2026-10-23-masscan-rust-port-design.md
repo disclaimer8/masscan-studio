@@ -783,3 +783,12 @@ Handle::pause(), Handle::stop(), Handle::join()
   IPv6 нет (R3 этапа IPv6 отказывает UDP поверх IPv6); они придут с TCP в 4b. Фаззер мутаций на чистом Rust
   (`rmasscan-lab fuzz udp`, Р15) заменяет libFuzzer, который тянет C++. Изменения по итогам — §10 спеки этапа; приёмка:
   [отчёт](../../experiments/2026-11-13-rmasscan-banners-4a-acceptance.md).
+- **(j) Подэтап 4b: свой TCP-стек и текстовые протоколы.** Переносит стек TCP в пространстве пользователя (IPv4 и IPv6), RST
+  без состояния и `--noreset` (Р8), ответчик ARP для собственного IPv4, как в C (`src/main.c:878-887`; спека этапа §11 И12),
+  учёт кадров стека в `--rate`, каркас баннеров (классификатор первых байтов, hello по порту, `--hello*`, `--http-*`,
+  `--connection-timeout`) и одиннадцать парсеров C (HTTP, FTP, SMTP, POP3, IMAP4, SSH, VNC, Telnet, RDP, memcached,
+  Minecraft) в `rmasscan-proto`. Движок от `rmasscan-proto` не зависит (трейт стека в `rmasscan-core`, реализацию передаёт
+  CLI), Studio не менялась. Отличия от C — исправления классов а–г (E1 справки 4b) и правило «C на неразрезанном потоке»
+  (E2), перечень в `rmasscan/README.md`; бюджет 512 МиБ на байты баннеров таблицы — отступление сверх Р5 (спека этапа, §11 И9). TLS и
+  X.509 — подэтап 4c, SMB/NTLMSSP и фаззинг 24 ч — 4d. Изменения по итогам — §11 спеки этапа; приёмка:
+  [отчёт](../../experiments/2026-11-13-rmasscan-banners-4b-acceptance.md).

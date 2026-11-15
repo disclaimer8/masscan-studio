@@ -936,10 +936,14 @@ masscan `8e6b3b0`). **Windows IPv6 не снимался (NOT RUN):** на lab-N
 UDP-ответчиков, IPv4, PASS 3/3, см. «Статус»). Баннеры UDP поверх IPv6 недоступны, пока скан UDP поверх IPv6 отказывает
 (R3); живые UDP-баннеры по IPv6 NOT RUN.
 
-Баннеры TCP (подэтап 4b) пока проверены только офлайн: эталонами C-парсеров и кадров стека (`tests/golden/tcp-banners/`,
+Баннеры TCP (подэтап 4b) проверены офлайн эталонами C-парсеров и кадров стека (`tests/golden/tcp-banners/`,
 `tests/golden/tcp-frames/`), тестами автомата и таблицы и тестами CLI на фиктивном адаптере с настоящим стеком и пиром
-TCP (HTTP, SSH, IMAP4, RST сервера, срок жизни, keep-alive до конца `--wait`, пауза, IPv6). Живое окно стенда и прогон на
-Windows и macOS ещё не снимались (NOT RUN).
+TCP, а вживую — окном `banners` на стенде Linux (C-оракул и rmasscan против одних сценариев TCP, IPv4 и IPv6: записи и
+сегменты сканера равны C; RST без состояния, `--noreset`, сброс таблицы в конце скана, разрешение адреса источника
+через ответы ARP и NDP сканера; см. «Статус») и одним TCP-кейсом на Windows VM (HTTP и SSH, записи равны записям C из
+окна Linux). Не снимались живьём (NOT RUN): macOS `feth`, IPv6 на Windows, физические NIC. Дедуп ответов TCP у C держит
+в корзине одну запись (`src/main-dedup.c:279`): повтор SYN-ACK, чью корзину занял другой ответ, C печатает второй раз,
+rmasscan — один (окно `banners`, кейс `t06_noreset`).
 
 Маршрут по умолчанию читается не в любой форме. На Linux маршрут, заданный объектом nexthop (`RTA_NH_ID`) или
 многопутевой (`RTA_MULTIPATH`), не читается: на таком хосте скан нескольких целей on-link получает отказ
@@ -947,6 +951,18 @@ Windows и macOS ещё не снимались (NOT RUN).
 `utun`, скан LAN на `en0` получает `NoGateway` вместо шлюза `en0`. В обоих случаях шлюз задают явно, `--router-ip`.
 
 ## Статус
+
+Баннеры, подэтап 4b (код `0d1bdbce`, 2026-11-15, ветка `codex/rmasscan-banners-4b-continuation`, база `0f3c2153`): свой стек
+TCP (IPv4 и IPv6), RST без состояния и `--noreset`, ответчик ARP, каркас баннеров с `--hello*` и `--http-*` и парсеры HTTP,
+FTP, SMTP, POP3, IMAP4, SSH, VNC, Telnet, RDP, memcached и Minecraft в `rmasscan-proto`. Живая приёмка: Linux `banners`
+11 PASS и 1 INVALID из 12 (`t06_noreset`: документ C из-за его дедупа, все проверки rmasscan PASS), регрессии IPv6 Linux
+PASS 4/4, протоколов Linux PASS 6/6, управления сканом Linux PASS 7/7, вывода Linux PASS 18/18, автоопределения Linux PASS
+13/13 и Windows VM PASS 10/10, TCP-кейс Windows VM PASS 3/3; C `--readscan` читает `-oB` rmasscan с баннерами TCP теми же
+документами; фаззинг 13 семейств TCP по часу (1,03 млрд входов, 0 падений, 0 медленных, 0 несовпадений нарезки; у `stack`
+3 нарушения инварианта, по разбору — правило фаззера, решение открыто). Тесты: Mac 2754/0, хост стенда Linux 2633/1,
+гость Windows 2521/2 (три теста, которые до этой приёмки не шли на своей ОС: два теста лаборатории и тест текста ошибки
+`--hello-file` на Windows; отчёт, раздел 4). macOS `feth`, Windows IPv6 и физические NIC: NOT RUN. Сырые данные: `../docs/experiments/2026-11-13-rmasscan-banners-4b-raw/`;
+отчёт: `../docs/experiments/2026-11-13-rmasscan-banners-4b-acceptance.md`.
 
 Баннеры, подэтап 4a (код `39ba251e`, 2026-11-13, ветка `feat/rmasscan-banners`, база `719603b2`): записи баннеров (`-oB` типы 9 и
 13 и их формы во всех форматах, `--readscan` типов 3/4/5/9/13, `--banner-types`) и `--banners`/`--rawudp` для UDP с восемью

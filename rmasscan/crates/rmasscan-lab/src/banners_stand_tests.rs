@@ -672,8 +672,19 @@ fn the_case_table_scans_the_http_and_ssh_scenarios_with_the_stands_binding() {
     // hello, or SSH on a hello port, would be refused.
     for ports in [[(2222, 22), (8081, 80)], [(23, 22), (8080, 80)]] {
         let c = StandCase { ports, ..MACOS };
-        assert_eq!(hello_table_problems(&c).len(), 1, "{ports:?}");
+        assert!(!hello_table_problems(&c).is_empty(), "{ports:?}");
     }
+    // A hello table that lost its line for a port whose scenario waits for the hello is a problem, not "no hello".
+    let c = StandCase {
+        ports: [(2222, 22), (9999, 80)],
+        ..MACOS
+    };
+    let probs = hello_table_problems(&c);
+    assert!(
+        probs.iter().any(|p| p.contains("no line for 9999")),
+        "{probs:?}"
+    );
+    assert_eq!(hello_table_streams(), Some(98));
     assert_eq!(c_hello(80), c_hello(8080));
     assert!(c_hello(80).is_some_and(|h| h.starts_with("474554202f20")));
     assert_eq!((c_hello(22), c_hello(2222)), (None, None));
@@ -745,6 +756,35 @@ fn a_foreign_hello_fails_although_the_records_are_cs() {
             );
             // The records cannot tell: the server answered the foreign hello as it answers C's.
             assert_eq!(check(&v, c.tag, "equal C's records"), PASS);
+        }
+    }
+}
+
+#[test]
+fn a_scanner_that_never_sends_its_hello_fails_and_is_not_the_stands_fault() {
+    // The handshake completes, then rmasscan drops its HTTP request (and the SSH ident). The peer's script waits for
+    // it and streams nothing, so the banners are gone too: the scanner's FAIL, not an INVALID stand.
+    for c in [WINDOWS, MACOS] {
+        for port in [c.ports[1].0, c.ports[0].0] {
+            let st = av::stand(c.plan);
+            let mut sim = StandSim::new(c);
+            let lp = c.linux_port(port).unwrap();
+            sim.frames.retain(|(_, f)| {
+                let Some(h) = tcp_head(f) else { return true };
+                let scanner = f[6..12] == st.scanner_mac && h.dp == port;
+                let peer = f[6..12] == st.peer_mac && h.sp == port;
+                !((scanner || peer) && !h.payload.is_empty())
+            });
+            sim.lines
+                .retain(|l| !matches!(l, Line::Banner { port: p, .. } if *p == port || *p == lp));
+            let v = judge(&sim);
+            assert_eq!(v["overall"], FAIL, "{} {port}: {:#?}", c.tag, bad(&v));
+            assert_eq!(run_of(&v, c.tag)["behaviour_fail"], true);
+            assert_eq!(check(&v, c.tag, "streamed the scenario"), PASS);
+            assert_eq!(
+                check(&v, c.tag, "payload segments on each connection are C's"),
+                FAIL
+            );
         }
     }
 }
@@ -934,6 +974,25 @@ fn the_reference_must_be_a_pass_of_t01_with_its_recorded_hashes() {
             .unwrap_err()
             .contains("differs")
     );
+    // A verdict.json that outlived an edit: the file is re-hashed and still says PASS, the window no longer is.
+    let case_dir = linux.join("runs").join(REFERENCE_CASE);
+    let hashes_file = case_dir.join("hashes-before-copy.txt");
+    let old_hashes = fs::read_to_string(&hashes_file).unwrap();
+    let rel = format!("{REFERENCE_STEP}/{OUTPUT}");
+    let new_hashes = old_hashes
+        .lines()
+        .map(|l| match l.split_once("  ") {
+            Some((_, n)) if n == rel => format!("{}  {n}\n", sha(b"#masscan\n# end\n")),
+            _ => format!("{l}\n"),
+        })
+        .collect::<String>();
+    fs::write(&hashes_file, new_hashes).unwrap();
+    assert!(
+        copy_reference(&linux, &out)
+            .unwrap_err()
+            .contains("when banners-verify judges it now")
+    );
+    fs::write(&hashes_file, old_hashes).unwrap();
     fs::write(&doc, &good).unwrap();
     let src = copy_reference(&linux, &out).unwrap();
     assert_eq!(src.run_verdict, PASS);

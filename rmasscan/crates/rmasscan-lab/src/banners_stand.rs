@@ -265,20 +265,47 @@ pub fn c_hello(port: u16) -> Option<String> {
         .and_then(|l| l.rsplit(' ').next())
         .map(str::to_owned)
 }
-/// Every scanned port whose C hello differs from the hello of its scenario's port in the Linux window (the macOS port
-/// mapping is only sound when C sends the same on both).
+/// The number of hello lines the table's header (`tcp-oracle hellos streams=N`) says it holds.
+fn hello_table_streams() -> Option<usize> {
+    HELLOS
+        .lines()
+        .next()?
+        .strip_prefix("tcp-oracle hellos streams=")?
+        .parse()
+        .ok()
+}
+/// What is wrong with the pinned hello table for the stand's ports: its line count is not its header's (a line was
+/// lost: "no line" would read as "C sends nothing"), a port whose scenario is answered by C's hello has no line, or a
+/// scanned port's hello differs from the hello of its scenario's port in the Linux window (the macOS port mapping is
+/// only sound when C sends the same on both).
 pub fn hello_table_problems(c: &StandCase) -> Vec<String> {
-    c.ports
-        .iter()
-        .filter(|(p, sp)| c_hello(*p) != c_hello(*sp))
-        .map(|(p, sp)| {
-            format!(
+    let mut out = Vec::new();
+    let lines = HELLOS.lines().filter(|l| l.starts_with("hello ")).count();
+    if hello_table_streams() != Some(lines) {
+        out.push(format!(
+            "the hello table holds {lines} lines, its header says {:?}",
+            hello_table_streams()
+        ));
+    }
+    for (p, sp) in c.ports {
+        if c.scenario(p).is_some_and(|sc| !sc.server_first())
+            && (c_hello(p).is_none() || c_hello(sp).is_none())
+        {
+            out.push(format!(
+                "C's hello table has no line for {p} ({:?}) or {sp} ({:?}), whose scenario waits for the hello",
+                c_hello(p),
+                c_hello(sp)
+            ));
+        }
+        if c_hello(p) != c_hello(sp) {
+            out.push(format!(
                 "C's hello on {p} ({:?}) is not its hello on {sp} ({:?})",
-                c_hello(*p),
-                c_hello(*sp)
-            )
-        })
-        .collect()
+                c_hello(p),
+                c_hello(sp)
+            ));
+        }
+    }
+    out
 }
 
 // ------------------------------------------------------------------ the reference
@@ -308,7 +335,8 @@ fn run_verdict(v: &Value, tag: &str) -> Option<String> {
 }
 /// Copy the C reference from the Linux banners evidence directory `linux` into `out/reference/` (both suites, before
 /// the first remote action): the window's manifest must be `banners: linux`, its `verdict.json` must say PASS for
-/// `t01_tcp4`, and every copied file must have the sha256 the Linux case recorded before its own copy. A copy that is
+/// `t01_tcp4` and so must the verdict of `banners-verify` on the window now (recomputed, not trusted from the file), and
+/// every copied file must have the sha256 the Linux case recorded before its own copy. A copy that is
 /// already there is kept only when it is the same.
 pub fn copy_reference(linux: &Path, out: &Path) -> Result<ReferenceSource, String> {
     let man = read_json(linux.join("manifest.json"))
@@ -357,6 +385,14 @@ pub fn copy_reference(linux: &Path, out: &Path) -> Result<ReferenceSource, Strin
         }
         files.insert(f.to_owned(), (*want).to_owned());
         bytes.push((rel, b));
+    }
+    // A verdict.json is a file that outlives the files it judged: judge the window again now.
+    let fresh = run_verdict(&bv::verify_dir(linux), REFERENCE_CASE).unwrap_or_default();
+    if fresh != PASS {
+        return Err(format!(
+            "{REFERENCE_CASE} of {} is {fresh:?} when banners-verify judges it now, though verdict.json says PASS: it is no reference",
+            linux.display()
+        ));
     }
     let src = ReferenceSource {
         source_dir: linux
@@ -414,6 +450,15 @@ pub struct CReference {
     /// C's payload segments on each scenario's connection (by the scenario's port), each sequence number once, in
     /// wire order.
     pub payloads: BTreeMap<u16, Vec<Vec<u8>>>,
+}
+/// The payload segments rmasscan sent on a connection, each sequence number once, in wire order.
+fn scanner_payloads(x: &Conn) -> Vec<Vec<u8>> {
+    let mut seen = BTreeSet::new();
+    x.scanner
+        .iter()
+        .filter(|g| !g.payload.is_empty() && seen.insert(g.seq))
+        .map(|g| g.payload.clone())
+        .collect()
 }
 /// The scanner's payload segments to `dst:port` from `src:sport` on a capture, each sequence number once (a
 /// retransmission is no second segment), in wire order.
@@ -1095,7 +1140,13 @@ pub(crate) fn judge_run(root: &Path, c: &StandCase, reference: Option<&CReferenc
                     stand_bad.push(format!("{}: no scenario", h.dp));
                     continue;
                 };
-                if x.peer_stream() != sc.stream() {
+                // A scanner that did not send C's payload on this connection explains the peer's shorter stream (its
+                // script waits for the hello): that is the payload check's FAIL below, not the stand's fault.
+                let explained = reference.is_some_and(|rf| {
+                    c.linux_port(h.dp)
+                        .is_some_and(|lp| rf.payloads.get(&lp) != Some(&scanner_payloads(x)))
+                });
+                if x.peer_stream() != sc.stream() && !explained {
                     stand_bad.push(format!(
                         "{}: the peer sent {} bytes, not its scenario's {}",
                         h.dp,
@@ -1167,13 +1218,7 @@ pub(crate) fn judge_run(root: &Path, c: &StandCase, reference: Option<&CReferenc
         let Some(lp) = c.linux_port(x.port) else {
             continue;
         };
-        let mut seen = BTreeSet::new();
-        let mine: Vec<Vec<u8>> = x
-            .scanner
-            .iter()
-            .filter(|g| !g.payload.is_empty() && seen.insert(g.seq))
-            .map(|g| g.payload.clone())
-            .collect();
+        let mine = scanner_payloads(x);
         sent.insert(
             x.port.to_string(),
             json!(

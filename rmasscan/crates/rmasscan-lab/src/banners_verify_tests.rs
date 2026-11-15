@@ -2862,7 +2862,35 @@ fn a_second_request_after_an_answer_in_form_is_the_scanners() {
 #[test]
 fn every_field_of_the_answer_to_the_peers_request_is_judged() {
     type Edit = fn(&mut Vec<u8>);
-    let cases: [(&str, &str, Edit); 9] = [
+    let cases: [(&str, &str, Edit); 16] = [
+        // T15 N1 / L-M3: each named field of C's form has a row.
+        ("t08_resolve_ndp", "flags 0x60", |f| {
+            f[58] = 0x40;
+            set_sums(f);
+        }),
+        ("t08_resolve_ndp", "no extension header", |f| {
+            // A hop-by-hop header (PadN) before the ICMPv6 body, which keeps its checksum (the pseudo header is the
+            // same).
+            let body = f.split_off(54);
+            f[20] = 0;
+            f.extend([58, 0, 1, 4, 0, 0, 0, 0]);
+            f.extend(body);
+            let n = (f.len() - 54) as u16;
+            f[18..20].copy_from_slice(&n.to_be_bytes());
+        }),
+        ("t08_resolve_ndp", "from the source", |f| {
+            f[37] ^= 1;
+            set_sums(f);
+        }),
+        ("t08_resolve_ndp", "to the requester", |f| {
+            f[53] ^= 1;
+            set_sums(f);
+        }),
+        ("t07_resolve_arp", "an Ethernet ARP reply", |f| f[15] = 6),
+        ("t07_resolve_arp", "the scanner MAC as sender", |f| {
+            f[27] ^= 1
+        }),
+        ("t07_resolve_arp", "the requester as target", |f| f[41] ^= 1),
         ("t08_resolve_ndp", "hop limit 255", |f| f[21] = 64),
         ("t08_resolve_ndp", "a right checksum", |f| f[56] ^= 1),
         ("t08_resolve_ndp", "code 0", |f| {
@@ -2908,12 +2936,41 @@ fn every_field_of_the_answer_to_the_peers_request_is_judged() {
 
 #[test]
 fn after_the_resolution_the_connection_must_carry_its_stream() {
-    // t07: the answer is right but the connection never carried the scenario's data (nor banners).
+    // t07: the answer is right and rmasscan sends its hello, but the peer never answers it: its script owed the
+    // response (Conn::owed, L-I1), so the stand is INVALID and nothing of rmasscan's FAILs with behaviour.
+    let mut sim = Sim::new("t07_resolve_arp");
+    let st = sim.step_mut("list");
+    st.frames.retain(|(_, f)| {
+        !(f.get(6..12) == Some(&PEER_MAC[..]) && tcp_head(f).is_some_and(|h| !h.payload.is_empty()))
+    });
+    st.recs.retain(|r| !matches!(r, SimRec::TcpBanner { .. }));
+    let j = judge_full(&sim);
+    let b = &j.bad;
+    assert_eq!(j.verdict, INVALID, "{b:#?}");
+    assert!(
+        has(b, INVALID, "list: the peer's stream of every connection"),
+        "{b:#?}"
+    );
+    assert!(no(b, FAIL), "{b:#?}");
+    assert!(!j.behaviour_fail && j.overall == INVALID, "{b:#?}");
+    // The scanner took the SYN-ACK of the resolved connection and never answered it (no ACK, no hello): its frames
+    // owe the peer nothing, the connection carried no stream, and that is rmasscan's FAIL.
     let (v, b) = judge_tcp("t07_resolve_arp", |sim| {
         let st = sim.step_mut("list");
-        st.frames.retain(|(_, f)| {
-            !(f.get(6..12) == Some(&PEER_MAC[..])
-                && tcp_head(f).is_some_and(|h| !h.payload.is_empty()))
+        let reply = st
+            .frames
+            .iter()
+            .find(|(_, f)| {
+                f.get(6..12) == Some(&PEER_MAC[..])
+                    && tcp_head(f).is_some_and(|h| h.flags & 0x12 == 0x12)
+            })
+            .unwrap()
+            .0;
+        st.frames.retain(|(t, f)| {
+            !(*t > reply
+                && tcp_head(f).is_some_and(|h| {
+                    h.flags & 0x3f != 0x02 && (h.src == ip4(2) || h.dst == ip4(2))
+                }))
         });
         st.recs.retain(|r| !matches!(r, SimRec::TcpBanner { .. }));
     });
@@ -2926,6 +2983,210 @@ fn after_the_resolution_the_connection_must_carry_its_stream() {
         ),
         "{b:#?}"
     );
+    assert!(no(&b, INVALID), "{b:#?}");
+}
+
+/// On one step of a case the peer never streams its scenario on `.o:port` (its data segments gone); with `scanner`
+/// the scanner sends nothing on that connection either: a correct scanner facing a silent server-first peer, or a
+/// scanner that never sent the hello a client-first script waits for. The step's document has none of the
+/// connection's banners.
+fn silent_peer(st: &mut StepSim, o: u8, port: u16, scanner: bool) {
+    let peer = ip4(o);
+    st.frames.retain(|(_, f)| {
+        let Some(h) = tcp_head(f) else { return true };
+        let theirs = f.get(6..12) == Some(&PEER_MAC[..]) && h.src == peer && h.sp == port;
+        let mine =
+            scanner && f.get(6..12) == Some(&SCANNER_MAC[..]) && h.dst == peer && h.dp == port;
+        !((theirs || mine) && !h.payload.is_empty())
+    });
+    st.recs.retain(
+        |r| !matches!(r, SimRec::TcpBanner { ip, port: p, .. } if *ip == peer && *p == port),
+    );
+}
+
+#[test]
+fn a_peer_stream_short_of_what_it_owes_is_the_stands_fault_on_either_scanners_step() {
+    // L-I1, the final review's probe: the SSH server on 198.18.0.2:22 never sends its ident and the scanner of that
+    // step, correctly, sends nothing and writes no ssh banner. On rmasscan's steps and on the oracle's alike the peer
+    // owed its ident from the handshake on: INVALID, never a FAIL of rmasscan's records or segments against C.
+    for step in ["list", "binary", "oracle-list", "oracle-binary"] {
+        let mut sim = Sim::new("t01_tcp4");
+        silent_peer(sim.step_mut(step), 2, 22, true);
+        let j = judge_full(&sim);
+        let b = &j.bad;
+        assert_eq!(j.verdict, INVALID, "{step}: {b:#?}");
+        assert!(
+            has(
+                b,
+                INVALID,
+                &format!("{step}: the peer's stream of every connection")
+            ),
+            "{step}: {b:#?}"
+        );
+        assert!(no(b, FAIL), "{step}: {b:#?}");
+        assert!(!j.behaviour_fail && j.overall == INVALID, "{step}: {b:#?}");
+    }
+    // Client first: rmasscan sent its hello to 198.18.0.2:80 and the peer stalled (its response never came). Nothing
+    // of rmasscan's frames explains it: INVALID.
+    let mut sim = Sim::new("t01_tcp4");
+    silent_peer(sim.step_mut("list"), 2, 80, false);
+    let j = judge_full(&sim);
+    let b = &j.bad;
+    assert_eq!(j.verdict, INVALID, "{b:#?}");
+    assert!(
+        has(b, INVALID, "list: the peer's stream of every connection"),
+        "{b:#?}"
+    );
+    assert!(!j.behaviour_fail && j.overall == INVALID, "{b:#?}");
+    // A response cut after its first segment on a split scenario (198.18.0.3:80), on C's step: INVALID as well.
+    let mut sim = Sim::new("t01_tcp4");
+    let st = sim.step_mut("oracle-list");
+    let later: Vec<usize> = conn_frames(st, ip4(3), 80, false)
+        .into_iter()
+        .filter(|i| !tcp_head(&st.frames[*i].1).unwrap().payload.is_empty())
+        .skip(1)
+        .collect();
+    assert!(!later.is_empty());
+    for i in later.into_iter().rev() {
+        st.frames.remove(i);
+    }
+    let j = judge_full(&sim);
+    assert_eq!(j.verdict, INVALID, "{:#?}", j.bad);
+    assert!(!j.behaviour_fail && j.overall == INVALID, "{:#?}", j.bad);
+}
+
+#[test]
+fn a_scanner_fin_or_rst_before_the_data_a_script_waits_for_ends_what_the_peer_owes() {
+    // SMTP on 198.18.0.2:25 (greeting, EHLO, 250, STARTTLS, 454): rmasscan ends the connection after the 250 and only
+    // then puts STARTTLS on the wire. The peer's second read sees the end (FIN: EOF; RST: the socket is gone), so it
+    // owes no 454: its stream stops after the 250, the stand passes, and the frame after the end is rmasscan's FAIL.
+    for flags in [0x11u8, 0x14] {
+        let (v, b) = judge_tcp("t01_tcp4", |sim| {
+            let st = sim.step_mut("list");
+            let mine = conn_frames(st, ip4(2), 25, true);
+            let data: Vec<usize> = mine
+                .iter()
+                .copied()
+                .filter(|i| !tcp_head(&st.frames[*i].1).unwrap().payload.is_empty())
+                .collect();
+            // EHLO, then STARTTLS.
+            assert!(data.len() >= 2, "{data:?}");
+            let (t, f) = st.frames[data[1]].clone();
+            let h = tcp_head(&f).unwrap();
+            assert!(h.payload.starts_with(b"STARTTLS"), "{:?}", h.payload);
+            let end = tcp_rebuilt(&f, None, None, Some(flags), Some(b""));
+            // The peer's 454 never comes.
+            let theirs: Vec<usize> = conn_frames(st, ip4(2), 25, false)
+                .into_iter()
+                .filter(|i| {
+                    tcp_head(&st.frames[*i].1)
+                        .unwrap()
+                        .payload
+                        .starts_with(b"454")
+                })
+                .collect();
+            assert_eq!(theirs.len(), 1);
+            st.frames.remove(theirs[0]);
+            st.frames.push((t - 0.01, end));
+            resort(st);
+            st.recs
+                .retain(|r| !matches!(r, SimRec::TcpBanner { ip, port: 25, .. } if *ip == ip4(2)));
+        });
+        assert_eq!(v, FAIL, "{flags:#04x}: {b:#?}");
+        assert!(no(&b, INVALID), "{flags:#04x}: {b:#?}");
+    }
+}
+
+#[test]
+fn what_the_peer_owes_follows_its_reads_and_its_time_to_write() {
+    // SMTP on 198.18.0.2:25, the peer's 454 missing in both legs, and the scanner's own frames explain it: FAIL, no
+    // INVALID. (1) STARTTLS put on the wire before the peer's 250 (with the EHLO): the peer's first read took both, its
+    // second read waits for data that never comes, so it owes no 454. (2) STARTTLS 1 s late, then rmasscan's RST 50 ms
+    // after it: the peer had no time to write its 454 before the connection was gone (Conn::owed gives a write
+    // SCRIPT_PAUSE_MS from the data it answers).
+    type Edit = fn(&mut StepSim, usize, f64);
+    let legs: [(&str, Edit); 2] = [
+        ("early STARTTLS", |st, i, _| {
+            let ehlo = conn_frames(st, ip4(2), 25, true)
+                .into_iter()
+                .find(|j| !tcp_head(&st.frames[*j].1).unwrap().payload.is_empty())
+                .unwrap();
+            st.frames[i].0 = st.frames[ehlo].0 + 0.001;
+        }),
+        ("RST after STARTTLS", |st, i, t| {
+            let f = st.frames[i].1.clone();
+            let h = tcp_head(&f).unwrap();
+            let seq = h.seq.wrapping_add(h.payload.len() as u32);
+            let rst = tcp_rebuilt(&f, Some(seq), None, Some(0x14), Some(b""));
+            // Nothing of either side after the old STARTTLS (the peer never saw it before the RST, and its socket is
+            // gone after it; the scanner's later segments and its FIN never happened), then STARTTLS 1 s late and the
+            // RST 50 ms after it.
+            let mut late: Vec<usize> = conn_frames(st, ip4(2), 25, false)
+                .into_iter()
+                .chain(conn_frames(st, ip4(2), 25, true))
+                .filter(|j| st.frames[*j].0 > t)
+                .collect();
+            late.sort_unstable();
+            for j in late.into_iter().rev() {
+                st.frames.remove(j);
+            }
+            st.frames.push((t + 1.0, f));
+            st.frames.remove(i);
+            st.frames.push((t + 1.05, rst));
+        }),
+    ];
+    for (what, edit) in legs {
+        let (v, b) = judge_tcp("t01_tcp4", |sim| {
+            let st = sim.step_mut("list");
+            let i = conn_frames(st, ip4(2), 25, true)
+                .into_iter()
+                .find(|i| {
+                    tcp_head(&st.frames[*i].1)
+                        .unwrap()
+                        .payload
+                        .starts_with(b"STARTTLS")
+                })
+                .unwrap();
+            let t = st.frames[i].0;
+            edit(st, i, t);
+            if let Some(j) = conn_frames(st, ip4(2), 25, false).into_iter().find(|j| {
+                tcp_head(&st.frames[*j].1)
+                    .unwrap()
+                    .payload
+                    .starts_with(b"454")
+            }) {
+                st.frames.remove(j);
+            }
+            resort(st);
+            st.recs
+                .retain(|r| !matches!(r, SimRec::TcpBanner { ip, port: 25, .. } if *ip == ip4(2)));
+        });
+        assert_eq!(v, FAIL, "{what}: {b:#?}");
+        assert!(no(&b, INVALID), "{what}: {b:#?}");
+    }
+}
+
+#[test]
+fn a_scanner_that_never_sends_the_hello_its_server_waits_for_fails() {
+    // The scanner's frames explain the peer's silence: rmasscan completed the handshake on 198.18.0.2:80 and never
+    // sent its request, so the script owes nothing past the handshake. The stand passes, rmasscan FAILs with
+    // behaviour (its hello window, its segments and records against C).
+    let mut sim = Sim::new("t01_tcp4");
+    silent_peer(sim.step_mut("list"), 2, 80, true);
+    let j = judge_full(&sim);
+    let b = &j.bad;
+    assert_eq!(j.verdict, FAIL, "{b:#?}");
+    assert!(no(b, INVALID), "{b:#?}");
+    assert!(
+        has(
+            b,
+            FAIL,
+            "list: every connection's scanner segments equal the C oracle's"
+        ),
+        "{b:#?}"
+    );
+    assert!(has(b, FAIL, "list: the hello leaves"), "{b:#?}");
+    assert!(j.behaviour_fail && j.overall == FAIL, "{b:#?}");
 }
 
 #[test]
@@ -3371,7 +3632,21 @@ fn the_stateless_rst_has_cs_form_and_answers_every_reset_too() {
             .unwrap()
     };
     type Edit = fn(&mut StepSim, usize);
-    let edits: [(&str, u16, Edit); 3] = [
+    // A field of the SYN template's form rewritten in place (sums set again, the padding kept): L-M1, the whole form.
+    fn field(st: &mut StepSim, i: usize, at: usize, bytes: &[u8]) {
+        let g = &mut st.frames[i].1;
+        g[at..at + bytes.len()].copy_from_slice(bytes);
+        set_sums(g);
+    }
+    let edits: [(&str, u16, Edit); 7] = [
+        // Window 65535 instead of the template's 1200 (src/templ-pkt.c:497-498).
+        ("window", 80, |st, i| field(st, i, 34 + 14, &[0xff, 0xff])),
+        // TTL 7 instead of the SYN's.
+        ("ttl", 80, |st, i| field(st, i, 22, &[7])),
+        // Another IPv4 identification than C's ip_them ^ port_them ^ seqno (src/templ-pkt.c:432).
+        ("ip id", 80, |st, i| field(st, i, 18, &[0x12, 0x34])),
+        // Not padded to 60 bytes.
+        ("padding", 81, |st, i| st.frames[i].1.truncate(54)),
         // Its seq one past the reply's ack.
         ("seq", 80, |st, i| {
             let h = tcp_head(&st.frames[i].1).unwrap();

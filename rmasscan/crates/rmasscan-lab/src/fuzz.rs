@@ -809,19 +809,22 @@ pub fn summary(ports: &[u16], seed: u64, o: &Outcome) -> String {
     )
 }
 
-/// `3600`, `3600s`, `60m`, `1h`.
+/// `3600`, `3600s`, `60m`, `1h`; `None` for anything else, a number of seconds past `u64` included (L-M6).
 pub fn parse_duration(s: &str) -> Option<Duration> {
     let (n, mul) = match s.as_bytes().last()? {
-        b's' => (&s[..s.len() - 1], 1),
+        b's' => (&s[..s.len() - 1], 1u64),
         b'm' => (&s[..s.len() - 1], 60),
         b'h' => (&s[..s.len() - 1], 3600),
         _ => (s, 1),
     };
-    n.parse::<u64>().ok().map(|v| Duration::from_secs(v * mul))
+    n.parse::<u64>()
+        .ok()
+        .and_then(|v| v.checked_mul(mul))
+        .map(Duration::from_secs)
 }
 
 const USAGE: &str = "fuzz udp --seed N (--duration D | --count N) [--port P] [--corpus DIR...] [--pcap FILE...] [--out FILE]
-  D: seconds, or with s/m/h; P: one of 53 123 137 161 500 5683 11211 16464 (default: all, round robin); several
+  D: seconds, or with s/m/h, and N: above 0; P: one of 53 123 137 161 500 5683 11211 16464 (default: all, round robin); several
   directories or captures follow one --corpus or --pcap
 fuzz tcp --family F --seed N (--duration D | --count N) [--corpus DIR...] [--pcap FILE...] [--out FILE]
   F: http ftp smtp pop3 imap4 ssh vnc telnet rdp memcached minecraft (the parser, forced), framework (the classifier
@@ -855,6 +858,10 @@ impl Common {
             .transpose()?;
         if duration.is_some() == count.is_some() {
             return Err("give exactly one of --duration and --count".into());
+        }
+        // A run of no input proves nothing: refused (exit 2), never CLEAN (L-M6).
+        if duration.is_some_and(|d| d.is_zero()) || count == Some(0) {
+            return Err("--duration 0 or --count 0: a run needs at least one input".into());
         }
         Ok(Common {
             seed,
@@ -2826,7 +2833,37 @@ mod tests {
         assert_eq!(parse_duration("61m"), Some(Duration::from_secs(3660)));
         assert_eq!(parse_duration("1h"), Some(Duration::from_secs(3600)));
         assert_eq!(parse_duration("x"), None);
+        // L-M6: a product past u64 seconds is no duration (it panicked in a debug build, wrapped in release).
+        assert_eq!(parse_duration("99999999999999999h"), None);
+        assert_eq!(parse_duration("18446744073709551615m"), None);
+        assert_eq!(
+            parse_duration("18446744073709551615s"),
+            Some(Duration::from_secs(u64::MAX))
+        );
         let a = |v: &[&str]| v.iter().map(|x| (*x).to_owned()).collect::<Vec<_>>();
+        // A run of no input is refused, for both fuzzers, whatever the spelling of zero.
+        for zero in [
+            &["udp", "--seed", "1", "--count", "0"][..],
+            &["udp", "--seed", "1", "--duration", "0"],
+            &["udp", "--seed", "1", "--duration", "0h"],
+            &["tcp", "--family", "http", "--seed", "1", "--count", "0"],
+            &[
+                "tcp",
+                "--family",
+                "stack",
+                "--seed",
+                "1",
+                "--duration",
+                "0s",
+            ],
+            &["udp", "--seed", "1", "--duration", "99999999999999999h"],
+        ] {
+            let e = run(&a(zero)).unwrap_err();
+            assert!(
+                e.contains("--duration") || e.contains("--count"),
+                "{zero:?}: {e}"
+            );
+        }
         assert!(run(&a(&["sctp"])).is_err());
         assert!(run(&a(&["tcp"])).is_err(), "a family is required");
         assert!(

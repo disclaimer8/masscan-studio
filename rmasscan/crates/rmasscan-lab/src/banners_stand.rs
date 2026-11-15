@@ -632,8 +632,9 @@ pub struct StandWire {
     /// 42-byte form (rmasscan's, judged by `autodetect_verify::scanner_arp_answer_problems`).
     pub requests: Vec<(f64, Vec<u8>)>,
     pub answers: Vec<(f64, Vec<u8>)>,
-    /// 42-byte ARP replies of the scanner MAC: the host kernel's.
-    pub os_arp_replies: usize,
+    /// 42-byte ARP replies of the scanner MAC: the host kernel's, bounded by the peer's requests on Windows and none
+    /// at all on macOS (L-M4, [`os_arp_problems`]).
+    pub os_arp_replies: Vec<(f64, Vec<u8>)>,
     /// ARP requests of the scanner MAC (none with `--router-mac`).
     pub scanner_arp_requests: usize,
     /// Every other frame of the scanner MAC: the host's own traffic (IPv6 discovery, name services), counted only.
@@ -688,6 +689,25 @@ fn stack_form(builder: &rmasscan_core::tcp_frame::TcpFrameBuilder, f: &[u8]) -> 
     };
     builder.build(&seg) == f
 }
+/// What is wrong with the 42-byte ARP replies of the scanner MAC on a stand (L-M4), as autodetect bounds them
+/// (`av::os_arp_reply_problems`): on Windows each answers a who-has of the peer for the source before it, in the
+/// kernel's form, at most one per request (the guest answers for its own address); on macOS there is none at all
+/// (198.18.0.1 is on no interface, `macos-lab status` rule 2), so any is a reply of the scanner without C's padding.
+fn os_arp_problems(plan: Plan, w: &StandWire, st: &av::Stand) -> Vec<String> {
+    if plan == Plan::Windows {
+        av::os_arp_reply_problems(
+            &w.requests,
+            &w.os_arp_replies,
+            st.scanner_mac,
+            st.scanner_ip,
+        )
+    } else {
+        w.os_arp_replies
+            .iter()
+            .map(|(t, _)| format!("a 42-byte ARP reply at {t:.6} s"))
+            .collect()
+    }
+}
 /// Take one capture of the case apart, by the plan's SYNs and the stack template of its binding.
 pub fn stand_wire(c: &StandCase, fr: &Frames, plan: &rmasscan_core::probe::ReadyPlan) -> StandWire {
     let st = av::stand(c.plan);
@@ -727,7 +747,7 @@ pub fn stand_wire(c: &StandCase, fr: &Frames, plan: &rmasscan_core::probe::Ready
                 asked |= op == Some(1);
                 match (op, f.len()) {
                     (Some(1), _) if av::resolver_request(f) => v.scanner_arp_requests += 1,
-                    (Some(2), 42) => v.os_arp_replies += 1,
+                    (Some(2), 42) => v.os_arp_replies.push((t, f.clone())),
                     (Some(2), _) if spa == Some(st.scanner_ip) => v.answers.push((t, f.clone())),
                     _ => v.other_scanner += 1,
                 }
@@ -756,6 +776,7 @@ pub fn stand_wire(c: &StandCase, fr: &Frames, plan: &rmasscan_core::probe::Ready
             payload: h.payload.clone(),
             sums_ok: bv::ipv4_header_sum_ok(f) && bv::tcp_sum_ok(f),
             ip_sum_ok: bv::ipv4_header_sum_ok(f),
+            frame: f.clone(),
         };
         if from_scanner {
             if h.src != src {
@@ -1002,7 +1023,8 @@ pub(crate) fn judge_run(root: &Path, c: &StandCase, reference: Option<&CReferenc
     if let Some(x) = av::typed::<StandExpect>(&mut r, &d, EXPECT_JSON) {
         r.inv("expect.json is the case table's", x == c.expect(), "");
     }
-    match read_json(d.join(LISTENERS_JSON)) {
+    let listeners = read_json(d.join(LISTENERS_JSON));
+    match &listeners {
         None => r.add(
             &format!("{LISTENERS_JSON} present"),
             NOT_RUN,
@@ -1129,6 +1151,24 @@ pub(crate) fn judge_run(root: &Path, c: &StandCase, reference: Option<&CReferenc
             some4(&arp)
         },
     );
+    let os_arp = os_arp_problems(c.plan, &w, &st);
+    r.cap(
+        if c.plan == Plan::Windows {
+            "every 42-byte ARP reply of the scanner MAC answers a who-has of the peer for the source, at most one per request (the guest's own reply; an unpadded reply of rmasscan's would be another)"
+        } else {
+            "no 42-byte ARP reply of the scanner MAC (198.18.0.1 is on no interface of the Mac: its kernel owes none, so such a reply is an unpadded one of rmasscan's)"
+        },
+        os_arp.is_empty(),
+        if os_arp.is_empty() {
+            format!(
+                "{} replies for {} requests",
+                w.os_arp_replies.len(),
+                w.requests.len()
+            )
+        } else {
+            some4(&os_arp)
+        },
+    );
     // 4. The stand.
     let mut stand_bad = Vec::new();
     for (i, (_, p)) in w.probes.iter().enumerate() {
@@ -1140,17 +1180,17 @@ pub(crate) fn judge_run(root: &Path, c: &StandCase, reference: Option<&CReferenc
                     stand_bad.push(format!("{}: no scenario", h.dp));
                     continue;
                 };
-                // A scanner that did not send C's payload on this connection explains the peer's shorter stream (its
-                // script waits for the hello): that is the payload check's FAIL below, not the stand's fault.
-                let explained = reference.is_some_and(|rf| {
-                    c.linux_port(h.dp)
-                        .is_some_and(|lp| rf.payloads.get(&lp) != Some(&scanner_payloads(x)))
-                });
-                if x.peer_stream() != sc.stream() && !explained {
+                // The owed-stream rule of the banners window (L-I2, `bv::Conn::owed`): the peer must stream what the
+                // scanner's frames on this connection owe it. A scanner that never sent the hello the HTTP script
+                // waits for owes it nothing after the handshake (the payload check's FAIL below); the SSH server
+                // speaks first and owes its ident once the handshake is complete, whatever the scanner sends after.
+                let (got, owed) = (x.peer_stream(), x.owed(sc));
+                if !sc.stream().starts_with(&got) || got.len() < owed {
                     stand_bad.push(format!(
-                        "{}: the peer sent {} bytes, not its scenario's {}",
+                        "{}: the peer sent {} bytes, the scanner's frames owe {} of its scenario's {}",
                         h.dp,
-                        x.peer_stream().len(),
+                        got.len(),
+                        owed,
                         sc.stream().len()
                     ));
                 }
@@ -1167,7 +1207,7 @@ pub(crate) fn judge_run(root: &Path, c: &StandCase, reference: Option<&CReferenc
         }
     }
     r.inv(
-        "the stand answered each SYN with one SYN-ACK and streamed the scenario of its port, without a RST",
+        "the stand answered each SYN with one SYN-ACK and streamed the scenario of its port as far as the scanner's frames owe it (all of it unless the scanner gave the script no cause: no handshake, no hello, a FIN or RST first), without a RST",
         stand_bad.is_empty() && !w.probes.is_empty(),
         if stand_bad.is_empty() {
             format!("{} connections", w.conns.len())
@@ -1175,6 +1215,46 @@ pub(crate) fn judge_run(root: &Path, c: &StandCase, reference: Option<&CReferenc
             some4(&stand_bad)
         },
     );
+    // L-I2: what the peer's scripts recorded when the listener stopped (`peer listen --banners`, `script_errors`). A
+    // script that failed on a connection the scanner did not reset failed for the stand's reasons; after the scanner's
+    // RST a failed write or shutdown is the scanner's doing, which its own checks judge. A record without the key comes
+    // from a lab build before the final review (or a listener killed before it could write): noted, not judged.
+    match listeners.as_ref().map(|v| &v["script_errors"]) {
+        Some(Value::Array(errors)) => {
+            let reset: BTreeSet<u64> = w
+                .conns
+                .iter()
+                .filter(|x| x.scanner.iter().any(|g| g.flags & 0x04 != 0))
+                .map(|x| u64::from(x.port))
+                .collect();
+            let stand: Vec<String> = errors
+                .iter()
+                .filter(|e| e["port"].as_u64().is_none_or(|p| !reset.contains(&p)))
+                .map(|e| format!("{}: {}", e["port"], s(&e["error"])))
+                .collect();
+            r.inv(
+                "the peer's banner scripts ran without an error, but on a connection the scanner reset (peer listen --banners, script_errors)",
+                stand.is_empty(),
+                if stand.is_empty() {
+                    format!("{} errors", errors.len())
+                } else {
+                    some4(&stand)
+                },
+            );
+        }
+        Some(Value::Null) => {
+            r.notes.insert(
+                "peer_script_errors".into(),
+                json!("not recorded: listeners.json has no script_errors (a lab build before the final review, or a listener that did not stop on its own)"),
+            );
+        }
+        Some(_) => r.inv(
+            "the peer's banner scripts ran without an error (peer listen --banners, script_errors)",
+            false,
+            "script_errors is not a list",
+        ),
+        None => {}
+    }
     r.inv(
         "no other frame of the peer (its multicast and IPv6 kernel traffic aside)",
         w.peer_unexpected.is_empty(),
@@ -1371,7 +1451,7 @@ pub(crate) fn judge_run(root: &Path, c: &StandCase, reference: Option<&CReferenc
         "wire".into(),
         json!({"syns": w.probes.len(), "connections": w.conns.len(),
             "peer_requests_for_source": w.requests.len(), "rmasscan_arp_answers": w.answers.len(),
-            "host_arp_replies": w.os_arp_replies, "host_frames_counted": w.other_scanner,
+            "host_arp_replies": w.os_arp_replies.len(), "host_frames_counted": w.other_scanner,
             "peer_noise": w.peer_noise}),
     );
     if c.plan == Plan::Macos {

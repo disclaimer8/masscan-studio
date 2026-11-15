@@ -3361,6 +3361,78 @@ fn the_stateless_rst_count_is_exact_both_ways_and_none_without_it() {
     ])));
 }
 
+#[test]
+fn every_planned_argv_uses_only_the_spellings_the_argv_readers_understand() {
+    // T16 M6 / L-M5: `answering` reads `--wait N` and `stateless_rst_on` reads `--banners` and `--noreset` by exact
+    // token. C and rmasscan also take `--wait=N`, any case and `-`/`_`/`.` in a name, abbreviations C accepts
+    // (`--banner`) and a config file: a case written that way would silently be judged with wait 10 or with the RST
+    // on. Every argv of every case table these readers judge (autodetect on its four stands, protocols, ipv6, the
+    // banners window, the Windows and macOS banner cases) uses the exact spellings, `--wait` with a number after it,
+    // and no config or resume file.
+    let mut argvs: Vec<(String, Vec<String>)> = Vec::new();
+    for plan in [Plan::Linux, Plan::Macos, Plan::MacosRoot, Plan::Windows] {
+        argvs.extend(cases(plan).iter().map(|c| (c.tag.to_owned(), c.argv())));
+    }
+    let steps = |tag: &str, s: Vec<crate::protocols_verify::StepSpec>| {
+        s.into_iter()
+            .map(|x| (format!("{tag}/{}", x.name), x.argv))
+            .collect::<Vec<_>>()
+    };
+    for c in crate::protocols_verify::CASES {
+        argvs.extend(steps(c.tag, crate::protocols_verify::steps(c.tag).unwrap()));
+    }
+    for c in crate::ipv6_verify::CASES {
+        argvs.extend(steps(c.tag, crate::ipv6_verify::steps(c.tag).unwrap()));
+    }
+    for tag in crate::banners_verify::planned_tags() {
+        argvs.extend(steps(tag, crate::banners_verify::steps(tag).unwrap()));
+    }
+    for c in [crate::banners_stand::WINDOWS, crate::banners_stand::MACOS] {
+        argvs.push((c.tag.to_owned(), c.argv()));
+    }
+    assert!(argvs.len() > 60, "{} argvs", argvs.len());
+    let mut waits = 0;
+    for (who, a) in &argvs {
+        for (i, t) in a.iter().enumerate().filter(|(_, t)| t.starts_with('-')) {
+            let name: String = t
+                .trim_start_matches('-')
+                .split(['=', ':'])
+                .next()
+                .unwrap_or("")
+                .chars()
+                .filter(|c| !matches!(c, '-' | '_' | '.'))
+                .collect::<String>()
+                .to_ascii_lowercase();
+            for (full, exact) in [
+                ("wait", "--wait"),
+                ("banners", "--banners"),
+                ("noreset", "--noreset"),
+            ] {
+                if name.len() >= 2 && full.starts_with(&name) {
+                    assert_eq!(t, exact, "{who}: {t:?} in {a:?}");
+                }
+            }
+            if t == "--wait" {
+                waits += 1;
+                assert!(
+                    a.get(i + 1).is_some_and(|w| w.parse::<f64>().is_ok()),
+                    "{who}: --wait without a number in {a:?}"
+                );
+            }
+            assert!(
+                !matches!(name.as_str(), "c" | "conf" | "config" | "resume"),
+                "{who}: a config or resume file in {a:?}"
+            );
+        }
+    }
+    // Every scan argv names its wait (the readers' default of 10 s applies to none of them); `--iflist` has none.
+    let iflist = argvs
+        .iter()
+        .filter(|(_, a)| a == &["--iflist".to_owned()])
+        .count();
+    assert_eq!(waits + iflist, argvs.len());
+}
+
 /// The peer's who-has for the scanner's address, in the peer kernel's form (42 bytes), and the scanner's answer to it
 /// from the product's own responder (`receive::arp_reply_for` of a plan on the stand).
 pub(crate) fn peer_who_has(st: &Stand) -> Vec<u8> {

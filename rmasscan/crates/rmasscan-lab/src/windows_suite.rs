@@ -1658,6 +1658,11 @@ impl Suite<'_> {
             }
         }
         self.stop(&lis, "TERM");
+        if self.banners() {
+            // `peer listen --banners` writes its scripts' errors into its ready file when it stops (L-I2): wait for it,
+            // the file is fetched again below.
+            let _ = self.exited(&lis, 20);
+        }
         if kind == "foreign" {
             self.exited(&format!("{rev}/inject.pid"), 15);
         }
@@ -1732,6 +1737,16 @@ impl Suite<'_> {
                 &ev.join(n),
                 &format!("{rev}/{n}"),
                 matches!(n, "peer.pcap" | "eno1.pcap" | "peer.err" | "eno1.err"),
+            )?;
+        }
+        if self.banners() {
+            // The listener's record as it stopped, with `script_errors` (banners_stand::judge_run).
+            self.transfer(
+                false,
+                false,
+                &ev.join("listeners.json"),
+                &format!("{rev}/listener.json"),
+                true,
             )?;
         }
         for n in [

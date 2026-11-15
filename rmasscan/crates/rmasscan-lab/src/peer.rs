@@ -208,7 +208,10 @@ mod tests {
         }
         let stop = Arc::new(AtomicBool::new(false));
         let st = stop.clone();
-        let h = thread::spawn(move || serve_banners(&socks, &move || st.load(Ordering::SeqCst)));
+        let errors = ScriptErrors::default();
+        let errs = errors.clone();
+        let h =
+            thread::spawn(move || serve_banners(&socks, &move || st.load(Ordering::SeqCst), &errs));
         let read_all = |c: &mut TcpStream| {
             let mut got = Vec::new();
             c.read_to_end(&mut got).unwrap();
@@ -233,6 +236,8 @@ mod tests {
         assert!(read_all(&mut c).is_empty());
         stop.store(true, Ordering::SeqCst);
         h.join().unwrap().unwrap();
+        // Both scripts ran to their end: no error recorded (a failed one would be, for the ready file at stop).
+        assert!(errors.lock().unwrap().is_empty());
     }
 }
 use crate::link;
@@ -532,19 +537,36 @@ pub(crate) fn banner_ports(
     }
     Ok(out)
 }
+/// The errors of the banner scripts of `peer listen --banners`, one `{port, from, error}` each (the listener's port,
+/// the scanner's source port, the error): printed to stderr when one happens and written to the ready file when the
+/// listener stops ([`listen`]), where `banners_stand` reads them (L-I2: a script that failed on a connection the
+/// scanner did not reset is the stand's fault).
+pub(crate) type ScriptErrors = std::sync::Arc<std::sync::Mutex<Vec<Value>>>;
 /// Accept on every banner socket until `stop`: each connection runs its scenario's script on its own thread
-/// (`capture::run_script`, the banners window's peer), which ends with the connection.
+/// (`capture::run_script`, the banners window's peer), which ends with the connection; a script's error goes to
+/// `errors`.
 fn serve_banners(
     socks: &[(TcpListener, &'static crate::banners_verify::TcpScenario)],
     stop: &dyn Fn() -> bool,
+    errors: &ScriptErrors,
 ) -> Result<(), String> {
     while !stop() {
         for (l, sc) in socks {
             match l.accept() {
-                Ok((c, _)) => {
+                Ok((c, from)) => {
                     let sc: &'static crate::banners_verify::TcpScenario = sc;
+                    let port = l.local_addr().map_or(0, |a| a.port());
+                    let errors = errors.clone();
                     thread::spawn(move || {
-                        let _ = crate::capture::run_script(c, sc);
+                        if let Err(e) = crate::capture::run_script(c, sc) {
+                            eprintln!(
+                                "peer listen: the banner script of port {port} for source port {} failed: {e}",
+                                from.port()
+                            );
+                            if let Ok(mut v) = errors.lock() {
+                                v.push(json!({"port": port, "from": from.port(), "error": e.to_string()}));
+                            }
+                        }
                     });
                 }
                 // A connection the scanner reset before it was accepted is no failure of the listener.
@@ -622,7 +644,12 @@ fn listen(open: &str, silent: &str, banners: &str, ready: &str) -> Result<i32, S
             thread::sleep(Duration::from_millis(100));
         }
     } else {
-        serve_banners(&scenario_socks, &lab_io::stop_requested)?;
+        let errors = ScriptErrors::default();
+        serve_banners(&scenario_socks, &lab_io::stop_requested, &errors)?;
+        // The scripts' errors so far, in the same record (`banners_stand::judge_run` reads `script_errors`).
+        rec["stopped"] = json!(true);
+        rec["script_errors"] = json!(errors.lock().map(|v| v.clone()).unwrap_or_default());
+        save(ready, &rec)?;
     }
     drop((sockets, clients, scenario_socks));
     Ok(0)

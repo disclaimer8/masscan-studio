@@ -192,6 +192,9 @@ pub(crate) struct StandSim {
     /// The document's bytes, rendered from `lines` unless a test set them.
     pub(crate) doc: Option<Vec<u8>>,
     pub(crate) extra: Vec<(String, Vec<u8>)>,
+    /// `script_errors` of `listeners.json` as the listener writes it when it stops (`None`: a record without the key,
+    /// as a lab build before the final review wrote it).
+    pub(crate) script_errors: Option<Value>,
 }
 impl StandSim {
     pub(crate) fn new(c: StandCase) -> Self {
@@ -203,6 +206,7 @@ impl StandSim {
             exit: 0,
             doc: None,
             extra: Vec::new(),
+            script_errors: Some(json!([])),
         }
     }
     pub(crate) fn render(&self) -> Vec<u8> {
@@ -258,18 +262,18 @@ impl StandSim {
             .iter()
             .map(|(p, sp)| json!({"port": p, "scenario_port": sp, "peer": 2}))
             .collect();
+        let mut listeners = json!({"open":[],"silent":[],"silent_proven":null,"ready":true,"bind":"198.18.0.2","pid":4242,"banners":banners});
+        if let Some(e) = &self.script_errors {
+            listeners["stopped"] = json!(true);
+            listeners["script_errors"] = e.clone();
+        }
         let mut f: Vec<(String, Vec<u8>)> = vec![
             (
                 av::ARGV_JSON.into(),
                 serde_json::to_vec(&ArgvRecord { argv: c.argv() }).unwrap(),
             ),
             (EXPECT_JSON.into(), serde_json::to_vec(&c.expect()).unwrap()),
-            (
-                LISTENERS_JSON.into(),
-                pretty(
-                    json!({"open":[],"silent":[],"silent_proven":null,"ready":true,"bind":"198.18.0.2","pid":4242,"banners":banners}),
-                ),
-            ),
+            (LISTENERS_JSON.into(), pretty(listeners)),
             (OUTPUT.into(), self.render()),
             (av::PEER_PCAP.into(), pcap::encode(&self.frames)),
             (
@@ -762,21 +766,29 @@ fn a_foreign_hello_fails_although_the_records_are_cs() {
 
 #[test]
 fn a_scanner_that_never_sends_its_hello_fails_and_is_not_the_stands_fault() {
-    // The handshake completes, then rmasscan drops its HTTP request (and the SSH ident). The peer's script waits for
-    // it and streams nothing, so the banners are gone too: the scanner's FAIL, not an INVALID stand.
+    // HTTP: the handshake completes, then rmasscan drops its request. The peer's script waits for it and streams
+    // nothing, so the banners are gone too: the scanner's FAIL, not an INVALID stand (the scanner's frames owe the
+    // script nothing past the handshake).
+    // SSH: the server speaks first and sends its ident, then rmasscan drops its own ident. The peer streamed all it
+    // owes; the banner of the server's ident stays (C's too), the payload check FAILs.
     for c in [WINDOWS, MACOS] {
-        for port in [c.ports[1].0, c.ports[0].0] {
+        let (ssh, http) = (c.ports[0].0, c.ports[1].0);
+        for port in [http, ssh] {
             let st = av::stand(c.plan);
             let mut sim = StandSim::new(c);
             let lp = c.linux_port(port).unwrap();
+            let client_first = port == http;
             sim.frames.retain(|(_, f)| {
                 let Some(h) = tcp_head(f) else { return true };
                 let scanner = f[6..12] == st.scanner_mac && h.dp == port;
                 let peer = f[6..12] == st.peer_mac && h.sp == port;
-                !((scanner || peer) && !h.payload.is_empty())
+                !((scanner || (peer && client_first)) && !h.payload.is_empty())
             });
-            sim.lines
-                .retain(|l| !matches!(l, Line::Banner { port: p, .. } if *p == port || *p == lp));
+            if client_first {
+                sim.lines.retain(
+                    |l| !matches!(l, Line::Banner { port: p, .. } if *p == port || *p == lp),
+                );
+            }
             let v = judge(&sim);
             assert_eq!(v["overall"], FAIL, "{} {port}: {:#?}", c.tag, bad(&v));
             assert_eq!(run_of(&v, c.tag)["behaviour_fail"], true);
@@ -787,6 +799,167 @@ fn a_scanner_that_never_sends_its_hello_fails_and_is_not_the_stands_fault() {
             );
         }
     }
+}
+
+#[test]
+fn a_silent_server_first_peer_is_the_stands_fault_not_the_scanners() {
+    // L-I2: the SSH server never sends its ident and a correct scanner, which waits for it, sends nothing: the peer
+    // owed its ident from the handshake on, so the run is INVALID and no check of rmasscan FAILs with behaviour (C sent
+    // its ident on the reference connection, so the payloads and the records differ, but the stand made them differ).
+    for c in [WINDOWS, MACOS] {
+        let ssh = c.ports[0].0;
+        let lp = c.linux_port(ssh).unwrap();
+        let st = av::stand(c.plan);
+        let mut sim = StandSim::new(c);
+        sim.frames.retain(|(_, f)| {
+            let Some(h) = tcp_head(f) else { return true };
+            let scanner = f[6..12] == st.scanner_mac && h.dp == ssh;
+            let peer = f[6..12] == st.peer_mac && h.sp == ssh;
+            !((scanner || peer) && !h.payload.is_empty())
+        });
+        sim.lines
+            .retain(|l| !matches!(l, Line::Banner { port: p, .. } if *p == ssh || *p == lp));
+        let v = judge(&sim);
+        assert_eq!(v["overall"], INVALID, "{}: {:#?}", c.tag, bad(&v));
+        let r = run_of(&v, c.tag);
+        assert_eq!(r["verdict"], INVALID, "{:#?}", bad(&v));
+        assert_eq!(r["behaviour_fail"], false, "{:#?}", bad(&v));
+        assert_eq!(check(&v, c.tag, "streamed the scenario"), INVALID);
+        assert_eq!(
+            check(&v, c.tag, "payload segments on each connection are C's"),
+            INVALID
+        );
+        // A peer that stalls after the handshake on the client-first HTTP port, although rmasscan sent its request:
+        // the stand's fault as well.
+        let http = c.ports[1].0;
+        let mut sim = StandSim::new(c);
+        sim.frames.retain(|(_, f)| {
+            let Some(h) = tcp_head(f) else { return true };
+            !(f[6..12] == st.peer_mac && h.sp == http && !h.payload.is_empty())
+        });
+        let v = judge(&sim);
+        let r = run_of(&v, c.tag);
+        assert_eq!(r["verdict"], INVALID, "{}: {:#?}", c.tag, bad(&v));
+        assert_eq!(r["behaviour_fail"], false, "{:#?}", bad(&v));
+        assert_eq!(check(&v, c.tag, "streamed the scenario"), INVALID);
+    }
+}
+
+/// A RST of rmasscan's stack on the connection to `port`, 0.1 s after its last frame there (in the stack's form).
+fn with_scanner_rst(sim: &mut StandSim, port: u16) {
+    let plan = sim.case.ready_plan().unwrap();
+    let builder = rmasscan_core::tcp_frame::TcpFrameBuilder::from_plan(&plan);
+    let st = av::stand(sim.case.plan);
+    let (t, h) = sim
+        .frames
+        .iter()
+        .filter_map(|(t, f)| tcp_head(f).map(|h| (*t, h, f)))
+        .filter(|(_, h, f)| f[6..12] == st.scanner_mac && h.dp == port && h.flags & 0x02 == 0)
+        .map(|(t, h, _)| (t, h))
+        .next_back()
+        .unwrap();
+    let IpAddr::V4(local) = h.src else { panic!() };
+    let rst = builder.build(&SegmentOut {
+        key: ConnKey {
+            addrs: ConnAddrs::V4 {
+                local: u32::from(local),
+                remote: u32::from(PEER),
+            },
+            local_port: h.sp,
+            remote_port: h.dp,
+        },
+        seq: h.seq.wrapping_add(h.payload.len() as u32),
+        ack: h.ack,
+        flags: 0x14,
+        payload: Vec::new(),
+        window: None,
+    });
+    sim.frames.push((t + 0.1, rst));
+    sim.frames.sort_by(|a, b| a.0.total_cmp(&b.0));
+}
+
+#[test]
+fn a_script_error_of_the_peer_is_the_stands_fault_unless_the_scanner_reset_its_connection() {
+    for c in [WINDOWS, MACOS] {
+        let (ssh, http) = (c.ports[0].0, c.ports[1].0);
+        // The script of the HTTP port failed, and rmasscan never reset that connection: the stand's fault.
+        let mut sim = StandSim::new(c);
+        sim.script_errors =
+            Some(json!([{"port": http, "from": 40000, "error": "Broken pipe (os error 32)"}]));
+        let v = judge(&sim);
+        let r = run_of(&v, c.tag);
+        assert_eq!(r["verdict"], INVALID, "{}: {:#?}", c.tag, bad(&v));
+        assert_eq!(r["behaviour_fail"], false);
+        assert_eq!(
+            check(&v, c.tag, "banner scripts ran without an error"),
+            INVALID
+        );
+        // The same error on the SSH connection after rmasscan's RST of it: the RST is the scanner's FAIL, the
+        // script's error follows from it and is no fault of the stand.
+        let mut sim = StandSim::new(c);
+        with_scanner_rst(&mut sim, ssh);
+        sim.script_errors = Some(
+            json!([{"port": ssh, "from": 40000, "error": "Connection reset by peer (os error 104)"}]),
+        );
+        let v = judge(&sim);
+        let r = run_of(&v, c.tag);
+        assert_eq!(r["verdict"], FAIL, "{}: {:#?}", c.tag, bad(&v));
+        assert_eq!(r["behaviour_fail"], true);
+        assert_eq!(
+            check(&v, c.tag, "banner scripts ran without an error"),
+            PASS
+        );
+        assert_eq!(check(&v, c.tag, "no RST of rmasscan"), FAIL);
+        // A record without the key (a listener of an earlier lab build): noted, not judged.
+        let mut sim = StandSim::new(c);
+        sim.script_errors = None;
+        let v = judge(&sim);
+        assert_eq!(v["overall"], PASS, "{}: {:#?}", c.tag, bad(&v));
+        assert!(s(&run_of(&v, c.tag)["notes"]["peer_script_errors"]).starts_with("not recorded"));
+    }
+}
+
+#[test]
+fn a_42_byte_arp_reply_the_os_does_not_owe_fails() {
+    // Windows: the guest answers the peer's who-has once; a second 42-byte reply (an unpadded one of rmasscan's, say)
+    // is over the bound autodetect sets (os_arp_reply_problems).
+    let st = av::stand(Plan::Windows);
+    let mut sim = StandSim::new(WINDOWS);
+    let (t, os) = sim
+        .frames
+        .iter()
+        .find(|(_, f)| f.len() == 42 && f[6..12] == st.scanner_mac && f[20..22] == [0, 2])
+        .cloned()
+        .unwrap();
+    sim.frames.push((t + 0.0001, os));
+    sim.frames.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let v = judge(&sim);
+    assert_eq!(v["overall"], FAIL, "{:#?}", bad(&v));
+    assert_eq!(check(&v, WINDOWS.tag, "every 42-byte ARP reply"), FAIL);
+    assert_eq!(run_of(&v, WINDOWS.tag)["behaviour_fail"], true);
+    // macOS: 198.18.0.1 is on no interface, so its kernel owes no reply at all; the peer asks, rmasscan answers in
+    // C's form, and a 42-byte reply next to it fails.
+    let st = av::stand(Plan::Macos);
+    let at = |sim: &StandSim| {
+        sim.frames
+            .iter()
+            .find(|(_, f)| tcp_head(f).is_some_and(|h| h.flags == 0x02))
+            .unwrap()
+            .0
+    };
+    let [q, os, ours] = arp_exchange(&st);
+    let mut sim = StandSim::new(MACOS);
+    let t = at(&sim);
+    sim.frames.push((t + 0.0002, q.clone()));
+    sim.frames.push((t + 0.0004, ours.clone()));
+    sim.frames.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let v = judge(&sim);
+    assert_eq!(v["overall"], PASS, "{:#?}", bad(&v));
+    sim.frames.push((t + 0.0003, os));
+    sim.frames.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let v = judge(&sim);
+    assert_eq!(v["overall"], FAIL, "{:#?}", bad(&v));
+    assert_eq!(check(&v, MACOS.tag, "no 42-byte ARP reply"), FAIL);
 }
 
 #[test]

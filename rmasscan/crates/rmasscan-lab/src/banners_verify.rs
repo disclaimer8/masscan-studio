@@ -1743,6 +1743,8 @@ pub struct Seg {
     pub sums_ok: bool,
     /// Its IPv4 header checksum is right (always for IPv6).
     pub ip_sum_ok: bool,
+    /// The frame as captured (the stateless RST of `t05_stateless_rst` is judged in its whole form, L-M1).
+    pub frame: Vec<u8>,
 }
 /// A segment of the scanner, relative to its connection (the SYN's and the reply's sequence numbers): flags,
 /// payload, sequence, and acknowledgment (`None` for a RST without ACK whose ack field is 0, the stateless form).
@@ -1821,6 +1823,97 @@ impl Conn {
             }
         }
         out
+    }
+    /// How many bytes of `sc`'s stream the peer owes on this connection, from the scanner's frames on the wire (the
+    /// final review's "owed stream" rule, L-I1 and L-I2). The script (`capture::run_script`, [`TcpStep`]) starts once
+    /// the handshake is complete, at the scanner's first ACK that is no reset; its leading writes are owed from
+    /// there. A `Recv` or `Peek` waits for new data of the scanner (bytes past every earlier segment's, a
+    /// retransmission is none) that came after the peer's last write on the wire (earlier data went to an earlier
+    /// read): the scanner's FIN or RST before it, or no such data at all, ends the script there. A `Write` is owed
+    /// unless the scanner's RST came before the peer had [`SCRIPT_PAUSE_MS`] to make it (from the data it answers,
+    /// or from its previous write and that write's pause). `Reset` and `Hold` write nothing. A peer stream shorter than
+    /// this is the stand's fault (INVALID); one shorter than the script but as long as this is the scanner's doing (no
+    /// handshake, no hello, no reply the script waits for, a FIN or RST first), which the scanner's own checks and the
+    /// comparisons with C judge. A write found missing ends the walk: the stream is short of what is owed already.
+    pub fn owed(&self, sc: &TcpScenario) -> usize {
+        let pause = SCRIPT_PAUSE_MS as f64 / 1000.0;
+        if !self.open {
+            return 0;
+        }
+        let rst = self
+            .scanner
+            .iter()
+            .find(|g| g.flags & RST != 0)
+            .map(|g| g.t);
+        let fin = self
+            .scanner
+            .iter()
+            .find(|g| g.flags & FIN != 0)
+            .map(|g| g.t);
+        let Some(mut at) = self
+            .scanner
+            .iter()
+            .take_while(|g| g.flags & RST == 0)
+            .find(|g| g.flags & ACK != 0 && g.flags & SYN == 0)
+            .map(|g| g.t)
+        else {
+            return 0;
+        };
+        // The times of the scanner's segments that carry bytes past every earlier one's.
+        let me = self.iss_me.wrapping_add(1);
+        let mut high = 0u64;
+        let mut fresh = Vec::new();
+        for g in self.scanner.iter().filter(|g| !g.payload.is_empty()) {
+            let end = u64::from(g.seq.wrapping_sub(me)) + g.payload.len() as u64;
+            if end > high {
+                high = end;
+                fresh.push(g.t);
+            }
+        }
+        // When the peer's byte at `offset` of its stream first went on the wire.
+        let them = self.iss_them.wrapping_add(1);
+        let wrote = |offset: usize| {
+            self.peer
+                .iter()
+                .filter(|g| !g.payload.is_empty())
+                .find(|g| {
+                    let from = g.seq.wrapping_sub(them) as usize;
+                    from <= offset && offset < from + g.payload.len()
+                })
+                .map(|g| g.t)
+        };
+        let (mut owed, mut next, mut last_write) = (0usize, 0usize, None::<f64>);
+        for step in sc.steps {
+            match step {
+                TcpStep::Write(b) => {
+                    if rst.is_some_and(|r| r <= at + pause) {
+                        break;
+                    }
+                    let start = owed;
+                    owed += b.len();
+                    let Some(w) = wrote(start) else { break };
+                    last_write = Some(w);
+                    at = w + pause;
+                }
+                TcpStep::Recv | TcpStep::Peek => {
+                    let Some(k) =
+                        (next..fresh.len()).find(|&k| last_write.is_none_or(|w| fresh[k] > w))
+                    else {
+                        break;
+                    };
+                    let t = fresh[k];
+                    if fin.is_some_and(|f| f < t) || rst.is_some_and(|r| r < t) {
+                        break;
+                    }
+                    if *step == TcpStep::Recv {
+                        next = k + 1;
+                    }
+                    at = at.max(t);
+                }
+                TcpStep::Reset | TcpStep::Hold => break,
+            }
+        }
+        owed
     }
     /// When the connection was destroyed on the wire: the scanner's RST, the peer's RST, or the peer's ACK of the
     /// scanner's FIN after the peer's own FIN (LAST_ACK, `src/stack-tcp-core.c:2300-2313`).
@@ -2103,6 +2196,7 @@ pub fn tcp_view(c: &TcpCase, fr: &Frames, st: &Stand) -> TcpView {
             payload: h.payload.clone(),
             sums_ok: ipv4_header_sum_ok(f) && tcp_sum_ok(f),
             ip_sum_ok: ipv4_header_sum_ok(f),
+            frame: f.clone(),
         };
         let inside = (start..=end).contains(&t);
         let mut stray = |what: String, v: &mut TcpView| {
@@ -3188,8 +3282,10 @@ fn tcp_scanner_first(r: &mut Run, c: &TcpCase, s: &Side<BView>, v: &TcpView, st:
 }
 
 /// The stand of a TCP step behaved (INVALID for both scanners otherwise): each SYN answered once, with a SYN-ACK
-/// exactly where the table has a scenario and a reset elsewhere; each scenario's stream on the wire is a prefix of its
-/// script's writes and a split one came in more than one segment; nothing else from the peer and no IPv6 noise; the
+/// exactly where the table has a scenario and a reset elsewhere; each scenario's stream on the wire is its script's
+/// writes up to at least what the scanner's frames on this step owe it ([`Conn::owed`]: a peer that stalls or stops
+/// early on either scanner's step, the oracle's included, is the stand's fault, never a FAIL of rmasscan's records or
+/// segments against C) and a split one came in more than one segment; nothing else from the peer and no IPv6 noise; the
 /// heartbeat covered the scan (none at all on the quiet control); the source was resolved only in a resolve case. What
 /// [`tcp_scanner_first`] puts to the scanner is left out: a repeated SYN, a SYN left unanswered after the scanner
 /// failed the peer's request for its source, a frame of the peer that answers an unexplained frame of the scanner.
@@ -3236,13 +3332,22 @@ fn tcp_stand(r: &mut Run, c: &TcpCase, s: &Side<BView>, v: &TcpView, st: &Stand)
         let Some(sc) = tcp_scenario(x.port, x.ip) else {
             continue;
         };
-        let (got, want) = (x.peer_stream(), sc.stream());
+        let (got, want, owed) = (x.peer_stream(), sc.stream(), x.owed(sc));
         if !want.starts_with(&got) {
             streams.push(format!(
                 "{}:{}: {} bytes that are not the script's",
                 ip_text(x.ip),
                 x.port,
                 got.len()
+            ));
+        } else if got.len() < owed {
+            streams.push(format!(
+                "{}:{}: {} of the {} bytes the scanner's frames owe ({} in the script)",
+                ip_text(x.ip),
+                x.port,
+                got.len(),
+                owed,
+                want.len()
             ));
         } else if got == want && sc.split && x.peer_segments() < 2 {
             split.push(format!(
@@ -3255,7 +3360,7 @@ fn tcp_stand(r: &mut Run, c: &TcpCase, s: &Side<BView>, v: &TcpView, st: &Stand)
     }
     r.inv(
         &format!(
-            "{name}: the peer's stream of every connection is its scenario's writes or a prefix of them"
+            "{name}: the peer's stream of every connection is its scenario's writes, all those the scanner's frames on this step owe it (a prefix only where the scanner gave the script no cause to go on: no handshake, no data it waits for, a FIN or RST first)"
         ),
         streams.is_empty(),
         some4(&streams, 4).join("; "),
@@ -3554,7 +3659,9 @@ fn tcp_scanner(r: &mut Run, c: &TcpCase, s: &Side<BView>, v: &TcpView) {
         );
     } else {
         // R8: the stateless RST, one per first reply of a connection (SYN-ACK or RST) that passed C's dedup, seq the
-        // reply's ack, ack 0, flags 0x04 (src/main.c:1094-1100); --noreset sends none.
+        // reply's ack, ack 0, flags 0x04 (src/main.c:1094-1100); --noreset sends none. Its whole frame is the SYN
+        // template's form (`av::is_stateless_rst`: window 1200, the SYN's options and TTL, C's IPv4 id, the padding), as
+        // the protocols, ipv6 and autodetect plans judge it (L-M1): t05 sends it from a source no kernel owns.
         let mut bad = Vec::new();
         for x in &v.conns {
             let want: Vec<RelSeg> = if c.noreset {
@@ -3562,7 +3669,12 @@ fn tcp_scanner(r: &mut Run, c: &TcpCase, s: &Side<BView>, v: &TcpView) {
             } else {
                 vec![(RST, Vec::new(), x.reply_ack.wrapping_sub(x.iss_me), None)]
             };
-            if x.sequence() != want {
+            let syn = v.probes.get(x.probe).map(|p| &p.frame[..]);
+            let form = x
+                .scanner
+                .iter()
+                .all(|g| syn.is_some_and(|p| av::is_stateless_rst(p, &g.frame)));
+            if x.sequence() != want || !form {
                 bad.push(format!(
                     "{}:{} ({}) {:?}",
                     ip_text(x.ip),
@@ -3581,7 +3693,7 @@ fn tcp_scanner(r: &mut Run, c: &TcpCase, s: &Side<BView>, v: &TcpView) {
             &if c.noreset {
                 "--noreset: no RST of the scanner, to a SYN-ACK or to a reset (R8)".to_owned()
             } else {
-                "exactly one stateless RST per connection, to its SYN-ACK or its reset: seq the reply's ack, ack 0, flags 0x04 (R8, src/main.c:1094-1100)".to_owned()
+                "exactly one stateless RST per connection, to its SYN-ACK or its reset: seq the reply's ack, ack 0, flags 0x04, the rest the SYN template's (window 1200, the SYN's options and TTL, C's IPv4 id, padding to 60 bytes; R8, src/main.c:1094-1100, src/templ-pkt.c:419-613)".to_owned()
             },
             bad.is_empty() && !v.conns.is_empty(),
             if bad.is_empty() {
@@ -3852,7 +3964,9 @@ fn tcp_vs_c(r: &mut Run, c: &TcpCase, rm: &Side<BView>, or: &Side<BView>) {
 }
 
 /// Before the comparisons with C of a TCP case: C's forced exit and the TCP deviations' conditions, so that an unmet
-/// one makes every comparison after it INVALID ([`PairPlan::before_vs_c`]).
+/// one makes every comparison after it INVALID ([`PairPlan::before_vs_c`]). The peer streams of both steps of a
+/// document need no condition here: every step's own checks run first ([`tcp_stand`] with [`Conn::owed`]), so a peer
+/// stream short of what either scanner's frames owe has made the run INVALID before these comparisons.
 fn tcp_before_vs_c(
     r: &mut Run,
     c: &TcpCase,

@@ -1,0 +1,10 @@
+Discovered open port 8001/tcp on 198.18.0.2                                    
+Discovered open port 8002/tcp on 198.18.0.2                                    
+Discovered open port 8003/tcp on 198.18.0.2                                    
+Discovered open port 8004/tcp on 198.18.0.2                                    
+Discovered open port 8005/tcp on 198.18.0.2                                    
+Discovered open port 8006/tcp on 198.18.0.2                                    
+Discovered open port 8007/tcp on 198.18.0.2                                    
+Discovered open port 443/tcp on 198.18.0.2                                     
+Discovered open port 80/tcp on 198.18.0.2                                      
+Discovered open port 8000/tcp on 198.18.0.2                                    

@@ -1808,6 +1808,54 @@ mod tests {
         );
     }
 
+    /// Баннеры файла для проверки фильтров: что осталось после `-p`/адресов, по полезной нагрузке.
+    fn kept_payloads(items: &[Item], targets: &[&str], ports: &str) -> Vec<String> {
+        let scratch = Scratch::new();
+        let path = tmp_file(&scratch, "keeps", &make_bin_items(items));
+        let mut cfg = ScanConfig::default();
+        for t in targets {
+            cfg.targets.add_target_string(t).unwrap();
+        }
+        if !ports.is_empty() {
+            parse_ports(cfg.targets.ports_mut(), ports).unwrap();
+        }
+        let (out, _, res) = list_of(&path, &ReadFilter::from_config(&cfg));
+        res.unwrap();
+        out.lines()
+            .filter(|l| l.starts_with("banner "))
+            .filter_map(|l| l.rsplit(' ').next().map(str::to_string))
+            .collect()
+    }
+
+    /// Сторона «оставляет» Р5 для баннеров: `-pU:53` оставляет баннер UDP 53 (порт со сдвигом протокола,
+    /// `TEMPL_UDP + 53`); у C тот же фильтр не оставляет ничего, потому что `readscan_filter_pass` сравнивает порт
+    /// без сдвига (`src/in-filter.c:14-17`). TCP 53 и UDP 54 под этим фильтром отбрасываются.
+    #[test]
+    #[allow(non_snake_case)]
+    fn banner_port_filter_keeps_pU53() {
+        let items = [
+            Item::Banner(banner(1_700_000_001, "192.0.2.1", 17, 53, 6, 64, b"udp53")),
+            Item::Banner(banner(1_700_000_002, "192.0.2.1", 6, 53, 6, 64, b"tcp53")),
+            Item::Banner(banner(1_700_000_003, "192.0.2.1", 17, 54, 6, 64, b"udp54")),
+        ];
+        assert_eq!(kept_payloads(&items, &[], "U:53"), ["udp53"]);
+        assert_eq!(kept_payloads(&items, &[], "53"), ["tcp53"]);
+    }
+
+    /// Сторона «оставляет» R14 для баннеров: фильтр из одних диапазонов IPv6 оставляет баннер IPv6 внутри диапазона
+    /// и отбрасывает снаружи и IPv4; у C такой фильтр не действует вовсе (`src/in-filter.c:10`, проверяется только
+    /// IPv4-список), и проходит всё.
+    #[test]
+    fn ipv6_only_filter_keeps_ipv6_banner() {
+        let items = [
+            Item::Banner(banner(1_700_000_001, "2001:db8::5", 6, 80, 4, 64, b"v6in")),
+            Item::Banner(banner(1_700_000_002, "2001:db9::5", 6, 80, 4, 64, b"v6out")),
+            Item::Banner(banner(1_700_000_003, "192.0.2.1", 6, 80, 4, 64, b"v4")),
+        ];
+        assert_eq!(kept_payloads(&items, &["2001:db8::/32"], ""), ["v6in"]);
+        assert_eq!(kept_payloads(&items, &[], ""), ["v6in", "v6out", "v4"]);
+    }
+
     /// `-oB` пишет устаревшие баннеры типом 9 (`binary_out_banner`, `out-binary.c:293-355`): они только IPv4, TTL 0, у
     /// типа 3 протокол TCP.
     #[test]

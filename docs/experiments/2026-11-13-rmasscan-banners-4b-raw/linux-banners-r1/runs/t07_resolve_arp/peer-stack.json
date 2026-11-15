@@ -1,0 +1,19 @@
+{
+  "icmp_ratemask": "0",
+  "icmp_echo_ignore_all": "0",
+  "sctp_in_kernel": false,
+  "responder": [
+    "--tcp-answer",
+    "banners",
+    "--tcp-ips",
+    "198.18.0.2,198.18.0.3,198.18.0.4,198.18.0.5,fd00:198:18::2,fd00:198:18::3,fd00:198:18::4,fd00:198:18::5",
+    "--tcp-ports",
+    "21,22,23,25,80,110,143,3389,5900,11211,25565",
+    "--heartbeat-iface",
+    "veth-b",
+    "--heartbeat-dst",
+    "02:aa:00:00:00:01",
+    "--heartbeat-secs",
+    "16"
+  ]
+}

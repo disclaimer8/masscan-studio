@@ -4,8 +4,10 @@
 //! `src/main.c:1595-1733` из masscan © Robert David Graham
 //! (github.com/robertdavidgraham/masscan, HEAD 8e6b3b0).
 //!
-//! Что здесь НЕ перенесено: опции TCP-баннеров кроме `capture`/`nocapture` и `hello-timeout` (`--top-ports`
-//! разбирает CLI, таблицы лежат в [`crate::top_ports`]). Ключи
+//! Опции TCP-баннеров (`capture`/`nocapture`, `hello`, `hello-string`, `hello-timeout`,
+//! `connection-timeout`, `http-*`) разбираются и хранятся здесь; файл `--hello-file` читает слой CLI и
+//! превращает его в `hello-string` (`src/main-conf.c:1207-1254`). `--top-ports` разбирает CLI, таблицы лежат в
+//! [`crate::top_ports`]. Ключи
 //! вывода, `pcap-filename` и `ndjson-status` принадлежат слою CLI и
 //! подмешиваются через [`EchoExtras`]; остальные ключи `config_parameters[]`
 //! печатает `echo` из `ScanConfig` (адаптеры `nic[0..8)`, `noreset`, `ttl`,
@@ -98,6 +100,16 @@ pub enum ConfigError {
     /// и разбор идёт дальше (`CONF_ERR` отбрасывается), здесь это отказ с кодом 1 (Р17).
     #[error("FAIL: {value}: unknown {kind} type")]
     UnknownCapture { kind: &'static str, value: String },
+    /// `--hello` не `ssl|smbv1|http` (`src/main-conf.c:1201`): C печатает строку и разбор идёт дальше
+    /// (`CONF_ERR` отбрасывается), здесь это отказ с кодом 1 (Р17).
+    #[error("FAIL: {value}: unknown hello type")]
+    UnknownHello { value: String },
+    /// `--http-header` без скобок в набранном имени и без двоеточия в значении: две строки C и `exit(1)`
+    /// (`src/main-conf.c:1388-1390`).
+    #[error(
+        "[-] --http-header needs both a name and value\n    hint: \"--http-header Name:value\""
+    )]
+    HttpHeaderNeedsNameValue,
     #[error("{0}")]
     Parse(#[from] ParseError),
 }
@@ -200,6 +212,36 @@ pub struct ScanConfig {
     /// `--hello-timeout` (`tcp_hello_timeout`, `src/main-conf.c:1288-1298`): принимается и, как у C, ни на что не
     /// влияет (Р1, Р17).
     pub hello_timeout: u32,
+    /// `--hello http` (`is_hello_http`, `src/main-conf.c:1181-1210`): запрос HTTP hello на портах 0..=65534.
+    pub hello_http: bool,
+    /// `--hello ssl` (`is_hello_ssl`, `src/main-conf.c:1181-1210`): hello TLS на тех же портах (4c).
+    pub hello_ssl: bool,
+    /// `--hello smbv1` (`is_hello_smbv1`, `src/main-conf.c:1181-1210`): hello SMBv1 вместо SMB (4d).
+    pub hello_smbv1: bool,
+    /// `--hello-string[PORT]` и превращённые слоем CLI `--hello-file[PORT]` (`src/main-conf.c:1256-1286`):
+    /// base64 как дан (верность проверена на разборе), в порядке задания; C ставит записи в начало списка,
+    /// поэтому для порта выигрывает первая заданная, а эхо печатает от новой к старой.
+    pub hello_strings: Vec<(u16, String)>,
+    /// `--connection-timeout`/`--tcp-timeout` (`tcp_connection_timeout`, `src/main-conf.c:2765-2767`): секунды
+    /// жизни соединения баннеров; 0 это умолчание C 30 (`src/stack-tcp-core.c:665-667`). В эхо не пишется.
+    pub connection_timeout: u32,
+    /// `--http-*` (`masscan->http`, `src/main-conf.c:1300-1505`): значения как даны, CRLF включительно.
+    pub http: HttpConfig,
+}
+
+/// Значения `--http-*` одного скана (`struct Masscan::http`, `src/main-conf.c:1300-1505`). Одиночные опции
+/// держат последнее значение (`Some` и при пустой строке: указатель C ненулевой), заголовков и cookie не
+/// больше 16 (справка C3; лишнее C отбрасывал молча, здесь отказ на разборе).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HttpConfig {
+    pub method: Option<String>,
+    pub url: Option<String>,
+    pub version: Option<String>,
+    pub host: Option<String>,
+    pub user_agent: Option<String>,
+    pub payload: Option<String>,
+    pub headers: Vec<(String, String)>,
+    pub cookies: Vec<String>,
 }
 
 /// Что захватывают TCP-баннеры (`is_capture_*`, `src/main-conf.c:1132-1180`). Умолчание C: только `cert`
@@ -260,6 +302,12 @@ impl Default for ScanConfig {
             rawudp: false,
             capture: Capture::default(),
             hello_timeout: 0,
+            hello_http: false,
+            hello_ssl: false,
+            hello_smbv1: false,
+            hello_strings: Vec::new(),
+            connection_timeout: 0,
+            http: HttpConfig::default(),
         }
     }
 }
@@ -827,8 +875,9 @@ pub struct EchoExtras<'a> {
 /// новых полей вывод побайтно прежний.
 ///
 /// Порядок как у `config_parameters[]` (main-conf.c:2369-2422): resume,
-/// seed, rate, shard, `banners`, `rawudp`, retries, `noreset`, offline, `pcap-filename`, `hello-timeout`,
-/// `ndjson-status`, двойной capture, `SPACE`, секция вывода, `SPACE`,
+/// seed, rate, shard, `banners`, `rawudp`, retries, `noreset`, offline, `pcap-filename`, `hello`,
+/// `hello-string`, `hello-timeout`, `http-cookie`, `http-header`, `http-method`, `http-version`, `http-url`,
+/// `http-user-agent`, `http-host`, `http-payload`, `ndjson-status`, двойной capture, `SPACE`, секция вывода, `SPACE`,
 /// затем `ttl`, `badsum` (их C не печатает, это расширение rmasscan, читаемое
 /// и C: `masscan_set_parameter` знает оба ключа) и `tcp-mss`, `tcp-wscale`,
 /// `tcp-tsecho`, `tcp-sackok` (:2141-2345), после этого адаптеры.
@@ -882,9 +931,43 @@ pub fn echo_with(cfg: &ScanConfig, echo_all: bool, extras: &EchoExtras<'_>, out:
     if let Some(name) = cfg.pcap_payloads.as_deref().filter(|n| !n.is_empty()) {
         let _ = writeln!(out, "pcap-payloads = {name}"); // :1832-1840
     }
+    // :1181-1210 (`hello`, место в таблице :2387): одна строка, `ssl` важнее `smbv1`, тот важнее `http`, даже
+    // когда заданы несколько.
+    if cfg.hello_ssl {
+        out.push_str("hello = ssl\n");
+    } else if cfg.hello_smbv1 {
+        out.push_str("hello = smbv1\n");
+    } else if cfg.hello_http {
+        out.push_str("hello = http\n");
+    }
+    // :1256-1286 (`hello-string`, место в таблице :2389; `hello-file` :2388 в эхо ничего не пишет):
+    // `hello-string[%u] = %s` от новой записи к старой, как список C в начало.
+    for (port, value) in cfg.hello_strings.iter().rev() {
+        let _ = writeln!(out, "hello-string[{port}] = {value}");
+    }
     // :1288-1298 (`hello-timeout`, место в таблице :2390, после `hello-string`), только когда задан.
     if cfg.hello_timeout != 0 {
         let _ = writeln!(out, "hello-timeout = {}", cfg.hello_timeout);
+    }
+    // :1300-1505 (`http-*`, место в таблице :2391-2398): cookie, header (`%s:%.*s`, без пробела), method,
+    // version, url, user-agent, host, payload; одиночные только когда заданы.
+    for cookie in &cfg.http.cookies {
+        let _ = writeln!(out, "http-cookie = {cookie}");
+    }
+    for (name, value) in &cfg.http.headers {
+        let _ = writeln!(out, "http-header = {name}:{value}");
+    }
+    for (key, value) in [
+        ("http-method", &cfg.http.method),
+        ("http-version", &cfg.http.version),
+        ("http-url", &cfg.http.url),
+        ("http-user-agent", &cfg.http.user_agent),
+        ("http-host", &cfg.http.host),
+        ("http-payload", &cfg.http.payload),
+    ] {
+        if let Some(value) = value {
+            let _ = writeln!(out, "{key} = {value}");
+        }
     }
     if extras.ndjson_status {
         out.push_str("ndjson-status = true\n"); // :1507-1514
@@ -1191,11 +1274,12 @@ pub fn parse_bool(value: &str) -> bool {
 /// `router-mac-ipv6` хранятся раздельно в `nics` (как в C).
 pub fn read_paused_conf(text: &str) -> Result<ScanConfig, ConfigError> {
     let mut cfg = ScanConfig::default();
-    for raw in text.lines() {
-        let Some((name, value)) = conf_line_kv(raw) else {
+    let mut line = ConfLineBuffer::default();
+    for raw in text.split_inclusive('\n') {
+        let Some((name, value)) = line.feed(raw) else {
             continue;
         };
-        if apply_core_kv(&mut cfg, name, value)? {
+        if apply_core_conf_kv(&mut cfg, name, value, &line)? {
             continue;
         }
         match normalize_key(name).as_str() {
@@ -1254,6 +1338,79 @@ pub fn conf_line_kv(raw: &str) -> Option<(&str, &str)> {
         name.trim_matches(is_c_space),
         value.trim_matches(is_c_space),
     ))
+}
+
+/// Буфер строки одного вызова `masscan_read_config_file` (`char line[65536]`, `src/main-conf.c:3886`), байты в
+/// том виде, в каком их оставляет C: `fgets` пишет строку и её NUL (`:3902`), `trim` строки сдвигает начальные
+/// пробелы `memmove` и пишет NUL на месте конечных (`:3869-3878`, `:3906`), `=` становится NUL (`:3915`), `trim`
+/// имени пишет NUL на месте его конечных пробелов, `trim` значения сдвигает его влево на число начальных пробелов
+/// (`:3917-3918`). Байты дальше NUL этой строки остаются от прошлых строк того же файла. Буфер нужен ровно одному
+/// ключу: `SET_http_header` делает `name += 11` (`:1361`), и у имени короче 11 байт это `line[11]`
+/// ([`ConfLineBuffer::name_plus_11`]). Новый файл (вложенный `conf`/`resume`, ещё один `-c`) это новый буфер; у C это
+/// новый кадр стека, его содержимое не определено. Строка длиннее 65 535 байт (`fgets` режет её на части) здесь
+/// одна строка, как у [`conf_line_kv`].
+#[derive(Debug, Default)]
+pub struct ConfLineBuffer {
+    /// Байты `line[0..written)`: всё, что строки этого файла записали.
+    buf: Vec<u8>,
+}
+
+impl ConfLineBuffer {
+    /// Одна строка файла, как её вернул `fgets` (с `\n`, если он был): буфер принимает вид C, результат это
+    /// [`conf_line_kv`] той же строки.
+    pub fn feed<'r>(&mut self, raw: &'r str) -> Option<(&'r str, &'r str)> {
+        let kv = conf_line_kv(raw);
+        let written = raw.len() + 1;
+        if self.buf.len() < written {
+            self.buf.resize(written, 0);
+        }
+        let line = self.buf.get_mut(..written).unwrap_or_default();
+        line.fill(0);
+        let mut put = |at: usize, s: &str| {
+            if let Some(dst) = line.get_mut(at..at + s.len()) {
+                dst.copy_from_slice(s.as_bytes());
+            }
+        };
+        let content = raw.trim_matches(is_c_space);
+        match kv {
+            // Имя с нулевого байта (начальных пробелов у строки уже нет), значение сразу за NUL на месте `=`.
+            Some((name, value)) => {
+                put(0, name);
+                put(content.find('=').map_or(0, |eq| eq + 1), value);
+            }
+            None => put(0, content),
+        }
+        kv
+    }
+
+    /// Строка C, которую читает `name += 11` (`src/main-conf.c:1361`) у имени короче 11 байт: `line[11]` до
+    /// ближайшего NUL. `None`, если байт 11 не писала ни одна строка этого файла (у C это неопределённые байты
+    /// стека).
+    pub fn name_plus_11(&self) -> Option<&[u8]> {
+        let tail = self.buf.get(11..).filter(|t| !t.is_empty())?;
+        Some(tail.split(|&b| b == 0).next().unwrap_or_default())
+    }
+}
+
+/// Ключ файла конфигурации с буфером строки C: как [`apply_core_kv`], кроме `http-header` с набранным именем короче
+/// 11 байт (`http-field`, `httpheader`, `http.field`, ...). Его `name += 11` (`src/main-conf.c:1361`) читает
+/// `line[11]` после правок `masscan_read_config_file` ([`ConfLineBuffer`]): `[` там это скобочная форма над строкой
+/// с этого байта, иначе форма `Name:value` над значением, как у C. Байт 11, которого не писала ни одна строка файла
+/// (только строка ровно `httpfield=` без перевода строки раньше всех строк длиннее неё), у C неопределённый байт
+/// стека (класс а: чтение неинициализированного `line[]`; E1.7 это только argv); здесь он считается не `[`, и пустое
+/// значение даёт две строки C и код 1, как обычная сборка C на таком файле.
+pub fn apply_core_conf_kv(
+    cfg: &mut ScanConfig,
+    name: &str,
+    value: &str,
+    line: &ConfLineBuffer,
+) -> Result<bool, ConfigError> {
+    if name.len() < 11 && matches!(normalize_key(name).as_str(), "httpheader" | "httpfield") {
+        let header = http_header_at(line.name_plus_11().unwrap_or_default(), value)?;
+        push_http_header(cfg, name, value, header)?;
+        return Ok(true);
+    }
+    apply_core_kv(cfg, name, value)
 }
 
 /// Индекс `[N]` в имени ключа (C `ARRAY`, main-conf.c:2438); без скобок 0.
@@ -1376,6 +1533,115 @@ fn parse_tcp_opt(
     } else {
         Err(bad())
     }
+}
+
+/// «Верный base64» справки C2 для значения `hello-string`: только знаки алфавита, затем не больше двух `=` и
+/// ничего после них; с `n` знаками алфавита `n mod 4 != 1`, а при набивке `n mod 4` это 2 с ровно `==` или 3 с
+/// ровно `=`; пустая строка верна. Раскодирование живёт в `rmasscan-proto` (ядро от него не зависит); здесь та
+/// же проверка без декодирования, чтобы неверное значение отказывало уже на разборе (E1.6, Р17).
+fn is_valid_hello_base64(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    let pad_at = bytes.iter().position(|&b| b == b'=').unwrap_or(bytes.len());
+    let (alphabet, padding) = bytes.split_at(pad_at);
+    if padding.len() > 2 || padding.iter().any(|&b| b != b'=') {
+        return false;
+    }
+    if !alphabet
+        .iter()
+        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'/'))
+    {
+        return false;
+    }
+    match (alphabet.len() % 4, padding.len()) {
+        (_, 0) => alphabet.len() % 4 != 1,
+        (2, 2) | (3, 1) => true,
+        _ => false,
+    }
+}
+
+/// Порт из набранного имени `hello-string[PORT]`/`hello-file[PORT]` (`ARRAY`, `src/main-conf.c:881-890`).
+/// Строже C (Р17): скобок нет, `[` не закрыта, внутри не только десятичные цифры или значение от 65536 это
+/// `BadValue` (C без скобок брал порт 0, `parseInt` читал ведущие цифры). Хвост после `]` не смотрится, как у C.
+pub fn hello_port_index(name: &str, value: &str) -> Result<u16, ConfigError> {
+    let bad = || ConfigError::BadValue {
+        key: name.into(),
+        value: value.into(),
+    };
+    let (_, rest) = name.split_once('[').ok_or_else(bad)?;
+    let digits = &rest[..rest.find(']').ok_or_else(bad)?];
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(bad());
+    }
+    let port = digits.bytes().fold(0u64, |n, d| {
+        n.saturating_mul(10).saturating_add(u64::from(d - b'0'))
+    });
+    u16::try_from(port).map_err(|_| bad())
+}
+
+/// `SET_http_header` (`src/main-conf.c:1361-1391`) после `name += 11`: `at11` это строка C, на которую указывает
+/// `name`. Знак `[` первым это скобочная форма: пунктуация (`ispunct`) снимается с обоих краёв этой строки, `]` не
+/// нужна (`:1362-1371`); иначе форма `Name:value` в значении: имя до первого `:` без пробелов в конце, значение после
+/// него без пробелов в начале (`:1372-1386`); ни одной формы это две строки C и `exit(1)` (`:1388-1390`).
+fn http_header_at(at11: &[u8], value: &str) -> Result<(String, String), ConfigError> {
+    if at11.first() == Some(&b'[') {
+        let start = at11
+            .iter()
+            .position(|b| !b.is_ascii_punctuation())
+            .unwrap_or(at11.len());
+        let end = at11
+            .iter()
+            .rposition(|b| !b.is_ascii_punctuation())
+            .map_or(start, |i| (i + 1).max(start));
+        let name = at11.get(start..end).unwrap_or_default();
+        return Ok((
+            String::from_utf8_lossy(name).into_owned(),
+            value.to_string(),
+        ));
+    }
+    let Some(colon) = value.find(':') else {
+        return Err(ConfigError::HttpHeaderNeedsNameValue);
+    };
+    Ok((
+        value[..colon].trim_end_matches(is_c_space).to_string(),
+        value[colon + 1..]
+            .trim_start_matches(is_c_space)
+            .to_string(),
+    ))
+}
+
+/// Ключ `http-header` с именем не короче 11 байт (`SET_http_header`, `src/main-conf.c:1335-1408`): `name += 11`
+/// (`:1361`) остаётся внутри имени, `[` на этом месте это скобочная форма, иначе форма `Name:value`
+/// ([`http_header_at`]). Незакрытая `[` в имени отказывает (Р17; у C скобка не требовалась); имя опции argv слой CLI
+/// уже обрезал до 63 байт, как `name2[64]` C (`src/main-conf.c:3305-3308`). Имя короче 11 байт это `BadValue`: в
+/// argv `name += 11` у C читает за его NUL байты `name2`, оставшиеся от прошлых опций (E1.7, только argv); ключ файла
+/// конфигурации с таким именем разбирает [`apply_core_conf_kv`] по буферу строки C.
+fn parse_http_header(name: &str, value: &str) -> Result<(String, String), ConfigError> {
+    let bad = || ConfigError::BadValue {
+        key: name.into(),
+        value: value.into(),
+    };
+    let rest = name.as_bytes().get(11..).ok_or_else(bad)?;
+    if rest.first() == Some(&b'[') && !rest.contains(&b']') {
+        return Err(bad());
+    }
+    http_header_at(rest, value)
+}
+
+/// 17-й заголовок отказывает (`src/main-conf.c:1400`: C лишние молча отбрасывает), иначе в конец списка.
+fn push_http_header(
+    cfg: &mut ScanConfig,
+    name: &str,
+    value: &str,
+    header: (String, String),
+) -> Result<(), ConfigError> {
+    if cfg.http.headers.len() >= 16 {
+        return Err(ConfigError::BadValue {
+            key: name.into(),
+            value: value.into(),
+        });
+    }
+    cfg.http.headers.push(header);
+    Ok(())
 }
 
 /// Применяет один ключ `name = value` к `ScanConfig` (main-conf.c
@@ -1512,6 +1778,49 @@ pub fn apply_core_kv(cfg: &mut ScanConfig, key: &str, val: &str) -> Result<bool,
         // `SET_hello_timeout` (`src/main-conf.c:1288-1298`): `(unsigned)parseInt(value)`; принимается и не действует
         // (Р1). Не число или больше `u32` это отказ (Р17), у C 0 или усечение.
         "hellotimeout" => cfg.hello_timeout = parse_u32(name, value)?,
+        // `SET_hello` (`src/main-conf.c:1181-1210`): значение по `EQUALS`, каждое вхождение ставит свой флаг.
+        "hello" => match normalize_key(value).as_str() {
+            "ssl" => cfg.hello_ssl = true,
+            "smbv1" => cfg.hello_smbv1 = true,
+            "http" => cfg.hello_http = true,
+            _ => {
+                return Err(ConfigError::UnknownHello {
+                    value: value.to_string(),
+                });
+            }
+        },
+        // `SET_hello_string` (`src/main-conf.c:1256-1286`): индекс обязателен и десятичен (`hello_port_index`),
+        // base64 верен по справке C2; записи в порядке задания (C ставит в начало списка, первая выигрывает).
+        "hellostring" => {
+            let port = hello_port_index(name, value)?;
+            if !is_valid_hello_base64(value) {
+                return Err(bad());
+            }
+            cfg.hello_strings.push((port, value.to_string()));
+        }
+        // Старый стиль (`src/main-conf.c:2765-2767`): `(unsigned)parseInt(value)`, в эхо не пишется.
+        "connectiontimeout" | "tcptimeout" => cfg.connection_timeout = parse_u32(name, value)?,
+        // `SET_http_*` (`src/main-conf.c:1300-1505`, таблица :2391-2398 с синонимами `http-uri` и
+        // `http-useragent`): одиночные держат последнее значение как дано, CRLF включительно.
+        "httpmethod" => cfg.http.method = Some(value.to_string()),
+        "httpurl" | "httpuri" => cfg.http.url = Some(value.to_string()),
+        "httpversion" => cfg.http.version = Some(value.to_string()),
+        "httphost" => cfg.http.host = Some(value.to_string()),
+        "httpuseragent" => cfg.http.user_agent = Some(value.to_string()),
+        "httppayload" => cfg.http.payload = Some(value.to_string()),
+        // 17-я cookie отказывает (Р17; C лишние молча отбрасывает, `src/main-conf.c:1326`).
+        "httpcookie" => {
+            if cfg.http.cookies.len() >= 16 {
+                return Err(bad());
+            }
+            cfg.http.cookies.push(value.to_string());
+        }
+        // Форма по набранному имени (`parse_http_header`); 17-й отказывает вместо молчаливого отброса C
+        // (`src/main-conf.c:1400`).
+        "httpheader" | "httpfield" => {
+            let header = parse_http_header(name, value)?;
+            push_http_header(cfg, name, value, header)?;
+        }
         "adapter" | "if" | "interface" => {
             let idx = nic_index(name, value)?;
             nic_mut(cfg, idx).adapter_name = Some(value.to_string());
@@ -2433,7 +2742,9 @@ mod tests {
         )
         .unwrap();
         assert_eq!(cfg.seed, 8);
-        for key in ["hello", "min-packet", "top-ports"] {
+        // `hello` больше не пример: задача 13 его переносит (`src/main-conf.c:1181-1210`).
+        assert!(read_paused_conf("hello = ssl\n").unwrap().hello_ssl);
+        for key in ["min-packet", "top-ports", "script"] {
             assert_eq!(
                 read_paused_conf(&format!("{key} = 1\n")).unwrap_err(),
                 ConfigError::UnknownKey(key.into())
@@ -2971,6 +3282,321 @@ mod tests {
         assert_eq!(count_cidr6_bits(1, 2), (128, false));
         assert_eq!(count_cidr6_bits(4, 7), (126, true));
         assert_eq!(count_cidr6_bits(1, 4), (128, false));
+    }
+
+    // --hello / --hello-string / --connection-timeout / --http-* (задача 13, справка C2-C4).
+
+    /// `SET_hello` (`src/main-conf.c:1181-1210`): значение сравнивается `EQUALS` (регистр и `-`, `.`, `_` не
+    /// важны); неизвестное это текст C `FAIL: %s: unknown hello type`.
+    #[test]
+    fn hello_value_matches_like_c_and_unknown_fails() {
+        let mut cfg = ScanConfig::default();
+        for (value, want) in [
+            ("ssl", (false, true, false)),
+            ("SSL", (false, true, false)),
+            ("s.s_l", (false, true, false)),
+            ("smbv1", (false, false, true)),
+            ("SMB-V1", (false, false, true)),
+            ("http", (true, false, false)),
+            ("Http", (true, false, false)),
+        ] {
+            let mut c = ScanConfig::default();
+            assert_eq!(apply_core_kv(&mut c, "hello", value), Ok(true), "{value}");
+            assert_eq!((c.hello_http, c.hello_ssl, c.hello_smbv1), want, "{value}");
+        }
+        assert_eq!(apply_core_kv(&mut cfg, "HELLO", "ssl"), Ok(true));
+        assert!(cfg.hello_ssl);
+        assert_eq!(
+            apply_core_kv(&mut cfg, "hello", "tls"),
+            Err(ConfigError::UnknownHello {
+                value: "tls".into()
+            })
+        );
+        assert_eq!(
+            ConfigError::UnknownHello {
+                value: "tls".into()
+            }
+            .to_string(),
+            "FAIL: tls: unknown hello type"
+        );
+    }
+
+    /// Эхо `hello` одна строка, `ssl` важнее `smbv1`, тот важнее `http` (`src/main-conf.c:1188-1195`), даже когда
+    /// заданы несколько.
+    #[test]
+    fn hello_echo_one_line_ssl_smbv1_http() {
+        let echo_of = |http: bool, ssl: bool, smbv1: bool| {
+            let mut cfg = cfg_with("10.0.0.0/30", "80");
+            (cfg.hello_http, cfg.hello_ssl, cfg.hello_smbv1) = (http, ssl, smbv1);
+            let mut s = String::new();
+            echo(&cfg, false, &mut s);
+            s
+        };
+        assert!(!echo_of(false, false, false).contains("hello ="));
+        for (flags, line) in [
+            ((true, true, true), "hello = ssl\n"),
+            ((true, false, true), "hello = smbv1\n"),
+            ((true, false, false), "hello = http\n"),
+            ((false, true, false), "hello = ssl\n"),
+        ] {
+            let s = echo_of(flags.0, flags.1, flags.2);
+            assert_eq!(s.matches("hello =").count(), 1, "{s}");
+            assert!(s.contains(line), "{s}");
+        }
+    }
+
+    /// `--connection-timeout`/`--tcp-timeout` (`src/main-conf.c:2765-2767`) хранится (0 это умолчание C 30) и в
+    /// эхо не пишется.
+    #[test]
+    fn connection_timeout_and_tcp_timeout_not_echoed() {
+        let mut cfg = cfg_with("10.0.0.0/30", "80");
+        assert_eq!(cfg.connection_timeout, 0);
+        assert_eq!(apply_core_kv(&mut cfg, "connection-timeout", "7"), Ok(true));
+        assert_eq!(cfg.connection_timeout, 7);
+        assert_eq!(apply_core_kv(&mut cfg, "tcp-timeout", "9"), Ok(true));
+        assert_eq!(cfg.connection_timeout, 9);
+        assert_eq!(apply_core_kv(&mut cfg, "TCP_TIMEOUT", "3"), Ok(true));
+        assert_eq!(cfg.connection_timeout, 3);
+        let mut s = String::new();
+        echo(&cfg, false, &mut s);
+        assert!(!s.contains("connection-timeout"), "{s}");
+        assert!(!s.contains("tcp-timeout"), "{s}");
+        assert!(matches!(
+            apply_core_kv(&mut cfg, "connection-timeout", "x"),
+            Err(ConfigError::BadValue { .. })
+        ));
+    }
+
+    /// Эхо ключей `http-*` в порядке таблицы `config_parameters[]` (`src/main-conf.c:2391-2398`): cookie, header,
+    /// method, version, url, user-agent, host, payload; форматы строк C (`http-header = %s:%.*s` без пробела).
+    #[test]
+    fn http_options_echo_in_table_order() {
+        let mut cfg = cfg_with("10.0.0.0/30", "80");
+        for (k, v) in [
+            ("http-payload", "body"),
+            ("http-host", "lab.test"),
+            ("http-user-agent", "agent/1"),
+            ("http-url", "/lab"),
+            ("http-version", "HTTP/1.1"),
+            ("http-method", "POST"),
+            ("http-header", "X-Lab: v1"),
+            ("http-cookie", "a=b"),
+            ("http-cookie", "c=d"),
+        ] {
+            assert_eq!(apply_core_kv(&mut cfg, k, v), Ok(true), "{k}");
+        }
+        assert_eq!(cfg.http.headers, [("X-Lab".to_string(), "v1".to_string())]);
+        assert_eq!(cfg.http.cookies, ["a=b", "c=d"]);
+        let mut s = String::new();
+        echo(&cfg, false, &mut s);
+        let pos = |needle: &str| s.find(needle).unwrap_or_else(|| panic!("{needle} in {s}"));
+        let order = [
+            "http-cookie = a=b\n",
+            "http-cookie = c=d\n",
+            "http-header = X-Lab:v1\n",
+            "http-method = POST\n",
+            "http-version = HTTP/1.1\n",
+            "http-url = /lab\n",
+            "http-user-agent = agent/1\n",
+            "http-host = lab.test\n",
+            "http-payload = body\n",
+        ];
+        for w in order.windows(2) {
+            assert!(pos(w[0]) < pos(w[1]), "{} before {}: {s}", w[0], w[1]);
+        }
+        // Синонимы C ведут к тем же полям; повтор одиночной опции побеждает последним.
+        assert_eq!(apply_core_kv(&mut cfg, "http-uri", "/other"), Ok(true));
+        assert_eq!(apply_core_kv(&mut cfg, "http-useragent", "b/2"), Ok(true));
+        assert_eq!(cfg.http.url.as_deref(), Some("/other"));
+        assert_eq!(cfg.http.user_agent.as_deref(), Some("b/2"));
+    }
+
+    /// Вывод `--echo` с опциями баннеров читается обратно в те же поля и печатается побайтно так же.
+    #[test]
+    fn paused_conf_round_trip_of_banner_options() {
+        let mut cfg = cfg_with("10.0.0.0/30", "80");
+        cfg.banners = true;
+        cfg.capture.html = true;
+        for (k, v) in [
+            ("hello", "http"),
+            ("hello-string[8080]", "QUJD"),
+            ("hello-timeout", "5"),
+            ("http-cookie", "a=b"),
+            ("http-header", "X-Lab: v1"),
+            ("http-method", "POST"),
+            ("http-version", "HTTP/1.1"),
+            ("http-url", "/lab"),
+            ("http-user-agent", "agent/1"),
+            ("http-host", "lab.test"),
+            ("http-payload", "body"),
+            ("connection-timeout", "7"),
+        ] {
+            assert_eq!(apply_core_kv(&mut cfg, k, v), Ok(true), "{k}");
+        }
+        let mut s = String::new();
+        echo(&cfg, false, &mut s);
+        let back = read_paused_conf(&s).unwrap();
+        assert_eq!(
+            (back.hello_http, back.hello_ssl, back.hello_smbv1),
+            (true, false, false)
+        );
+        assert_eq!(back.hello_strings, cfg.hello_strings);
+        assert_eq!(back.hello_timeout, 5);
+        assert_eq!(back.http, cfg.http);
+        assert_eq!(back.capture, cfg.capture);
+        // `connection-timeout` C в paused.conf не пишет, поэтому назад он не возвращается.
+        assert_eq!(back.connection_timeout, 0);
+        let mut s2 = String::new();
+        echo(&back, false, &mut s2);
+        assert_eq!(s, s2);
+    }
+
+    /// M8 ревью задач 11-13: два `hello-string` одного порта. Эхо идёт от новой записи к старой, чтение файла
+    /// ставит каждую строку в начало списка (`src/main-conf.c:1281-1284`), поэтому после круга порядок обратный и
+    /// для порта 80 выигрывает другая запись («первая заданная», `src/main.c:727-734`), как у C. Выход C (`--echo`
+    /// без скана): `--hello-string[80] QUJD --hello-string[80] RA== --hello-string[443] aGk=` печатает
+    /// `[443] = aGk=`, `[80] = RA==`, `[80] = QUJD`; этот вывод через `-c` печатает `[80] = QUJD`, `[80] = RA==`,
+    /// `[443] = aGk=`.
+    #[test]
+    fn paused_conf_round_trip_reverses_hello_strings_like_c() {
+        let lines = |cfg: &ScanConfig| {
+            let mut s = String::new();
+            echo(cfg, false, &mut s);
+            s.lines()
+                .filter(|l| l.starts_with("hello-string"))
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        };
+        let winner = |cfg: &ScanConfig| {
+            cfg.hello_strings
+                .iter()
+                .find(|(p, _)| *p == 80)
+                .map(|(_, v)| v.clone())
+        };
+        let mut cfg = cfg_with("10.0.0.0/30", "80");
+        for (k, v) in [
+            ("hello-string[80]", "QUJD"),
+            ("hello-string[80]", "RA=="),
+            ("hello-string[443]", "aGk="),
+        ] {
+            assert_eq!(apply_core_kv(&mut cfg, k, v), Ok(true), "{k}");
+        }
+        assert_eq!(
+            lines(&cfg),
+            [
+                "hello-string[443] = aGk=",
+                "hello-string[80] = RA==",
+                "hello-string[80] = QUJD"
+            ]
+        );
+        assert_eq!(winner(&cfg).as_deref(), Some("QUJD"));
+        let mut s = String::new();
+        echo(&cfg, false, &mut s);
+        let back = read_paused_conf(&s).unwrap();
+        assert_eq!(
+            lines(&back),
+            [
+                "hello-string[80] = QUJD",
+                "hello-string[80] = RA==",
+                "hello-string[443] = aGk="
+            ]
+        );
+        assert_eq!(winner(&back).as_deref(), Some("RA=="));
+    }
+
+    /// I1 ревью задач 11-13: байты `line[]` после правок `masscan_read_config_file` (`src/main-conf.c:3902-3920`),
+    /// которые читает `name += 11` (`:1361`): NUL на месте `=` и конечных пробелов имени, значение, сдвинутое
+    /// влево на свои начальные пробелы, начальные пробелы строки, байты прошлой строки того же файла за NUL короткой
+    /// строки и неписаный байт 11.
+    #[test]
+    fn conf_line_buffer_keeps_c_bytes_for_name_plus_11() {
+        let tail = |lines: &[&str]| {
+            let mut b = ConfLineBuffer::default();
+            for l in lines {
+                b.feed(l);
+            }
+            b.name_plus_11().map(<[u8]>::to_vec)
+        };
+        let some = |s: &str| Some(s.as_bytes().to_vec());
+        assert_eq!(tail(&["http-field = X:v\n"]), some(""));
+        assert_eq!(tail(&["http-field=X:v\n"]), some("X:v"));
+        assert_eq!(tail(&["httpfield=X:v\n"]), some(":v"));
+        assert_eq!(tail(&["http-field= [X]v\n"]), some("[X]v"));
+        assert_eq!(tail(&["http-field =[X]v\n"]), some(""));
+        assert_eq!(tail(&["  http-field=X:v  \n"]), some("X:v"));
+        assert_eq!(tail(&["http-field=[Y]\n", "httpfield="]), some("[Y]"));
+        assert_eq!(tail(&["#  comment [Y]\n", "httpfield="]), some("[Y]"));
+        assert_eq!(
+            tail(&["# comment that is long\n", "httpfield="]),
+            some("hat is long")
+        );
+        // Байт 11 не писала ни одна строка: у C это стек.
+        assert_eq!(tail(&["httpfield="]), None);
+        assert_eq!(tail(&["httpfield=\n"]), some(""));
+        // `feed` отдаёт то же, что `conf_line_kv`.
+        let mut b = ConfLineBuffer::default();
+        assert_eq!(b.feed("  a = b c \r\n"), Some(("a", "b c")));
+        assert_eq!(b.feed("# x = y\n"), None);
+        assert_eq!(b.feed("no equals\n"), None);
+    }
+
+    /// I1 ревью задач 11-13: ключ файла `http-header` с набранным именем короче 11 байт берёт форму по `line[11]`
+    /// буфера строки C, как C. Ожидания это вывод `masscan --echo -c FILE` сборки C 8e6b3b0 (без скана): строки
+    /// `http-header = …` или две строки `needs both a name and value` с кодом 1.
+    #[test]
+    fn http_header_short_config_spelling_like_c() {
+        let header_lines = |text: &str| -> Result<Vec<String>, ConfigError> {
+            let cfg = read_paused_conf(text)?;
+            let mut s = String::new();
+            echo(&cfg, false, &mut s);
+            Ok(s.lines()
+                .filter(|l| l.starts_with("http-header"))
+                .map(str::to_string)
+                .collect())
+        };
+        for (text, want) in [
+            ("http-field = X:v\n", &["X:v"][..]),
+            ("httpheader = X:v\n", &["X:v"]),
+            ("http-field=X:v\n", &["X:v"]),
+            ("httpfield = X:v\n", &["X:v"]),
+            ("httpfield=X:v\n", &["X:v"]),
+            ("HTTP_FIELD = X:v\n", &["X:v"]),
+            ("http.field = X:v\n", &["X:v"]),
+            ("httpfield-=X:v\n", &["X:v"]),
+            ("  http-field=X:v  \n", &["X:v"]),
+            ("http-header = X:v\n", &["X:v"]),
+            ("httpfield=a[X]\n", &["X:a[X]"]),
+            ("http-field=[X-Lab]\n", &["X-Lab:[X-Lab]"]),
+            ("http-field= [X]v\n", &["X]v:[X]v"]),
+            ("http-field=[X] v\n", &["X] v:[X] v"]),
+            ("httpheader=[Y]:z\n", &["Y]:z:[Y]:z"]),
+            ("http-field=[\n", &[":["]),
+            ("http-field=[]\n", &[":[]"]),
+            ("http-field=[X\n", &["X:[X"]),
+            ("http-field=[Y]\nhttpfield=", &["Y:[Y]", "Y:"]),
+            ("#  comment [Y]\nhttpfield=", &["Y:"]),
+            (
+                "http-field = A:b\nhttpheader=[Q]\nhttpfield=",
+                &["A:b", "Q:[Q]", "Q:"],
+            ),
+        ] {
+            let want: Vec<String> = want.iter().map(|w| format!("http-header = {w}")).collect();
+            assert_eq!(header_lines(text), Ok(want), "{text:?}");
+        }
+        for text in [
+            "http-field =[X]v\n",
+            "httpfield=",
+            "httpfield=\n",
+            "  httpfield=\n",
+            "http-header = A:b\nhttpfield=",
+            "# comment that is long\nhttpfield=",
+        ] {
+            assert_eq!(
+                header_lines(text),
+                Err(ConfigError::HttpHeaderNeedsNameValue),
+                "{text:?}"
+            );
+        }
     }
 
     /// `paused.conf` written by `--echo` reads back into the same targets.

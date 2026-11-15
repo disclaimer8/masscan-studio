@@ -1885,3 +1885,325 @@ fn a_listener_set_that_is_not_ready_still_refuses_the_run() {
     );
     assert_eq!(st.scanner_runs(), 0);
 }
+
+// ---- Task 18: --plan banners, the TCP banner case mb01_banners ----
+//
+// The feth stand as the banners plan sees it, played from the case verifier's simulated run
+// (`banners_stand::tests::StandSim`): the banner listener's ready record, the uplink tcpdump (nothing on it), the
+// peer witness's capture (the run's frames and the host's own mDNS), and rmasscan writing its -oL document.
+use crate::banners_stand::{
+    self as bs,
+    tests::{StandSim, linux_window},
+};
+
+struct BannersMac {
+    sim: StandSim,
+    rmasscan: String,
+    spawned: RefCell<Vec<Vec<String>>>,
+    log: Rc<RefCell<Vec<String>>>,
+    uplink_frames: Cell<usize>,
+}
+/// An mDNS announcement of the peer host (IPv4, UDP 5353), which the published capture leaves out.
+fn host_mdns() -> Vec<u8> {
+    let mut f = vec![0x01, 0x00, 0x5e, 0, 0, 0xfb];
+    f.extend(crate::link::STAND_PEER_MAC);
+    f.extend([
+        8, 0, 0x45, 0, 0, 28, 0, 0, 0, 0, 255, 17, 0, 0, 198, 18, 0, 2, 224, 0, 0, 251,
+    ]);
+    f.extend([0x14, 0xe9, 0x14, 0xe9, 0, 8, 0, 0]);
+    f
+}
+impl Stand for BannersMac {
+    fn exec(&self, argv: &[String], _timeout: u64) -> Result<Output, String> {
+        let ok = |stdout: String| {
+            Ok(Output {
+                rc: 0,
+                stdout,
+                stderr: String::new(),
+            })
+        };
+        if argv.iter().any(|a| a == "status") {
+            return ok(json!({"raw_run_allowed":true,"bpf_access":"granted","uplink":"en0","run_id":"m1","checks":[]}).to_string());
+        }
+        if argv[0].ends_with("socketfilterfw") {
+            return ok("Firewall is disabled. (State = 0)\n".into());
+        }
+        if argv[0] == "/bin/ps" {
+            let me = std::process::id();
+            return ok(format!(
+                "  PID  PGID COMMAND\n{me} {me} /x/rmasscan-lab macos-suite --plan banners\n"
+            ));
+        }
+        ok(String::new())
+    }
+    fn spawn(
+        &self,
+        argv: &[String],
+        stdout: &Path,
+        stderr: &Path,
+    ) -> Result<Box<dyn Proc>, String> {
+        self.spawned.borrow_mut().push(argv.to_vec());
+        fs::write(stdout, "").unwrap();
+        fs::write(stderr, "").unwrap();
+        let mut name = "other";
+        let mut mode = Mode::Hangs;
+        if argv.iter().any(|a| a == "listen") {
+            name = "listener";
+            let banners: Vec<Value> = crate::peer::banner_ports(after(argv, "--banners"))
+                .unwrap()
+                .iter()
+                .map(|(p, sc)| json!({"port": p, "scenario_port": sc.port, "peer": sc.peer, "about": sc.about, "apps": sc.apps}))
+                .collect();
+            fs::write(
+                after(argv, "--ready"),
+                json!({"open":[],"silent":[],"silent_proven":null,"ready":true,"bind":"198.18.0.2","pid":4242,"banners":banners}).to_string(),
+            )
+            .unwrap();
+        } else if argv[0] == "/usr/sbin/tcpdump" {
+            name = "uplink";
+            fs::write(after(argv, "-w"), pcap_of(self.uplink_frames.get())).unwrap();
+            fs::write(
+                stderr,
+                err_text3(self.uplink_frames.get(), self.uplink_frames.get() + 57, 0),
+            )
+            .unwrap();
+        } else if argv.iter().any(|a| a == "dump") {
+            name = "witness";
+            let p = after(argv, "--pcap");
+            fs::write(after(argv, "--ready"), "{}").unwrap();
+            fs::write(after(argv, "--ack"), "ack\n").unwrap();
+            let mut frames = self.sim.frames.clone();
+            frames.insert(1, (frames[0].0 + 0.1, host_mdns()));
+            let data = pcap::encode(&frames);
+            fs::write(p, &data).unwrap();
+            fs::write(format!("{p}.tcpdump.err"), err_text(frames.len())).unwrap();
+            let mut w: Value =
+                serde_json::from_slice(&crate::autodetect_verify::tests::Sim::witness(&frames))
+                    .unwrap();
+            w["pcap_sha256"] = json!(crate::verify::sha(&data));
+            fs::write(after(argv, "--meta"), w.to_string()).unwrap();
+        } else if argv[0] == self.rmasscan {
+            name = "scanner";
+            mode = Mode::Exits(self.sim.exit);
+            fs::write(stderr, self.sim.stderr()).unwrap();
+            fs::write(after(argv, "-oL"), self.sim.render()).unwrap();
+        }
+        Ok(Box::new(FakeProc {
+            name,
+            log: self.log.clone(),
+            mode,
+            done: false,
+            failed: false,
+            polls: 0,
+            pgid: 9000 + self.spawned.borrow().len() as u32,
+        }))
+    }
+    fn counters(&self, _: &str) -> Result<NetstatCounters, String> {
+        Ok(NetstatCounters {
+            ipkts: 1,
+            opkts: 1,
+            ierrs: 0,
+            drop: 0,
+        })
+    }
+    fn iface_mac(&self, iface: &str) -> Result<String, String> {
+        Ok(if iface == SCANNER_IF {
+            SCANNER_MAC
+        } else {
+            PEER_MAC
+        }
+        .to_owned())
+    }
+    fn send_start_markers(&self) -> Result<(), String> {
+        Ok(())
+    }
+    fn start_injector(&self, _: &InjectSpec) -> Result<Box<dyn Side>, String> {
+        Err("no injector in the banners plan".into())
+    }
+    fn start_flood(&self, _: &FloodSpec) -> Result<Box<dyn Side>, String> {
+        Err("no flood in the banners plan".into())
+    }
+    fn flood_burst_frames(&self) -> Result<u64, String> {
+        Err("no flood in the banners plan".into())
+    }
+    fn link_state(&self) -> Result<LinkState, String> {
+        Ok(LinkState {
+            peer_up: true,
+            scanner_active: true,
+        })
+    }
+    fn euid(&self) -> Result<u32, String> {
+        Ok(501)
+    }
+    fn pause(&self, _: Duration) {}
+    fn stopped(&self) -> bool {
+        false
+    }
+}
+struct BannersRig {
+    root: PathBuf,
+    out: PathBuf,
+    rmasscan: String,
+    lab: PathBuf,
+}
+impl BannersRig {
+    fn new() -> Self {
+        let root = scratch();
+        let rmasscan = root.join("rmasscan");
+        fs::write(&rmasscan, b"the rmasscan CLI").unwrap();
+        let lab = root.join("rmasscan-lab");
+        fs::write(&lab, b"this rmasscan-lab").unwrap();
+        Self {
+            out: root.join("out"),
+            rmasscan: p2s(&rmasscan),
+            lab,
+            root,
+        }
+    }
+    fn args(&self, extra: &[&str]) -> Vec<String> {
+        let mut a: Vec<String> = [
+            "--plan",
+            "banners",
+            "--out",
+            &p2s(&self.out),
+            "--rmasscan",
+            &self.rmasscan,
+            "--reference",
+            &p2s(linux_window()),
+        ]
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect();
+        a.extend(extra.iter().map(|s| (*s).to_owned()));
+        a
+    }
+    fn stand(&self) -> BannersMac {
+        BannersMac {
+            sim: StandSim::new(bs::MACOS),
+            rmasscan: self.rmasscan.clone(),
+            spawned: RefCell::default(),
+            log: Rc::default(),
+            uplink_frames: Cell::new(0),
+        }
+    }
+    fn lock(&self) -> Box<dyn Fn() -> Result<Lock, String>> {
+        let p = self.root.join("suite.lock");
+        Box::new(move || take_lock(&p))
+    }
+}
+
+#[test]
+fn plan_banners_runs_mb01_and_macos_verify_passes_it_by_records() {
+    let rig = BannersRig::new();
+    let st = rig.stand();
+    assert_eq!(
+        run_locked(&rig.args(&[]), &st, rig.lab.clone(), rig.lock().as_ref()).unwrap(),
+        0
+    );
+    let spawned = st.spawned.borrow();
+    let listen: Vec<&Vec<String>> = spawned
+        .iter()
+        .filter(|a| a.iter().any(|x| x == "listen"))
+        .collect();
+    assert_eq!(listen.len(), 1);
+    assert_eq!(after(listen[0], "--banners"), "2222=22,8080=80");
+    assert!(!listen[0].iter().any(|x| x == "--open"));
+    let scan: Vec<&Vec<String>> = spawned.iter().filter(|a| a[0] == rig.rmasscan).collect();
+    assert_eq!(scan.len(), 1);
+    let d = rig.out.join("runs").join(bs::MACOS.tag);
+    // The document goes into the run's work directory by its full path; argv.json keeps the table's form.
+    let doc = after(scan[0], "-oL");
+    assert!(doc.starts_with(&p2s(&rig.out.join(".work"))), "{doc}");
+    assert!(doc.ends_with("/run/output.txt"), "{doc}");
+    let table: Value = read_json(d.join("argv.json")).unwrap();
+    assert_eq!(table["argv"], json!(bs::MACOS.argv()));
+    let rec = read_json(d.join("scanner-argv.json")).unwrap();
+    assert!(rec["argv"].to_string().contains("$OUT/.work/"), "{rec}");
+    assert!(!rec["argv"].to_string().contains(&p2s(&rig.out)), "{rec}");
+    for f in [
+        "output.txt",
+        "argv.json",
+        "expect.json",
+        "listeners.json",
+        "peer.pcap",
+        "capture.json",
+        "uplink.pcap",
+        "alf.txt",
+    ] {
+        assert!(d.join(f).is_file(), "{f}");
+    }
+    assert!(!rig.out.join(".work").exists());
+    let man = read_json(rig.out.join("manifest.json")).unwrap();
+    assert_eq!(man[bs::MANIFEST_KEY], "macos");
+    let v = crate::macos_verify::verify_dir(&rig.out);
+    assert_eq!(v["overall"], "PASS", "{v:#}");
+    // The case runs once into one --out.
+    let st = rig.stand();
+    let e = run_locked(&rig.args(&[]), &st, rig.lab.clone(), rig.lock().as_ref()).unwrap_err();
+    assert!(
+        matches!(&e, SuiteError::NotRun(m) if m.contains("already has a run")),
+        "{e:?}"
+    );
+    let _ = fs::remove_dir_all(&rig.root);
+}
+
+#[test]
+fn plan_banners_refuses_wire_scan_options_and_a_missing_reference_before_anything_starts() {
+    let rig = BannersRig::new();
+    let st = rig.stand();
+    assert_eq!(
+        run_locked(
+            &crate::windows_suite::strings(&["--plan", "banners", "--list"]),
+            &st,
+            rig.lab.clone(),
+            rig.lock().as_ref()
+        )
+        .unwrap(),
+        0
+    );
+    let without_reference: Vec<String> = {
+        let mut a = rig.args(&[]);
+        let at = a.iter().position(|x| x == "--reference").unwrap();
+        a.drain(at..at + 2);
+        a
+    };
+    let bad = rig.root.join("not-a-window");
+    fs::create_dir_all(&bad).unwrap();
+    for (args, named) in [
+        (without_reference, "--reference"),
+        (rig.args(&["--wire-scan", "/x/wire_scan"]), "--wire-scan"),
+        (rig.args(&["--rerun"]), "--rerun"),
+        (
+            {
+                let mut a = rig.args(&[]);
+                let at = a.iter().position(|x| x == "--reference").unwrap();
+                a[at + 1] = p2s(&bad);
+                a
+            },
+            "manifest.json",
+        ),
+    ] {
+        let st = rig.stand();
+        let e = run_locked(&args, &st, rig.lab.clone(), rig.lock().as_ref()).unwrap_err();
+        assert!(
+            matches!(&e, SuiteError::NotRun(m) if m.contains(named)),
+            "{named}: {e:?}"
+        );
+        assert!(st.spawned.borrow().is_empty(), "{named}");
+        assert!(!rig.out.join("manifest.json").exists(), "{named}");
+    }
+    let _ = fs::remove_dir_all(&rig.root);
+}
+
+#[test]
+fn a_lab_frame_on_the_uplink_stops_the_banners_plan_with_the_isolation_breach() {
+    let rig = BannersRig::new();
+    let st = rig.stand();
+    st.uplink_frames.set(1);
+    let e = run_locked(&rig.args(&[]), &st, rig.lab.clone(), rig.lock().as_ref()).unwrap_err();
+    assert!(matches!(e, SuiteError::Isolation(_)), "{e:?}");
+    // The run is kept and fails the directory for good.
+    let v = crate::macos_verify::verify_dir(&rig.out);
+    assert_eq!(v["overall"], "FAIL", "{v:#}");
+    let _ = fs::remove_dir_all(&rig.root);
+}

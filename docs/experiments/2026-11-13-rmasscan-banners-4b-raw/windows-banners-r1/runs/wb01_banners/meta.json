@@ -1,0 +1,19 @@
+{
+  "argv_file": "runner-argv.json",
+  "capture_started_utc": 1794765149.869592,
+  "capture_stopped_utc": 1794765217.193656,
+  "end_marker_seen": true,
+  "exe_sha256": "af6486c393606bc5d87f3c9d49cc78b69bc8284bf5282a2499a8d50f3643adbb",
+  "guest_exit": 0,
+  "guest_finished_utc": 1794765180.852151,
+  "guest_ssh_rc": 0,
+  "guest_started_utc": 1794765156.112532,
+  "guest_times": {
+    "finished_utc": 1794765180.754,
+    "started_utc": 1794765165.255
+  },
+  "guest_verify_exit": 0,
+  "invocation_nonce": "r8ba3063777125d4ae1bdd4c947b8748c-ca0587f729f00dff",
+  "kind": "banners",
+  "tag": "wb01_banners"
+}

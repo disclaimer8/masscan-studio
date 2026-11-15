@@ -1,0 +1,22 @@
+tcp-frame-input v1
+# eth-wscale-7-v6: ethernet, IPv6, --tcp-wscale 7
+link ethernet
+macs src=02:00:00:00:00:01 router4=02:00:00:00:00:fe router6=02:00:00:00:00:fd
+template mss=default sackok=0 wscale=7 tsecho=- ttl=-
+frame v6 them=51a59710cc3fc562cfe9191624a77105 port_them=12434 me=791d6218846f967eba593a1c6d7513f4 port_me=15283 seq=0x205c4855 ack=0x90217974 flags=0x10 window=- payload=0:126
+frame v6 them=411c1edfff6a92ab306595954d693dfb port_them=21529 me=6756a0c8ff1354f0adaafe5795f1b7a4 port_me=52759 seq=0xf91e3945 ack=0x4965e2f8 flags=0x10 window=- payload=1:134
+frame v6 them=368c16ec72d5803938ccc6fdf03a906e port_them=17415 me=dbd7a5436590c1e19f77f1c10f18e37f port_me=37689 seq=0x6728c367 ack=0xe02efddb flags=0x10 window=- payload=1400:187
+frame v6 them=3261992243100fbd02f74ab468c52975 port_them=32656 me=584268a37df214a8978343f655b8e047 port_me=16650 seq=0xee05430f ack=0x743d0cf8 flags=0x18 window=- payload=0:84
+frame v6 them=a172d2b50e77bf3af468eacf56e281ee port_them=33810 me=56ef0ad4d6e8b0db4967ee6235bbb138 port_me=5726 seq=0x9bd89183 ack=0xb9d2be43 flags=0x18 window=- payload=1:47
+frame v6 them=ce706ba61e95a5af066105d239c1e0bb port_them=10319 me=161296d4fa804ebc84a73d7867fb4d67 port_me=5481 seq=0x411a8ba9 ack=0x1dbfafb5 flags=0x18 window=- payload=1400:185
+frame v6 them=4513eeb4478b9e0507d416f6c4e54c64 port_them=18838 me=b016cbae7240878166ae4e2893ee874f port_me=20423 seq=0x0b255d63 ack=0x503a0950 flags=0x19 window=- payload=0:71
+frame v6 them=189f5d69161de29816a2f7a2f9441f61 port_them=56848 me=b89bce9d270c158b2ae7b51cfb1c9733 port_me=6919 seq=0x4fe997ec ack=0xbb187a55 flags=0x19 window=- payload=1:25
+frame v6 them=b3ac51db1553e29573554ebf8271f93d port_them=51888 me=5bf04181f871bcb32bde619d206d0c11 port_me=45930 seq=0x5fcbafff ack=0xf88a5a12 flags=0x19 window=- payload=1400:248
+frame v6 them=1214acd00765b3fc7df5f90224f57e05 port_them=17030 me=b0d3f3a6c877439d6fdd7d30f30e4933 port_me=18551 seq=0x36fd745c ack=0x4929a0cc flags=0x11 window=- payload=0:96
+frame v6 them=db1ae8f2f9ef4447144836163e49525c port_them=53497 me=6bb170b19b5dfb833c117e2408e43162 port_me=58335 seq=0xcb6c098f ack=0x91cacfb3 flags=0x11 window=- payload=1:131
+frame v6 them=baf191d2f48319b52a193d78efc2dae1 port_them=10405 me=03372bb553071865ae90009f41f4b231 port_me=32901 seq=0x00ee5f6e ack=0xe6edf878 flags=0x11 window=- payload=1400:73
+frame v6 them=80b36320a7f8c71fe37b334a80cf1d5d port_them=14280 me=5418d6e8ed22a3d4c2183cd675ba5945 port_me=63579 seq=0x60391ac9 ack=0xd0149259 flags=0x04 window=- payload=0:38
+frame v6 them=15043f93d6d99ad3e796a42b05ff237c port_them=4001 me=3d5f5f099675e1c5b80436a2452791dc port_me=9920 seq=0x9081b302 ack=0x9c8172d2 flags=0x04 window=- payload=1:207
+frame v6 them=dcf46b6e17ba9181523b3aeae5ba865d port_them=31509 me=81db324b5723ba2d9a3645e1ee47a1a6 port_me=13818 seq=0x20e58369 ack=0xd639f302 flags=0x04 window=- payload=1400:234
+frame v6 them=ffffffffffffffffffffffffffffffff port_them=65535 me=ffffffffffffffffffffffffffffffff port_me=65535 seq=0xffffffff ack=0xffffffff flags=0x10 window=- payload=1:255
+frame v6 them=00000000000000000000000000000000 port_them=0 me=00000000000000000000000000000000 port_me=0 seq=0x00000000 ack=0x00000000 flags=0x04 window=- payload=0:0

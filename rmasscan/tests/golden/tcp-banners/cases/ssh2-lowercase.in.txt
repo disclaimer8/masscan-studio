@@ -1,0 +1,4 @@
+tcp-banner-input v1
+port 2222
+capture none
+segment 7373682d322e302d64726f70626561720d0a

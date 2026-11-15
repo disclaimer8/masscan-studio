@@ -1,0 +1,16 @@
+tcp-oracle v1 port=25 capture=none segments=1 bytes=100
+run whole calls=1
+app_proto 11
+action send flags=0 14 "EHLO masscan\x0d\x0a"
+action send flags=0 10 "STARTTLS\x0d\x0a"
+action close
+record 11 95 "220 mail.example.test ESMTP\x0a250-mail.example.test\x0a250 8BITMIME\x0a502 5.5.1 STARTTLS not supported"
+end
+run bytewise calls=100
+app_proto 11
+action send flags=0 14 "EHLO masscan\x0d\x0a"
+action send flags=0 10 "STARTTLS\x0d\x0a"
+action close
+record 1 3 =stream
+record 11 95 "220 mail.example.test ESMTP\x0a250-mail.example.test\x0a250 8BITMIME\x0a502 5.5.1 STARTTLS not supported"
+end

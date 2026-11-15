@@ -13,10 +13,12 @@
 //! handle адаптера; `Engine::start_cli_with_clock` запускает пару на каждый `nic[k]`.
 //! Команды (Pause/Stop) и внутренние отказы это монотонный атомарный флаг
 //! `halt`; TX проверяет его перед каждой отправкой и внутри ожиданий throttle,
-//! RX на каждой итерации (цикл приёма не дольше 50 мс). Очередь результатов
-//! никогда не блокирует производителя, поэтому отмена не зависит от того,
-//! читает ли потребитель события. Единственный терминальный [`Outcome`]
-//! вычисляется тем из `2n` рабочих потоков, который завершается последним
+//! RX на каждой итерации (цикл приёма не дольше 50 мс). Во время скана очередь
+//! результатов не блокирует производителя, поэтому отмена не зависит от того,
+//! читает ли потребитель события; ждёт потребителя только сброс таблицы стека TCP
+//! в конце RX (`EngineOptions::tcp_stack`), и его прерывают Stop, `Drop` и `join`.
+//! Единственный терминальный [`Outcome`] вычисляется тем из `2n` рабочих потоков,
+//! который завершается последним
 //! (`ExitGuard`), то есть уже после остановки всех; он хранится отдельно от очереди результатов.
 
 pub mod banners;
@@ -27,11 +29,14 @@ pub mod fake;
 pub mod identity;
 pub mod io;
 
-pub use banners::{BannerOptions, Output, UdpBannerParser, udp_reply_banners};
+pub use banners::{
+    BannerOptions, Output, StackSummary, TcpStackOptions, UdpBannerParser, udp_reply_banners,
+};
 pub use checkpoint::{CHECKPOINT_FORMAT_VERSION, Checkpoint, CheckpointError};
 pub use engine::{
-    CancelHandle, DEFAULT_TX_STALL_TIMEOUT, DedupCache, Engine, EngineError, EngineHandle,
-    EngineOptions, MAX_DEDUP_ENTRIES, MAX_IO_TIMEOUT, MAX_TX_BATCH, PcapSink, StartError,
+    ArpSummary, CancelHandle, DEFAULT_RESULT_BYTE_CAPACITY, DEFAULT_TX_STALL_TIMEOUT, DedupCache,
+    Engine, EngineError, EngineHandle, EngineOptions, MAX_DEDUP_ENTRIES, MAX_IO_TIMEOUT,
+    MAX_TX_BATCH, PcapSink, STACK_OUT_CAP, StartError,
 };
 pub use events::{Event, FailReason, Outcome, Progress, Reason};
 pub use identity::{ENGINE_ALGORITHM_VERSION, job_digest};

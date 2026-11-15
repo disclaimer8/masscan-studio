@@ -709,8 +709,9 @@ impl LinkCap {
             .filter(|(_, i)| {
                 i.dm == sm && i.dst == src && asked.contains(&(i.src.clone(), i.sp, i.dp, i.ack))
             })
-            // The peer retransmits a SYN-ACK nobody resets (an address on no interface): a retransmission has the
-            // same (src, dst, sport, dport, seq, flags) as the reply it repeats and is the same reply.
+            // No kernel resets a SYN-ACK to an address on no interface, only the scanner's stateless RST (R8, after the
+            // first copy) does, so the peer may retransmit it first: a retransmission has the same (src, dst, sport,
+            // dport, seq, flags) as the reply it repeats and is the same reply.
             .scan(BTreeSet::new(), |seen, (t, i)| {
                 let id = (i.src.clone(), i.dst.clone(), i.sp, i.dp, i.seq, i.flags);
                 Some(seen.insert(id).then_some((t, i)))

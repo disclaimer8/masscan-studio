@@ -1,0 +1,12 @@
+tcp-oracle v1 port=22 capture=none segments=1 bytes=18
+run whole calls=1
+app_proto 3
+action close
+record 3 12 =stream
+end
+run bytewise calls=18
+app_proto 3
+action close
+record 1 5 =stream
+record 3 18 =stream
+end

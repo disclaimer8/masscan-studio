@@ -1,0 +1,17 @@
+{
+  "tag": "p01_ping",
+  "plan_ports": "I:0",
+  "arp": false,
+  "steps": [
+    {
+      "name": "list",
+      "who": "rmasscan",
+      "out": "list"
+    },
+    {
+      "name": "oracle-list",
+      "who": "oracle",
+      "out": "list"
+    }
+  ]
+}

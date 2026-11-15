@@ -1,0 +1,21 @@
+{
+  "tag": "t09_quiet_timers",
+  "plan_ports": "80,3389",
+  "rawudp": false,
+  "steps": [
+    {
+      "name": "list",
+      "who": "rmasscan",
+      "out": "list"
+    }
+  ],
+  "tcp": {
+    "source": "198.18.0.9",
+    "neighbour_entry": true,
+    "banners": true,
+    "noreset": false,
+    "connection_timeout": 8,
+    "wait": 14,
+    "heartbeat": false
+  }
+}

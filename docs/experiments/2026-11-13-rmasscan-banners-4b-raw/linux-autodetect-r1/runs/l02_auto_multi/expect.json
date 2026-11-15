@@ -1,0 +1,26 @@
+{
+  "tag": "l02_auto_multi",
+  "kind": "scan",
+  "detection": {
+    "interface": {
+      "value": "veth-a",
+      "source": "detected: route to 198.18.0.2"
+    },
+    "source_mac": {
+      "value": "02-aa-00-00-00-01",
+      "source": "detected"
+    },
+    "source_ip": {
+      "value": "198.18.0.1",
+      "source": "detected"
+    },
+    "router_ip": {
+      "value": "198.18.0.2",
+      "source": "interface default gateway"
+    },
+    "router_mac": {
+      "value": "02-aa-00-00-00-02",
+      "source": "arp"
+    }
+  }
+}

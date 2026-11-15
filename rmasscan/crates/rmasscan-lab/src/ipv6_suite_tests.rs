@@ -578,8 +578,11 @@ fn wire_lab_raises_ipv6_only_for_the_ipv6_suite_and_only_on_the_lab_veth_pair() 
     assert!(text.contains(r#"[ "$SUITE" != ipv6 ] || STAND_SUITE=1"#));
     assert!(text.contains(r#"[ "$SUITE" != ipv6 ] || ISOLATION_MODE=ipv6"#));
     // Every line that turns IPv6 on or adds an IPv6 address, route or neighbour is one of these exact lines, and each
-    // sits inside a top-level `if [ "$SUITE" = ipv6 ]; then` .. `fi` block (opened and closed at column 0; an indented
-    // `if`/`fi` inside it, or an indented ipv6 test elsewhere, neither opens nor closes one).
+    // sits inside a top-level `if [ "$IPV6_STAND" = 1 ]; then` .. `fi` block (opened and closed at column 0; an
+    // indented `if`/`fi` inside it, or an indented ipv6 test elsewhere, neither opens nor closes one). The IPv6 stand
+    // is the ipv6 suite's and the banners suite's (its TCP cases over IPv6), and nothing else's.
+    assert!(text.lines().any(|l| l
+        == r#"IPV6_STAND=0; [ "$SUITE" != ipv6 ] || IPV6_STAND=1; [ "$SUITE" != banners ] || IPV6_STAND=1"#));
     let raising = [
         r#"  for kv in $IPV6_SETTINGS; do nsa sysctl -qw "net.ipv6.conf.$IF_A.$kv"; nsb sysctl -qw "net.ipv6.conf.$IF_B.$kv"; done"#,
         r#"  for ns in "$NS_A" "$NS_B"; do ip netns exec "$ns" sysctl -qw net.ipv6.conf.all.accept_dad=0 net.ipv6.conf.lo.disable_ipv6=0; done"#,
@@ -591,11 +594,13 @@ fn wire_lab_raises_ipv6_only_for_the_ipv6_suite_and_only_on_the_lab_veth_pair() 
         // 7b r1: the link-local addresses too, so no kernel learns (and later probes) the other side's
         r#"  ip -n "$NS_A" -6 neigh add "$IP6_GW" lladdr "$MAC_B" dev "$IF_A" nud permanent"#,
         r#"  ip -n "$NS_B" -6 neigh add "$IP6_A_LL" lladdr "$MAC_A" dev "$IF_B" nud permanent"#,
+        // banners only: the TCP cases' IPv6 source on the scanner MAC, in the peer namespace
+        r#"  [ "$SUITE" != banners ] || ip -n "$NS_B" -6 neigh add "$IP6_TCP_SRC" lladdr "$MAC_A" dev "$IF_B" nud permanent"#,
     ];
     let (mut depth_open, mut inside, mut found, mut body) =
         (false, Vec::new(), Vec::new(), Vec::new());
     for l in text.lines() {
-        if l == r#"if [ "$SUITE" = ipv6 ]; then"# {
+        if l == r#"if [ "$IPV6_STAND" = 1 ]; then"# {
             assert!(!depth_open, "nested top-level ipv6 block");
             depth_open = true;
             continue;
@@ -635,7 +640,7 @@ fn wire_lab_raises_ipv6_only_for_the_ipv6_suite_and_only_on_the_lab_veth_pair() 
     // and the settle wait.
     let opened = text
         .lines()
-        .filter(|l| *l == r#"if [ "$SUITE" = ipv6 ]; then"#)
+        .filter(|l| *l == r#"if [ "$IPV6_STAND" = 1 ]; then"#)
         .count();
     assert_eq!(opened, 2);
     let mut want_body: Vec<&str> = raising.to_vec();

@@ -1,0 +1,31 @@
+arp-reply-input v1
+# one source address, the plain request cut short
+me mac=02:00:00:00:00:01 first=c00002fa last=c00002fa
+# 0: plain request cut to 0 bytes
+frame -
+# 1: plain request cut to 6 bytes
+frame ffffffffffff
+# 2: plain request cut to 13 bytes
+frame ffffffffffff0200000000fe08
+# 3: plain request cut to 14 bytes
+frame ffffffffffff0200000000fe0806
+# 4: plain request cut to 15 bytes
+frame ffffffffffff0200000000fe080600
+# 5: plain request cut to 21 bytes
+frame ffffffffffff0200000000fe080600010800060400
+# 6: plain request cut to 22 bytes
+frame ffffffffffff0200000000fe08060001080006040001
+# 7: plain request cut to 23 bytes
+frame ffffffffffff0200000000fe0806000108000604000102
+# 8: plain request cut to 28 bytes
+frame ffffffffffff0200000000fe080600010800060400010200000000fe
+# 9: plain request cut to 33 bytes
+frame ffffffffffff0200000000fe080600010800060400010200000000fec000020100
+# 10: plain request cut to 34 bytes
+frame ffffffffffff0200000000fe080600010800060400010200000000fec00002010000
+# 11: plain request cut to 38 bytes
+frame ffffffffffff0200000000fe080600010800060400010200000000fec0000201000000000000
+# 12: plain request cut to 41 bytes
+frame ffffffffffff0200000000fe080600010800060400010200000000fec0000201000000000000c00002
+# 13: the whole 42 bytes
+frame ffffffffffff0200000000fe080600010800060400010200000000fec0000201000000000000c00002fa

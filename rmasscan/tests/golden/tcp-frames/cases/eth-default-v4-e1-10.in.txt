@@ -1,0 +1,9 @@
+tcp-frame-input v1
+# eth-default-v4-e1-10: ethernet, IPv4, вектор E1.10: без нагрузки сумма IP у C 0xffff вместо 0xfffe, с байтом нагрузки верна
+link ethernet
+macs src=02:00:00:00:00:01 router4=02:00:00:00:00:fe router6=02:00:00:00:00:fd
+template mss=default sackok=0 wscale=- tsecho=- ttl=-
+frame v4 them=4ba3e552 port_them=55289 me=d5a30aac port_me=40000 seq=0x3e8f982c ack=0x206db47d flags=0x10 window=- payload=0:65
+frame v4 them=4ba3e552 port_them=55289 me=d5a30aac port_me=40000 seq=0x3e8f982c ack=0x2e980ac4 flags=0x04 window=- payload=0:65
+frame v4 them=4ba3e552 port_them=55289 me=d5a30aac port_me=40000 seq=0x3e8f982c ack=0x2a7cffb7 flags=0x11 window=- payload=0:65
+frame v4 them=4ba3e552 port_them=55289 me=d5a30aac port_me=40000 seq=0x3e8f982c ack=0x7c668aae flags=0x18 window=- payload=1:65

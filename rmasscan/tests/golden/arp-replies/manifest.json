@@ -1,0 +1,98 @@
+{
+  "oracle": {
+    "masscan_git_head": "8e6b3b0c07a81e8ea61d557c06134a21a6881614",
+    "harness": "arp_reply_oracle.c + build.sh + run-goldens.sh (kept off the repository, R14)",
+    "driver_sha256": "834abf2d85dcf3af49a44bbbca8d276e1a643c8c57410bb646fb0be7ecf09e47",
+    "build_script_sha256": "de0d8354a126f38207ecf7b760436f76b870802b31c35ed0a210686f690c2ca3",
+    "runner_sha256": "31ebdc8321e7ceb62e4568200198539b269a36271c39a094aabfa97bfeb2d545",
+    "binary_sha256": "d52d4d0dc070ea92a6d0434643c5866ade30a56f1f7dcd8587cac65e1b375a0f",
+    "compiler": "Apple clang version 21.0.0 (clang-2100.4.1.1)",
+    "build": "-std=gnu99 -g -O2 (masscan Makefile CFLAGS); every case also through -O1 -fsanitize=address,undefined -fno-sanitize=shift-base with identical output (C shifts bytes >= 0x80 into the sign bit of int, src/proto-preprocess.c:612-621, src/stack-arpv4.c:84, :89)",
+    "linked_sources": ["proto-preprocess", "stack-arpv4", "stack-src", "util-logger", "util-safefunc", "massip-addr"],
+    "linked_sources_sha256": {
+      "proto-preprocess.c": "df4b75c854305bfe576fdbdd617e9e0f926668801b81470b6f27d4a5162375fd",
+      "stack-arpv4.c": "92dcf17969a89aa5b8d15c346b3885effd70fd59899d3ad0d5acebcb5ff56a0f",
+      "stack-src.c": "0994faea7cd6b9acb83fa899747eeb135aeece623455c9a79e826e599ac6928e",
+      "util-logger.c": "1b5b15d1b9d1eedab2ae02609a7e00c0ce9566ed4158759e6de374e43e3eab21",
+      "util-safefunc.c": "65f7db4136b2de5fb410128f2d2b78bbd4f4fe1b68bfa5be407c1e3e77bd8b9e",
+      "massip-addr.c": "f6ee3e86ae3c8dbc3fdf6e3580a6a81926609654c3cc7c64b10b1211b5e32316"
+    },
+    "stubs": "stack_get_packetbuffer returns one static buffer pre-filled with 0xA5, stack_transmit_packetbuffer records it (src/stack-queue.c not linked); rawsock_send_packet, rawsock_recv_packet and stack_if_datalink (referenced by stack_arp_resolve) abort if called",
+    "calls": "per frame, src/main.c:799-887 transcribed: length > 1514 skips, preprocess_frame(px, length, 1 = Ethernet), ip_me = parsed.dst_ip, is_my_ip(stack->src, ip_me), FOUND_ARP with opcode 1 calls stack_arp_incoming_request(stack, ip_me.ipv4, source_mac, px, length); each frame in a heap buffer of exactly its length"
+  },
+  "host": "macOS 27.2.1, Darwin 27.2.0, arm64",
+  "captured_at": "2026-11-15T12:19:56Z",
+  "expected": "rmasscan_core::arp::answer_request returns C's reply byte for byte for every frame and no reply where C sends none",
+  "cases": [
+    {
+      "name": "plain",
+      "about": "one source address 192.0.2.250",
+      "frames": 15,
+      "replies": 8,
+      "input": "cases/plain.in.txt",
+      "input_sha256": "f0c8d6c3c7bc822b0b81919530328cacbf23c883fe0bc0b20737ab4b4a76391f",
+      "output": "cases/plain.out",
+      "output_sha256": "1ea4db76380c7597eb1fd89d9f6669c80773ec764bafee76cd275b731997567a"
+    },
+    {
+      "name": "range",
+      "about": "--adapter-ip 192.0.2.250-192.0.2.253",
+      "frames": 6,
+      "replies": 4,
+      "input": "cases/range.in.txt",
+      "input_sha256": "a68002b8a66d27e86450ed6ceb0ec6b300c8c57ffa8d07111ad3ce45e0afb2a6",
+      "output": "cases/range.out",
+      "output_sha256": "7a930fd1ac1bbef28e266721757925416420965ba9c598ba2f387a43ee182266"
+    },
+    {
+      "name": "truncated",
+      "about": "one source address, the plain request cut short",
+      "frames": 14,
+      "replies": 1,
+      "input": "cases/truncated.in.txt",
+      "input_sha256": "2c0ceef5098d8815bbf3c8d5afa52f6e24314473a57641a6117d06de63622404",
+      "output": "cases/truncated.out",
+      "output_sha256": "de60e61419fc1aa1d99876b16164d9c67291b8e05f173d536980d8aa023ce38f"
+    },
+    {
+      "name": "encapsulated",
+      "about": "one source address, the request inside VLAN tags and LLC/SNAP",
+      "frames": 5,
+      "replies": 0,
+      "input": "cases/encapsulated.in.txt",
+      "input_sha256": "d594311cca8f4d7bcf0fcdbc26f482bde0f1da0071c328a1ce68c60d97ff23e2",
+      "output": "cases/encapsulated.out",
+      "output_sha256": "cd8416dee576ddf9d86183e1dfb83b0516c21056aa271181bb6aff954816b77f"
+    },
+    {
+      "name": "header-quirks",
+      "about": "one source address, odd hardware and protocol types and address lengths",
+      "frames": 11,
+      "replies": 7,
+      "input": "cases/header-quirks.in.txt",
+      "input_sha256": "83f5be558e106095fcb965010ce64658fbbf84f487c5964bb199b6c3d3fdd2fb",
+      "output": "cases/header-quirks.out",
+      "output_sha256": "64dbea359c1fb1197cf34c631f859d7b68bb59974fff722d12ded2bebb7ca1d4"
+    },
+    {
+      "name": "oversize",
+      "about": "one source address, frames at and past 1514 bytes",
+      "frames": 2,
+      "replies": 1,
+      "input": "cases/oversize.in.txt",
+      "input_sha256": "0f99a71d8058954ec52e0556c46ce31fc207a016827f8ca947da71a01060c555",
+      "output": "cases/oversize.out",
+      "output_sha256": "06c42902e18c4eac398aceb53ebf5b53054ad55d9cb21491886b741dea9ef686"
+    },
+    {
+      "name": "unspecified-source",
+      "about": "IPv4 source 0.0.0.0-0.0.0.0, as C leaves it in a scan without IPv4 targets",
+      "frames": 2,
+      "replies": 1,
+      "input": "cases/unspecified-source.in.txt",
+      "input_sha256": "88063c781baf446e2001e2afa972cabdfbd7ac698bdf75ee4e791a21e995dd64",
+      "output": "cases/unspecified-source.out",
+      "output_sha256": "e633d198b7793b669ff5eab3db4ea8bc95ce9faa257af41604a8a16a0cb9b012"
+    }
+  ]
+}

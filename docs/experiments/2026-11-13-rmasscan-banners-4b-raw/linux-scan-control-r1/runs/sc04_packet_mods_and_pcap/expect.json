@@ -1,0 +1,19 @@
+{
+  "tag": "sc04_packet_mods_and_pcap",
+  "steps": [
+    {
+      "name": "mods",
+      "who": "rmasscan",
+      "links": 1,
+      "interrupt": false,
+      "netem": false
+    },
+    {
+      "name": "badsum",
+      "who": "rmasscan",
+      "links": 1,
+      "interrupt": false,
+      "netem": false
+    }
+  ]
+}

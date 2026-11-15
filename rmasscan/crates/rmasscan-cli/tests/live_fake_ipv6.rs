@@ -16,7 +16,7 @@ use rmasscan_cli::conf::{FullConf, format_paused_conf};
 use rmasscan_cli::live::Backend;
 use rmasscan_cli::output::{ServiceNames, Wall};
 use rmasscan_cli::status::normalize_stderr_line;
-use rmasscan_core::arp::{ArpOp, decode, encode_reply};
+use rmasscan_core::arp::{ArpOp, decode, encode_reply, encode_request};
 use rmasscan_core::config::{Operation, validate};
 use rmasscan_core::ndp::{
     decode_neighbor_advertisement, decode_neighbor_solicitation, encode_neighbor_advertisement,
@@ -117,6 +117,9 @@ struct Opened {
     adapter: FakeAdapter,
 }
 
+/// Наш кадр TCP поверх IPv6 глазами пира: флаги, seq, ack, нагрузка.
+type Seen6 = (u8, u32, u32, Vec<u8>);
+
 struct FakeBackend {
     tables: Tables,
     neighbors4: Vec<(Ipv4Addr, [u8; 6])>,
@@ -126,6 +129,8 @@ struct FakeBackend {
     open6: Vec<(Ipv6Addr, u16)>,
     /// На первый SYN соседний роутер спрашивает наш адрес IPv6 (NS): ответ NA есть только у скана IPv6.
     ns_on_first_syn: bool,
+    /// На первый SYN поверх IPv6 шлюз присылает эти ARP-запросы (ревью задачи 14a, M1).
+    arp_on_first_syn6: Vec<Vec<u8>>,
     /// Ctrl-C во время NDP: уход Neighbor Solicitation считается одним нажатием (ответа нет).
     press_during_ndp: bool,
     presses: Arc<AtomicU32>,
@@ -133,6 +138,11 @@ struct FakeBackend {
     clock: Arc<ManualClock>,
     opened: Mutex<Vec<Opened>>,
     tx: Arc<Mutex<Vec<Vec<u8>>>>,
+    /// Сервер HTTP поверх IPv6 с настоящими номерами (задача 14): на наш первый сегмент с данными отвечает этими
+    /// байтами и FIN; его порт 80 вместо `open6`.
+    http6: Option<Vec<u8>>,
+    /// Наши кадры TCP поверх IPv6 после SYN.
+    seen6: Arc<Mutex<Vec<Seen6>>>,
 }
 
 impl FakeBackend {
@@ -191,12 +201,15 @@ impl FakeBackend {
             open4: vec![(Ipv4Addr::new(198, 51, 100, 1), 80)],
             open6: vec![(v6("2001:db8:9::1"), 80), (v6("2001:db8:9::2"), 443)],
             ns_on_first_syn: false,
+            arp_on_first_syn6: Vec::new(),
             press_during_ndp: false,
             presses: Arc::new(AtomicU32::new(0)),
             panic_on_open: false,
             clock: ManualClock::new(),
             opened: Mutex::new(Vec::new()),
             tx: Arc::new(Mutex::new(Vec::new())),
+            http6: None,
+            seen6: Arc::new(Mutex::new(Vec::new())),
         }
     }
 }
@@ -243,7 +256,8 @@ fn respond(
             };
             reply_to_syn6(f, flags).into_iter().collect()
         }
-        Some([0x08, 0x00]) => {
+        // Только SYN: на RST без состояния (Р8) хост не отвечает.
+        Some([0x08, 0x00]) if is_syn4(f) => {
             let ip = Ipv4Addr::new(f[30], f[31], f[32], f[33]);
             let port = u16::from_be_bytes([f[36], f[37]]);
             let flags = if open4.contains(&(ip, port)) {
@@ -279,7 +293,10 @@ impl Backend for FakeBackend {
         let (n4, n6) = (self.neighbors4.clone(), self.neighbors6.clone());
         let (o4, o6) = (self.open4.clone(), self.open6.clone());
         let tx = self.tx.clone();
+        let (http6, seen6) = (self.http6.clone(), self.seen6.clone());
+        let mut http6_next = None::<u32>;
         let mut ask = self.ns_on_first_syn;
+        let mut ask_arp = self.arp_on_first_syn6.clone();
         let (presses, press_during_ndp) = (self.presses.clone(), self.press_during_ndp);
         adapter.set_responder(move |f| {
             tx.lock().unwrap().push(f.to_vec());
@@ -287,7 +304,13 @@ impl Backend for FakeBackend {
                 presses.fetch_max(1, Ordering::SeqCst);
                 return vec![];
             }
+            if let Some(body) = http6.as_ref().filter(|_| is_tcp6(f)) {
+                return http6_peer(f, body, &mut http6_next, &seen6);
+            }
             let mut out = respond(f, &n4, &n6, &o4, &o6);
+            if is_syn6(f) {
+                out.append(&mut ask_arp);
+            }
             if ask && (is_syn6(f) || is_syn4(f)) {
                 ask = false;
                 out.push(
@@ -340,6 +363,54 @@ fn is_syn4(f: &[u8]) -> bool {
     f.get(12..14) == Some(&[0x08, 0x00][..]) && f.get(47) == Some(&0x02)
 }
 
+/// Кадр TCP нашего адаптера: семья, MAC назначения, адрес и порт источника, адрес и порт назначения, seq, ack, флаги.
+type TcpOut = (bool, [u8; 6], Vec<u8>, u16, Vec<u8>, u16, u32, u32, u8);
+
+fn tcp_out(f: &[u8]) -> TcpOut {
+    let v6 = f[12..14] == [0x86, 0xdd];
+    let (src, dst, tcp) = if v6 {
+        (22..38, 38..54, 54)
+    } else {
+        (26..30, 30..34, 34)
+    };
+    let be32 = |i: usize| u32::from_be_bytes(f[i..i + 4].try_into().unwrap());
+    (
+        v6,
+        f[0..6].try_into().unwrap(),
+        f[src].to_vec(),
+        u16::from_be_bytes([f[tcp], f[tcp + 1]]),
+        f[dst].to_vec(),
+        u16::from_be_bytes([f[tcp + 2], f[tcp + 3]]),
+        be32(tcp + 4),
+        be32(tcp + 8),
+        f[tcp + 13],
+    )
+}
+
+/// Р8 (`src/main.c:1094-1100`, справка A7): кадры адаптера скана это SYN (IPv4 и IPv6) и ровно один RST без состояния
+/// на каждый ответ, той же семьи, на тот же MAC, адрес и порт назначения и с тех же адреса и порта источника, что его
+/// SYN (C берёт их из ответа): seq = ack ответа (seq SYN + 1), ack 0, флаги `0x04`, после своего SYN. Фиктивная сеть
+/// отвечает на каждый SYN. Возвращает SYN по порядку.
+fn syns_and_one_rst_per_reply(frames: &[Vec<u8>]) -> Vec<Vec<u8>> {
+    let (mut syns, mut want, mut got) = (Vec::new(), Vec::new(), Vec::new());
+    for f in frames {
+        let (v6, mac, src, sport, dst, port, seq, ack, flags) = tcp_out(f);
+        if flags == 0x02 {
+            syns.push(f.clone());
+            want.push((v6, mac, src, sport, dst, port, seq.wrapping_add(1)));
+            continue;
+        }
+        assert_eq!((flags, ack), (0x04, 0), "only SYNs and stateless RSTs");
+        let rst = (v6, mac, src, sport, dst, port, seq);
+        assert!(want.contains(&rst), "an RST follows its SYN: {rst:?}");
+        got.push(rst);
+    }
+    want.sort_unstable();
+    got.sort_unstable();
+    assert_eq!(got, want, "one RST per reply");
+    syns
+}
+
 fn syn6_dst(f: &[u8]) -> (Ipv6Addr, u16) {
     (
         Ipv6Addr::from(<[u8; 16]>::try_from(&f[38..54]).unwrap()),
@@ -369,7 +440,9 @@ fn plus_lines(log: &str) -> Vec<String> {
         .collect()
 }
 
-const LIVE6: [&str; 4] = ["2001:db8:9::1-2001:db8:9::2", "-p80,443", "--wait", "1"];
+/// `--wait 10`, а не 1 (ревью задачи 14, I3): RST без состояния последнего ответа уходит из очереди TX в окне ожидания,
+/// а часы `ManualClock` двигает опрос приёма; под нагрузкой окно в 1 с кончалось, пока TX стоял.
+const LIVE6: [&str; 4] = ["2001:db8:9::1-2001:db8:9::2", "-p80,443", "--wait", "10"];
 
 /// R11: следующий хоп IPv6 это шлюз маршрута ОС (`fe80::1`), его MAC резолвит один NS (86 байт, solicited-node) с
 /// короткоживущего адаптера фазы NDP, закрытого до адаптера скана; затем SYN поверх IPv6 на этот MAC с источника,
@@ -393,10 +466,12 @@ fn live_ipv6_scan_resolves_the_next_hop_with_ndp_then_scans() {
         ndp.binding.next_hop_mac,
         solicited_node_mac(u128::from(gw6()))
     );
-    let syns = scan.adapter.sent_frames();
+    let frames = scan.adapter.sent_frames();
+    let syns = syns_and_one_rst_per_reply(&frames);
     assert_eq!(syns.len(), 4, "2 addresses x 2 ports");
-    for f in &syns {
-        assert!(is_syn6(f), "only IPv6 SYNs");
+    assert!(syns.iter().all(|f| is_syn6(f)), "only IPv6 SYNs");
+    for f in &frames {
+        assert_eq!(&f[12..14], &[0x86, 0xdd], "IPv6 SYNs and RSTs only");
         assert_eq!(&f[0..6], &GW6_MAC, "to the NDP-resolved MAC");
         assert_eq!(&f[6..12], &MY_MAC);
         assert_eq!(
@@ -463,7 +538,7 @@ fn router_mac_ipv6_bypasses_ndp_and_never_becomes_the_ipv4_router_mac() {
             "2001:db8:9::1",
             "-p80",
             "--wait",
-            "1",
+            "10",
             "--router-mac-ipv6",
             mac,
         ],
@@ -482,13 +557,14 @@ fn router_mac_ipv6_bypasses_ndp_and_never_becomes_the_ipv4_router_mac() {
             .iter()
             .all(|f| f[12..14] == [0x08, 0x06])
     );
+    // Р8: RST без состояния идёт той же семьёй и на тот же MAC, что SYN его ответа.
     let frames = opened[1].adapter.sent_frames();
-    assert_eq!(frames.len(), 2);
+    assert_eq!(syns_and_one_rst_per_reply(&frames).len(), 2);
+    assert_eq!(frames.len(), 4);
     for f in &frames {
-        if is_syn6(f) {
+        if f[12..14] == [0x86, 0xdd] {
             assert_eq!(&f[0..6], &GIVEN_MAC, "IPv6 to --router-mac-ipv6");
         } else {
-            assert!(is_syn4(f));
             assert_eq!(&f[0..6], &GW_MAC, "IPv4 to the ARP-resolved router");
         }
     }
@@ -829,4 +905,311 @@ fn interrupt_during_ndp_stops_before_the_scan_adapter() {
         b.clock.now_micros() - t0 < 10_000_000,
         "the press ends NDP before the timeout"
     );
+}
+
+// ---------- TCP-баннеры поверх IPv6 (задача 14) ----------
+
+/// ISN пира: тот же, что у `reply_to_syn6`.
+const PEER_ISN: u32 = 0x0bad_f00d;
+
+fn is_tcp6(f: &[u8]) -> bool {
+    f.len() >= 74 && f[12..14] == [0x86, 0xdd] && f[20] == 6
+}
+
+/// Сегмент пира поверх IPv6 в ответ на наш кадр: MAC, адреса и порты наоборот, hop limit 64, сумма TCP по RFC 8200.
+fn peer_frame6(ours: &[u8], flags: u8, seq: u32, ack: u32, payload: &[u8]) -> Vec<u8> {
+    let me = u128::from_be_bytes(ours[22..38].try_into().unwrap());
+    let them = u128::from_be_bytes(ours[38..54].try_into().unwrap());
+    let mut t = vec![0u8; 20];
+    t[0..2].copy_from_slice(&ours[56..58]);
+    t[2..4].copy_from_slice(&ours[54..56]);
+    t[4..8].copy_from_slice(&seq.to_be_bytes());
+    t[8..12].copy_from_slice(&ack.to_be_bytes());
+    t[12] = 5 << 4;
+    t[13] = flags;
+    t[14..16].copy_from_slice(&1024u16.to_be_bytes());
+    t.extend_from_slice(payload);
+    let c = rmasscan_core::checksum::checksum_ipv6(them, me, 6, &t);
+    t[16..18].copy_from_slice(&c.to_be_bytes());
+    let mut f = Vec::new();
+    f.extend_from_slice(&ours[6..12]);
+    f.extend_from_slice(&ours[0..6]);
+    f.extend_from_slice(&[0x86, 0xdd, 0x60, 0, 0, 0]);
+    f.extend_from_slice(&(t.len() as u16).to_be_bytes());
+    f.extend_from_slice(&[6, 64]);
+    f.extend_from_slice(&them.to_be_bytes());
+    f.extend_from_slice(&me.to_be_bytes());
+    f.extend_from_slice(&t);
+    f
+}
+
+/// Сервер HTTP на порту 80 поверх IPv6 (одно соединение): SYN-ACK, на наш первый сегмент с данными `body` и FIN, на
+/// наш FIN голый ACK; прочие порты RST. Записывает наши кадры после SYN.
+fn http6_peer(
+    f: &[u8],
+    body: &[u8],
+    next: &mut Option<u32>,
+    seen: &Mutex<Vec<Seen6>>,
+) -> Vec<Vec<u8>> {
+    let plen = usize::from(u16::from_be_bytes([f[18], f[19]]));
+    let doff = usize::from(f[54 + 12] >> 4) * 4;
+    let flags = f[54 + 13];
+    let be32 = |i: usize| u32::from_be_bytes(f[i..i + 4].try_into().unwrap());
+    let (seq, ack) = (be32(58), be32(62));
+    let payload = f[54 + doff..54 + plen].to_vec();
+    if flags == 0x02 {
+        if u16::from_be_bytes([f[56], f[57]]) != 80 {
+            return reply_to_syn6(f, 0x04).into_iter().collect();
+        }
+        *next = Some(PEER_ISN.wrapping_add(1));
+        return reply_to_syn6(f, 0x12).into_iter().collect();
+    }
+    let mut log = seen.lock().unwrap();
+    let first_data = !payload.is_empty() && log.iter().all(|s| s.3.is_empty());
+    log.push((flags, seq, ack, payload.clone()));
+    let Some(n) = *next else { return vec![] };
+    let ours = seq.wrapping_add(payload.len() as u32);
+    if first_data {
+        *next = Some(n.wrapping_add(body.len() as u32 + 1));
+        return vec![
+            peer_frame6(f, 0x18, n, ours, body),
+            peer_frame6(f, 0x11, n.wrapping_add(body.len() as u32), ours, &[]),
+        ];
+    }
+    if flags & 0x01 != 0 {
+        return vec![peer_frame6(f, 0x10, n, seq.wrapping_add(1), &[])];
+    }
+    vec![]
+}
+
+/// Баннеры по IPv6 (Р16, справка A10): тот же сценарий HTTP, что по IPv4 (эталон C `http-gws`: `http.server`, `title`,
+/// `http` в порядке banout), hello порта 80 через 2 с, наш FIN после FIN сервера; записи с адресом IPv6. Окно
+/// `--wait 20` и допуск повтора hello по правилу сценариев `live_fake.rs` (ревью задачи 14, I3): часы движка двигает
+/// опрос приёма, и под нагрузкой TX может опоздать с hello на тик повтора.
+#[test]
+fn live_fake_ipv6_banner() {
+    let golden = |rel: &str| {
+        std::fs::read_to_string(format!(
+            "{}/../../tests/golden/tcp-banners/{rel}",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .unwrap()
+    };
+    let unhex = |s: &str| -> Vec<u8> {
+        (0..s.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+            .collect()
+    };
+    let input = golden("cases/http-gws.in.txt");
+    let stream: Vec<u8> = input
+        .lines()
+        .filter_map(|l| l.strip_prefix("segment "))
+        .flat_map(unhex)
+        .collect();
+    assert!(golden("cases/http-gws.out").contains(
+        "run whole calls=1\napp_proto 4\nrecord 31 3 \"gws\"\nrecord 17 1 \"x\"\nrecord 4 31 =stream\nend"
+    ));
+    let hello = golden("hellos.out")
+        .lines()
+        .find(|l| l.starts_with("hello port=80 "))
+        .map(|l| unhex(l.rsplit(' ').next().unwrap()))
+        .unwrap();
+    let mut b = FakeBackend::new();
+    b.http6 = Some(stream.clone());
+    let (r, out, log) = cli(
+        &b,
+        &[
+            "2001:db8:9::1",
+            "-p80",
+            "--banners",
+            "--wait",
+            "20",
+            "-oL",
+            "-",
+        ],
+    );
+    r.unwrap();
+    assert!(
+        log.contains("finished: Completed, sent 1, replies 1, open 1"),
+        "{log}"
+    );
+    let header = String::from_utf8_lossy(&stream[..31])
+        .replace('\r', "\\x0d")
+        .replace('\n', "\\x0a");
+    let ip = "2001:db8:9::1";
+    assert_eq!(
+        out,
+        format!(
+            "#masscan\nopen tcp 80 {ip} {UNIX_TIME}\n\
+             banner tcp 80 {ip} {UNIX_TIME} http.server gws\n\
+             banner tcp 80 {ip} {UNIX_TIME} title x\n\
+             banner tcp 80 {ip} {UNIX_TIME} http {header}\n# end\n"
+        )
+    );
+    let seen = b.seen6.lock().unwrap().clone();
+    assert_eq!((seen[0].0, seen[0].2), (0x10, PEER_ISN + 1), "{seen:?}");
+    let data: Vec<&Vec<u8>> = seen
+        .iter()
+        .map(|s| &s.3)
+        .filter(|p| !p.is_empty())
+        .collect();
+    assert!(!data.is_empty(), "{seen:?}");
+    assert!(
+        data.iter().all(|p| **p == hello),
+        "only the C hello of port 80 (a retransmission allowed): {seen:?}"
+    );
+    assert!(seen.iter().any(|s| s.0 & 0x01 != 0), "our FIN: {seen:?}");
+    assert!(seen.iter().all(|s| s.0 & 0x04 == 0), "{seen:?}");
+}
+
+/// Р9 (решение D19): одна строка на скан на любой ОС, если `--banners`, хотя бы один порт TCP и хотя бы один адрес
+/// источника выбран автоопределением, с этими адресами через ` and ` (IPv6 в скобках, как в `[+] source-ip`); с
+/// заданными `--adapter-ip` (обе семьи) строки нет, без `--banners` тоже. Скан только UDP с `--banners` или
+/// `--rawudp` (ревью задачи 14, решение по замечанию 1): ядро баннерам UDP не мешает, строки нет, и stderr тот же, что
+/// у 4a, то есть строки `[…]` те же, что у того же скана без баннеров; с портом TCP рядом с UDP строка есть.
+#[test]
+fn banners_warning_once_for_os_owned_source() {
+    let warning = |ips: &str| {
+        format!(
+            "[-] warning: --banners uses the OS's own address {ips}: its kernel resets the banner \
+             connections; give --adapter-ip an unused address on the subnet or drop the --source-port \
+             traffic in the firewall\n"
+        )
+    };
+    let run = |args: &[&str]| {
+        let b = FakeBackend::new();
+        let (r, _, log) = cli(&b, args);
+        r.unwrap_or_else(|e| panic!("{args:?}: {e}"));
+        log
+    };
+    let v4 = ["198.51.100.1", "-p80", "--wait", "1", "--banners"];
+    let v6 = ["2001:db8:9::1", "-p80", "--wait", "1", "--banners"];
+    let mixed = [
+        "198.51.100.1",
+        "2001:db8:9::1",
+        "-p80",
+        "--wait",
+        "1",
+        "--banners",
+    ];
+    for (args, ips) in [
+        (&v4[..], "192.0.2.5"),
+        (&v6[..], "[2001:db8:1::5]"),
+        (&mixed[..], "192.0.2.5 and [2001:db8:1::5]"),
+    ] {
+        let log = run(args);
+        assert_eq!(
+            log.matches("[-] warning: --banners").count(),
+            1,
+            "{args:?}: {log}"
+        );
+        assert!(log.contains(&warning(ips)), "{args:?}: {log}");
+        // После строк обнаружения адаптера, до ARP/NDP и строк `seed` и `source-port`.
+        assert!(
+            log.find(&warning(ips)).unwrap() < log.find("[+] seed = ").unwrap(),
+            "{log}"
+        );
+    }
+    // Один адрес задан, другой найден: в строке только найденный.
+    let log = run(&with(&mixed, &["--adapter-ip", "192.0.2.5"]));
+    assert!(log.contains(&warning("[2001:db8:1::5]")), "{log}");
+    let given = [
+        &with(&v4, &["--adapter-ip", "192.0.2.77"])[..],
+        &with(&v6, &["--adapter-ip", "2001:db8:1::77"]),
+        &with(
+            &mixed,
+            &["--adapter-ip", "192.0.2.5", "--adapter-ip[0]=2001:db8:1::5"],
+        ),
+        &["198.51.100.1", "2001:db8:9::1", "-p80", "--wait", "1"],
+    ];
+    for args in given {
+        let log = run(args);
+        assert!(!log.contains("[-] warning"), "{args:?}: {log}");
+    }
+    // Строки `[+]`/`[-]` stderr (строка статуса стёрта `\r`, поэтому режем и по нему).
+    let bracketed = |log: &str| -> Vec<String> {
+        log.split(['\r', '\n'])
+            .filter(|l| l.starts_with('['))
+            .map(str::to_string)
+            .collect()
+    };
+    let udp = ["198.51.100.1", "-pU:53", "--wait", "1"];
+    let plain = bracketed(&run(&udp));
+    for flag in ["--banners", "--rawudp"] {
+        let log = run(&with(&udp, &[flag]));
+        assert!(!log.contains("[-] warning"), "{flag}: {log}");
+        assert!(!log.contains("[-] banners:"), "{flag}: {log}");
+        assert_eq!(bracketed(&log), plain, "{flag}: stderr as in 4a: {log}");
+    }
+    let log = run(&["198.51.100.1", "-pU:53,T:80", "--wait", "1", "--banners"]);
+    assert_eq!(log.matches("[-] warning: --banners").count(), 1, "{log}");
+    assert!(log.contains(&warning("192.0.2.5")), "{log}");
+}
+
+/// Ревью задачи 14a, M1: скан без целей IPv4 с заданным `--adapter-ip` IPv4. C держит этот адрес в `src.ipv4`
+/// (`src/main-conf.c:2505-2506`; `src/main-initadapter.c:122` пропускает только обнаружение IPv4) и отвечает на ARP за
+/// него (`is_my_ip`, `src/main.c:829`, `:878-887`), а не за `0.0.0.0`; rmasscan так же. Без ключа ответ за `0.0.0.0`,
+/// как у C (эталон `unspecified-source`). Диапазон `A-B`, который C тоже держит, отвечает за каждый свой адрес (до
+/// ревью такой скан отказывал: «does not start at the source address 0.0.0.0»). Строки `[+]`, SYN поверх IPv6 (у
+/// каждого скана по одному RST без состояния на ответ) и выдача у всех трёх сканов одни и те же.
+#[test]
+fn ipv6_only_scan_answers_arp_for_a_given_ipv4_adapter_ip() {
+    let ip = |d: u8| Ipv4Addr::new(192, 0, 2, d);
+    let asked = [Ipv4Addr::UNSPECIFIED, ip(250), ip(251), ip(252)];
+    let reply = |me: Ipv4Addr| encode_reply(MY_MAC, u32::from(me), GW_MAC, u32::from(GW)).to_vec();
+    let run = |extra: &[&str]| {
+        let b = FakeBackend {
+            arp_on_first_syn6: asked
+                .iter()
+                .map(|&a| encode_request(GW_MAC, u32::from(GW), u32::from(a)).to_vec())
+                .collect(),
+            ..FakeBackend::new()
+        };
+        let (r, out, log) = cli(&b, &with(&LIVE6, extra));
+        r.unwrap_or_else(|e| panic!("{extra:?}: {e}"));
+        let opened = b.opened.lock().unwrap();
+        assert_eq!(opened.len(), 2, "one NDP adapter, then one scan adapter");
+        let scan = &opened[1];
+        let (arps, tcp): (Vec<Vec<u8>>, Vec<Vec<u8>>) = scan
+            .adapter
+            .sent_frames()
+            .into_iter()
+            .partition(|f| f[12..14] == [0x08, 0x06]);
+        let mut lines: Vec<String> = out.lines().map(|l| l.trim_end().to_string()).collect();
+        lines.sort_unstable();
+        (
+            arps,
+            syns_and_one_rst_per_reply(&tcp),
+            plus_lines(&log),
+            lines,
+            scan.binding.source_ipv4,
+        )
+    };
+    let plain = run(&[]);
+    assert_eq!(
+        plain.0,
+        vec![reply(Ipv4Addr::UNSPECIFIED)],
+        "as C without --adapter-ip"
+    );
+    assert_eq!(plain.4, 0);
+    assert_eq!(plain.1.len(), 4);
+    let given = run(&["--adapter-ip", "192.0.2.250"]);
+    assert_eq!(
+        given.0,
+        vec![reply(ip(250))],
+        "the given address, not 0.0.0.0"
+    );
+    assert_eq!(given.4, u32::from(ip(250)));
+    let range = run(&["--adapter-ip", "192.0.2.250-192.0.2.251"]);
+    assert_eq!(range.0, vec![reply(ip(250)), reply(ip(251))]);
+    for (name, other) in [("given", &given), ("range", &range)] {
+        assert_eq!(other.1, plain.1, "{name}: the same IPv6 SYNs");
+        assert_eq!(other.2, plain.2, "{name}: the same [+] lines");
+        assert_eq!(other.3, plain.3, "{name}: the same results");
+    }
+}
+
+fn with<'a>(base: &[&'a str], extra: &[&'a str]) -> Vec<&'a str> {
+    base.iter().chain(extra).copied().collect()
 }

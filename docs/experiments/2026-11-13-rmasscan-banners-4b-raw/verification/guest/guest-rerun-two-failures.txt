@@ -1,0 +1,21 @@
+start 2026-11-15T17:12:00.2641257Z
+
+test args::tests::hello_file_open_failure_prints_c_strerror ... FAILED
+assertion `left == right` failed
+  left: "[-] [FAILED] --hello-file\n[-] C:\\Users\\lab\\AppData\\Local\\Temp\\rmasscan-test-7696-0\\missing.bin: The 
+system cannot find the file specified."
+ right: "[-] [FAILED] --hello-file\n[-] C:\\Users\\lab\\AppData\\Local\\Temp\\rmasscan-test-7696-0\\missing.bin: No 
+such file or directory"
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 248 filtered out; finished in 0.00s
+error: test failed, to rerun pass `-p rmasscan-cli --lib`
+CLI_EXIT=101
+test fuzz::tests::a_stack_that_never_acks_in_order_data_is_a_finding ... FAILED
+thread 'fuzz::tests::a_stack_that_never_acks_in_order_data_is_a_finding' (4148) panicked at 
+crates\rmasscan-lab\src\fuzz.rs:3512:9:
+[]
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 947 filtered out; finished in 1.15s
+error: test failed, to rerun pass `-p rmasscan-lab --lib`
+LAB_EXIT=101
+rss probe: /proc False, ps False
+end 2026-11-15T17:13:29.0837178Z
+

@@ -1,0 +1,48 @@
+#masscan
+open tcp 25 198.18.0.2 1794761992
+open tcp 21 198.18.0.3 1794761992
+open tcp 3389 198.18.0.2 1794761992
+open tcp 110 198.18.0.2 1794761992
+open tcp 21 198.18.0.5 1794761992
+open tcp 23 198.18.0.2 1794761992
+open tcp 5900 198.18.0.2 1794761992
+open tcp 11211 198.18.0.2 1794761992
+open tcp 80 198.18.0.2 1794761992
+open tcp 80 198.18.0.3 1794761992
+open tcp 25 198.18.0.5 1794761992
+banner tcp 110 198.18.0.2 1794761992 pop +OK rmasscan-lab POP3 ready\x0a+OK\x0aSTLS\x0a.\x0a-ERR TLS not available\x0a
+banner tcp 25 198.18.0.2 1794761992 smtp 220 rmasscan-lab ESMTP\x0a250-rmasscan-lab\x0a250 STARTTLS\x0a454 4.7.0 TLS not available
+open tcp 80 198.18.0.5 1794761992
+banner tcp 21 198.18.0.3 1794761992 ftp 220-rmasscan-lab\x0a220 FTP server ready\x0a530 Please login with USER and PASS.
+open tcp 22 198.18.0.3 1794761992
+open tcp 25565 198.18.0.2 1794761993
+banner tcp 25 198.18.0.5 1794761993 ftp 220-rmasscan-lab ESMTP\x0a220 ready\x0a502 5.5.1 Unrecognized command
+open tcp 21 198.18.0.2 1794761993
+open tcp 143 198.18.0.2 1794761993
+banner tcp 143 198.18.0.2 1794761993 imap * OK
+banner tcp 5900 198.18.0.2 1794761993 vnc RFB 003.008\x0a width=1024 height=768
+banner tcp 5900 198.18.0.2 1794761993 vnc-info Security types:\x0a  none\x0aName: rmasscan-lab\x0a
+open tcp 25 198.18.0.3 1794761993
+open tcp 3389 198.18.0.5 1794761993
+banner tcp 21 198.18.0.2 1794761993 ftp 220 rmasscan-lab FTP server ready\x0a530 Please login with USER and PASS.
+open tcp 80 198.18.0.4 1794761993
+open tcp 22 198.18.0.2 1794761993
+banner tcp 21 198.18.0.5 1794761993 unknown HELLO rmasscan-lab\x0d\x0a
+banner tcp 23 198.18.0.2 1794761993 telnet \xff\xfb\x01\x0d\x0armasscan-lab login: 
+banner tcp 25 198.18.0.3 1794761993 smtp 220 rmasscan-lab ESMTP\x0a250-rmasscan-lab\x0a250 STARTTLS\x0a454 4.7.0 TLS not available
+banner tcp 22 198.18.0.3 1794761994 ssh SSH-2.0-OpenSSH_9.6 rmasscan-lab\x0d\x0a
+banner tcp 22 198.18.0.2 1794761994 ssh SSH-2.0-OpenSSH_9.6 rmasscan-lab\x0d\x0a
+banner tcp 25565 198.18.0.2 1794761995 minecraft r\x00p{\x22version\x22:{\x22name\x22:\x221.20\x22,\x22protocol\x22:763},\x22players\x22:{\x22max\x22:20,\x22online\x22:0},\x22description\x22:{\x22text\x22:\x22rmasscan-lab\x22}}
+banner tcp 80 198.18.0.5 1794761995 http.server rmasscan-lab
+banner tcp 80 198.18.0.5 1794761995 http HTTP/1.1 200 OK\x0d\x0aServer: rmasscan-lab\x0d\x0a
+banner tcp 3389 198.18.0.2 1794761995 rdp  NLA-supported
+banner tcp 11211 198.18.0.2 1794761996 memcached uptime=42 time=1700000000 version=1.6.21 
+banner tcp 80 198.18.0.2 1794761996 http.server rmasscan-lab
+banner tcp 80 198.18.0.2 1794761996 title rmasscan-lab
+banner tcp 80 198.18.0.2 1794761996 http HTTP/1.0 200 OK\x0d\x0aServer: rmasscan-lab\x0d\x0aContent-Type: text/html\x0d\x0a\x0d
+banner tcp 80 198.18.0.3 1794761996 http.server rmasscan-lab
+banner tcp 80 198.18.0.3 1794761996 title rmasscan-lab
+banner tcp 80 198.18.0.3 1794761996 http HTTP/1.0 200 OK\x0d\x0aServer: rmasscan-lab\x0d\x0aContent-Type: text/html\x0d\x0a\x0d
+banner tcp 80 198.18.0.4 1794762003 http.server rmasscan-lab
+banner tcp 80 198.18.0.4 1794762003 http HTTP/1.1 200 OK\x0d\x0aServer: rmasscan-lab\x0d\x0aContent-Length: 0\x0d\x0a\x0d
+# end

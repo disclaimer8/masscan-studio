@@ -1,0 +1,10 @@
+tcp-oracle v1 port=445 capture=none segments=1 bytes=28
+run whole calls=1
+app_proto 10
+record 10 24 "SMBv2  PARSERROR[flags] "
+end
+run bytewise calls=28
+app_proto 10
+record 1 7 =stream
+record 10 24 "SMBv2  PARSERROR[flags] "
+end

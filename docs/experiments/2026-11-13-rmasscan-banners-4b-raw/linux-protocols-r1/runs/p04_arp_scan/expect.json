@@ -1,0 +1,27 @@
+{
+  "tag": "p04_arp_scan",
+  "plan_ports": "I:2",
+  "arp": true,
+  "steps": [
+    {
+      "name": "stdout",
+      "who": "rmasscan",
+      "out": "stdout"
+    },
+    {
+      "name": "oracle-stdout",
+      "who": "oracle",
+      "out": "stdout"
+    },
+    {
+      "name": "binary",
+      "who": "rmasscan",
+      "out": "binary"
+    },
+    {
+      "name": "oracle-binary",
+      "who": "oracle",
+      "out": "binary"
+    }
+  ]
+}

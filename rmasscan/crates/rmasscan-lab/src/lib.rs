@@ -3,6 +3,7 @@
 
 pub mod autodetect_suite;
 pub mod autodetect_verify;
+pub mod banners_stand;
 pub mod banners_suite;
 pub mod banners_verify;
 pub mod capture;

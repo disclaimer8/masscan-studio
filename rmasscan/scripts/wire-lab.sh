@@ -45,10 +45,16 @@
 # settle wait so that the kernels' MLD reports for the new groups are over before any capture.
 # Every setting dies with the namespaces; the seal is `capture isolation --mode ipv6`.
 #
-# Suite banners runs rmasscan-lab banners-suite linux on the protocols stand (the autodetect stand, same seal, lab id,
-# teardown record, kept work and refusal of an earlier lab's OUT, plus the same net.ipv4.icmp_ratemask=0 in the peer
-# namespace only): UDP banners (--banners, --rawudp) of the C oracle and rmasscan. Its own responder answers each UDP
-# probe with a scenario reply (capture responder --udp-answer banners); nothing else changes.
+# Suite banners runs rmasscan-lab banners-suite linux on the IPv6 stand (the ipv6 suite's: the autodetect stand with
+# IPv6 raised on the lab veth pair only, same seal `capture isolation --mode ipv6`, lab id, teardown record, kept work
+# and refusal of an earlier lab's OUT), plus the protocols stand's net.ipv4.icmp_ratemask=0 in the peer namespace and,
+# in the peer namespace only, net.ipv4.tcp_max_tw_buckets=0 (no TIME_WAIT socket: each step of a TCP case reuses the
+# 4-tuples of the one before) and permanent neighbours for the TCP cases' sources 198.18.0.9 and fd00:198:18::9 on the
+# scanner MAC (assigned to no interface: the scanner kernel neither answers nor resets for them, R9; the resolve cases'
+# sources 198.18.0.10 and fd00:198:18::a get no entry, the scanners answer ARP and NDP for them): UDP banners
+# (--banners, --rawudp) and TCP banners, the stateless RST and --noreset of the C oracle and rmasscan. Its own
+# responder answers each UDP probe with a scenario reply (capture responder --udp-answer banners) and each TCP
+# connection with a scenario script (capture responder --tcp-answer banners); nothing else changes.
 #
 # Suites rust/perf run rmasscan-lab wire-suite inside the same sealed lab (same seal assertions,
 # same cleanup); `rust` ends by deleting the veth on purpose, so it is the last thing it does.
@@ -133,6 +139,10 @@ STAND_SUITE=0; case "$SUITE" in autodetect|output|scan-control|protocols) STAND_
 [ "$SUITE" != ipv6 ] || STAND_SUITE=1
 # banners: the same stand as protocols (see the header)
 [ "$SUITE" != banners ] || STAND_SUITE=1
+# The IPv6 stand (see the header): the ipv6 suite's, and the banners suite's (its TCP cases over IPv6).
+IPV6_STAND=0; [ "$SUITE" != ipv6 ] || IPV6_STAND=1; [ "$SUITE" != banners ] || IPV6_STAND=1
+# The banners suite's TCP sources with a permanent neighbour entry in the peer namespace (see the header).
+IP_TCP_SRC=198.18.0.9; IP6_TCP_SRC=fd00:198:18::9
 if [ "$STAND_SUITE" = 1 ]; then
   # Fixed stand of the autodetect and output suites (inside the script on purpose: no new variable crosses the sudo -n env re-exec).
   # The scanner's own address is assigned to veth-a, so the adapter IP is the link address.
@@ -274,12 +284,15 @@ nsa sysctl -qw "net.ipv6.conf.$IF_A.disable_ipv6=1"; nsb sysctl -qw "net.ipv6.co
 [ "$SUITE" != protocols ] || note_cmd "ip netns exec \$NS_B sysctl -qw net.ipv4.icmp_ratemask=0   # protocols: every ICMP error of the peer kernel is sent"
 [ "$SUITE" != banners ] || nsb sysctl -qw net.ipv4.icmp_ratemask=0
 [ "$SUITE" != banners ] || note_cmd "ip netns exec \$NS_B sysctl -qw net.ipv4.icmp_ratemask=0   # banners: the protocols stand's setting"
+# banners: no TIME_WAIT socket in the peer namespace: every step of a TCP case reuses the 4-tuples of the one before.
+[ "$SUITE" != banners ] || nsb sysctl -qw net.ipv4.tcp_max_tw_buckets=0
+[ "$SUITE" != banners ] || note_cmd "ip netns exec \$NS_B sysctl -qw net.ipv4.tcp_max_tw_buckets=0   # banners: the TCP cases' 4-tuples are free for each step"
 if [ "$SUITE" = scan-control ]; then
   ip -n "$NS_A" link set "$IF_A2" address "$MAC_A2"
   ip -n "$NS_B" link set "$IF_B2" address "$MAC_B2"
   nsa sysctl -qw "net.ipv6.conf.$IF_A2.disable_ipv6=1"; nsb sysctl -qw "net.ipv6.conf.$IF_B2.disable_ipv6=1"
 fi
-if [ "$SUITE" = ipv6 ]; then
+if [ "$IPV6_STAND" = 1 ]; then
   # ipv6: IPv6 back on for the lab veth pair and lo only, in both namespaces, links still down. DAD is off for the
   # namespace too (the kernel runs it while either `all` or the link asks for it).
   for kv in $IPV6_SETTINGS; do nsa sysctl -qw "net.ipv6.conf.$IF_A.$kv"; nsb sysctl -qw "net.ipv6.conf.$IF_B.$kv"; done
@@ -289,6 +302,9 @@ fi
 [ -z "$IP_A_LINK" ] || ip -n "$NS_A" addr add "$IP_A_LINK/24" dev "$IF_A"
 for ip_ in $PEER_IPS; do ip -n "$NS_B" addr add "$ip_/$PEER_PREFIX" dev "$IF_B"; done
 ip -n "$NS_B" neigh add "$IP_ADAPTER" lladdr "$MAC_A" dev "$IF_B" nud permanent   # no ARP needed on the lab wire
+# banners: the TCP cases' IPv4 source, on the scanner MAC in the peer namespace only (see the header)
+[ "$SUITE" != banners ] || ip -n "$NS_B" neigh add "$IP_TCP_SRC" lladdr "$MAC_A" dev "$IF_B" nud permanent
+[ "$SUITE" != banners ] || note_cmd "ip -n \$NS_B neigh add {$IP_TCP_SRC,$IP6_TCP_SRC} lladdr $MAC_A dev $IF_B nud permanent   # banners: the TCP sources, peer namespace only"
 for ns in "$NS_A" "$NS_B"; do ip -n "$ns" link set lo up; done
 ip -n "$NS_A" link set "$IF_A" up
 ip -n "$NS_B" link set "$IF_B" up
@@ -307,7 +323,7 @@ if [ -n "$DEFAULT_VIA" ]; then
   for ip_ in $PEER_IPS; do ip -n "$NS_A" neigh add "$ip_" lladdr "$MAC_B" dev "$IF_A" nud permanent; done
   note_cmd "ip -n \$NS_A route add default via $DEFAULT_VIA dev $IF_A; ip -n \$NS_A neigh add {$PEER_IPS} lladdr $MAC_B dev $IF_A nud permanent   # autodetect stand"
 fi
-if [ "$SUITE" = ipv6 ]; then
+if [ "$IPV6_STAND" = 1 ]; then
   # ipv6: the ULA addresses without DAD, the scanner's IPv6 default route via the peer's link-local (several on-link
   # targets resolve the interface's default gateway, so rmasscan's NS goes to the router), and permanent neighbours on
   # both ends: no kernel needs to solicit on the wire (rmasscan's resolver does not read the neighbour table), and the
@@ -321,6 +337,8 @@ if [ "$SUITE" = ipv6 ]; then
   ip -n "$NS_B" -6 neigh add "$IP6_A" lladdr "$MAC_A" dev "$IF_B" nud permanent
   ip -n "$NS_A" -6 neigh add "$IP6_GW" lladdr "$MAC_B" dev "$IF_A" nud permanent
   ip -n "$NS_B" -6 neigh add "$IP6_A_LL" lladdr "$MAC_A" dev "$IF_B" nud permanent
+  # banners: the TCP cases' IPv6 source, on the scanner MAC in the peer namespace only (see the header)
+  [ "$SUITE" != banners ] || ip -n "$NS_B" -6 neigh add "$IP6_TCP_SRC" lladdr "$MAC_A" dev "$IF_B" nud permanent
   note_cmd "ip -n \$NS_A -6 addr add $IP6_A/64 dev $IF_A nodad; ip -n \$NS_B -6 addr add {$IP6_PEERS}/64 dev $IF_B nodad; ip -n \$NS_A -6 route add default via $IP6_GW dev $IF_A; ip -n \$NS_A -6 neigh add {$IP6_PEERS} $IP6_GW lladdr $MAC_B dev $IF_A nud permanent; ip -n \$NS_B -6 neigh add $IP6_A $IP6_A_LL lladdr $MAC_A dev $IF_B nud permanent   # ipv6 stand"
   # The kernels' MLD reports for the groups just joined repeat for up to mldv2_unsolicited_report_interval (1 s):
   # they are over before the first capture starts (live 7b r1: no MLD frame in any step).
@@ -347,12 +365,12 @@ for ns in "$NS_A" "$NS_B"; do
   if [ -n "$DEFAULT_VIA" ] && [ "$ns" = "$NS_A" ]; then :; else
     [ -z "$(ip -n "$ns" route show default)" ] || fail "$ns has a default route"
   fi
-  if [ "$SUITE" = ipv6 ] && [ "$ns" = "$NS_A" ]; then
+  if [ "$IPV6_STAND" = 1 ] && [ "$ns" = "$NS_A" ]; then
     # ipv6 scanner namespace: exactly one IPv6 default route, via the peer's link-local on the lab veth
     [ "$(ip -n "$ns" -6 route show default | grep -c .)" = 1 ] && ip -n "$ns" -6 route show default | grep -Eq "^default via $IP6_GW dev $IF_A( |\$)" || fail "$ns IPv6 default route is not exactly via $IP6_GW dev $IF_A"
   else
     [ -z "$(ip -n "$ns" -6 route show default)" ] || fail "$ns has an IPv6 default route"
-    if [ "$SUITE" = ipv6 ]; then
+    if [ "$IPV6_STAND" = 1 ]; then
       ip netns exec "$ns" ip -6 route get 2001:db8::1 >/dev/null 2>&1 && fail "$ns can route to 2001:db8::1"
     fi
   fi
@@ -389,6 +407,7 @@ else
 fi
 ISOLATION_MODE=autodetect; [ "$SUITE" != scan-control ] || ISOLATION_MODE=scan-control
 [ "$SUITE" != ipv6 ] || ISOLATION_MODE=ipv6
+[ "$SUITE" != banners ] || ISOLATION_MODE=ipv6
 [ "$SUITE" != ipv6 ] || note_cmd "ip -n \$NS_A -6 route show default (exactly: default via $IP6_GW dev $IF_A); ip -n \$NS_B -6 route show default (empty); ip -n \$NS_B -6 route get 2001:db8::1 (fails); capture isolation --mode ipv6  # seal assertions, ipv6 stand"
 "$LAB_BIN" capture isolation ${DEFAULT_VIA:+--mode $ISOLATION_MODE} --out "$OUT/isolation.json" --ns-a "$NS_A" --ns-b "$NS_B" --host-links-before "$WORK/host-links-before.txt"
 
@@ -400,7 +419,7 @@ topo() {  # topo FILE : save topology + routes of both namespaces
       echo "## ip -4 addr"; ip -n "$ns" -4 addr show
       echo "## ip route"; ip -n "$ns" route show
       echo "## ip -6 route"; ip -n "$ns" -6 route show
-      if [ "$SUITE" = ipv6 ]; then
+      if [ "$IPV6_STAND" = 1 ]; then
         echo "## ip -6 addr"; ip -n "$ns" -6 addr show
         echo "## ip -6 neigh"; ip -n "$ns" -6 neigh show
       fi
@@ -532,7 +551,7 @@ elif [ "$SUITE" = protocols ]; then
   stop_suite_group
   log "suite $SUITE finished rc=$SUITE_RC (see $OUT/suite.log)"
 elif [ "$SUITE" = banners ]; then
-  # ---- banners suite: the same driver on the protocols stand, UDP banners of the C oracle and rmasscan
+  # ---- banners suite: the same driver on the IPv6 stand, UDP and TCP banners of the C oracle and rmasscan
   note_cmd "rmasscan-lab banners-suite linux ...   # runs everything through ip netns exec \$NS_A / \$NS_B"
   start_suite_group "$OUT/suite.log" "$LAB_BIN" banners-suite linux --out "$OUT" --work "$WORK" \
     --ns-a "$NS_A" --ns-b "$NS_B" --iface-a "$IF_A" --iface-b "$IF_B" --mac-a "$MAC_A" --mac-b "$MAC_B" \

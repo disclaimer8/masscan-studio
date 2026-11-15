@@ -1,0 +1,23 @@
+tcp-frame-input v1
+# eth-sackok-v4: ethernet, IPv4, --tcp-sackok
+link ethernet
+macs src=02:00:00:00:00:01 router4=02:00:00:00:00:fe router6=02:00:00:00:00:fd
+template mss=default sackok=1 wscale=- tsecho=- ttl=-
+frame v4 them=1649f693 port_them=28762 me=91466d2a port_me=43007 seq=0xa92575ee ack=0xeff30e30 flags=0x10 window=- payload=0:124
+frame v4 them=593f4c8e port_them=10947 me=9e584314 port_me=24693 seq=0xd9db6732 ack=0xe1d8d761 flags=0x10 window=- payload=1:114
+frame v4 them=8e0507d4 port_them=15029 me=357795d1 port_me=31252 seq=0xcafaad76 ack=0x134c19d3 flags=0x10 window=- payload=1400:136
+frame v4 them=397ec08b port_them=18444 me=97049456 port_me=32916 seq=0xc15134d8 ack=0x5ff0166c flags=0x18 window=- payload=0:198
+frame v4 them=6c22fcd7 port_them=43701 me=a866898d port_me=13009 seq=0x8c8446a7 ack=0xcdbfbb71 flags=0x18 window=- payload=1:120
+frame v4 them=ac8fe842 port_them=62643 me=d96472d7 port_me=48313 seq=0x43bebf85 ack=0xbae25302 flags=0x18 window=- payload=1400:88
+frame v4 them=d039d972 port_them=41600 me=706aafa2 port_me=14673 seq=0x06a5d815 ack=0x8ed11748 flags=0x19 window=- payload=0:21
+frame v4 them=e8145937 port_them=60858 me=dd447a71 port_me=57711 seq=0xfb413a45 ack=0x1cceb3e3 flags=0x19 window=- payload=1:174
+frame v4 them=e0886d38 port_them=1943 me=5b1e8313 port_me=46573 seq=0x7404ab71 ack=0xc1c503f2 flags=0x19 window=- payload=1400:244
+frame v4 them=924c6d17 port_them=15254 me=7c7c09d4 port_me=56504 seq=0xe61fa094 ack=0xcc442221 flags=0x11 window=- payload=0:128
+frame v4 them=4bf45a2a port_them=12384 me=c3468057 port_me=10336 seq=0xeffb4e7b ack=0xbc1bdea5 flags=0x11 window=- payload=1:39
+frame v4 them=3c2ec19f port_them=42634 me=91744868 port_me=51144 seq=0x9644a877 ack=0x5a8db9e5 flags=0x11 window=- payload=1400:7
+frame v4 them=4ee39df6 port_them=33799 me=a2be5816 port_me=40938 seq=0xd3f9f926 ack=0x6d04f5a3 flags=0x04 window=- payload=0:169
+frame v4 them=57b77321 port_them=48912 me=a9f80b83 port_me=45086 seq=0xfc0cbe6e ack=0x4e2895b8 flags=0x04 window=- payload=1:153
+frame v4 them=0295e67d port_them=49060 me=8c1e126b port_me=63519 seq=0x537166c2 ack=0x4de9c800 flags=0x04 window=- payload=1400:213
+frame v4 them=ffffffff port_them=65535 me=ffffffff port_me=65535 seq=0xffffffff ack=0xffffffff flags=0x10 window=- payload=1:255
+frame v4 them=00000000 port_them=0 me=00000000 port_me=0 seq=0x00000000 ack=0x00000000 flags=0x04 window=- payload=0:0
+frame v4 them=d4933577 port_them=443 me=32569278 port_me=40000 seq=0x42507c3b ack=0xe3d0ef6e flags=0x18 window=600 payload=1400:232

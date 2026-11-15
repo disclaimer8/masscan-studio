@@ -1,0 +1,10 @@
+{
+  "tag": "o02_json",
+  "kind": "scan",
+  "format": "json",
+  "target": "file",
+  "show_closed": true,
+  "stdout": "silent",
+  "status": "text",
+  "oracle": true
+}

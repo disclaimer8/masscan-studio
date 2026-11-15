@@ -1,0 +1,5 @@
+# Deterministic repeat of the first finding of fuzz-tcp-stack.json (input index 21020920 of seed 413), on the Mac, code C,
+# the same Mac binary, from the repository root at C, the same corpus and captures; --count stops after that input.
+nice -n 10 $MACOUT/bin/rmasscan-lab fuzz tcp --family stack --seed 413 --count 21020920 \
+  --corpus rmasscan/tests/golden/tcp-banners --pcap $MACOUT/linux-banners-r1/runs/*/*/peer.pcap \
+  --out $MACOUT/fuzz-repro/repro-stack-413-count-21020920.json > $MACOUT/fuzz-repro/repro.log 2>&1

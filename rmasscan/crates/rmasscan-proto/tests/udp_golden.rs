@@ -24,6 +24,13 @@ mod udp_golden_inputs;
 
 use udp_golden_inputs::{Case, cases};
 
+// Манифест эталонов проверяется общим кодом rmasscan-core (без serde): сумма файла, `golden.rs` берёт `super::sha256`.
+#[path = "../../rmasscan-core/tests/common/sha256.rs"]
+mod sha256;
+
+#[path = "../../rmasscan-core/tests/common/golden.rs"]
+mod golden;
+
 const DIR: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../tests/golden/udp-banners"
@@ -761,4 +768,116 @@ fn udp_golden_mutations_never_panic() {
             }
         }
     }
+}
+
+/// Каждые `input_sha256` и `output_sha256` манифеста равны sha256 файла: 204 кейса, 408 файлов.
+#[test]
+fn manifest_hashes_match_files() {
+    let manifest = String::from_utf8(read(&Path::new(DIR).join("manifest.json"))).expect("utf-8");
+    let n =
+        golden::check_manifest_hashes(Path::new(DIR), &manifest).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(n, 408, "408 = 204 кейса x (вход + вывод)");
+}
+
+/// Временный каталог, удаляется при выходе из области видимости (в том числе при панике).
+struct TempDir(std::path::PathBuf);
+
+/// Номер следующего [`TempDir`] процесса. Имя из часов делили параллельные тесты: часы macOS идут микросекундами, и
+/// два теста, начатые в одну микросекунду, получали один каталог, а `Drop` короткого удалял его посреди копии
+/// длинного.
+static NEXT_TEMP_DIR: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+impl TempDir {
+    fn new() -> Self {
+        let n = NEXT_TEMP_DIR.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("rmasscan-golden-{}-{n}", std::process::id()));
+        // `create_dir`, не `create_dir_all`: совпадение имени падает здесь, а не делит каталог молча.
+        fs::create_dir(&dir).unwrap_or_else(|e| panic!("create temp dir {}: {e}", dir.display()));
+        Self(dir)
+    }
+}
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+/// Подмена одного байта в одном `.out` во временной копии: ошибка называет файл и обе суммы, а нетронутая
+/// копия проходит (подмена в самом деле ловится, а не проверка пропускает всё).
+#[test]
+fn manifest_check_names_the_tampered_file() {
+    let src = Path::new(DIR);
+    let tmp = TempDir::new();
+    fs::create_dir_all(tmp.0.join("cases")).expect("mkdir");
+    for e in fs::read_dir(src.join("cases")).expect("read cases") {
+        let e = e.expect("entry");
+        fs::copy(e.path(), tmp.0.join("cases").join(e.file_name())).expect("copy");
+    }
+    let manifest = String::from_utf8(read(&src.join("manifest.json"))).expect("utf-8");
+    assert_eq!(
+        golden::check_manifest_hashes(&tmp.0, &manifest),
+        Ok(408),
+        "untouched copy"
+    );
+
+    let victim = "cases/dns-chaos-txt.out";
+    let path = tmp.0.join(victim);
+    let mut bytes = fs::read(&path).expect("read victim");
+    let want = {
+        let mut h = sha256::Sha256::new();
+        h.update(&bytes);
+        h.finish()
+    };
+    bytes[0] ^= 0x01;
+    fs::write(&path, &bytes).expect("tamper");
+    let got = {
+        let mut h = sha256::Sha256::new();
+        h.update(&bytes);
+        h.finish()
+    };
+    let err = golden::check_manifest_hashes(&tmp.0, &manifest).expect_err("tamper must be caught");
+    assert!(err.contains(victim), "names the file: {err}");
+    assert!(
+        err.contains(&want) && err.contains(&got),
+        "both sums: {err}"
+    );
+    assert_ne!(want, got);
+
+    // Файл пропал: ошибка называет его же (не пропуск и не чужое имя).
+    fs::write(&path, fs::read(src.join(victim)).expect("orig")).expect("restore");
+    let gone = "cases/dns-chaos-txt.bin";
+    fs::remove_file(tmp.0.join(gone)).expect("remove");
+    let err = golden::check_manifest_hashes(&tmp.0, &manifest).expect_err("missing file");
+    assert!(err.starts_with(gone), "names the missing file: {err}");
+}
+
+/// Сумма относится к своему кейсу и своему полю: `output_sha256` после вложенных `frames` и кейс с
+/// `"output": null` не подхватывают чужое имя (ошибка называет файл кейса, а не последнего кадра).
+#[test]
+fn manifest_pairing_is_per_case_and_ignores_nested_frames() {
+    let tmp = TempDir::new();
+    fs::write(tmp.0.join("a.bin"), b"abc").expect("a");
+    fs::write(tmp.0.join("a.out"), b"x").expect("a.out");
+    fs::write(tmp.0.join("a.eth.out"), b"frame").expect("frame");
+    let abc = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+    let snippet = |out_sha: &str| {
+        format!(
+            "{{\n  \"cases\": [\n    {{\n      \"name\": \"a\",\n      \"input\": \"a.bin\",\n      \
+             \"input_sha256\": \"{abc}\",\n      \"output\": \"a.out\",\n      \"frames\": {{\n        \
+             \"eth\": {{\n          \"output\": \"a.eth.out\"\n        }}\n      }},\n      \
+             \"output_sha256\": \"{out_sha}\"\n    }}\n  ]\n}}\n"
+        )
+    };
+    let x = "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881";
+    assert_eq!(golden::check_manifest_hashes(&tmp.0, &snippet(x)), Ok(2));
+    let err = golden::check_manifest_hashes(&tmp.0, &snippet(abc)).unwrap_err();
+    assert!(
+        err.starts_with("a.out:"),
+        "case output, not the frame: {err}"
+    );
+    // Сумма без своего имени (`"output": null` у кейса) это ошибка, а не имя предыдущего кейса.
+    let orphan = snippet(x).replace("\"output\": \"a.out\",", "\"output\": null,");
+    let err = golden::check_manifest_hashes(&tmp.0, &orphan).unwrap_err();
+    assert!(err.contains("without a preceding file name"), "{err}");
 }

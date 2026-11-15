@@ -1,0 +1,15 @@
+{
+  "icmp_ratemask": "0",
+  "icmp_echo_ignore_all": "0",
+  "sctp_in_kernel": false,
+  "responder": [
+    "--ports",
+    "80,8080",
+    "--udp-ports",
+    "53,123,137,161,500,1900,5683,11211,16464",
+    "--udp-ips",
+    "198.18.0.2,198.18.0.3,198.18.0.4,198.18.0.5",
+    "--udp-answer",
+    "banners"
+  ]
+}

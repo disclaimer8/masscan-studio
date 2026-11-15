@@ -56,6 +56,8 @@ pub(crate) const OPTIONS: &[&str] = &[
     "list",
     "run-timeout",
     "remove-stale-lock",
+    "rmasscan",
+    "reference",
 ];
 /// The scanner and peer MACs of the stand, as bytes (the frames the lab may write).
 use link::{GuardedTx, STAND_PEER_MAC as PM, STAND_SCANNER_MAC as SM};
@@ -2019,6 +2021,407 @@ fn hex(b: &[u8]) -> String {
         .collect()
 }
 
+// ------------------------------------------------------------------ the TCP banner case (sub-stage 4b, task 18)
+
+/// `--plan banners`: the TCP banner case `mb01_banners` (`banners_stand::MACOS`). The rmasscan CLI with `--banners`
+/// (user mode, BPF granted) from the unassigned `198.18.0.1` against the peer's HTTP and SSH scenarios on 8080 and
+/// 2222 (`peer listen --banners 2222=22,8080=80`: a user cannot bind a reserved port on `198.18.0.2`), with the steps
+/// of the CLI runs on this stand (`autodetect-suite macos`): the gates, the uplink capture and its interlock, the peer
+/// witness published without the host's own mDNS, the work directory, `hashes-before-copy.txt`. The directory
+/// (manifest key `banners_stand`) is judged by `macos-verify`, which hands it to `banners_stand`, against the C
+/// reference copied from the Linux banners window (`--reference`).
+pub(crate) const BANNERS: &str = "banners";
+/// The scanner's bound: 1200 polls of 50 ms for a scan of about 15 s (`--wait 14`).
+const BANNERS_SCAN_POLLS: u32 = 1200;
+const BANNERS_POLL: Duration = Duration::from_millis(50);
+/// The options of the wire_scan plans that the banners plan does not take.
+const BANNERS_REFUSED: [&str; 10] = [
+    "wire-scan",
+    "fixtures",
+    "rerun",
+    "reps",
+    "rates",
+    "only",
+    "commit",
+    "repo",
+    "suite",
+    "run-timeout",
+];
+
+/// `peer listen --banners SPEC --ready READY` for one run, and its own proof: ready, on the case's ports.
+pub(crate) fn start_banner_listeners(
+    st: &dyn Stand,
+    t: &mut Tools,
+    exe: &str,
+    banners: &str,
+    ready: &Path,
+    log_dir: &Path,
+    note: &dyn Fn(&dyn Proc),
+) -> Result<Value, SuiteError> {
+    let p = st.spawn(
+        &[
+            exe.to_owned(),
+            "peer".into(),
+            "listen".into(),
+            "--banners".into(),
+            banners.to_owned(),
+            "--ready".into(),
+            p2s(ready),
+        ],
+        &log_dir.join("listener.out.txt"),
+        &log_dir.join("listener.stderr.txt"),
+    )?;
+    note(&*p);
+    t.listener = Some(p);
+    if !wait_file(ready, st, 300, None) {
+        return Err(SuiteError::NotRun(
+            "the peer's banner listeners did not become ready; nothing was started".into(),
+        ));
+    }
+    let lj = read_json(ready)?;
+    if lj["ready"] != true || lj["banners"].as_array().is_none_or(Vec::is_empty) {
+        return Err(SuiteError::NotRun(format!(
+            "the peer's banner listeners are not proven (ready {}, banners {}); nothing was started",
+            lj["ready"], lj["banners"]
+        )));
+    }
+    Ok(lj)
+}
+
+/// What the banners plan carries from its start to its run.
+struct BannersRun<'a> {
+    st: &'a dyn Stand,
+    out: PathBuf,
+    rmasscan: String,
+    lab: String,
+    status: Vec<String>,
+    binaries: Vec<(String, String)>,
+    lock: Option<PathBuf>,
+    children: RefCell<BTreeSet<u32>>,
+    scrub: crate::capture::Scrubber,
+}
+impl BannersRun<'_> {
+    fn note(&self, p: &dyn Proc) {
+        note_child(self.lock.as_deref(), &self.children, p);
+    }
+    fn stand_macs(&self) -> Result<(), SuiteError> {
+        for (iface, want) in [(SCANNER_IF, SCANNER_MAC), (PEER_IF, PEER_MAC)] {
+            let got = self.st.iface_mac(iface)?;
+            if got != want {
+                return Err(SuiteError::NotRun(format!(
+                    "ifconfig reports {got} on {iface}, the stand binding is {want}; nothing was started"
+                )));
+            }
+        }
+        Ok(())
+    }
+    fn scrub_status(&self, run: &Path) {
+        for name in ["status-pre.json", "status-post.json"] {
+            let p = run.join(name);
+            if p.is_file()
+                && let Err(e) = self.scrub.file(&p)
+            {
+                warn(&format!("{name} was not rewritten ({e})"));
+            }
+        }
+    }
+    /// The witness's capture, published into `run` without the host's own mDNS, with its record; the unfiltered file
+    /// is deleted whatever happens (`autodetect_suite::publish_peer_capture`).
+    fn publish(&self, f: &WitnessFiles, run: &Path, witness: Option<Value>) -> Result<(), String> {
+        let published = (|| -> Result<(), String> {
+            let raw = io(fs::read(&f.peer_pcap), "the unfiltered peer capture")?;
+            let (kept, record) = match witness {
+                Some(w) => {
+                    let (kept, mut rec) = crate::autodetect_suite::publish_peer_capture(&raw, w)?;
+                    self.scrub.value(&mut rec);
+                    (kept, Some(rec))
+                }
+                None => (
+                    pcap::keep_records(&raw, |fr| !crate::autodetect_suite::is_peer_mdns(fr))?.0,
+                    None,
+                ),
+            };
+            io(fs::write(run.join("peer.pcap"), kept), "peer.pcap")?;
+            record.map_or(Ok(()), |r| write_json(run.join("capture.json"), &r))
+        })();
+        let _ = fs::remove_file(&f.peer_pcap);
+        published
+    }
+    fn one(&self) -> Result<PathBuf, SuiteError> {
+        let c = crate::banners_stand::MACOS;
+        leftover_gate(self.st, &self.rmasscan)?;
+        pair_quiet_gate(self.st)?;
+        let name = format!("{}.{}", c.tag, nonce());
+        let base = self.out.join(".work").join(&name);
+        let run = base.join("run");
+        io(fs::create_dir_all(&run), "work directory")?;
+        // The uplink capture's files in the run (evidence), the witness's in the private work directory; its capture
+        // there is `peer.unfiltered`, an extension no evidence file may carry.
+        let files = WitnessFiles {
+            uplink_pcap: run.join("uplink.pcap"),
+            uplink_err: run.join("uplink.err"),
+            uplink_out: base.join("uplink.out.txt"),
+            peer_pcap: base.join("peer.unfiltered"),
+            peer_dir: base.clone(),
+            peer_err: run.join("peer.err"),
+        };
+        let mut t = Tools::default();
+        let result = match self.inner(&base, &run, &files, &mut t) {
+            Ok(sealed) => {
+                let dest = self.out.join("runs").join(c.tag);
+                io(fs::create_dir_all(self.out.join("runs")), "runs directory")?;
+                self.scrub_status(&run);
+                crate::autodetect_suite::hash_and_copy(&run, &dest).map_err(SuiteError::Abort)?;
+                io(fs::remove_dir_all(&base), "remove the work directory")?;
+                if sealed {
+                    Ok(dest)
+                } else {
+                    Err(SuiteError::Abort(format!(
+                        "macos-lab status after {} does not allow raw runs; the run is kept in runs/{} for the verifier",
+                        c.tag, c.tag
+                    )))
+                }
+            }
+            Err(e) => {
+                stop_tools(self.st, &mut t);
+                if files.peer_pcap.exists() {
+                    let w = read_json(base.join("peer-witness.json")).ok();
+                    if let Err(x) = self.publish(&files, &run, w) {
+                        warn(&format!(
+                            "the aborted run's peer capture was not published ({x}); it is deleted"
+                        ));
+                    }
+                }
+                self.scrub_status(&run);
+                let e = abort_run(self.st, &self.out, &run, &name, &mut t, e);
+                if !run.exists() {
+                    let _ = fs::remove_dir_all(&base);
+                }
+                Err(e)
+            }
+        };
+        self.children.borrow_mut().clear();
+        sync_lock(self.lock.as_deref(), &self.children.borrow());
+        result
+    }
+    /// One run; `Ok(sealed)` with the stand's state after it.
+    fn inner(
+        &self,
+        base: &Path,
+        run: &Path,
+        files: &WitnessFiles,
+        t: &mut Tools,
+    ) -> Result<bool, SuiteError> {
+        let c = crate::banners_stand::MACOS;
+        let note = |p: &dyn Proc| self.note(p);
+        // 1. The gates: the sealed stand with BPF granted (198.18.0.1 on no interface: macos-lab status rule 2), the
+        //    Application Firewall, the binaries, the stand's MACs.
+        let pre = gate_status(self.st, &self.status, run, &json!(c.tag), "granted")?;
+        application_firewall(self.st, run)?;
+        crate::autodetect_suite::binaries_unchanged(&self.binaries)?;
+        self.stand_macs()?;
+        write_json(run.join("argv.json"), &json!({"argv": c.argv()}))?;
+        write_json(
+            run.join(crate::banners_stand::EXPECT_JSON),
+            &json!(c.expect()),
+        )?;
+        // 2. The scenario sockets, then the uplink capture and the peer witness.
+        start_banner_listeners(
+            self.st,
+            t,
+            &self.lab,
+            &c.banners_arg(),
+            &run.join(crate::banners_stand::LISTENERS_JSON),
+            base,
+            &note,
+        )?;
+        let uplink_if = pre["uplink"].as_str().unwrap_or("").to_owned();
+        if uplink_if.is_empty() || uplink_if.starts_with("feth") {
+            return Err(SuiteError::NotRun(format!(
+                "the uplink interface {uplink_if:?} is not a real default-route interface; nothing was started"
+            )));
+        }
+        start_witnesses(self.st, t, &self.lab, &uplink_if, files, &note)?;
+        if self.st.stopped() {
+            return Err(SuiteError::Interrupted(format!(
+                "stop requested before {} started its scanner",
+                c.tag
+            )));
+        }
+        // 3. rmasscan with the table's argv; its `-oL output.txt` goes into the run directory by its full path
+        //    (`scanner-argv.json`: the arguments as run, `--out` as `$OUT`; the binary is the manifest's).
+        let doc = run.join(crate::banners_stand::OUTPUT);
+        let argv: Vec<String> = std::iter::once(self.rmasscan.clone())
+            .chain(c.argv().into_iter().map(|a| {
+                if a == crate::banners_stand::OUTPUT {
+                    p2s(&doc)
+                } else {
+                    a
+                }
+            }))
+            .collect();
+        write_json(
+            run.join("scanner-argv.json"),
+            &json!({"argv": argv[1..].iter().map(|a| self.scrub.str(a)).collect::<Vec<_>>()}),
+        )?;
+        let p = self
+            .st
+            .spawn(&argv, &run.join("stdout.txt"), &run.join("stderr.txt"))?;
+        note(&*p);
+        t.scanner = Some(p);
+        let mut rc = None;
+        for _ in 0..BANNERS_SCAN_POLLS {
+            rc = t
+                .scanner
+                .as_mut()
+                .ok_or("the scanner is not running")?
+                .try_wait()?;
+            if rc.is_some() {
+                break;
+            }
+            if self.st.stopped() {
+                return Err(SuiteError::Interrupted(format!(
+                    "stopped while the scanner of {} was running",
+                    c.tag
+                )));
+            }
+            self.st.pause(BANNERS_POLL);
+        }
+        let rc = rc.ok_or_else(|| {
+            SuiteError::Abort(format!(
+                "the scanner of {} ran longer than {} s",
+                c.tag,
+                (BANNERS_POLL * BANNERS_SCAN_POLLS).as_secs()
+            ))
+        })?;
+        t.scanner = None;
+        io(
+            fs::write(run.join("exit.txt"), format!("{rc}\n")),
+            "exit.txt",
+        )?;
+        // 4. The witnesses (peer first), the published capture, the listeners, the stand after the run, the interlock.
+        let (witness, _, _) = stop_witnesses(self.st, t, files)?;
+        self.publish(files, run, Some(witness))?;
+        stop_listener(self.st, t);
+        let (post_rc, post) = lab_status(self.st, &self.status, run, "status-post.json")?;
+        interlock(run)?;
+        Ok(post_rc == 0 && post["raw_run_allowed"] == true)
+    }
+}
+
+/// `macos-suite --plan banners`: the case once into a new `--out`, never as root (checked by the caller).
+fn run_banners(
+    o: &BTreeMap<String, Vec<String>>,
+    st: &dyn Stand,
+    exe: &Path,
+    lock: &dyn Fn() -> Result<Lock, String>,
+) -> Result<i32, SuiteError> {
+    let c = crate::banners_stand::MACOS;
+    if o.contains_key("list") {
+        say(&format!("{} banners", c.tag));
+        return Ok(0);
+    }
+    let refused: Vec<&str> = BANNERS_REFUSED
+        .into_iter()
+        .filter(|k| o.contains_key(*k))
+        .collect();
+    if !refused.is_empty() {
+        return Err(SuiteError::NotRun(format!(
+            "--plan banners takes --out, --rmasscan, --reference, --run-id and --manifest; not {}",
+            refused
+                .iter()
+                .map(|k| format!("--{k}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )));
+    }
+    let rmasscan = crate::autodetect_suite::absolute_file(o, "rmasscan")?;
+    let reference = PathBuf::from(required(o, "reference")?);
+    let lab = p2s(exe);
+    let run_id = opt(o, "run-id", "m1");
+    if !safe_id(&run_id) {
+        return Err("--run-id must be a safe identifier".to_string().into());
+    }
+    let lab_manifest = o.get("manifest").and_then(|v| v.first()).cloned();
+    let out = PathBuf::from(required(o, "out")?);
+    let scrub =
+        crate::capture::Scrubber::new(&out, None, crate::capture::account_from_env().as_deref());
+    let identity = json!({crate::banners_stand::MANIFEST_KEY: crate::autodetect_verify::Plan::Macos,
+        "schema": 1, "suite": "macos-suite --plan banners",
+        "rmasscan": crate::autodetect_suite::binary(&rmasscan)?, "lab": crate::autodetect_suite::binary(&lab)?,
+        "run_id": run_id,
+        "stand": {"scanner_if": SCANNER_IF, "peer_if": PEER_IF, "scanner_mac": SCANNER_MAC, "peer_mac": PEER_MAC,
+            "scanner_ip": SOURCE_IP, "peer_ip": PEER_IP},
+        "case": {"tag": c.tag, "argv": c.argv(), "listeners": c.banners_arg(),
+            "note": "a non-root process cannot bind a reserved port on 198.18.0.2: HTTP on 8080, SSH on 2222, C's hello table sends the same there (tests/golden/tcp-banners/hellos.out)"},
+        "peer_capture": {"witness": "capture dump on feth4202, every frame, into the private work directory",
+            "published": mv::PEER_FILTER},
+        "uplink_filter": crate::macos_lab::UPLINK_FILTER});
+    let lock = lock().map_err(SuiteError::NotRun)?;
+    crate::autodetect_suite::check_out_for(
+        &out,
+        &[c.tag],
+        &identity,
+        crate::banners_stand::MANIFEST_KEY,
+        crate::banners_stand::verify_dir,
+    )?;
+    let work = out.join(".work");
+    if fs::read_dir(&work).is_ok_and(|mut d| d.next().is_some()) {
+        return Err(SuiteError::NotRun(format!(
+            "{} holds unfinished run directories (an abort whose evidence copy failed); inspect them, copy or remove them by hand, then start again. Nothing was deleted or started",
+            work.display()
+        )));
+    }
+    io(fs::create_dir_all(&work), "work root")?;
+    let status = status_argv(&lab, &run_id, lab_manifest.as_deref());
+    let (rc, s0) = lab_status(st, &status, &work, "status-start.json")?;
+    let _ = fs::remove_file(work.join("status-start.json"));
+    if rc != 0 || s0["raw_run_allowed"] != true || s0["bpf_access"] != "granted" {
+        let _ = fs::remove_dir(&work);
+        return Err(SuiteError::NotRun(format!(
+            "the stand is not sealed with BPF granted (macos-lab status rc {rc}, bpf_access {}); run macos-lab up and bpf-access --grant first. Nothing was started",
+            s0["bpf_access"]
+        )));
+    }
+    let suite = BannersRun {
+        st,
+        out: out.clone(),
+        binaries: vec![
+            (rmasscan.clone(), hash(&rmasscan)?),
+            (lab.clone(), hash(&lab)?),
+        ],
+        rmasscan,
+        lab,
+        status,
+        lock: Some(lock.path().to_path_buf()),
+        children: RefCell::default(),
+        scrub,
+    };
+    let started = (|| -> Result<PathBuf, SuiteError> {
+        suite.stand_macs()?;
+        // The C reference before anything raw: copied once into --out, from a window that judged it PASS.
+        crate::banners_stand::copy_reference(&reference, &out)
+            .map_err(|e| SuiteError::NotRun(format!("--reference: {e}; nothing was started")))?;
+        crate::autodetect_suite::write_manifest(&out, &identity, &suite.scrub)?;
+        if st.stopped() {
+            return Err(SuiteError::Interrupted(format!(
+                "stop requested before {} started; nothing was left running",
+                c.tag
+            )));
+        }
+        suite.one()
+    })();
+    let _ = fs::remove_dir(&work);
+    drop(lock);
+    let dest = started?;
+    say(&format!("done {} -> {}", c.tag, dest.display()));
+    say(&format!(
+        "verify offline with rmasscan-lab macos-verify --dir {}",
+        out.display()
+    ));
+    Ok(0)
+}
+
 // ------------------------------------------------------------------ entry points
 
 pub fn run(args: &[String]) -> Result<i32, String> {
@@ -2066,11 +2469,14 @@ pub(crate) fn run_locked(
     let o = options_for("macos-suite", args, OPTIONS)?;
     if o.contains_key("help") {
         say(
-            "macos-suite --out DIR --suite ID --plan functional|failure|perf --commit SHA --repo PATH --wire-scan PATH --fixtures DIR [--run-id m1] [--manifest LAB_MANIFEST] [--reps N] [--rates CSV] [--only TAG ...] [--rerun] [--list] [--run-timeout S] [--remove-stale-lock]",
+            "macos-suite --out DIR --suite ID --plan functional|failure|perf --commit SHA --repo PATH --wire-scan PATH --fixtures DIR [--run-id m1] [--manifest LAB_MANIFEST] [--reps N] [--rates CSV] [--only TAG ...] [--rerun] [--list] [--run-timeout S] [--remove-stale-lock]\nmacos-suite --plan banners --out DIR --rmasscan PATH --reference LINUX_BANNERS_DIR [--run-id m1] [--manifest LAB_MANIFEST] [--list]   the TCP banner case mb01_banners (HTTP on 8080, SSH on 2222) against C's records of t01_tcp4; verify with macos-verify",
         );
         return Ok(0);
     }
     let plan = opt(&o, "plan", "functional");
+    if plan == BANNERS {
+        return run_banners(&o, st, &exe, lock);
+    }
     if !matches!(plan.as_str(), "functional" | "failure" | "perf") {
         return Err("unknown suite plan".to_string().into());
     }

@@ -1,0 +1,25 @@
+{
+  "argv": [
+    "198.18.0.2",
+    "-p22,80",
+    "--banners",
+    "--connection-timeout",
+    "8",
+    "--adapter-ip",
+    "198.18.0.1",
+    "--router-mac",
+    "02-57-4c-3d-2e-9b",
+    "-oL",
+    "output.txt",
+    "--seed",
+    "1",
+    "--rate",
+    "100",
+    "--wait",
+    "14",
+    "--source-port",
+    "40000",
+    "--retries",
+    "0"
+  ]
+}

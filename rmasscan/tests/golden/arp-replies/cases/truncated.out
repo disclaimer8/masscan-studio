@@ -1,0 +1,15 @@
+arp-reply-oracle v1 frames=14 replies=1
+frame 0 none
+frame 1 none
+frame 2 none
+frame 3 none
+frame 4 none
+frame 5 none
+frame 6 none
+frame 7 none
+frame 8 none
+frame 9 none
+frame 10 none
+frame 11 none
+frame 12 none
+frame 13 reply len=60 0200000000fe02000000000108060001080006040002020000000001c00002fa0200000000fec0000201000000000000000000000000000000000000

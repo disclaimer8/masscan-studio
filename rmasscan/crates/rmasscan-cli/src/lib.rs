@@ -14,6 +14,7 @@
 #![forbid(unsafe_code)]
 
 pub mod args;
+pub mod banner_settings;
 pub mod conf;
 pub mod live;
 pub mod output;
@@ -34,7 +35,6 @@ use output::{
 };
 use rmasscan_core::config::{ConfigError, EchoExtras, Operation, ScanConfig, echo_with, validate};
 use rmasscan_core::scan::{format_list_line_v46, list_scan_v46};
-use rmasscan_core::targets::TEMPL_TCP_LAST;
 
 /// Ошибка [`run`], строки которой уже записаны в `log` (`[-] FAIL: --readscan`, `[-] <файл>: …`, `[-] file
 /// corrupt`, `in-binary.c`): exit 1 без второй копии. [`error_text`] даёт для неё пустую строку.
@@ -69,30 +69,17 @@ fn refuse_arp_with_ports(cfg: &ScanConfig) -> Result<(), String> {
     Ok(())
 }
 
-/// Подэтап 4a: баннеры только UDP. TCP-баннерам нужен собственный стек TCP (`src/stack-tcp-core.c`), он появится в
-/// подэтапе 4b; без него скан `--banners -p80` молча дал бы меньше записей, чем C.
-const TCP_BANNERS_REFUSAL: &str = "--banners with TCP ports is not supported yet: TCP banners need the \
-     user-mode TCP stack, which arrives in the next sub-stage (4b); UDP ports (-pU:53) are supported now";
-
-/// Отказ 4a: `--banners` (или `--rawudp`, который его включает) вместе с портом TCP в скане (живом и `--offline`),
-/// до обнаружения адаптера и до первого кадра. `-sL`, `--echo` и `--readscan` ничего не сканируют и не отказывают.
-fn refuse_tcp_banners(cfg: &ScanConfig) -> Result<(), String> {
-    let tcp = cfg
-        .targets
-        .ports()
-        .as_slice()
-        .iter()
-        .any(|r| r.begin <= TEMPL_TCP_LAST);
-    if cfg.banners && tcp {
-        return Err(TCP_BANNERS_REFUSAL.into());
-    }
-    Ok(())
-}
-
 /// `FAIL: <значение>: unknown capture type` и `… nocapture type` (`src/main-conf.c:1159`, `:1174`): строка C.
 fn is_capture_refusal(msg: &str) -> bool {
     msg.starts_with("FAIL: ")
         && (msg.ends_with(": unknown capture type") || msg.ends_with(": unknown nocapture type"))
+}
+
+/// `FAIL: <значение>: unknown hello type` (`src/main-conf.c:1201`) и пустой файл `--hello-file`
+/// (`[FAILED] could not read hello file`, `:1239`): строки C.
+fn is_hello_refusal(msg: &str) -> bool {
+    (msg.starts_with("FAIL: ") && msg.ends_with(": unknown hello type"))
+        || msg == "[FAILED] could not read hello file"
 }
 
 /// R3: поверх IPv6 только TCP SYN. Живой скан и `--offline --packet-trace` с целью IPv6 и портом не TCP (`U:`, `S:`,
@@ -141,6 +128,7 @@ pub fn error_text(msg: &str) -> String {
         || msg.starts_with(OPEN_FAILURE_PREFIX)
         || msg.starts_with(conf::BAD_BANNER_APP)
         || is_capture_refusal(msg)
+        || is_hello_refusal(msg)
         || msg == ARP_PORTSCAN_REFUSAL
     {
         msg.to_string()
@@ -254,6 +242,10 @@ pub fn run(
     out: &mut dyn Write,
     log: &mut dyn Write,
 ) -> Result<(), String> {
+    // Строки, которые C печатает по ходу разбора argv и продолжает (`name too long`, `src/main-conf.c:3305-3308`).
+    for note in cli.parse_notes() {
+        let _ = writeln!(log, "{note}");
+    }
     let other_op = cli.list || cli.echo || cli.echo_all || cli.offline || cli.iflist;
     if cli.output_flags_given() && other_op {
         return Err(OUTPUT_OUTSIDE_SCAN.into());
@@ -335,7 +327,6 @@ pub fn run(
         if validate(&probe, Operation::Scan).is_ok() {
             refuse_arp_with_ports(&cfg)?;
         }
-        refuse_tcp_banners(&cfg)?;
         live::run_offline(&cfg, backend, cli.packet_trace, out, log)?;
         return finish(out);
     }
@@ -350,7 +341,6 @@ pub fn run(
     }
     // main.c:1224-1229: сразу после проверок пустых целей и портов, до вывода и адаптера.
     refuse_arp_with_ports(&cfg)?;
-    refuse_tcp_banners(&cfg)?;
     // Опции проверяются до обнаружения: отказ не стоит ни строки `[+]`, ни кадра. Начало скана - момент `open`.
     let opts = checked_output_options(cli)?;
     // Файл `-` это stdout C (`output.c:216`), и `close_rotate` закрывает его (`output.c:268`) до `printf` времени
@@ -589,66 +579,82 @@ mod tests {
         run_args(&[&base[..], extra].concat()).unwrap()
     }
 
+    /// M1 ревью задач 11-13: `--echo` с набранным именем длиннее 63 байт. Сборка C 8e6b3b0 печатает в stderr
+    /// `…Total]: name too long` (`src/main-conf.c:3305-3308`) и в stdout заголовок из обрезанного имени, код 0;
+    /// `run` печатает строку разбора первой.
+    #[test]
+    fn echo_of_long_typed_name_warns_like_c() {
+        let long =
+            "--http-header[X-Very-Long-Header-Name-That-Goes-Beyond-Sixty-Three-Characters-Total]";
+        let cli = Cli::try_parse_masscan([
+            "rmasscan",
+            "--echo",
+            "10.0.0.0/30",
+            "-p80",
+            "--seed",
+            "1",
+            long,
+            "v",
+        ])
+        .unwrap();
+        let (mut out, mut log) = (Vec::new(), Vec::new());
+        run(&cli, &FakeBackend::default(), &mut out, &mut log).unwrap();
+        assert_eq!(
+            String::from_utf8(log).unwrap(),
+            format!("{}: name too long\n", &long[2..])
+        );
+        let out = String::from_utf8(out).unwrap();
+        assert!(
+            out.contains("\nhttp-header = X-Very-Long-Header-Name-That-Goes-Beyond-Sixty-Thre:v\n"),
+            "{out}"
+        );
+    }
+
+    /// Финальное ревью, M2: `--echo` сборки C 8e6b3b0 (вне репозитория, без скана) с этими argv печатает те же строки
+    /// `http-*` и выходит с кодом 0; весь её stdout равен выводу rmasscan.
+    #[test]
+    fn echo_of_http_values_starting_with_a_dash_like_c() {
+        let out = echo_of(&[
+            "--http-method",
+            "-X",
+            "--HTTP_URI",
+            "--x",
+            "--http-version",
+            "-1",
+            "--http-host",
+            "-h",
+            "--http-useragent",
+            "-ua",
+            "--http-payload",
+            "--boundary--",
+            "--http-cookie",
+            "-a=1",
+            "--http-cookie",
+            "--",
+        ]);
+        let http: Vec<&str> = out.lines().filter(|l| l.starts_with("http")).collect();
+        assert_eq!(
+            http,
+            [
+                "http-cookie = -a=1",
+                "http-cookie = --",
+                "http-method = -X",
+                "http-version = -1",
+                "http-url = --x",
+                "http-user-agent = -ua",
+                "http-host = -h",
+                "http-payload = --boundary--",
+            ],
+            "{out}"
+        );
+    }
+
     fn scan_config(extra: &[&str]) -> ScanConfig {
         let base = ["rmasscan", "10.0.0.0/30", "-pU:53"];
         Cli::try_parse_masscan([&base[..], extra].concat())
             .unwrap()
             .to_config()
             .unwrap()
-    }
-
-    /// Задача 6, шаг 2: в 4a `--banners` (и `--rawudp`, который его включает) с портом TCP отказывает с кодом 1 до
-    /// обнаружения и любого кадра (живой скан и `--offline`): TCP-баннерам нужен стек TCP, он придёт в 4b. `-pU:53`
-    /// проходит; `--nobanners` правее снимает отказ; `-sL` и `--echo` ничего не сканируют и принимают любые порты.
-    #[test]
-    fn banners_with_tcp_ports_is_refused_in_4a() {
-        for extra in [
-            &["-p80", "--banners"][..],
-            &["-p80,U:53", "--rawudp"],
-            &["--banners", "-pU:53,T:443"],
-            &["-pU:53", "--top-ports", "5", "--banner"],
-        ] {
-            // `FakeBackend::open` и `interrupts` паникуют: отказ раньше обнаружения и Ctrl-C.
-            for op in [&["rmasscan"][..], &["rmasscan", "--offline", "--seed", "1"]] {
-                let e = run_args(&[op, &["198.51.100.1"], extra].concat()).unwrap_err();
-                assert!(
-                    e.contains("TCP banners") && e.contains("next sub-stage"),
-                    "{extra:?}: {e}"
-                );
-                assert_eq!(error_text(&e), format!("rmasscan: error: {e}"));
-            }
-        }
-        for ok in [
-            &[
-                "--offline",
-                "198.51.100.1",
-                "-pU:53",
-                "--banners",
-                "--seed",
-                "1",
-            ][..],
-            &[
-                "--offline",
-                "198.51.100.1",
-                "-pU:53,S:2905,I:0",
-                "--rawudp",
-                "--seed",
-                "1",
-            ],
-            &[
-                "--offline",
-                "198.51.100.1",
-                "-p80",
-                "--banners",
-                "--nobanners",
-                "--seed",
-                "1",
-            ],
-            &["--echo", "198.51.100.1", "-p80", "--banners", "--seed", "1"],
-            &["-sL", "198.51.100.1", "-p80", "--rawudp", "--seed", "1"],
-        ] {
-            run_args(&[&["rmasscan"][..], ok].concat()).unwrap();
-        }
     }
 
     /// `--banners`/`--banner` (`src/main-conf.c:1106-1116`) и `--rawudp` (`:1118-1130`, ставит и `banners`) в `--echo`
@@ -866,6 +872,15 @@ mod tests {
             .map(ToString::to_string)
             .unwrap_or_default();
         assert!(help.contains("--output-format certs"), "{help}");
+        // Финальное ревью, M1: опции, которые clap не перечисляет (имя несёт порт или поле), названы в справке.
+        for opt in [
+            "--hello-string[PORT] BASE64",
+            "--hello-file[PORT] FILE",
+            "--http-header NAME:VALUE",
+            "--http-header[NAME] VALUE",
+        ] {
+            assert!(help.contains(opt), "{opt}: {help}");
+        }
     }
 
     /// Р19: флаги вывода и статуса вне живого скана и `--readscan` отклоняются до любого вывода и любого файла.

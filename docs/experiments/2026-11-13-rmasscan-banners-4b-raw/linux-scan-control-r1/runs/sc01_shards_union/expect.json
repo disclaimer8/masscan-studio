@@ -1,0 +1,26 @@
+{
+  "tag": "sc01_shards_union",
+  "steps": [
+    {
+      "name": "shard1",
+      "who": "rmasscan",
+      "links": 1,
+      "interrupt": false,
+      "netem": false
+    },
+    {
+      "name": "shard2",
+      "who": "rmasscan",
+      "links": 1,
+      "interrupt": false,
+      "netem": false
+    },
+    {
+      "name": "oracle",
+      "who": "oracle",
+      "links": 1,
+      "interrupt": false,
+      "netem": false
+    }
+  ]
+}

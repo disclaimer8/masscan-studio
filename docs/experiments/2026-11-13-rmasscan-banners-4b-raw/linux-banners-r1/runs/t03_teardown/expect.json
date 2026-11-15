@@ -1,0 +1,26 @@
+{
+  "tag": "t03_teardown",
+  "plan_ports": "80,3389",
+  "rawudp": false,
+  "steps": [
+    {
+      "name": "binary",
+      "who": "rmasscan",
+      "out": "binary"
+    },
+    {
+      "name": "oracle-binary",
+      "who": "oracle",
+      "out": "binary"
+    }
+  ],
+  "tcp": {
+    "source": "198.18.0.9",
+    "neighbour_entry": true,
+    "banners": true,
+    "noreset": false,
+    "connection_timeout": null,
+    "wait": 6,
+    "heartbeat": true
+  }
+}

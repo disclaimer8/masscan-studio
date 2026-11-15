@@ -1,0 +1,15 @@
+tcp-oracle v1 port=445 capture=none segments=2 bytes=13
+run whole calls=1
+app_proto 10
+record 10 6 "SMBv1 "
+end
+run bytewise calls=13
+app_proto 10
+record 1 7 =stream
+record 10 6 "SMBv1 "
+end
+run given calls=2
+app_proto 10
+record 1 2 =stream
+record 10 6 "SMBv1 "
+end

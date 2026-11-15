@@ -106,6 +106,14 @@ pub(crate) trait PairPlan {
     }
     /// Frames of the scanner off the stand (a safety finding).
     fn foreign(fr: &Frames, st: &Stand) -> Vec<String>;
+    /// SYNs on a capture from outside the stand binding or to an address off the stand (a safety finding): those of
+    /// the Linux stand's one scanner address unless the plan's cases scan from more (the banners plan's TCP sources).
+    fn foreign_syns(fr: &Frames) -> usize {
+        av::foreign_syns(fr, &av::stand(Plan::Linux))
+    }
+    /// The stand `av::stray_scan` judges the peer captures outside the planned cases by; `None` when the plan's own
+    /// [`Self::foreign_syns`] and the MAC check do it instead (a plan whose cases scan from several addresses).
+    const STRAY_PLAN: Option<Plan> = Some(Plan::Linux);
     /// What a text file names beyond `token_problems`' allowlist.
     fn text_problems(text: &str, scanner_text: bool) -> Vec<String>;
     /// What an `-oB` file names outside the stand.
@@ -149,6 +157,18 @@ pub(crate) trait PairPlan {
         rm: &[Self::Rec],
         oracle: &[Self::Rec],
     ) -> (Vec<Self::Rec>, Vec<Self::Rec>, usize, &'static str);
+    /// After every step's own checks and before any comparison with C: the plan's conditions without which a
+    /// difference from C says nothing about rmasscan (its named deviations, the oracle's forced exit). An unmet one is
+    /// INVALID here, so the comparisons after it are INVALID too and never a FAIL with `behaviour`. `tally` is what
+    /// the comparisons count ([`tally_of`]).
+    fn before_vs_c(
+        _r: &mut Run,
+        _c: &Self::Case,
+        _sides: &[Side<Self::View>],
+        _docs: &[Option<Doc<Self::Rec>>],
+        _tally: Tally,
+    ) {
+    }
     /// After the step loop: the plan's case checks, deviations and notes.
     fn finish(
         r: &mut Run,
@@ -529,6 +549,7 @@ fn judge<P: PairPlan>(r: &mut Run, c: &P::Case, sides: &[Side<P::View>]) {
         }
         docs.push(d);
     }
+    P::before_vs_c(r, c, sides, &docs, tally_of::<P>(c, sides, &docs));
     // Each document: rmasscan's step against the oracle's step of the same document.
     let mut tally = Tally::default();
     let mut order = Map::new();
@@ -620,6 +641,31 @@ fn judge<P: PairPlan>(r: &mut Run, c: &P::Case, sides: &[Side<P::View>]) {
     );
     r.notes
         .insert("scanner_frames".into(), Value::Object(scanner_notes));
+}
+
+/// What the comparisons of a case count, before they run: probe pairs equal only by a named rule, C's records
+/// collapsed (the same sums as the pair loop of [`judge`]).
+fn tally_of<P: PairPlan>(
+    c: &P::Case,
+    sides: &[Side<P::View>],
+    docs: &[Option<Doc<P::Rec>>],
+) -> Tally {
+    let mut t = Tally::default();
+    for (i, pair) in sides.chunks(2).enumerate() {
+        let [rm, or] = pair else { continue };
+        if let (Some(a), Some(b)) = (&rm.view, &or.view) {
+            let (a, b) = (a.probe_frames(), b.probe_frames());
+            t.by_rule += a
+                .iter()
+                .zip(&b)
+                .filter(|(x, y)| P::same_probe(x, y) == Some(true))
+                .count();
+        }
+        if let (Some(Some(x)), Some(Some(y))) = (docs.get(2 * i), docs.get(2 * i + 1)) {
+            t.collapsed += P::vs_c(c, &x.records, &y.records).2;
+        }
+    }
+    t
 }
 
 /// `notes.scanner_frames.<step>`: the count of every named class, the unexplained frames and the bounds.
@@ -766,7 +812,7 @@ fn verify_run<P: PairPlan>(root: &Path, c: &P::Case, root_links: &[String]) -> R
     for s in &sides {
         if let Some(fr) = &s.frames {
             let who = s.spec.name;
-            let n = av::foreign_syns(fr, &st);
+            let n = P::foreign_syns(fr);
             r.safety(
                 &format!(
                     "no {} on the {who} capture from outside the stand binding or to an address off the stand",
@@ -962,7 +1008,7 @@ fn stray_scan<P: PairPlan>(root: &Path, tags: &[&'static str], t: &Tree) -> Vec<
             .any(|tag| rel.starts_with(&format!("runs/{tag}/")))
     };
     let st = av::stand(Plan::Linux);
-    let mut out = av::stray_scan(root, Some(Plan::Linux), tags, t);
+    let mut out = av::stray_scan(root, P::STRAY_PLAN, tags, t);
     for f in t
         .files
         .iter()
@@ -971,6 +1017,15 @@ fn stray_scan<P: PairPlan>(root: &Path, tags: &[&'static str], t: &Tree) -> Vec<
         let mut r = Run::new(&format!("{f} (every protocol)"));
         r.argv_ok = true;
         if let Some((fr, _)) = verify::load_pcap(&mut r, &root.join(f)) {
+            if P::STRAY_PLAN.is_none() {
+                let n = P::foreign_syns(&fr);
+                r.safety(
+                    "no SYN on the peer capture from outside the stand binding or to an address off the stand",
+                    n == 0,
+                    n,
+                );
+                av::no_foreign_frame(&mut r, "peer", &fr, &st);
+            }
             let off = P::foreign(&fr, &st);
             r.safety(
                 "no frame of the scanner on the capture to an address off the stand or from another source",
@@ -1123,6 +1178,70 @@ pub(crate) fn scanner_frame_checks<V>(
             .map(|(k, n, max)| format!("{k} {n} of at most {max}"))
             .collect::<Vec<_>>()
             .join(", "),
+    );
+}
+/// The scanner's own frames that the stand's replies and requests make it send, both scanners alike, each exact (FAIL
+/// on rmasscan's step, INVALID on the oracle's): the stateless RST (R8) of every distinct TCP reply (`replies`, by C's
+/// dedup key, with the time of its first copy) against every stateless RST on the wire (`rsts`), after the reply it
+/// resets, none with `--banners` or `--noreset` ([`av::stateless_rst_problems`]), each with valid sums
+/// ([`av::stateless_rst_sum_problems`]: rmasscan computes them in full, C's IPv4 header sum is wrong for about 1e-5 of
+/// its stack frames, E1.10, so that is INVALID on the oracle's step, never its FAIL); and the scanner's ARP replies
+/// (`answers`) to the peer's who-has for its address (`requests`, [`av::scanner_arp_answer_problems`]), owed while the
+/// scanner certainly runs (`probes`: its first and last probe, [`av::answering`]). The stand (`st`) gives the
+/// scanner's MAC and IPv4 address.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn own_frame_checks<V>(
+    r: &mut Run,
+    s: &Side<V>,
+    replies: &BTreeMap<String, f64>,
+    rsts: &[av::OwnRst],
+    requests: &[(f64, Vec<u8>)],
+    answers: &[(f64, Vec<u8>)],
+    probes: Option<(f64, f64)>,
+    st: &Stand,
+) {
+    let first4 = |p: &[String]| p.iter().take(4).cloned().collect::<Vec<_>>().join("; ");
+    let p = av::stateless_rst_problems(av::stateless_rst_on(&s.spec.argv), replies, rsts);
+    cap(
+        r,
+        s,
+        "the scanner's stateless RST (R8, C src/main.c:1094-1100): exactly one per distinct TCP reply of the stand (SYN-ACK or RST, C's dedup key), after the reply it resets, in the SYN template's form (seq the reply's acknowledgment, ack 0, flags 0x04, window 1200, the SYN's options, C's IPv4 identification), none with --banners or --noreset",
+        p.is_empty(),
+        if p.is_empty() {
+            format!("{} RSTs for {} replies", rsts.len(), replies.len())
+        } else {
+            first4(&p)
+        },
+    );
+    let p = av::stateless_rst_sum_problems(rsts);
+    cap(
+        r,
+        s,
+        "the scanner's stateless RSTs carry a valid TCP checksum and, over IPv4, a valid header checksum (src/templ-pkt.c:466-473, :503-508, :604-606; a frame with a wrong sum resets nothing; E1.10: C's incremental IPv4 header sum may be wrong, INVALID on the oracle's step)",
+        p.is_empty(),
+        if p.is_empty() {
+            format!("{} RSTs", rsts.len())
+        } else {
+            first4(&p)
+        },
+    );
+    let p = av::scanner_arp_answer_problems(
+        requests,
+        answers,
+        av::answering(probes, &s.spec.argv),
+        st.scanner_mac,
+        st.scanner_ip,
+    );
+    cap(
+        r,
+        s,
+        "the scanner answers the peer's who-has for its address in C's form (60 bytes to the requester, src/stack-arpv4.c:282-363): exactly once for a request between its first probe and --wait - 1 s after its last (less 0.1 s), at most once for any other, never without a request",
+        p.is_empty(),
+        if p.is_empty() {
+            format!("{} replies for {} requests", answers.len(), requests.len())
+        } else {
+            first4(&p)
+        },
     );
 }
 /// Each named deviation of a case (`names`, their rules in `table`): `judge(name)` gives whether the wire condition

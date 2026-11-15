@@ -1,0 +1,4 @@
+tcp-banner-input v1
+port 23
+capture none
+segment 6c6f67696e3a20fffa186869fff0627965fff6

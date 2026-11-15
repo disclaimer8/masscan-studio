@@ -1,0 +1,10 @@
+    Checking rmasscan-core v0.1.0 ($REPO/rmasscan/crates/rmasscan-core)
+    Checking studio-inspection v0.1.0 ($REPO/studio/crates/studio-inspection)
+    Checking rmasscan-engine v0.1.0 ($REPO/rmasscan/crates/rmasscan-engine)
+    Checking rmasscan-net v0.1.0 ($REPO/rmasscan/crates/rmasscan-net)
+    Checking studio-protocol v0.1.0 ($REPO/studio/crates/studio-protocol)
+    Checking studio-platform v0.1.0 ($REPO/studio/crates/studio-platform)
+    Checking studio-store v0.1.0 ($REPO/studio/crates/studio-store)
+    Checking studio-runner v0.1.0 ($REPO/studio/crates/studio-runner)
+    Checking studio-app v0.1.0 ($REPO/studio/crates/studio-app)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.29s

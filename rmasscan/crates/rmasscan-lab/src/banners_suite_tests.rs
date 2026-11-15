@@ -7,9 +7,12 @@ use crate::{
     autodetect_suite::{Running, SH, p2s},
     autodetect_verify::{
         self as av,
-        tests::{LAB_ID, Sim as AdSim, TEARDOWN, linux_isolation},
+        tests::{LAB_ID, Sim as AdSim, TEARDOWN},
     },
     banners_verify::tests::Sim,
+    capture,
+    ipv6_suite::ipv6_outside_the_lab,
+    ipv6_verify::tests::ipv6_isolation,
     pcap,
     protocols_suite::{
         ECHO_IGNORE, PROTOCOLS, RATEMASK,
@@ -99,12 +102,16 @@ impl LinuxHost for FakeBanners {
         self.note(argv, &[]);
         self.execs.borrow_mut().push(argv.to_vec());
         if argv.iter().any(|a| a == "isolation") {
-            fs::write(after(argv, "--out"), linux_isolation()).unwrap();
+            fs::write(after(argv, "--out"), ipv6_isolation()).unwrap();
         }
         let stdout = match argv.last().map(String::as_str) {
             Some(RATEMASK) => format!("{}\n", self.ratemask.borrow()),
             Some(ECHO_IGNORE) => "0\n".into(),
             Some(PROTOCOLS) => "UDP       1152      0       2   NI       0   yes  kernel\n".into(),
+            Some(bv::TW_BUCKETS) => "0\n".into(),
+            // The stand's IPv6 (ipv6_suite::ipv6_stack): the veth's settings, then its addresses.
+            Some(l) if l.starts_with("/proc/sys/net/ipv6/conf/") => "0\n0\n0\n0\n0\n0\n".into(),
+            Some(iface) if argv.iter().any(|a| a == "addr") => addr_json(iface),
             _ => String::new(),
         };
         Ok(Output {
@@ -203,6 +210,21 @@ impl LinuxHost for FakeBanners {
     }
 }
 
+/// `ip -6 -j addr show dev IF` of a side of the IPv6 stand, every address usable.
+fn addr_json(iface: &str) -> String {
+    let (ulas, ll): (Vec<&str>, &str) = if iface == "veth-a" {
+        (vec![capture::IPV6_SCANNER], capture::IPV6_SCANNER_LL)
+    } else {
+        (capture::IPV6_PEERS.to_vec(), capture::IPV6_PEER_LL)
+    };
+    let mut info: Vec<serde_json::Value> = ulas
+        .iter()
+        .map(|a| serde_json::json!({"family":"inet6","local":a,"prefixlen":64,"scope":"global","nodad":true}))
+        .collect();
+    info.push(serde_json::json!({"family":"inet6","local":ll,"prefixlen":64,"scope":"link"}));
+    serde_json::json!([{"ifindex":2,"ifname":iface,"addr_info":info}]).to_string()
+}
+
 struct Setup {
     root: PathBuf,
     out: PathBuf,
@@ -216,7 +238,7 @@ fn setup(tags: &[&'static str]) -> Setup {
     let work = out.join(".work");
     fs::create_dir_all(&work).unwrap();
     fs::write(work.join("host-links-before.txt"), "eno1\nlo\n").unwrap();
-    fs::write(out.join(bv::ISOLATION_JSON), linux_isolation()).unwrap();
+    fs::write(out.join(bv::ISOLATION_JSON), ipv6_isolation()).unwrap();
     let (lab, rm, oracle) = (
         root.join("rmasscan-lab"),
         root.join("rmasscan"),
@@ -286,7 +308,19 @@ fn the_suite_writes_what_the_verifier_reads_for_every_case() {
         ] {
             assert!(d.join(f).is_file(), "{tag} {f}");
         }
+        assert_eq!(
+            d.join(bv::PEER_TCP_JSON).is_file(),
+            bv::tcp_case(tag).is_some(),
+            "{tag}: peer-tcp.json for a TCP case only"
+        );
+        let resolve = bv::tcp_case(tag).is_some_and(|c| c.resolve);
         for step in bv::steps(tag).unwrap() {
+            assert_eq!(
+                d.join(step.name).join(bv::NEIGH_FLUSH_JSON).is_file(),
+                resolve,
+                "{tag}/{}: neigh-flush.json for a step of a resolve case only",
+                step.name
+            );
             for f in [
                 "argv.json",
                 "stdout.txt",
@@ -391,12 +425,131 @@ fn every_target_of_the_table_is_on_the_stand() {
     for tag in bv::planned_tags() {
         for s in bv::steps(tag).unwrap() {
             assert!(
-                addresses_outside_the_lab(&s.argv).is_empty(),
+                addresses_outside_the_lab(&s.argv).is_empty()
+                    && ipv6_outside_the_lab(&s.argv).is_empty(),
                 "{tag}/{}",
                 s.name
             );
         }
     }
+}
+
+#[test]
+fn a_tcp_case_gets_the_scenario_responder_and_a_resolve_case_a_fresh_peer_entry_per_step() {
+    let s = setup(&[
+        "t01_tcp4",
+        "t07_resolve_arp",
+        "t08_resolve_ndp",
+        "t09_quiet_timers",
+    ]);
+    assert_eq!(run_suite(&s).unwrap(), 0);
+    let responders = s.fake.of("responder");
+    assert_eq!(responders.len(), 4 + 2 + 2 + 1, "one responder per step");
+    for (r, tag) in responders.iter().zip(
+        ["t01_tcp4"; 4]
+            .into_iter()
+            .chain(["t07_resolve_arp"; 2])
+            .chain(["t08_resolve_ndp"; 2])
+            .chain(["t09_quiet_timers"]),
+    ) {
+        let at = r.iter().position(|a| a == "responder").unwrap();
+        let ready = r.iter().position(|a| a == "--ready").unwrap();
+        assert_eq!(
+            r[at + 1..ready],
+            bv::tcp_responder_args(&bv::tcp_case(tag).unwrap())[..],
+            "{tag}"
+        );
+        // The quiet control (M3) runs its responder without the heartbeat, every other TCP case with it.
+        assert_eq!(
+            r.iter().any(|a| a == "--heartbeat-iface"),
+            tag != "t09_quiet_timers",
+            "{tag}"
+        );
+    }
+    // The quiet control runs rmasscan only.
+    assert_eq!(s.fake.of(&s.fake.oracle).len(), 2 + 1 + 1);
+    // Before each step of a resolve case, and only then: ip -n <peer ns> [-6] neigh flush to <source> dev veth-b.
+    let flushes: Vec<Vec<String>> = s
+        .fake
+        .execs
+        .borrow()
+        .iter()
+        .filter(|a| a.iter().any(|x| x == "flush"))
+        .cloned()
+        .collect();
+    let want = |six: bool, src: &str| {
+        let mut v = strings(&[crate::autodetect_suite::IP, "-n", "wl-peer-41-42"]);
+        if six {
+            v.push("-6".into());
+        }
+        v.extend(strings(&["neigh", "flush", "to", src, "dev", "veth-b"]));
+        v
+    };
+    assert_eq!(
+        flushes,
+        [
+            want(false, "198.18.0.10"),
+            want(false, "198.18.0.10"),
+            want(true, "fd00:198:18::a"),
+            want(true, "fd00:198:18::a"),
+        ]
+    );
+    // Each flush is recorded in its step's directory (M8): the command and its exit code.
+    for (tag, six, src) in [
+        ("t07_resolve_arp", false, "198.18.0.10"),
+        ("t08_resolve_ndp", true, "fd00:198:18::a"),
+    ] {
+        for step in bv::steps(tag).unwrap() {
+            let rec: bv::NeighFlush = serde_json::from_slice(
+                &fs::read(
+                    s.out
+                        .join("runs")
+                        .join(tag)
+                        .join(step.name)
+                        .join(bv::NEIGH_FLUSH_JSON),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(
+                rec,
+                bv::NeighFlush {
+                    argv: want(six, src),
+                    rc: 0
+                },
+                "{tag}/{}",
+                step.name
+            );
+        }
+    }
+    // The suite's own seal of every case is the IPv6 stand's.
+    let modes: Vec<String> = s
+        .fake
+        .execs
+        .borrow()
+        .iter()
+        .filter(|a| a.iter().any(|x| x == "isolation"))
+        .map(|a| after(a, "--mode").to_owned())
+        .collect();
+    assert!(
+        !modes.is_empty() && modes.iter().all(|m| m == "ipv6"),
+        "{modes:?}"
+    );
+    fs::remove_dir_all(&s.root).unwrap();
+}
+
+#[test]
+fn a_stand_whose_ipv6_is_not_the_banners_stand_refuses_the_suite() {
+    // isolation.json of the autodetect stand (no IPv6): the TCP cases over IPv6 could not run.
+    let s = setup(&bv::planned_tags());
+    fs::write(s.out.join(bv::ISOLATION_JSON), av::tests::linux_isolation()).unwrap();
+    let m = not_run_text(run_suite(&s));
+    assert!(
+        m.contains("does not attest the sealed banners stand"),
+        "{m}"
+    );
+    assert!(s.fake.spawned.borrow().is_empty(), "nothing was started");
+    fs::remove_dir_all(&s.root).unwrap();
 }
 
 // ------------------------------------------------------------------ wire-lab.sh
@@ -424,9 +577,54 @@ fn wire_lab_raises_the_banners_stand_as_the_protocols_stand_and_starts_the_banne
             "an ICMP setting outside the peer namespace: {l}"
         );
     }
-    // The seal is the autodetect stand's (no IPv6, no second link).
-    for l in text.lines().filter(|l| l.contains("ISOLATION_MODE=")) {
-        assert!(!l.contains("banners"), "{l}");
+    // No TIME_WAIT socket in the peer namespace, for this suite only (every step of a TCP case reuses its 4-tuples).
+    assert!(
+        text.lines()
+            .any(|l| l
+                == r#"[ "$SUITE" != banners ] || nsb sysctl -qw net.ipv4.tcp_max_tw_buckets=0"#)
+    );
+    for l in text
+        .lines()
+        .filter(|l| l.contains("tcp_max_tw_buckets") && !l.trim_start().starts_with('#'))
+    {
+        assert!(l.contains("nsb ") || l.contains("note_cmd"), "{l}");
+        assert!(l.starts_with(r#"[ "$SUITE" != banners ] || "#), "{l}");
+    }
+    // The seal is the IPv6 stand's: the ipv6 suite's stand raised for this suite too (its TCP cases over IPv6).
+    assert!(
+        text.lines()
+            .any(|l| l == r#"[ "$SUITE" != banners ] || ISOLATION_MODE=ipv6"#)
+    );
+    assert!(text.lines().any(|l| l
+        == r#"IPV6_STAND=0; [ "$SUITE" != ipv6 ] || IPV6_STAND=1; [ "$SUITE" != banners ] || IPV6_STAND=1"#));
+    // The TCP sources are the verifier's, with a permanent neighbour entry in the peer namespace only.
+    assert!(text.contains(&format!(
+        "IP_TCP_SRC={}; IP6_TCP_SRC={}",
+        bv::TCP_SOURCE,
+        bv::TCP_SOURCE6
+    )));
+    let entries: Vec<&str> = text
+        .lines()
+        .filter(|l| l.contains("TCP_SRC") && l.contains("neigh add") && !l.contains("note_cmd"))
+        .collect();
+    assert_eq!(
+        entries,
+        [
+            r#"[ "$SUITE" != banners ] || ip -n "$NS_B" neigh add "$IP_TCP_SRC" lladdr "$MAC_A" dev "$IF_B" nud permanent"#,
+            r#"  [ "$SUITE" != banners ] || ip -n "$NS_B" -6 neigh add "$IP6_TCP_SRC" lladdr "$MAC_A" dev "$IF_B" nud permanent"#,
+        ]
+    );
+    // The resolve cases' sources get no entry anywhere: the scanners answer ARP and NDP for them.
+    for src in [
+        bv::RESOLVE_SOURCE.to_string(),
+        bv::RESOLVE_SOURCE6.to_string(),
+    ] {
+        assert!(
+            !text
+                .lines()
+                .any(|l| l.contains(&src) && !l.trim_start().starts_with('#')),
+            "{src}"
+        );
     }
     let suite = text
         .split("start_suite_group \"$OUT/suite.log\" \"$LAB_BIN\" banners-suite linux")

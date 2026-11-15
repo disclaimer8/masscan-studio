@@ -8,13 +8,27 @@
 //!   и внутри каждого повтора/сна throttle (отрезки сна <= 50 мс).
 //! - RX выходит при `halt >= STOP`. При `PAUSE` и при естественном конце TX
 //!   он отрабатывает `wait` (по инжектированным часам) и выходит.
+//! - С ответом на NS (`source_ipv6`), ответчиком ARP ([`EngineOptions::arp_responder`]), стеком TCP или RST без
+//!   состояния TX после последнего зонда (и после Pause) живёт, пока не кончится RX, и отправляет
+//!   очередь своего адаптера (`src/main.c:470-494`); Stop и отказ его прерывают.
 //! - Каждый поток владеет своим handle адаптера и освобождает его до
 //!   публикации выхода. Поток, вышедший вторым, вычисляет единственный
 //!   [`Outcome`] и кладёт его в очередь отдельно от результатов; `Finished`
 //!   выдаётся только когда принятые результаты уже вычитаны.
 //! - `Drop` handle = Stop + join обоих потоков.
-//! - Ничто в рабочих потоках не блокируется на потребителе: очередь
+//! - Во время скана ничто в рабочих потоках не блокируется на потребителе: очередь
 //!   результатов ограничена и при переполнении даёт `Failed(ConsumerTooSlow)`.
+//!   Единственное ожидание потребителя это сброс таблицы стека TCP в конце RX
+//!   (`EngineOptions::tcp_stack`, справка 4b A9): наборы баннеров соединений ждут
+//!   места в очереди, перепроверяя Stop не реже раза в 50 мс; Stop, `Drop` handle и
+//!   `join`/`join_drain` его прерывают, естественный конец он в `Failed` не превращает.
+//!
+//! # Блокировки стека TCP
+//! Таблица соединений принадлежит своему RX-потоку и вызывается без единой
+//! блокировки. Блокировка очереди результатов берётся только внутри методов
+//! `Queue` (ни один вызов стека и ни один `keep_going` под ней не идёт), блокировка
+//! очереди кадров стека адаптера (`stack_out`) только на перекладывание готовых
+//! кадров; две эти блокировки никогда не держатся вместе.
 
 use std::cell::Cell;
 use std::collections::{HashSet, VecDeque};
@@ -24,14 +38,17 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
+use rmasscan_core::arp::ARP_FRAME_LEN;
 use rmasscan_core::banner::BannerRecord;
 use rmasscan_core::ndp::NDP_FRAME_LEN;
 use rmasscan_core::packet::LinkType;
 use rmasscan_core::probe::{NicBinding, PlanError, ProbeCursor, ReadyPlan};
-use rmasscan_core::receive::{PortStatus, Reply, ndp_reply_for, parse_reply};
+use rmasscan_core::receive::{PortStatus, Reply, arp_reply_for, ndp_reply_for, parse_reply};
+use rmasscan_core::stack::{StackOutput, StackStats, TableParams, TcpStack};
+use rmasscan_core::tcp_frame::{TcpFrameBuilder, stateless_rst, tcp_segment};
 use rmasscan_core::throttle::{Clock, SystemClock, Throttler};
 
-use crate::banners::{BannerOptions, Output, udp_reply_banners};
+use crate::banners::{BannerOptions, Output, StackSummary, TcpStackOptions, udp_reply_banners};
 use crate::checkpoint::{CHECKPOINT_FORMAT_VERSION, Checkpoint, CheckpointError};
 use crate::events::{Event, FailReason, Outcome, Progress, Reason};
 use crate::identity::{ENGINE_ALGORITHM_VERSION, job_digest};
@@ -71,6 +88,21 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+/// Потолок очереди кадров стека TCP на адаптер (RX кладёт, TX отправляет): `BUFFER_COUNT - 1` буферов пула C
+/// (`src/stack-queue.c:105-124`, справка A8). RX на полной очереди не ждёт (Р7, у C ждёт, E1.12): кадр выбрасывается
+/// и считается в [`StackSummary::frames_dropped`].
+pub const STACK_OUT_CAP: usize = 16_383;
+
+/// Сколько соединений уничтожает один вызов `TcpStack::finish` в сбросе таблицы в конце RX: между порциями RX
+/// отдаёт их баннеры в очередь (с ожиданием места), и таблица не выдаёт сразу все баннеры скана.
+const FLUSH_CONNECTIONS: usize = 64;
+
+/// Шаг ожидания места в очереди при сбросе в конце: не реже этого RX перепроверяет Stop.
+const ROOM_RECHECK: Duration = Duration::from_millis(50);
+
+/// Бюджет очереди результатов в байтах нагрузки баннеров по умолчанию (64 МиБ).
+pub const DEFAULT_RESULT_BYTE_CAPACITY: usize = 64 * 1024 * 1024;
+
 /// Параметры запуска. `wait` берётся из плана.
 #[derive(Debug, Clone)]
 pub struct EngineOptions {
@@ -79,6 +111,10 @@ pub struct EngineOptions {
     /// Сколько элементов (принятых ответов и, с [`Self::banners`], их баннеров) может ждать потребителя. Ответ
     /// принимается, пока очередь не полна, и встаёт вместе со своими баннерами.
     pub result_capacity: usize,
+    /// Сколько байт нагрузки баннеров может ждать потребителя (по умолчанию [`DEFAULT_RESULT_BYTE_CAPACITY`], ноль
+    /// запрещён). Один порог на любой набор баннеров: набор встаёт целиком или не встаёт, пустая очередь принимает
+    /// любой набор. Ответы без баннеров на байты не смотрят.
+    pub result_byte_capacity: usize,
     /// Максимум ответов в одном `Event::Results`.
     pub event_batch_limit: usize,
     pub progress_interval: Duration,
@@ -94,6 +130,29 @@ pub struct EngineOptions {
     /// разбирается, кадры, события и [`EngineHandle::recv_event_timeout`] побайтно прежние, а
     /// [`EngineHandle::recv_output_timeout`] не выдаёт [`Output::Banner`].
     pub banners: Option<BannerOptions>,
+    /// Пользовательский стек TCP (`--banners`, подэтап 4b). `None` (по умолчанию, так у Studio): ни тиков, ни
+    /// разбора сегментов, ни [`Output::ConnectionBanner`], путь приёма побайтно прежний. С `Some` каждый RX-поток
+    /// ведёт свою таблицу ([`TcpStackOptions`]): таймеры на каждой итерации приёма, сегменты до статуса и дедупа
+    /// (справка A1), сброс живых соединений в конце RX ([`EngineHandle::stack_stats`] даёт счётчики). Кадры стека
+    /// TX отправляет впереди SYN каждой пачки в счёт `--rate` и после зондов до конца RX (справка A8).
+    pub tcp_stack: Option<TcpStackOptions>,
+    /// RST без состояния (Р8, справка A7; CLI ставит его без `--banners` и без `--noreset`). С `true` и без
+    /// [`Self::tcp_stack`] за каждым ответом TCP с SYN-ACK или RST, прошедшим cookie и дедуп, RX ставит RST в очередь
+    /// кадров своего адаптера (`src/main.c:1094-1100`); повтор ответа и ICMP Port Unreachable RST не получают. TX
+    /// отправляет очередь впереди SYN каждой пачки в счёт `--rate`, а после зондов ждёт конца RX, так что RST получает и
+    /// ответ, пришедший в окне `--wait`. Отправленные считает [`StackSummary::frames_sent`], не `Progress.sent`. Со
+    /// стеком TCP RST без состояния не шлётся (C: `tcpcon == NULL`). `false` (по умолчанию, так у Studio): кадры
+    /// прежние.
+    pub stateless_rst: bool,
+    /// Ответ на ARP-запросы к адресам источника IPv4 адаптера (`src/main.c:829`, `:878-887`,
+    /// `stack_arp_incoming_request`, `src/stack-arpv4.c:282-363`; CLI включает его в каждом живом скане, у C
+    /// переключателя нет). С `true` RX каждого адаптера Ethernet отвечает на запрос «кто имеет» адрес из диапазона
+    /// источника `nic[k]` кадром C ([`rmasscan_core::receive::arp_reply_for`]) через свою очередь (не больше 64
+    /// ответов, лишний выбрасывается и считается, RX не ждёт); TX отправляет её, как ответы на Neighbor Solicitation:
+    /// перед каждой пачкой зондов мимо throttle и после зондов до конца RX. Запрос, на который ушёл ответ, не результат
+    /// и не `Progress.discarded`; счётчики даёт [`EngineHandle::arp_stats`]. `false` (по умолчанию, так у Studio): кадры
+    /// и счётчики прежние.
+    pub arp_responder: bool,
 }
 
 impl EngineOptions {
@@ -102,14 +161,32 @@ impl EngineOptions {
             scan_id,
             attempt_id,
             result_capacity: 4096,
+            result_byte_capacity: DEFAULT_RESULT_BYTE_CAPACITY,
             event_batch_limit: 1000,
             progress_interval: Duration::from_millis(250),
             io_timeout: MAX_IO_TIMEOUT,
             dedup_capacity: MAX_DEDUP_ENTRIES,
             tx_stall_timeout: DEFAULT_TX_STALL_TIMEOUT,
             banners: None,
+            tcp_stack: None,
+            stateless_rst: false,
+            arp_responder: false,
         }
     }
+}
+
+/// Счётчики ответчика ARP ([`EngineOptions::arp_responder`]), сумма адаптеров. После `Finished` каждый запрос, на
+/// который построен ответ, посчитан ровно в одном поле.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ArpSummary {
+    /// Ответы, которые принял адаптер.
+    pub replies_sent: u64,
+    /// Ответы, которые не встали в очередь адаптера: в ней уже было 64 (RX не ждёт; C ждёт свободный буфер,
+    /// `src/stack-queue.c:8-21`).
+    pub queue_full: u64,
+    /// Ответы, взятые из очереди, но не отправленные: адаптер не принял (`WouldBlockUnsent`, `Uncertain`, ошибка;
+    /// ответ не повторяется, спросивший переспросит), либо Stop, отказ или конец скана застали их в очереди.
+    pub unsent: u64,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -218,60 +295,193 @@ impl DedupCache {
 
 // ---------------------------------------------------------------- queue ---
 
-/// Элемент очереди результатов: принятый ответ или баннер ответа, стоящего перед ним. Одна очередь на все RX-потоки:
-/// ответ и его баннеры кладутся под одной блокировкой ([`Queue::push_result`]), поэтому между ними ничего не встаёт.
+/// Элемент очереди результатов: принятый ответ, баннер ответа, стоящего перед ним, или баннер соединения TCP. Одна
+/// очередь на все RX-потоки: ответ и его баннеры кладутся под одной блокировкой ([`Queue::push_result`]), набор
+/// соединения тоже ([`Queue::push_conn_banners`]), поэтому между записями одного набора ничего не встаёт.
 enum Entry {
     Reply(Reply),
     Banner(Box<BannerRecord>),
+    ConnBanner(Box<BannerRecord>),
 }
 
 #[derive(Default)]
 struct QState {
     started: Option<u64>,
     results: VecDeque<Entry>,
+    /// Сумма нагрузки баннеров в `results` (бюджет `result_byte_capacity`).
+    banner_bytes: usize,
     progress: Option<Progress>,
     outcome: Option<Outcome>,
     checkpoint: Option<u64>,
     checkpoint_taken: bool,
     finished_taken: bool,
     closed: bool,
+    /// Потребитель ждёт потоки в `join`/`join_drain` и больше ничего не прочтёт: сброс в конце не ждёт места.
+    joining: bool,
+    /// Сколько производителей ждут места в `room` ([`Queue::push_conn_banners_waiting`]); без них выдача никого не
+    /// будит (путь Studio без стека не меняется).
+    room_waiters: usize,
+}
+
+impl QState {
+    /// Снимает баннер (ответа или соединения) с головы очереди и возвращает его байты бюджету. `None`, если во главе
+    /// ответ или очередь пуста (ответ остаётся на месте).
+    fn pop_banner(&mut self) -> Option<Output> {
+        let len = match self.results.front()? {
+            Entry::Reply(_) => return None,
+            Entry::Banner(b) | Entry::ConnBanner(b) => b.payload.len(),
+        };
+        let out = match self.results.pop_front()? {
+            Entry::Banner(b) => Output::Banner(*b),
+            Entry::ConnBanner(b) => Output::ConnectionBanner(*b),
+            Entry::Reply(r) => {
+                self.results.push_front(Entry::Reply(r));
+                return None;
+            }
+        };
+        debug_assert!(self.banner_bytes >= len);
+        self.banner_bytes = self.banner_bytes.saturating_sub(len);
+        Some(out)
+    }
+}
+
+/// Сумма нагрузки набора баннеров (насыщающая).
+fn payload_bytes(set: &[BannerRecord]) -> usize {
+    set.iter()
+        .fold(0usize, |a, b| a.saturating_add(b.payload.len()))
 }
 
 struct Queue {
     st: Mutex<QState>,
+    /// Новые элементы для потребителя.
     cv: Condvar,
+    /// Освободилось место: будит сброс в конце ([`Self::push_conn_banners_waiting`]). Та же блокировка `st`.
+    room: Condvar,
     capacity: usize,
+    byte_capacity: usize,
     batch_limit: usize,
 }
 
 impl Queue {
-    fn new(capacity: usize, batch_limit: usize) -> Self {
+    fn new(capacity: usize, byte_capacity: usize, batch_limit: usize) -> Self {
         Self {
             st: Mutex::new(QState::default()),
             cv: Condvar::new(),
+            room: Condvar::new(),
             capacity,
+            byte_capacity,
             batch_limit,
         }
     }
 
+    /// Правило приёма для любого набора (ответ с баннерами, позже набор соединения): очередь пуста, либо записей
+    /// меньше `capacity` и байты с набором не больше `byte_capacity`. Набор встаёт целиком или не встаёт; пустая
+    /// очередь принимает любой, иначе набор больше бюджета остановил бы скан навсегда.
+    fn fits(&self, st: &QState, new_bytes: usize) -> bool {
+        st.results.is_empty()
+            || (st.results.len() < self.capacity
+                && st.banner_bytes.saturating_add(new_bytes) <= self.byte_capacity)
+    }
+
     /// Не блокирует. `false` = очередь переполнена, ответ НЕ принят (и его баннеры тоже). Ёмкость считается по
-    /// элементам очереди, ответам и баннерам: ответ принимается, если очередь не полна, и встаёт под той же блокировкой
-    /// вместе со своими баннерами (очередь превышает ёмкость не больше чем на баннеры одного ответа). Без баннеров
-    /// проверка прежняя.
+    /// элементам очереди, ответам и баннерам, и по байтам нагрузки баннеров ([`Self::fits`]): ответ встаёт под той
+    /// же блокировкой вместе со своими баннерами (очередь превышает ёмкость не больше чем на баннеры одного ответа).
+    /// Без баннеров проверка по записям прежняя.
     fn push_result(&self, r: Reply, banners: Vec<BannerRecord>) -> bool {
         let mut st = lock(&self.st);
         if st.closed {
             return true; // потребителя нет: молча не храним
         }
-        if st.results.len() >= self.capacity {
+        let new_bytes = payload_bytes(&banners);
+        if !self.fits(&st, new_bytes) {
             return false;
         }
         st.results.push_back(Entry::Reply(r));
         st.results
             .extend(banners.into_iter().map(|b| Entry::Banner(Box::new(b))));
+        st.banner_bytes = st.banner_bytes.saturating_add(new_bytes);
         drop(st);
         self.cv.notify_all();
         true
+    }
+
+    /// Кладёт набор соединения (записи одного `banner_flush`, `src/stack-tcp-core.c:800-830`) под той же
+    /// блокировкой: правило [`Self::fits`], набор целиком или ничего, каждая запись отдельный элемент. Пустой набор
+    /// ничего не делает. Не блокирует; `false`: не встал (RX даёт `Failed(ConsumerTooSlow)`, как для ответа).
+    fn push_conn_banners(&self, set: Vec<BannerRecord>) -> bool {
+        if set.is_empty() {
+            return true;
+        }
+        let new_bytes = payload_bytes(&set);
+        let mut st = lock(&self.st);
+        if st.closed {
+            return true; // потребителя нет: молча не храним
+        }
+        if !self.fits(&st, new_bytes) {
+            return false;
+        }
+        Self::append_conn(&mut st, set, new_bytes);
+        drop(st);
+        self.cv.notify_all();
+        true
+    }
+
+    /// [`Self::push_conn_banners`] для сброса таблицы в конце RX (справка A9): ждёт, пока набор поместится
+    /// (потребитель дочитывает очередь, выдача будит `room`), и перепроверяет `keep_going` не реже раза в
+    /// [`ROOM_RECHECK`]. `keep_going` вызывается без блокировки очереди. `false` только когда `keep_going` сказал
+    /// стоп, а набор так и не поместился. Набор отбрасывается с `true`, если потребителя нет (`close`) или он ждёт
+    /// потоки в `join` и непрочитанные баннеры всё равно отбросит.
+    fn push_conn_banners_waiting(
+        &self,
+        set: Vec<BannerRecord>,
+        keep_going: &dyn Fn() -> bool,
+    ) -> bool {
+        if set.is_empty() {
+            return true;
+        }
+        let new_bytes = payload_bytes(&set);
+        let mut st = lock(&self.st);
+        loop {
+            if st.closed || st.joining {
+                return true;
+            }
+            if self.fits(&st, new_bytes) {
+                Self::append_conn(&mut st, set, new_bytes);
+                drop(st);
+                self.cv.notify_all();
+                return true;
+            }
+            drop(st);
+            if !keep_going() {
+                return false;
+            }
+            st = lock(&self.st);
+            // Место могло освободиться, пока блокировка была отпущена: перепроверить до ожидания.
+            if st.closed || st.joining || self.fits(&st, new_bytes) {
+                continue;
+            }
+            st.room_waiters += 1;
+            st = self
+                .room
+                .wait_timeout(st, ROOM_RECHECK)
+                .unwrap_or_else(PoisonError::into_inner)
+                .0;
+            st.room_waiters -= 1;
+        }
+    }
+
+    fn append_conn(st: &mut QState, set: Vec<BannerRecord>, new_bytes: usize) {
+        st.results
+            .extend(set.into_iter().map(|b| Entry::ConnBanner(Box::new(b))));
+        st.banner_bytes = st.banner_bytes.saturating_add(new_bytes);
+    }
+
+    /// Потребитель ушёл в `join`: ожидающий сброс в конце больше не ждёт места.
+    fn begin_join(&self) {
+        let mut st = lock(&self.st);
+        st.joining = true;
+        drop(st);
+        self.room.notify_all();
     }
 
     fn set_progress(&self, p: Progress) {
@@ -296,39 +506,27 @@ impl Queue {
         let mut st = lock(&self.st);
         st.closed = true;
         st.results.clear();
+        st.banner_bytes = 0;
         st.progress = None;
+        drop(st);
+        self.room.notify_all();
     }
 
-    /// Следующий элемент. [`Want::Events`] (прежний API) выбрасывает баннеры, поэтому без баннеров и для потребителя
-    /// событий порядок и пачки прежние; [`Want::Outputs`] отдаёт баннер отдельным элементом и обрывает на нём пачку
-    /// ответов (гарантия порядка [`Output`]).
+    /// Следующий элемент. [`Want::Events`] (прежний API) выбрасывает баннеры обоих видов, поэтому без баннеров и для
+    /// потребителя событий порядок и пачки прежние; [`Want::Outputs`] отдаёт баннер отдельным элементом и обрывает на
+    /// нём пачку ответов (гарантия порядка [`Output`]). Снятый элемент будит ожидающий сброс в конце (`room`).
     fn pop_locked(&self, st: &mut QState, want: Want) -> Result<Output, TryRecvError> {
         if let Some(range) = st.started.take() {
             return Ok(Output::Event(Event::Started { range }));
         }
-        while let Some(Entry::Banner(_)) = st.results.front() {
-            if let Some(Entry::Banner(b)) = st.results.pop_front()
-                && want == Want::Outputs
-            {
-                return Ok(Output::Banner(*b));
-            }
+        let before = st.results.len();
+        let entry = self.pop_entry(st, want);
+        // Место освободилось: разбудить сброс в конце, если он ждёт (без ожидающих никого не будим).
+        if st.results.len() < before && st.room_waiters > 0 {
+            self.room.notify_all();
         }
-        if !st.results.is_empty() {
-            let mut replies = Vec::with_capacity(st.results.len().min(self.batch_limit));
-            while replies.len() < self.batch_limit {
-                match st.results.front() {
-                    Some(Entry::Reply(_)) => {
-                        if let Some(Entry::Reply(r)) = st.results.pop_front() {
-                            replies.push(r);
-                        }
-                    }
-                    Some(Entry::Banner(_)) if want == Want::Events => {
-                        st.results.pop_front();
-                    }
-                    _ => break,
-                }
-            }
-            return Ok(Output::Event(Event::Results { replies }));
+        if let Some(o) = entry {
+            return Ok(o);
         }
         if let Some(p) = st.progress.take() {
             return Ok(Output::Event(Event::Progress(p)));
@@ -351,6 +549,34 @@ impl Queue {
         }))
     }
 
+    /// Элемент из `results`: баннер во главе (для [`Want::Outputs`]; [`Want::Events`] пропускает их с возвратом байт)
+    /// или пачка ответов до `batch_limit`, которую баннер любого вида обрывает (для [`Want::Events`] пропускается).
+    fn pop_entry(&self, st: &mut QState, want: Want) -> Option<Output> {
+        while let Some(b) = st.pop_banner() {
+            if want == Want::Outputs {
+                return Some(b);
+            }
+        }
+        if st.results.is_empty() {
+            return None;
+        }
+        let mut replies = Vec::with_capacity(st.results.len().min(self.batch_limit));
+        while replies.len() < self.batch_limit {
+            match st.results.front() {
+                Some(Entry::Reply(_)) => {
+                    if let Some(Entry::Reply(r)) = st.results.pop_front() {
+                        replies.push(r);
+                    }
+                }
+                Some(Entry::Banner(_) | Entry::ConnBanner(_)) if want == Want::Events => {
+                    st.pop_banner();
+                }
+                _ => break,
+            }
+        }
+        Some(Output::Event(Event::Results { replies }))
+    }
+
     /// Только события: [`Want::Events`] баннер не возвращает, повтор лишь страховка тотальности.
     fn pop_event_locked(&self, st: &mut QState) -> Result<Event, TryRecvError> {
         loop {
@@ -368,7 +594,7 @@ impl Queue {
     fn pop_timeout(&self, timeout: Duration) -> Result<Event, TryRecvError> {
         match self.wait_pop(timeout, Want::Events)? {
             Output::Event(e) => Ok(e),
-            Output::Banner(_) => Err(TryRecvError::Empty),
+            Output::Banner(_) | Output::ConnectionBanner(_) => Err(TryRecvError::Empty),
         }
     }
 
@@ -443,12 +669,44 @@ struct Shared {
     ndp_out: Vec<Mutex<VecDeque<[u8; NDP_FRAME_LEN]>>>,
     /// `plan.nics()[k].source_ipv6.is_some()`: отвечает ли адаптер `k` на Neighbor Solicitation.
     ndp_enabled: Vec<bool>,
+    /// [`EngineOptions::arp_responder`].
+    arp_responder: bool,
+    /// Ответы ARP от RX к TX своего адаптера (`stack_transmit_packetbuffer`, как `ndp_out`); не больше
+    /// [`ARP_OUT_CAP`]. Без ответчика пусты и не читаются.
+    arp_out: Vec<Mutex<VecDeque<[u8; ARP_FRAME_LEN]>>>,
+    /// [`ArpSummary`].
+    arp_replies_sent: AtomicU64,
+    arp_queue_full: AtomicU64,
+    arp_unsent: AtomicU64,
     clock: Arc<dyn Clock + Send + Sync>,
     io_timeout: Duration,
     wait_micros: u64,
     progress_micros: u64,
     /// [`EngineOptions::banners`]: RX разбирает датаграмму ответа, прошедшего дедуп.
     banners: Option<BannerOptions>,
+    /// Кадры стека TCP и RST без состояния от RX к TX своего адаптера (`stack_transmit_packetbuffer`,
+    /// `src/stack-queue.c:105-124`): пишет RX-поток адаптера (не больше [`STACK_OUT_CAP`], лишнее выбрасывается со
+    /// счётом), отправляет TX впереди SYN каждой пачки. Без [`EngineOptions::tcp_stack`] и
+    /// [`EngineOptions::stateless_rst`] очереди есть (по одной на адаптер), но всегда пусты и TX их не трогает.
+    stack_out: Vec<Mutex<VecDeque<Vec<u8>>>>,
+    /// TX берёт кадры из `stack_out` и после зондов ждёт конца RX: `tcp_stack.is_some() || stateless_rst`.
+    stack_tx: bool,
+    /// RX ставит RST без состояния за свежим ответом: `stateless_rst && tcp_stack.is_none()` (`src/main.c:1094`:
+    /// `tcpcon == NULL`).
+    stateless_rst: bool,
+    /// Последний слепок счётчиков таблицы каждого RX-потока (пишет свой RX: на шаге прогресса и при выходе).
+    stack_stats: Vec<Mutex<StackStats>>,
+    /// Кадры стека и RST без состояния, которые отправил TX (все адаптеры).
+    stack_frames_sent: AtomicU64,
+    /// Кадры стека и RST, которые не встали в `stack_out`, не построились или не отправились
+    /// ([`StackSummary::frames_dropped`]).
+    stack_frames_dropped: AtomicU64,
+    /// Кадры стека и RST, которые конец скана оставил неотправленными: остаток `stack_out` и сегменты сброса таблицы
+    /// ([`StackSummary::frames_left_unsent`]).
+    stack_frames_left_unsent: AtomicU64,
+    /// Живые соединения, брошенные несбросленными, когда `finish` ответил «ещё есть» без продвижения
+    /// ([`StackSummary::flush_abandoned`]).
+    stack_flush_abandoned: AtomicU64,
 }
 
 /// Сводка итогов потоков: "идёт", если хоть один идёт; "естественный конец",
@@ -585,6 +843,23 @@ impl Shared {
 
     /// Вызывается ровно один раз: потоком, вышедшим последним.
     fn finalize(&self) {
+        // Кадры стека, которые TX уже не отправил (RX кончился, Stop, отказ), не теряются молча, но и не выброшены:
+        // C бросает их в очереди (TX выходит по `is_rx_done`, `src/main.c:470-497`; очередь не досылается,
+        // `src/main.c:1119`). Все потоки вышли, новых кадров нет, и к `Finished` счётчик окончательный.
+        if self.stack_tx {
+            let unsent: usize = self
+                .stack_out
+                .iter()
+                .map(|q| lock(q).drain(..).count())
+                .sum();
+            self.stack_frames_left_unsent
+                .fetch_add(unsent as u64, Ordering::Relaxed);
+        }
+        // Ответы ARP, которые TX уже не отправил (Stop, отказ), не теряются из счёта.
+        if self.arp_responder {
+            let left: usize = self.arp_out.iter().map(|q| lock(q).drain(..).count()).sum();
+            self.arp_unsent.fetch_add(left as u64, Ordering::Relaxed);
+        }
         let fail = lock(&self.fail).clone();
         let tx_end = self.tx_end();
         let rx_end = self.rx_end();
@@ -671,6 +946,10 @@ const WOULD_BLOCK_BACKOFF_MICROS: u64 = 1_000;
 /// (лишний ответ отбрасывается, сосед переспросит).
 const NDP_OUT_CAP: usize = 64;
 
+/// Потолок очереди ответов ARP на адаптер, по тому же правилу, что [`NDP_OUT_CAP`] (лишний ответ считается в
+/// [`ArpSummary::queue_full`]).
+const ARP_OUT_CAP: usize = 64;
+
 /// Отправляет накопленные Neighbor Advertisement своего адаптера. Ответ необязательный: сосед переспросит, поэтому
 /// `WouldBlockUnsent`, `Uncertain` и ошибка адаптера скан не валят (ошибку отправки увидит следующий кадр
 /// скана) и кадр не повторяется.
@@ -678,19 +957,112 @@ const NDP_OUT_CAP: usize = 64;
 /// Работа ограничена: вызов берёт снимок очереди один раз (RX, который кладёт дальше, не удерживает TX) и перед
 /// каждой отправкой спрашивает `keep_going`. Иначе заполненная очередь (`NDP_OUT_CAP`) на блокирующемся адаптере
 /// (до `timeout` на кадр) держала бы TX-поток секунды и нарушала контракт Stop/Pause <= 1 с и окно `TxStalled`.
-/// Остаток снимка при остановке отбрасывается. C ограничивает это пачкой throttle (main.c:478-486).
-fn flush_ndp(
-    queue: &Mutex<VecDeque<[u8; NDP_FRAME_LEN]>>,
+/// Остаток снимка при остановке отбрасывается. C ограничивает это пачкой throttle (main.c:478-486). Так же
+/// отправляются ответы ARP ([`flush_arp`]). Возвращает `(принято адаптером, взято из очереди и не принято или
+/// отброшено остановкой)`.
+///
+/// Снимок это число кадров в очереди на входе: кадры снимаются с её головы по одному (блокировка держится только на
+/// снятие, отправка идёт без неё), очередь остаётся на месте со своей ёмкостью, и ответ на редкий запрос не стоит
+/// выделения памяти в RX (ревью задачи 14a, M5). Головой очереди владеет только этот TX-поток (RX кладёт в хвост,
+/// `finalize` читает после выхода потоков), поэтому первые `snapshot` кадров и есть снимок.
+fn flush_replies<const N: usize>(
+    queue: &Mutex<VecDeque<[u8; N]>>,
     keep_going: &dyn Fn() -> bool,
     tx: &mut dyn Tx,
     timeout: Duration,
-) {
-    let batch = std::mem::take(&mut *lock(queue));
-    for frame in batch {
+) -> (u64, u64) {
+    let snapshot = lock(queue).len();
+    let (mut taken, mut sent) = (0usize, 0u64);
+    while taken < snapshot {
         if !keep_going() {
-            return;
+            // Остаток снимка отбрасывается; кадры, которые RX положил после входа, остаются в очереди.
+            let mut q = lock(queue);
+            let rest = (snapshot - taken).min(q.len());
+            q.drain(..rest);
+            taken += rest;
+            break;
         }
-        let _ = tx.send(&frame, timeout);
+        let Some(frame) = lock(queue).pop_front() else {
+            break;
+        };
+        taken += 1;
+        if let Ok(SendStatus::Sent) = tx.send(&frame, timeout) {
+            sent += 1;
+        }
+    }
+    (sent, taken as u64 - sent)
+}
+
+/// [`flush_replies`] очереди ответов ARP адаптера `idx` со счётом в [`ArpSummary`].
+fn flush_arp(shared: &Shared, idx: usize, keep_going: &dyn Fn() -> bool, tx: &mut dyn Tx) {
+    let (sent, unsent) = flush_replies(&shared.arp_out[idx], keep_going, tx, shared.io_timeout);
+    if sent > 0 {
+        shared.arp_replies_sent.fetch_add(sent, Ordering::Relaxed);
+    }
+    if unsent > 0 {
+        shared.arp_unsent.fetch_add(unsent, Ordering::Relaxed);
+    }
+}
+
+/// Пауза linger TX, когда отправлять нечего (`pixie_usleep(100)`, `src/main.c:492`). Идёт по настоящему времени, мимо
+/// часов движка: она не меняет ни счёт throttle, ни окно ожидания RX, а через инжектированные `ManualClock` linger
+/// двигал бы окно `--wait` наперегонки с приёмом. Сон throttle в linger идёт по часам движка, как в цикле зондов.
+const LINGER_POLL: Duration = Duration::from_micros(100);
+
+/// `stack_flush_packets` (`src/stack-queue.c:46-96`): отправляет до `budget` кадров из очереди кадров стека адаптера
+/// `idx` по порядку, перед каждым спрашивая `keep_going`. Возвращает, сколько кадров взято: каждый занимает место в
+/// пачке throttle и идёт в его счёт, чем бы ни кончилась отправка (C `(*packets_sent)++` и `(*batchsize)--` на каждый
+/// снятый с очереди кадр, `:56`, `:93`). Отправка, которая не удалась (`WouldBlockUnsent`, `Uncertain`, ошибка адаптера),
+/// как у Neighbor Advertisement скан не валит и не повторяется: кадр выброшен и посчитан в
+/// [`StackSummary::frames_dropped`] (C результат `rawsock_send_packet` не смотрит, `:74`). Блокировка очереди держится
+/// только на снятие кадра, отправка идёт без неё.
+fn send_stack_frames(
+    shared: &Shared,
+    idx: usize,
+    tx: &mut dyn Tx,
+    budget: u64,
+    keep_going: &dyn Fn() -> bool,
+) -> u64 {
+    let (mut taken, mut sent) = (0u64, 0u64);
+    while taken < budget && keep_going() {
+        let Some(frame) = lock(&shared.stack_out[idx]).pop_front() else {
+            break;
+        };
+        taken += 1;
+        if let Ok(SendStatus::Sent) = tx.send(&frame, shared.io_timeout) {
+            sent += 1;
+        }
+    }
+    if sent > 0 {
+        shared.stack_frames_sent.fetch_add(sent, Ordering::Relaxed);
+    }
+    if taken > sent {
+        shared
+            .stack_frames_dropped
+            .fetch_add(taken - sent, Ordering::Relaxed);
+    }
+    taken
+}
+
+/// Кладёт готовые кадры (стека или RST без состояния) в очередь кадров адаптера `idx` без ожидания: кадр, который
+/// построитель не построил (пустой), и кадр сверх [`STACK_OUT_CAP`] выбрасываются и считаются (Р7; RX у C ждёт буфер,
+/// E1.12). Кадры строятся до вызова, под блокировкой они только перекладываются.
+fn enqueue_stack_frames(shared: &Shared, idx: usize, frames: Vec<Vec<u8>>) {
+    let mut dropped = 0u64;
+    {
+        let mut q = lock(&shared.stack_out[idx]);
+        for f in frames {
+            if f.is_empty() || q.len() >= STACK_OUT_CAP {
+                dropped += 1;
+            } else {
+                q.push_back(f);
+            }
+        }
+    }
+    if dropped > 0 {
+        shared
+            .stack_frames_dropped
+            .fetch_add(dropped, Ordering::Relaxed);
     }
 }
 
@@ -732,16 +1104,21 @@ fn run_tx(
     // между кадрами в него не входит, потому что к нему окно уже закрыто.
     let mut stall_since: Option<u64> = None;
 
-    // Только адаптер с адресом IPv6 отвечает на NS; у остальных (весь IPv4) путь не меняется.
+    // Только адаптер с адресом IPv6 отвечает на NS; у остальных (весь IPv4) путь не меняется. Ответы ARP только с
+    // `arp_responder`.
     let ndp = shared.ndp_enabled[idx];
+    let arp = shared.arp_responder;
     let end = 'run: loop {
         if ndp {
-            flush_ndp(
+            let _ = flush_replies(
                 &shared.ndp_out[idx],
                 &|| shared.halted() == RUN,
                 &mut *tx,
                 shared.io_timeout,
             );
+        }
+        if arp {
+            flush_arp(&shared, idx, &|| shared.halted() == RUN, &mut *tx);
         }
         // Конец последовательности сильнее паузы: next_index == range это
         // завершение, а не checkpoint с пустым остатком.
@@ -760,18 +1137,31 @@ fn run_tx(
         // Пауза посреди пачки: остаток пачки уходит сразу, мимо throttle (не более `retries` кадров), иначе при
         // малой скорости Pause ждал бы до `retries / rate` секунд. Любая команда прерывает сон throttle.
         let pausing = || shared.halted() == PAUSE && mid_burst.get();
-        let batch = if pausing() {
-            u64::MAX
+        let (batch, burst) = if pausing() {
+            (u64::MAX, true)
         } else {
             match throttler.next_batch_interruptible(my_sent, clock, || shared.halted() != RUN) {
-                Ok(b) => b,
-                Err(_) if pausing() => u64::MAX,
+                Ok(b) => (b, false),
+                Err(_) if pausing() => (u64::MAX, true),
                 Err(_) => break END_HALTED,
             }
         };
         shared.rate_bits[idx].store(throttler.current_rate().to_bits(), Ordering::Relaxed);
         // batch == 0 означает "вызвать снова".
         let mut left = batch;
+        // Кадры стека и RST без состояния впереди SYN, в счёт той же пачки и того же throttle (`src/main.c:289-299`:
+        // «This takes priority over sending SYN packets»; поток кадров стека может съесть всю пачку). Досылка
+        // остатка пачки повторов при паузе их не берёт: она идёт мимо throttle, а кадры стека дождутся linger.
+        // `shared.sent` (`Progress.sent`) считает только зонды. `!burst` следует из `halted() == RUN` в `keep_going`
+        // (`halt` только растёт, а `burst` значит, что был виден `PAUSE`), но оба условия остаются: `RUN` ловит ещё и
+        // Pause, пришедшую после `Ok(b)`, а `!burst` не даёт `u64::MAX` попасть в `send_stack_frames`.
+        // Модель этого разбиения пачки (стек, затем SYN) дублирует `model_tx` в `tests/tcp_stack.rs`: правя здесь,
+        // правь и её.
+        if shared.stack_tx && !burst && left > 0 {
+            let taken = send_stack_frames(&shared, idx, &mut *tx, left, &|| shared.halted() == RUN);
+            my_sent += taken;
+            left -= taken;
+        }
         while left > 0 {
             // Не больше, чем осталось в окне throttle, `max_batch()` адаптера и
             // общей скрепы. Загрузка не продвигает курсор.
@@ -876,23 +1266,53 @@ fn run_tx(
         }
     };
     shared.tx_ends[idx].store(end, Ordering::Release);
-    // Окно ожидания ответов после конца передачи: RX ещё принимает, и NS соседа, пришедший теперь, тоже должен
-    // получить NA (иначе роутер не вернёт нам ответы на последние зонды). TX живёт, пока RX не закончил.
-    if ndp {
+    // Окно ожидания ответов после конца передачи (`src/main.c:470-494`): RX ещё принимает, и TX живёт, пока RX не
+    // закончил. NS соседа, пришедший теперь, тоже получает NA (иначе роутер не вернёт нам ответы на последние зонды);
+    // кадры стека (ACK, приветствия, FIN, RST) и RST без состояния на ответы, пришедшие в окне, уходят под тем же
+    // throttle, что и зонды. Linger шлёт и после Pause: RX принимает до конца окна ожидания (C сбрасывает очередь до
+    // `is_rx_done`); не шлёт только после Stop/Fail. Запрос ARP к нашему адресу в окне тоже получает ответ.
+    if ndp || arp || shared.stack_tx {
+        let keep_going = || shared.halted() < STOP;
+        // Для сна throttle и пачки кадров стека: конец RX тоже прерывает их, иначе `Finished` опаздывает на сон
+        // throttle при малом `--rate` или на `пачка × io_timeout` при забитом адаптере. Недосланное досчитает
+        // `finalize`. Сброс NA и ответов ARP оставлен на `keep_going`: последний сброс после конца RX нужен.
+        // Модель этого цикла (когда спрашивается throttle) дублирует `model_tx` в `tests/tcp_stack.rs`: правя здесь,
+        // правь и её.
+        let keep_sending = || shared.halted() < STOP && shared.rx_end() == END_RUNNING;
         loop {
             let done = shared.rx_end() != END_RUNNING || shared.halted() >= STOP;
-            flush_ndp(
-                &shared.ndp_out[idx],
-                // Linger шлёт NA и после Pause: RX принимает до конца окна ожидания (main.c:470-493 сбрасывает
-                // очередь до `is_rx_done`); не шлёт только после Stop/Fail.
-                &|| shared.halted() < STOP,
-                &mut *tx,
-                shared.io_timeout,
-            );
+            if ndp {
+                let _ = flush_replies(
+                    &shared.ndp_out[idx],
+                    &keep_going,
+                    &mut *tx,
+                    shared.io_timeout,
+                );
+            }
+            if arp {
+                flush_arp(&shared, idx, &keep_going, &mut *tx);
+            }
             if done {
                 break;
             }
-            clock.sleep_micros(WOULD_BLOCK_BACKOFF_MICROS);
+            // Throttle спрашивается, только когда есть что отправить (C спрашивает его каждые 100 мкс и после
+            // простоя выдаёт пачку до 10000 кадров разом; здесь после простоя он начинает с пачки 1, как в начале
+            // скана). Так простой linger не трогает часы движка.
+            if shared.stack_tx && !lock(&shared.stack_out[idx]).is_empty() {
+                match throttler.next_batch_interruptible(my_sent, clock, || !keep_sending()) {
+                    Ok(b) => {
+                        shared.rate_bits[idx]
+                            .store(throttler.current_rate().to_bits(), Ordering::Relaxed);
+                        my_sent += send_stack_frames(&shared, idx, &mut *tx, b, &keep_sending);
+                    }
+                    Err(_) => break,
+                }
+            } else if shared.stack_tx || arp {
+                // Простой linger со стеком или ответчиком ARP часов движка не трогает (как выше).
+                std::thread::sleep(LINGER_POLL);
+            } else {
+                clock.sleep_micros(WOULD_BLOCK_BACKOFF_MICROS);
+            }
         }
     }
 }
@@ -905,6 +1325,114 @@ fn stall_fail(shared: &Shared, idle_micros: u64) {
 
 // ------------------------------------------------------------------ rx ----
 
+/// Биты SYN и ACK (`TCP_IS_SYNACK`, `src/stack-tcp-core.h:15-21`: `(flags & 0x12) == 0x12`).
+const TCP_SYNACK: u8 = 0x12;
+
+/// Стек TCP приёмного потока: своя таблица, построитель кадров своего адаптера (`nic[0]` плана RX, тот же адаптер,
+/// что у `parse_reply`) и буфер выдачи, который каждый вызов оставляет пустым.
+struct RxStack {
+    table: Box<dyn TcpStack>,
+    frames: TcpFrameBuilder,
+    out: StackOutput,
+}
+
+impl RxStack {
+    fn new(table: Box<dyn TcpStack>, plan: &ReadyPlan) -> Self {
+        RxStack {
+            table,
+            frames: TcpFrameBuilder::from_plan(plan),
+            out: StackOutput::default(),
+        }
+    }
+
+    /// Сегмент кадра стеку (справка A1 шаг 6, A2). Кадр с битами SYN и ACK стек видит, только если `parse_reply` его
+    /// принял (`reply_ok`: cookie верен; `Open`, а при SYN|ACK|RST `Closed`): C проверяет cookie в стековом блоке и
+    /// на плохом делает `continue` (`src/main.c:969-975`), не трогая TCB, даже живой, и не доходя до статуса, а с
+    /// верным создаёт TCB (`:976-986`), в том числе для SYN|ACK|RST (`TCP_IS_SYNACK` смотрит только биты 0x12).
+    /// Остальные сегменты идут в стек без cookie (`:987-1041`). Отличие от C: стек видит только то, что принял
+    /// `parse_reply` (`rmasscan-core/src/receive.rs:35-39`), а он проверяет и принадлежность адреса и порта ответчика
+    /// эффективному набору целей; поэтому SYN-ACK с верным cookie извне набора TCB не получает, а C его создаёт (до
+    /// стека C проверяет набор целей только для ARP, `src/main.c:891`). Практически ничтожно: cookie покрывает адрес
+    /// и порт ответчика. `true`: стек взял сегмент.
+    fn segment(
+        &mut self,
+        now: u64,
+        frame: &[u8],
+        link: LinkType,
+        plan: &ReadyPlan,
+        reply_ok: bool,
+    ) -> bool {
+        let Some(seg) = tcp_segment(frame, link, plan) else {
+            return false;
+        };
+        if seg.flags & TCP_SYNACK == TCP_SYNACK && !reply_ok {
+            return false;
+        }
+        self.table.on_segment(now, &seg, &mut self.out)
+    }
+
+    /// Выдача стека за вызов: кадры в `stack_out` своего адаптера без ожидания (полная очередь или кадр, который
+    /// построитель не строит, это выброс со счётом, Р7), наборы баннеров в очередь результатов без ожидания. Кадры
+    /// строятся без блокировок, под блокировкой `stack_out` только перекладываются. `false`: набор не встал
+    /// (`ConsumerTooSlow`).
+    fn deliver(&mut self, shared: &Shared, idx: usize) -> bool {
+        if !self.out.segments.is_empty() {
+            let frames: Vec<Vec<u8>> = self
+                .out
+                .segments
+                .drain(..)
+                .map(|s| self.frames.build(&s))
+                .collect();
+            enqueue_stack_frames(shared, idx, frames);
+        }
+        for set in self.out.banners.drain(..) {
+            if !shared.queue.push_conn_banners(set) {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Сброс таблицы в конце RX (`tcpcon_destroy_table`, `src/main.c:1111-1113`, `src/stack-tcp-core.c:933-961`):
+    /// порциями по [`FLUSH_CONNECTIONS`], наборы баннеров ждут места в очереди, пока не пришёл Stop. Кадров сброс не
+    /// шлёт: сегменты, если таблица их всё же выдала, конец скана оставляет неотправленными
+    /// ([`StackSummary::frames_left_unsent`]). `false`: Stop прервал сброс и часть баннеров не доставлена.
+    fn flush(&mut self, shared: &Shared) -> bool {
+        let keep_going = || shared.halted() < STOP;
+        loop {
+            let live = self.table.stats().tcbs_live;
+            let more = self.table.finish(FLUSH_CONNECTIONS, &mut self.out);
+            let stray = self.out.segments.len() as u64;
+            self.out.segments.clear();
+            if stray > 0 {
+                shared
+                    .stack_frames_left_unsent
+                    .fetch_add(stray, Ordering::Relaxed);
+            }
+            let produced = !self.out.banners.is_empty();
+            for set in self.out.banners.drain(..) {
+                if !shared.queue.push_conn_banners_waiting(set, &keep_going) {
+                    return false;
+                }
+            }
+            // Страховка тотальности: таблица, которая отвечает «ещё есть», но ничего не выдала и не уничтожила ни
+            // одного соединения, нарушила контракт `finish`; цикл без продвижения не крутится.
+            if !more {
+                return true;
+            }
+            let left = self.table.stats().tcbs_live;
+            if !produced && left >= live {
+                // Баннеры не теряются молча: оставшиеся соединения считаются в `StackSummary::flush_abandoned`,
+                // итог остаётся `Completed` (нарушение контракта таблицы, а не отказ скана).
+                shared
+                    .stack_flush_abandoned
+                    .fetch_add(left, Ordering::Relaxed);
+                return true;
+            }
+        }
+    }
+}
+
 /// Приём.
 ///
 /// # Контракт недоверенного входа
@@ -913,6 +1441,12 @@ fn stall_fail(shared: &Shared, idle_micros: u64) {
 /// чужой или битый: выбросить и продолжать приём" (C `main.c:773 continue`).
 /// Это враждебный/посторонний ввод, а не отказ скана: он никогда не ведёт к
 /// `Failed`. Падением считается только ошибка самого адаптера (`Rx::recv`).
+///
+/// # Стек TCP (`table: Some`, [`EngineOptions::tcp_stack`])
+/// Порядок итерации справки A1: таймеры таблицы по часам движка (и без кадра), затем для кадра `parse_reply`
+/// (чистая), `tcp_segment` и стек, затем прежний путь статуса и дедупа. Сегмент, который взял стек, в
+/// `Progress.discarded` не идёт. После цикла (естественный конец, пауза, Stop; не отказ) живые соединения
+/// сбрасываются с ожиданием места в очереди, до публикации `rx_end`.
 fn run_rx(
     shared: Arc<Shared>,
     idx: usize,
@@ -920,6 +1454,7 @@ fn run_rx(
     plan: ReadyPlan,
     dedup: Arc<Mutex<DedupCache>>,
     pcap_sink: Option<PcapSink>,
+    table: Option<Box<dyn TcpStack>>,
 ) {
     let _guard = ExitGuard {
         shared: shared.clone(),
@@ -933,18 +1468,41 @@ fn run_rx(
     let mut deadline: Option<u64> = None;
     let mut last_progress = clock.now_micros();
     let mut last_health = last_progress;
+    let mut stack = table.map(|t| RxStack::new(t, &plan));
+    // RST без состояния (`src/main.c:1094-1100`): тот же построитель кадров адаптера, что у стека.
+    let rst = shared
+        .stateless_rst
+        .then(|| TcpFrameBuilder::from_plan(&plan));
 
     let end = loop {
         if shared.halted() >= STOP {
             break END_HALTED;
         }
-        match rx.recv(&mut buf, shared.io_timeout) {
+        let got = match rx.recv(&mut buf, shared.io_timeout) {
             Err(e) => {
                 shared.fail(FailReason::RxError(e.message));
                 break END_HALTED;
             }
-            Ok(None) => {}
-            Ok(Some(n)) => {
+            Ok(got) => got,
+        };
+        // Таймеры стека на каждой итерации, с кадром и без, раньше любого фильтра кадра (справка A1 шаги 1-2,
+        // `tcpcon_timeouts`, `src/main.c:777-797`), по часам движка; это же время получает сегмент кадра. Без стека
+        // часы здесь не читаются.
+        let at = match stack.as_mut() {
+            Some(s) => {
+                let at = clock.now_micros();
+                s.table.on_tick(at, &mut s.out);
+                if !s.deliver(&shared, idx) {
+                    shared.fail(FailReason::ConsumerTooSlow);
+                    break END_HALTED;
+                }
+                at
+            }
+            None => 0,
+        };
+        match got {
+            None => {}
+            Some(n) => {
                 // n > buf.len() это нарушение контракта адаптера; безвредно
                 // обрезаем, парсер отбросит такой кадр.
                 let frame = &buf[..n.min(buf.len())];
@@ -963,13 +1521,46 @@ fn run_rx(
                 } else {
                     None
                 };
+                // ARP-запрос к нашему адресу источника IPv4 (main.c:829, :878-887): так же, ответ идёт в TX.
+                let arp = if na.is_none() && shared.arp_responder {
+                    arp_reply_for(frame, link, &plan)
+                } else {
+                    None
+                };
                 if let Some(na) = na {
                     let mut q = lock(&shared.ndp_out[idx]);
                     if q.len() < NDP_OUT_CAP {
                         q.push_back(na);
                     }
+                } else if let Some(reply) = arp {
+                    let queued = {
+                        let mut q = lock(&shared.arp_out[idx]);
+                        let room = q.len() < ARP_OUT_CAP;
+                        if room {
+                            q.push_back(reply);
+                        }
+                        room
+                    };
+                    if !queued {
+                        shared.arp_queue_full.fetch_add(1, Ordering::Relaxed);
+                    }
                 } else {
-                    match parse_reply(frame, link, &plan) {
+                    let parsed = parse_reply(frame, link, &plan);
+                    // Стек раньше статуса и дедупа (справка A1 шаг 6, `src/main.c:962-1043` до `:1048-1092`): повтор
+                    // SYN-ACK стек видит, запись статуса остаётся одна.
+                    let taken = match stack.as_mut() {
+                        Some(s) => {
+                            let taken =
+                                s.segment(at, frame, link, &plan, matches!(parsed, Ok(Some(_))));
+                            if !s.deliver(&shared, idx) {
+                                shared.fail(FailReason::ConsumerTooSlow);
+                                break END_HALTED;
+                            }
+                            taken
+                        }
+                        None => false,
+                    };
+                    match parsed {
                         Ok(Some(reply)) => {
                             let fresh = lock(&dedup).insert(&reply);
                             // `handle_udp` (`src/main.c:909-916`, `src/proto-udp.c:54-132`) только за ответом,
@@ -989,6 +1580,15 @@ fn run_rx(
                                 shared.duplicates.fetch_add(1, Ordering::Relaxed);
                             } else if shared.queue.push_result(reply, banners) {
                                 shared.received.fetch_add(1, Ordering::Relaxed);
+                                // RST без состояния за записью статуса свежего ответа SYN-ACK или RST, только без
+                                // стека (`src/main.c:1094-1100`, после дедупа `:1066-1068`): повтор и ICMP `closed`
+                                // его не получают (`stateless_rst` даёт `None` на ответ без этих флагов).
+                                if let Some(b) = &rst
+                                    && let Some(seg) =
+                                        stateless_rst(&reply, plan.effective().seed())
+                                {
+                                    enqueue_stack_frames(&shared, idx, vec![b.build(&seg)]);
+                                }
                             } else {
                                 // Ответ потерян, молча не теряем: останавливаем TX
                                 // и завершаемся Failed; принятое остаётся в очереди.
@@ -997,9 +1597,11 @@ fn run_rx(
                             }
                         }
                         // Не наш пакет, либо ЛЮБАЯ ошибка разбора: выбросить и
-                        // продолжать (см. контракт выше).
+                        // продолжать (см. контракт выше). Сегмент, который взял стек, не выброшен.
                         Ok(None) | Err(_) => {
-                            shared.discarded.fetch_add(1, Ordering::Relaxed);
+                            if !taken {
+                                shared.discarded.fetch_add(1, Ordering::Relaxed);
+                            }
                         }
                     }
                 }
@@ -1008,6 +1610,9 @@ fn run_rx(
         let now = clock.now_micros();
         if now.wrapping_sub(last_progress) >= shared.progress_micros {
             last_progress = now;
+            if let Some(s) = &stack {
+                *lock(&shared.stack_stats[idx]) = s.table.stats();
+            }
             shared.queue.set_progress(shared.snapshot());
         }
         // Проверка достоверности по часам engine, а не по числу кадров.
@@ -1028,11 +1633,21 @@ fn run_rx(
     // делается ДО публикации rx_end (а значит, до терминального исхода). Handle
     // закрывается позже, в ExitGuard, то есть до Finished.
     let clean = shared.check_rx_health(idx, &mut *rx);
-    let end = if clean || end == END_HALTED {
+    let mut end = if clean || end == END_HALTED {
         end
     } else {
         END_HALTED
     };
+    if let Some(s) = stack.as_mut() {
+        // Сброс живых соединений после естественного конца, паузы и Stop, но не после отказа (решение 21 плана 4b).
+        // Он идёт после финальной проверки приёма: окно наблюдения уже закрыто, и сброс, который ждёт медленного
+        // потребителя, поздними потерями ядра естественный конец в `Failed` не превращает. Прерванный Stop сброс
+        // доставил не всё: итог `Stopped`, а не `Completed`.
+        if shared.halted() < FAIL && !s.flush(&shared) {
+            end = END_HALTED;
+        }
+        *lock(&shared.stack_stats[idx]) = s.table.stats();
+    }
     shared.rx_ends[idx].store(end, Ordering::Release);
 }
 
@@ -1171,6 +1786,11 @@ impl Engine {
         if options.result_capacity == 0 {
             return Err(StartError::InvalidOptions("result_capacity must be > 0"));
         }
+        if options.result_byte_capacity == 0 {
+            return Err(StartError::InvalidOptions(
+                "result_byte_capacity must be > 0",
+            ));
+        }
         if options.event_batch_limit == 0 {
             return Err(StartError::InvalidOptions("event_batch_limit must be > 0"));
         }
@@ -1190,7 +1810,11 @@ impl Engine {
         let rate = plan.effective().max_rate() / count as f64;
         let io_timeout = options.io_timeout.min(MAX_IO_TIMEOUT);
 
-        let queue = Queue::new(options.result_capacity, options.event_batch_limit);
+        let queue = Queue::new(
+            options.result_capacity,
+            options.result_byte_capacity,
+            options.event_batch_limit,
+        );
         lock(&queue.st).started = Some(plan.range());
         let shared = Arc::new(Shared {
             halt: AtomicU8::new(RUN),
@@ -1218,12 +1842,27 @@ impl Engine {
                 .iter()
                 .map(|n| n.source_ipv6.is_some())
                 .collect(),
+            arp_responder: options.arp_responder,
+            arp_out: (0..count).map(|_| Mutex::new(VecDeque::new())).collect(),
+            arp_replies_sent: AtomicU64::new(0),
+            arp_queue_full: AtomicU64::new(0),
+            arp_unsent: AtomicU64::new(0),
             clock,
             io_timeout,
             wait_micros: u64::from(plan.effective().wait_secs()) * 1_000_000,
             progress_micros: u64::try_from(options.progress_interval.as_micros())
                 .unwrap_or(u64::MAX),
             banners: options.banners,
+            stack_out: (0..count).map(|_| Mutex::new(VecDeque::new())).collect(),
+            stack_tx: options.tcp_stack.is_some() || options.stateless_rst,
+            stateless_rst: options.stateless_rst && options.tcp_stack.is_none(),
+            stack_stats: (0..count)
+                .map(|_| Mutex::new(StackStats::default()))
+                .collect(),
+            stack_frames_sent: AtomicU64::new(0),
+            stack_frames_dropped: AtomicU64::new(0),
+            stack_frames_left_unsent: AtomicU64::new(0),
+            stack_flush_abandoned: AtomicU64::new(0),
         });
 
         let dedup = Arc::new(Mutex::new(DedupCache::new(options.dedup_capacity)));
@@ -1246,9 +1885,22 @@ impl Engine {
         let rx_plans = (0..count)
             .map(|k| rx_plan(&plan, k))
             .collect::<Result<Vec<_>, _>>()?;
+        // Своя таблица стека у каждого RX-потока (`tcpcon_create_table` в `receive_thread`, `src/main.c:612`): ёмкость
+        // и бюджет скана делятся между адаптерами, ёмкость не меньше 1024.
+        let tables: Vec<Option<Box<dyn TcpStack>>> = (0..count)
+            .map(|_| {
+                options.tcp_stack.as_ref().map(|o| {
+                    o.factory.new_table(TableParams {
+                        seed: plan.effective().seed(),
+                        capacity: (o.table_capacity / count).max(1024),
+                        banner_byte_budget: o.banner_byte_budget / count,
+                    })
+                })
+            })
+            .collect();
         let mut rx_threads = Vec::with_capacity(count);
         // RX первым: к моменту первой отправки приёмник уже слушает.
-        for (k, (rx, plan)) in rxs.into_iter().zip(rx_plans).enumerate() {
+        for (k, ((rx, plan), table)) in rxs.into_iter().zip(rx_plans).zip(tables).enumerate() {
             let s = shared.clone();
             let dedup = dedup.clone();
             let sink = pcap_sink.clone();
@@ -1259,7 +1911,7 @@ impl Engine {
             };
             match std::thread::Builder::new()
                 .name(name)
-                .spawn(move || run_rx(s, k, rx, plan, dedup, sink))
+                .spawn(move || run_rx(s, k, rx, plan, dedup, sink, table))
             {
                 Ok(t) => rx_threads.push(t),
                 Err(e) => return Err(abort(&shared, rx_threads, e)),
@@ -1399,15 +2051,17 @@ impl EngineHandle {
             .then(|| self.shared.resume_base())
     }
 
-    /// Следующее событие без ожидания. С `banners: Some` баннер, стоящий в очереди на пути события, этот вызов
-    /// ОТБРАСЫВАЕТ: он не возвращается и нигде не учитывается. Баннеры читает только [`Self::recv_output_timeout`].
+    /// Следующее событие без ожидания. С `banners: Some` или `tcp_stack: Some` баннер, стоящий в очереди на пути события,
+    /// этот вызов ОТБРАСЫВАЕТ: он не возвращается и нигде не учитывается. Баннеры читает только
+    /// [`Self::recv_output_timeout`].
     pub fn try_event(&self) -> Result<Event, TryRecvError> {
         self.shared.queue.try_pop()
     }
 
-    /// Ждёт событие не дольше `timeout`; `Err(Empty)` по таймауту. С `banners: Some` ([`EngineOptions::banners`]) баннеры,
-    /// встреченные по пути, этот вызов ОТБРАСЫВАЕТ: они не возвращаются и нигде не учитываются. Потребитель баннеров
-    /// читает очередь только [`Self::recv_output_timeout`].
+    /// Ждёт событие не дольше `timeout`; `Err(Empty)` по таймауту. С `banners: Some` ([`EngineOptions::banners`]) или
+    /// `tcp_stack: Some` ([`EngineOptions::tcp_stack`]) баннеры, встреченные по пути, этот вызов ОТБРАСЫВАЕТ: они не
+    /// возвращаются и нигде не учитываются, а их место в очереди освобождается. Потребитель баннеров читает очередь
+    /// только [`Self::recv_output_timeout`].
     pub fn recv_event_timeout(&self, timeout: Duration) -> Result<Event, TryRecvError> {
         self.shared.queue.pop_timeout(timeout)
     }
@@ -1416,7 +2070,8 @@ impl EngineHandle {
     /// пачки [`Event::Results`], которая этим ответом кончается, и раньше записи любого более позднего ответа. При
     /// `banners: None` выдаёт ровно те же события, что [`Self::recv_event_timeout`], и ни одного [`Output::Banner`].
     /// Время записи баннера (`BannerRecord::timestamp`) движок не знает и ставит 0: у [`rmasscan_core::receive::Reply`]
-    /// времени нет, потребитель ставит баннеру время записи статуса его ответа.
+    /// времени нет, потребитель ставит баннеру время записи статуса его ответа. С `tcp_stack: Some` выдаёт и
+    /// [`Output::ConnectionBanner`] (время 0, потребитель ставит время обработки); при `tcp_stack: None` ни одного.
     pub fn recv_output_timeout(&self, timeout: Duration) -> Result<Output, TryRecvError> {
         self.shared.queue.pop_output_timeout(timeout)
     }
@@ -1429,6 +2084,34 @@ impl EngineHandle {
 
     pub fn progress(&self) -> Progress {
         self.shared.snapshot()
+    }
+
+    /// Счётчики стека TCP ([`EngineOptions::tcp_stack`]): сумма таблиц RX-потоков и кадры стека (с
+    /// [`EngineOptions::stateless_rst`] это RST без состояния). Таблица отдаёт счётчики на шаге прогресса и при выходе
+    /// RX-потока, поэтому окончательные они после `Finished` (CLI читает их после конца цикла событий и до `join`).
+    /// Без стека и без RST нули.
+    pub fn stack_stats(&self) -> StackSummary {
+        let mut s = StackSummary {
+            frames_sent: self.shared.stack_frames_sent.load(Ordering::Relaxed),
+            frames_dropped: self.shared.stack_frames_dropped.load(Ordering::Relaxed),
+            frames_left_unsent: self.shared.stack_frames_left_unsent.load(Ordering::Relaxed),
+            flush_abandoned: self.shared.stack_flush_abandoned.load(Ordering::Relaxed),
+            ..StackSummary::default()
+        };
+        for t in &self.shared.stack_stats {
+            s.add_table(&lock(t));
+        }
+        s
+    }
+
+    /// Счётчики ответчика ARP ([`EngineOptions::arp_responder`]), сумма адаптеров; окончательные после `Finished`.
+    /// Без ответчика нули.
+    pub fn arp_stats(&self) -> ArpSummary {
+        ArpSummary {
+            replies_sent: self.shared.arp_replies_sent.load(Ordering::Relaxed),
+            queue_full: self.shared.arp_queue_full.load(Ordering::Relaxed),
+            unsent: self.shared.arp_unsent.load(Ordering::Relaxed),
+        }
     }
 
     /// Блокируется до завершения запуска (вызовите `stop`/`pause`, если не
@@ -1446,11 +2129,14 @@ impl EngineHandle {
     /// Как [`Self::join`], но возвращает ещё не прочитанные события (без
     /// `Finished`): итог не отбрасывает принятые результаты. Уже прочитанные
     /// через `try_event`/`recv_event_timeout` события не повторяются. Непрочитанные
-    /// баннеры (`banners: Some`) ОТБРАСЫВАЮТСЯ и нигде не учитываются.
+    /// баннеры (`banners: Some`, `tcp_stack: Some`) ОТБРАСЫВАЮТСЯ и нигде не учитываются:
+    /// сброс таблицы стека в конце RX после вызова места в очереди не ждёт.
     ///
     /// При панике рабочего потока принятые до неё результаты сохраняются, а
     /// итог это `Ok(Failed(WorkerPanicked))` с последним слепком счётчиков.
     pub fn join_drain(mut self) -> Result<(Outcome, Vec<Event>), EngineError> {
+        // Сброс стека в конце ждёт потребителя; этот потребитель ждёт потоки и баннеров не прочтёт.
+        self.shared.queue.begin_join();
         self.join_threads();
         let mut events = Vec::new();
         while let Ok(ev) = self.shared.queue.try_pop() {
@@ -2141,7 +2827,7 @@ mod tests {
         (0..n).map(|i| [i as u8; NDP_FRAME_LEN]).collect()
     }
 
-    /// Один вызов `flush_ndp` берёт снимок очереди и не гонится за RX, который продолжает класть кадры: поздний
+    /// Один вызов `flush_replies` (NA) берёт снимок очереди и не гонится за RX, который продолжает класть кадры: поздний
     /// кадр ждёт следующего вызова (C ограничивает это окном throttle, main.c:478-486).
     #[test]
     fn flush_ndp_sends_only_the_snapshot_it_took() {
@@ -2151,7 +2837,7 @@ mod tests {
         let q2 = q.clone();
         fake.set_send_hook(move |_| lock(&q2).push_back([0xee; NDP_FRAME_LEN]));
         let mut io = fake.pair();
-        flush_ndp(&q, &|| true, &mut *io.tx, Duration::from_millis(50));
+        let _ = flush_replies(&q, &|| true, &mut *io.tx, Duration::from_millis(50));
         assert_eq!(fake.sent_count(), 5);
         assert_eq!(
             lock(&q).len(),
@@ -2172,7 +2858,7 @@ mod tests {
         let f2 = fake.clone();
         let t0 = clock.now_micros();
         // Stop приходит после второго кадра.
-        flush_ndp(
+        let _ = flush_replies(
             &q,
             &|| f2.sent_count() < 2,
             &mut *io.tx,
@@ -2187,6 +2873,45 @@ mod tests {
         assert!(
             lock(&q).is_empty(),
             "the unsent snapshot is dropped, not retried"
+        );
+    }
+
+    /// Ревью задачи 14a, M5: сброс не забирает буфер очереди (ни NA, ни ARP, у обоих [`flush_replies`]). После сброса
+    /// очередь пуста, но с прежней ёмкостью, и следующий ответ RX кладёт без выделения памяти; при остановке остаток
+    /// снимка отброшен, а кадр, положенный во время сброса, остаётся.
+    #[test]
+    fn flush_replies_keeps_the_queue_buffer() {
+        let fake = FakeAdapter::new().with_clock(ManualClock::new());
+        let mut io = fake.pair();
+        let q = Arc::new(Mutex::new(VecDeque::with_capacity(NDP_OUT_CAP)));
+        lock(&q).extend(na_frames(3));
+        let cap = lock(&q).capacity();
+        assert_eq!(
+            flush_replies(&q, &|| true, &mut *io.tx, Duration::from_millis(50)),
+            (3, 0)
+        );
+        assert_eq!(fake.sent_count(), 3);
+        assert!(lock(&q).is_empty());
+        assert_eq!(lock(&q).capacity(), cap, "the buffer stays with the queue");
+        lock(&q).push_back([0xaa; NDP_FRAME_LEN]);
+        assert_eq!(lock(&q).capacity(), cap, "the next reply reuses it");
+        // Остановка после первого кадра: два кадра снимка отброшены и посчитаны, поздний кадр RX ждёт.
+        let q = Arc::new(Mutex::new(na_frames(3)));
+        let (q2, f2) = (q.clone(), fake.clone());
+        fake.set_send_hook(move |_| lock(&q2).push_back([0xee; NDP_FRAME_LEN]));
+        let before = fake.sent_count();
+        assert_eq!(
+            flush_replies(
+                &q,
+                &|| f2.sent_count() == before,
+                &mut *io.tx,
+                Duration::from_millis(50)
+            ),
+            (1, 2)
+        );
+        assert_eq!(
+            lock(&q).iter().copied().collect::<Vec<_>>(),
+            vec![[0xee; NDP_FRAME_LEN]]
         );
     }
 
@@ -2296,5 +3021,750 @@ mod tests {
             encode_neighbor_advertisement(NDP_ME_MAC, NDP_ME, NDP_ROUTER_MAC, NDP_ROUTER_IP)
                 .to_vec()
         );
+    }
+
+    // ---- ARP: ответчик на запросы к адресам источника IPv4 (задача 14a) ----
+
+    /// Адрес источника и MAC плана `plan12` (`cli_plan`).
+    const ARP_ME: u32 = 0xc612_0063;
+    const ARP_ME_MAC: [u8; 6] = [0, 0x11, 0x22, 0x33, 0x44, 0x55];
+    const ARP_ROUTER: u32 = 0xc612_0001;
+    const ARP_ROUTER_MAC: [u8; 6] = [0x0a, 0xbb, 0xcc, 0xdd, 0xee, 0x01];
+
+    fn who_has(tpa: u32) -> Vec<u8> {
+        rmasscan_core::arp::encode_request(ARP_ROUTER_MAC, ARP_ROUTER, tpa).to_vec()
+    }
+
+    /// Ответ C на `who_has(ip)` (`stack_arp_incoming_request`, `src/stack-arpv4.c:331-356`).
+    fn arp_reply_to_router(ip: u32) -> Vec<u8> {
+        rmasscan_core::arp::encode_reply(ARP_ME_MAC, ip, ARP_ROUTER_MAC, ARP_ROUTER).to_vec()
+    }
+
+    fn arp_on() -> EngineOptions {
+        let mut o = EngineOptions::new([1; 16], [2; 16]);
+        o.arp_responder = true;
+        o
+    }
+
+    /// План `plan12` с диапазоном адресов источника `ARP_ME..=last` (`--adapter-ip A-B`).
+    fn arp_range_plan(last: u32) -> ReadyPlan {
+        let plan = plan12(0, Shard { one: 1, of: 1 }, 0);
+        let mut nic = plan.nics()[0].clone();
+        nic.source_ipv4_last = last;
+        ReadyPlan::new_cli(plan.effective().clone(), vec![nic]).unwrap()
+    }
+
+    struct ArpRun {
+        sent: Vec<Vec<u8>>,
+        outcome: Outcome,
+        arp: ArpSummary,
+    }
+
+    /// Прогон `plan` с кадрами приёма `rx` и опциями `options` на `fake` (уже настроенном тестом).
+    fn run_arp_on(
+        fake: FakeAdapter,
+        clock: Arc<ManualClock>,
+        plan: &ReadyPlan,
+        rx: Vec<Vec<u8>>,
+        options: EngineOptions,
+    ) -> ArpRun {
+        for f in rx {
+            fake.push_frame(f);
+        }
+        let c: Arc<dyn Clock + Send + Sync> = clock;
+        let h = Engine::start_cli_with_clock(plan.clone(), vec![fake.pair()], options, c, None)
+            .unwrap();
+        let t = Instant::now();
+        loop {
+            match h.recv_event_timeout(Duration::from_millis(50)) {
+                Ok(Event::Finished { .. }) | Err(TryRecvError::Disconnected) => break,
+                Ok(_) => {}
+                Err(TryRecvError::Empty) => assert!(t.elapsed() < Duration::from_secs(20)),
+            }
+        }
+        let arp = h.arp_stats();
+        let outcome = h.join().unwrap();
+        ArpRun {
+            sent: fake.sent_frames(),
+            outcome,
+            arp,
+        }
+    }
+
+    fn run_arp(plan: &ReadyPlan, rx: Vec<Vec<u8>>, options: EngineOptions) -> ArpRun {
+        let clock = ManualClock::new();
+        let fake = FakeAdapter::new().with_clock(clock.clone());
+        run_arp_on(fake, clock, plan, rx, options)
+    }
+
+    fn arp_frames(sent: &[Vec<u8>]) -> Vec<&Vec<u8>> {
+        sent.iter()
+            .filter(|f| f.get(12..14) == Some(&[0x08, 0x06][..]))
+            .collect()
+    }
+
+    /// `src/main.c:829`, `:878-887`: запрос «кто имеет» наш адрес источника получает ответ C (60 байт от MAC адаптера к
+    /// MAC спросившего); 12 SYN идут как прежде, а сам запрос не результат и не `discarded`.
+    #[test]
+    fn arp_request_for_the_source_address_gets_cs_reply() {
+        let r = run_arp(
+            &plan12(0, Shard { one: 1, of: 1 }, 0),
+            vec![who_has(ARP_ME)],
+            arp_on(),
+        );
+        assert_eq!(r.outcome.reason, Reason::Completed);
+        assert_eq!(arp_frames(&r.sent), vec![&arp_reply_to_router(ARP_ME)]);
+        assert_eq!(r.sent.len(), 13);
+        assert_eq!(r.sent.iter().filter(|f| f.len() == 58).count(), 12);
+        assert_eq!(
+            r.arp,
+            ArpSummary {
+                replies_sent: 1,
+                queue_full: 0,
+                unsent: 0
+            }
+        );
+        assert_eq!(r.outcome.progress.discarded, 0);
+        assert_eq!(r.outcome.progress.received, 0);
+    }
+
+    /// `--adapter-ip A-B` (`is_my_ip`, `src/stack-src.c:8-13`): каждый адрес диапазона отвечает собой, соседние нет.
+    /// Запросы приходят с последним SYN, и RX разбирает все до конца TX (ревью задачи 14a, I1: заранее положенные
+    /// кадры при `wait_secs: 0` RX дочитывал, только если обгонял 12 отправок).
+    #[test]
+    fn arp_requests_for_each_address_of_a_source_range_get_replies() {
+        let rx = vec![
+            who_has(ARP_ME - 1),
+            who_has(ARP_ME),
+            who_has(ARP_ME + 1),
+            who_has(ARP_ME + 2),
+            who_has(ARP_ME + 3),
+            who_has(ARP_ME + 4),
+        ];
+        let r = run_arp_at_the_last_syn(&arp_range_plan(ARP_ME + 3), rx);
+        assert_eq!(r.outcome.reason, Reason::Completed);
+        let want: Vec<Vec<u8>> = (ARP_ME..=ARP_ME + 3).map(arp_reply_to_router).collect();
+        assert_eq!(arp_frames(&r.sent), want.iter().collect::<Vec<_>>());
+        assert_eq!(r.sent.len(), 12 + 4);
+        assert_eq!(
+            r.arp,
+            ArpSummary {
+                replies_sent: 4,
+                queue_full: 0,
+                unsent: 0
+            }
+        );
+        assert_eq!(
+            r.outcome.progress.discarded,
+            2 + 1,
+            "the two foreign requests stay discarded, and so does the trailer"
+        );
+    }
+
+    /// Нет ответа на чужой адрес, на ответ ARP (opcode 2) вне ARP-скана, на обрезанный и битый кадр и на запрос с
+    /// тегом VLAN (C разбирает запрос с фиксированного смещения 14, `src/stack-arpv4.c:309`). Каждый из семи кадров
+    /// прочитан и отброшен (`discarded` 7 и кадр-хвост), так что «ответа нет» не значит «кадр не дошёл» (ревью задачи
+    /// 14a, I1).
+    #[test]
+    fn arp_foreign_reply_malformed_and_tagged_frames_get_no_reply() {
+        let mut opcode2 = arp_reply_to_router(ARP_ROUTER);
+        opcode2[0..6].copy_from_slice(&ARP_ME_MAC);
+        opcode2[28..32].copy_from_slice(&ARP_ROUTER.to_be_bytes());
+        opcode2[32..38].copy_from_slice(&ARP_ME_MAC);
+        opcode2[38..42].copy_from_slice(&ARP_ME.to_be_bytes());
+        let mine = who_has(ARP_ME);
+        let mut tagged = mine[..12].to_vec();
+        tagged.extend_from_slice(&[0x81, 0x00, 0x00, 0x64]);
+        tagged.extend_from_slice(&mine[12..42]);
+        let mut bad_hw = mine.clone();
+        bad_hw[15] = 2;
+        let rx = vec![
+            who_has(ARP_ME + 1),
+            opcode2,
+            mine[..41].to_vec(),
+            mine[..14].to_vec(),
+            Vec::new(),
+            tagged,
+            bad_hw,
+        ];
+        let frames = rx.len() as u64;
+        let r = run_arp_at_the_last_syn(&plan12(0, Shard { one: 1, of: 1 }, 0), rx);
+        assert_eq!(r.outcome.reason, Reason::Completed);
+        assert!(arp_frames(&r.sent).is_empty(), "{:?}", arp_frames(&r.sent));
+        assert_eq!(r.sent.len(), 12);
+        assert_eq!(r.arp, ArpSummary::default());
+        assert_eq!(frames, 7);
+        assert_eq!(
+            r.outcome.progress.discarded,
+            frames + 1,
+            "every frame was read and dropped, then the trailer"
+        );
+        assert_eq!(r.outcome.progress.received, 0);
+    }
+
+    /// Без опции (`EngineOptions::new`, так у Studio) кадры побайтно прежние: запрос к нашему адресу без ответа и,
+    /// как раньше, в `discarded`; TX после зондов не ждёт RX.
+    #[test]
+    fn arp_responder_off_sends_nothing() {
+        let r = run_arp(
+            &plan12(0, Shard { one: 1, of: 1 }, 0),
+            vec![who_has(ARP_ME)],
+            EngineOptions::new([1; 16], [2; 16]),
+        );
+        assert_eq!(r.sent.len(), 12);
+        assert!(arp_frames(&r.sent).is_empty());
+        assert_eq!(r.arp, ArpSummary::default());
+        assert_eq!(r.outcome.progress.discarded, 1);
+        assert!(!EngineOptions::new([0; 16], [0; 16]).arp_responder);
+    }
+
+    /// Адаптер, у которого кадры `rx` (и кадр не ARP в конце, [`TRAILER`]) приходят вместе с `at`-м отправленным
+    /// кадром, а TX стоит в хуке этой отправки, пока RX не снимет последний кадр: к следующей отправке TX все кадры
+    /// `rx` уже разобраны (RX разбирает по порядку, и разбор каждого кончился до снятия следующего), а сам TX ни одного
+    /// ответа ещё не забрал. Порядок от загрузки машины не зависит; с `wait_secs: 0` RX не выходит раньше, чем TX
+    /// покинет этот хук, поэтому ни один кадр не остаётся непрочитанным (ревью задачи 14a, I1).
+    fn adapter_with_requests_at_send(
+        at: usize,
+        rx: Vec<Vec<u8>>,
+    ) -> (FakeAdapter, Arc<ManualClock>) {
+        let clock = ManualClock::new();
+        let fake = FakeAdapter::new().with_clock(clock.clone());
+        let mut pending = Some(rx);
+        let mut seen = 0usize;
+        fake.set_responder(move |_| {
+            seen += 1;
+            match pending.take() {
+                Some(mut frames) if seen == at => {
+                    frames.push(TRAILER.to_vec());
+                    frames
+                }
+                p => {
+                    pending = p;
+                    Vec::new()
+                }
+            }
+        });
+        let f2 = fake.clone();
+        fake.set_send_hook(move |sent| {
+            if sent == at {
+                let deadline = Instant::now() + Duration::from_secs(10);
+                while f2.rx_pending() > 0 && Instant::now() < deadline {
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+            }
+        });
+        (fake, clock)
+    }
+
+    /// Последний кадр сценария [`adapter_with_requests_at_send`]: не ARP и не ответ, RX его отбрасывает (`discarded`).
+    const TRAILER: [u8; 60] = [0; 60];
+
+    /// Запросы приходят с последним, 12-м SYN плана `plan12`.
+    fn adapter_with_requests_at_the_last_syn(rx: Vec<Vec<u8>>) -> (FakeAdapter, Arc<ManualClock>) {
+        adapter_with_requests_at_send(12, rx)
+    }
+
+    /// Прогон плана из 12 зондов (`plan12` или [`arp_range_plan`]) с кадрами `rx`, пришедшими с последним SYN.
+    fn run_arp_at_the_last_syn(plan: &ReadyPlan, rx: Vec<Vec<u8>>) -> ArpRun {
+        let (fake, clock) = adapter_with_requests_at_the_last_syn(rx);
+        run_arp_on(fake, clock, plan, Vec::new(), arp_on())
+    }
+
+    /// Очередь ответов ограничена (`ARP_OUT_CAP`): RX не ждёт TX, лишний ответ выбрасывается и считается в
+    /// `queue_full`.
+    #[test]
+    fn arp_queue_full_drops_and_counts() {
+        let rx = (0..ARP_OUT_CAP + 36).map(|_| who_has(ARP_ME)).collect();
+        let (fake, clock) = adapter_with_requests_at_the_last_syn(rx);
+        let r = run_arp_on(
+            fake,
+            clock,
+            &plan12(0, Shard { one: 1, of: 1 }, 0),
+            Vec::new(),
+            arp_on(),
+        );
+        assert_eq!(r.outcome.reason, Reason::Completed);
+        assert_eq!(
+            r.arp,
+            ArpSummary {
+                replies_sent: ARP_OUT_CAP as u64,
+                queue_full: 36,
+                unsent: 0
+            }
+        );
+        assert_eq!(arp_frames(&r.sent).len(), ARP_OUT_CAP);
+        assert_eq!(r.sent.len(), 12 + ARP_OUT_CAP);
+    }
+
+    /// Ответ, который адаптер не принял, не повторяется (как NA) и считается в `unsent`; скан не падает.
+    #[test]
+    fn arp_reply_the_adapter_refuses_is_counted_unsent() {
+        let (fake, clock) = adapter_with_requests_at_the_last_syn(vec![who_has(ARP_ME)]);
+        // 12 SYN уходят, следующая отправка (ответ ARP) не принята.
+        fake.script_tx(
+            std::iter::repeat_n(crate::fake::TxStep::Sent, 12)
+                .chain([crate::fake::TxStep::WouldBlockUnsent]),
+        );
+        let r = run_arp_on(
+            fake,
+            clock,
+            &plan12(0, Shard { one: 1, of: 1 }, 0),
+            Vec::new(),
+            arp_on(),
+        );
+        assert_eq!(r.outcome.reason, Reason::Completed);
+        assert_eq!(
+            r.arp,
+            ArpSummary {
+                replies_sent: 0,
+                queue_full: 0,
+                unsent: 1
+            }
+        );
+        assert_eq!(r.sent.len(), 12);
+        assert!(arp_frames(&r.sent).is_empty());
+    }
+
+    /// Запрос, пришедший после конца передачи, в окне `--wait`, тоже получает ответ (TX живёт до конца RX, как с NDP,
+    /// `src/main.c:470-494`), и скан кончается `Completed`.
+    #[test]
+    fn arp_request_arriving_after_tx_finished_still_gets_its_reply() {
+        let mut m = MassIp::new();
+        add_target_string(m.ipv4_mut(), "198.18.0.0/30").unwrap();
+        parse_ports(m.ports_mut(), "80,443,8080").unwrap();
+        let cfg = ScanConfig {
+            targets: m,
+            seed: SEED,
+            max_rate: 1_000_000.0,
+            wait_secs: 1000,
+            ..ScanConfig::default()
+        };
+        let eff = validate(&cfg, Operation::Scan).unwrap();
+        let nic = plan12(0, Shard { one: 1, of: 1 }, 0).nics()[0].clone();
+        let plan = ReadyPlan::new_cli(eff, vec![nic]).unwrap();
+        let clock = ManualClock::new();
+        clock.set_hold(true);
+        let fake = FakeAdapter::new().with_clock(clock.clone());
+        fake.push_rx(crate::fake::RxStep::Idle(2000));
+        let r = run_arp_on(fake, clock, &plan, vec![who_has(ARP_ME)], arp_on());
+        assert_eq!(r.outcome.reason, Reason::Completed);
+        assert_eq!(r.sent.len(), 13);
+        assert!(r.sent[..12].iter().all(|f| f.len() == 58), "SYNs first");
+        assert_eq!(r.sent[12], arp_reply_to_router(ARP_ME));
+        assert_eq!(r.arp.replies_sent, 1);
+    }
+
+    /// ARP-скан (`--arp`): запрос к нам получает ответ, ответ цели остаётся результатом (`src/main.c:878-905`).
+    #[test]
+    fn arp_scan_answers_requests_and_keeps_reporting_replies() {
+        let plan = cli_plan(&Spec {
+            targets: "198.18.0.0/30",
+            ports: "I:2",
+            retries: 0,
+            shard: Shard { one: 1, of: 1 },
+            resume_index: 0,
+            resume_count: None,
+            rate: 1_000_000.0,
+        });
+        assert!(plan.is_arp_scan());
+        let target = 0xc612_0002;
+        let answer =
+            rmasscan_core::arp::encode_reply([0x0a, 2, 2, 2, 2, 2], target, ARP_ME_MAC, ARP_ME);
+        // Оба кадра приходят с последним из 4 зондов ARP, и RX разбирает их до конца TX (ревью задачи 14a, I1).
+        let (fake, clock) =
+            adapter_with_requests_at_send(4, vec![who_has(ARP_ME), answer.to_vec()]);
+        let r = run_arp_on(fake, clock, &plan, Vec::new(), arp_on());
+        assert_eq!(r.outcome.reason, Reason::Completed);
+        assert_eq!(r.outcome.progress.sent, 4);
+        assert_eq!(
+            r.outcome.progress.received, 1,
+            "the target's reply is a result"
+        );
+        assert_eq!(r.arp.replies_sent, 1);
+        assert_eq!(r.sent.len(), 4 + 1);
+        assert_eq!(r.sent[4], arp_reply_to_router(ARP_ME));
+    }
+
+    /// Ревью задачи 14a, I2: ответ уходит, пока идут зонды, а не только в окне ожидания после последнего (`src/main.c`
+    /// отправляет очередь стека в каждой пачке TX, `:289-299`, `:478-486`; иначе шлюз, спросивший наш адрес в начале
+    /// долгого скана, узнал бы его только после последнего зонда). Запрос приходит с первым SYN, TX стоит в хуке этой
+    /// отправки, пока RX его не разберёт; ответ должен уйти раньше последнего, 12-го SYN.
+    #[test]
+    fn arp_reply_leaves_during_the_probe_phase() {
+        let (fake, clock) = adapter_with_requests_at_send(1, vec![who_has(ARP_ME)]);
+        let r = run_arp_on(
+            fake,
+            clock,
+            &plan12(0, Shard { one: 1, of: 1 }, 0),
+            Vec::new(),
+            arp_on(),
+        );
+        assert_eq!(r.outcome.reason, Reason::Completed);
+        let reply = arp_reply_to_router(ARP_ME);
+        let at = r.sent.iter().position(|f| *f == reply).expect("the reply");
+        let last_syn = r.sent.iter().rposition(|f| f.len() == 58).expect("SYNs");
+        assert_eq!(r.sent.len(), 13);
+        assert_eq!(r.sent[0].len(), 58, "the SYN that brought the request");
+        assert!(
+            at < last_syn,
+            "the reply (frame {at}) leaves before the last SYN (frame {last_syn})"
+        );
+        assert_eq!(r.arp.replies_sent, 1);
+    }
+}
+
+#[cfg(test)]
+mod byte_budget_tests {
+    //! Бюджет очереди в байтах нагрузки баннеров (И7): правило приёма и возврат байт при выдаче и пропуске.
+
+    use super::*;
+    use rmasscan_core::receive::PortStatus;
+    use std::net::{IpAddr, Ipv4Addr};
+
+    fn reply(n: u32) -> Reply {
+        Reply {
+            remote_ip: 0x0a00_0000 + n,
+            remote_port: 53,
+            local_ip: 0x0a00_00fe,
+            local_port: 40000,
+            status: PortStatus::Open,
+            tcp_flags: 0,
+            ttl: 64,
+            ip_proto: 17,
+            mac: None,
+            ip6: None,
+        }
+    }
+
+    fn banner(len: usize) -> BannerRecord {
+        BannerRecord {
+            timestamp: 0,
+            ip: IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
+            ip_proto: 17,
+            port: 53,
+            app: 0,
+            ttl: 64,
+            payload: vec![0x41; len],
+        }
+    }
+
+    const KIB64: usize = 64 * 1024;
+
+    #[test]
+    fn replies_only_queue_unchanged_by_byte_budget() {
+        let q = Queue::new(4096, 1, 1000);
+        for n in 0..4096 {
+            assert!(q.push_result(reply(n), Vec::new()), "reply {n}");
+        }
+        assert!(!q.push_result(reply(4096), Vec::new()), "4097th");
+    }
+
+    #[test]
+    fn empty_queue_accepts_any_banner_set() {
+        let q = Queue::new(4096, 1, 1000);
+        assert!(q.push_result(reply(0), vec![banner(KIB64), banner(KIB64)]));
+        assert!(
+            !q.push_result(reply(1), vec![banner(1)]),
+            "now it is not empty"
+        );
+    }
+
+    #[test]
+    fn byte_budget_frees_on_pop() {
+        let q = Queue::new(4096, 100 * 1024, 1000);
+        assert!(q.push_result(reply(0), vec![banner(KIB64)]));
+        assert!(!q.push_result(reply(1), vec![banner(KIB64)]));
+        let mut st = lock(&q.st);
+        assert_eq!(st.banner_bytes, KIB64);
+        let _ = q.pop_locked(&mut st, Want::Outputs); // Results{reply 0}
+        assert_eq!(st.banner_bytes, KIB64, "the banner is still queued");
+        assert!(matches!(
+            q.pop_locked(&mut st, Want::Outputs),
+            Ok(Output::Banner(_))
+        ));
+        assert_eq!(st.banner_bytes, 0);
+        drop(st);
+        assert!(q.push_result(reply(1), vec![banner(KIB64)]));
+        assert!(
+            q.push_result(reply(2), Vec::new()),
+            "no banners: bytes do not matter"
+        );
+    }
+
+    #[test]
+    fn events_consumer_skipping_banners_releases_bytes() {
+        let q = Queue::new(4096, 100 * 1024, 1000);
+        assert!(q.push_result(reply(0), vec![banner(KIB64)]));
+        assert!(!q.push_result(reply(1), vec![banner(KIB64)]));
+        let mut st = lock(&q.st);
+        match q.pop_locked(&mut st, Want::Events) {
+            Ok(Output::Event(Event::Results { replies })) => assert_eq!(replies.len(), 1),
+            _ => panic!("expected Results"),
+        }
+        assert!(
+            st.results.is_empty(),
+            "the banner is skipped with the batch"
+        );
+        assert_eq!(st.banner_bytes, 0);
+        drop(st);
+        assert!(q.push_result(reply(1), vec![banner(KIB64)]));
+        // close обнуляет счётчик вместе с очередью
+        q.close();
+        assert!(lock(&q.st).results.is_empty());
+        assert_eq!(lock(&q.st).banner_bytes, 0);
+    }
+
+    /// Ответ с баннером ровно на последней позиции полной пачки (`event_batch_limit` = 3): пачка режется по лимиту,
+    /// баннер остаётся во главе очереди.
+    fn batch_cut_queue() -> Queue {
+        let q = Queue::new(4096, DEFAULT_RESULT_BYTE_CAPACITY, 3);
+        assert!(q.push_result(reply(0), Vec::new()));
+        assert!(q.push_result(reply(1), Vec::new()));
+        assert!(q.push_result(reply(2), vec![banner(5)]));
+        assert!(q.push_result(reply(3), Vec::new()));
+        q
+    }
+
+    #[test]
+    fn batch_cut_at_event_batch_limit_with_banners() {
+        let q = batch_cut_queue();
+        let mut st = lock(&q.st);
+        assert_eq!(st.banner_bytes, 5);
+        let mut got = Vec::new();
+        while let Ok(o) = q.pop_locked(&mut st, Want::Outputs) {
+            got.push(match o {
+                Output::Event(Event::Results { replies }) => format!("R{}", replies.len()),
+                Output::Banner(_) => "B".to_string(),
+                Output::ConnectionBanner(_) => "C".to_string(),
+                Output::Event(e) => format!("{e:?}"),
+            });
+        }
+        assert_eq!(got, ["R3", "B", "R1"]);
+        assert_eq!(st.banner_bytes, 0);
+    }
+
+    #[test]
+    fn batch_cut_at_event_batch_limit_events_consumer_releases_bytes() {
+        let q = batch_cut_queue();
+        let mut st = lock(&q.st);
+        assert!(matches!(
+            q.pop_locked(&mut st, Want::Events),
+            Ok(Output::Event(Event::Results { replies })) if replies.len() == 3
+        ));
+        assert_eq!(st.banner_bytes, 5, "the banner waits at the head");
+        assert!(matches!(
+            q.pop_locked(&mut st, Want::Events),
+            Ok(Output::Event(Event::Results { replies })) if replies.len() == 1
+        ));
+        assert_eq!(st.banner_bytes, 0);
+    }
+}
+
+#[cfg(test)]
+mod conn_banner_tests {
+    //! Баннеры соединений TCP в очереди результатов (подэтап 4b, задача 4): правило `fits` для набора соединения,
+    //! байты бюджета, порядок относительно ответов и их баннеров, ожидание места при сбросе в конце.
+
+    use super::*;
+    use rmasscan_core::receive::PortStatus;
+    use std::net::{IpAddr, Ipv4Addr};
+    use std::sync::atomic::AtomicBool;
+    use std::time::Instant;
+
+    fn reply(n: u32) -> Reply {
+        Reply {
+            remote_ip: 0x0a00_0000 + n,
+            remote_port: 80,
+            local_ip: 0x0a00_00fe,
+            local_port: 40000,
+            status: PortStatus::Open,
+            tcp_flags: 0x12,
+            ttl: 64,
+            ip_proto: 6,
+            mac: None,
+            ip6: None,
+        }
+    }
+
+    fn conn(len: usize) -> BannerRecord {
+        BannerRecord {
+            timestamp: 0,
+            ip: IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
+            ip_proto: 6,
+            port: 80,
+            app: 4,
+            ttl: 64,
+            payload: vec![0x42; len],
+        }
+    }
+
+    fn kinds(q: &Queue, want: Want) -> Vec<String> {
+        let mut st = lock(&q.st);
+        let mut got = Vec::new();
+        while let Ok(o) = q.pop_locked(&mut st, want) {
+            got.push(match o {
+                Output::Event(Event::Results { replies }) => format!("R{}", replies.len()),
+                Output::Banner(b) => format!("B{}", b.payload.len()),
+                Output::ConnectionBanner(b) => format!("C{}", b.payload.len()),
+                Output::Event(e) => format!("{e:?}"),
+            });
+        }
+        got
+    }
+
+    /// Набор соединения встаёт целиком или не встаёт (правило `fits` задачи 0): не вместился по байтам, и очередь та
+    /// же; вместился, и все записи стоят подряд, каждая отдельным элементом.
+    #[test]
+    fn conn_banner_set_is_all_or_nothing() {
+        let q = Queue::new(4096, 1000, 1000);
+        assert!(q.push_result(reply(0), vec![conn(600)]));
+        assert!(!q.push_conn_banners(vec![conn(300), conn(300)]));
+        {
+            let st = lock(&q.st);
+            assert_eq!((st.results.len(), st.banner_bytes), (2, 600));
+        }
+        assert!(q.push_conn_banners(vec![conn(200), conn(200)]));
+        {
+            let st = lock(&q.st);
+            assert_eq!((st.results.len(), st.banner_bytes), (4, 1000));
+        }
+        assert_eq!(kinds(&q, Want::Outputs), ["R1", "B600", "C200", "C200"]);
+        assert_eq!(lock(&q.st).banner_bytes, 0);
+    }
+
+    /// Байты набора соединения идут в бюджет и возвращаются при выдаче и при пропуске потребителем событий; пустая
+    /// очередь принимает любой набор; `close` обнуляет счётчик.
+    #[test]
+    fn conn_banners_count_in_byte_budget() {
+        const KIB64: usize = 64 * 1024;
+        let q = Queue::new(4096, 100 * 1024, 1000);
+        assert!(q.push_conn_banners(vec![conn(KIB64)]));
+        assert_eq!(lock(&q.st).banner_bytes, KIB64);
+        assert!(!q.push_conn_banners(vec![conn(KIB64)]));
+        assert_eq!(kinds(&q, Want::Outputs), [format!("C{KIB64}")]);
+        assert_eq!(lock(&q.st).banner_bytes, 0);
+        assert!(q.push_conn_banners(vec![conn(KIB64)]));
+        assert!(q.push_result(reply(1), Vec::new()));
+        assert_eq!(kinds(&q, Want::Events), ["R1"]);
+        assert_eq!(
+            lock(&q.st).banner_bytes,
+            0,
+            "skipped by the events consumer"
+        );
+        let tiny = Queue::new(4096, 1, 1000);
+        assert!(tiny.push_conn_banners(vec![conn(KIB64), conn(KIB64)]));
+        tiny.close();
+        assert_eq!(lock(&tiny.st).banner_bytes, 0);
+        assert!(
+            tiny.push_conn_banners(vec![conn(1)]),
+            "closed: nobody reads"
+        );
+        assert!(lock(&tiny.st).results.is_empty());
+        assert!(q.push_conn_banners(Vec::new()), "an empty set is a no-op");
+    }
+
+    /// Набор соединения не встаёт между ответом и его баннерами (одна блокировка на ответ с баннерами), обрывает
+    /// пачку ответов для [`Want::Outputs`] и пропускается для [`Want::Events`].
+    #[test]
+    fn conn_banners_keep_reply_banner_adjacency() {
+        let fill = |q: &Queue| {
+            assert!(q.push_result(reply(0), vec![conn(5)]));
+            assert!(q.push_conn_banners(vec![conn(7)]));
+            assert!(q.push_result(reply(1), Vec::new()));
+            assert!(q.push_result(reply(2), vec![conn(5)]));
+        };
+        let q = Queue::new(4096, DEFAULT_RESULT_BYTE_CAPACITY, 1000);
+        fill(&q);
+        assert_eq!(kinds(&q, Want::Outputs), ["R1", "B5", "C7", "R2", "B5"]);
+        fill(&q);
+        assert_eq!(kinds(&q, Want::Events), ["R3"]);
+        assert_eq!(lock(&q.st).banner_bytes, 0);
+    }
+
+    fn full_queue() -> Arc<Queue> {
+        let q = Arc::new(Queue::new(2, DEFAULT_RESULT_BYTE_CAPACITY, 1000));
+        assert!(q.push_result(reply(0), Vec::new()));
+        assert!(q.push_result(reply(1), Vec::new()));
+        assert!(!q.push_conn_banners(vec![conn(1)]), "the queue is full");
+        q
+    }
+
+    fn wait_until(what: &str, cond: impl Fn() -> bool) {
+        let t = Instant::now();
+        while !cond() {
+            assert!(t.elapsed() < Duration::from_secs(10), "timeout: {what}");
+            std::thread::yield_now();
+        }
+    }
+
+    /// Ожидающий набор встаёт, как только потребитель освобождает место (`room`), и не раньше.
+    #[test]
+    fn waiting_push_waits_for_room() {
+        let q = full_queue();
+        let q2 = q.clone();
+        let t = std::thread::spawn(move || q2.push_conn_banners_waiting(vec![conn(3)], &|| true));
+        wait_until("the producer waits", || lock(&q.st).room_waiters > 0);
+        assert_eq!(lock(&q.st).results.len(), 2, "nothing pushed while full");
+        assert_eq!(kinds(&q, Want::Outputs), ["R2"]);
+        assert!(t.join().unwrap());
+        assert_eq!(kinds(&q, Want::Outputs), ["C3"]);
+    }
+
+    /// `keep_going` (`!Stop`) прерывает ожидание не позже чем через один шаг ожидания: набор не встаёт, `false`.
+    #[test]
+    fn waiting_push_returns_false_when_told_to_stop() {
+        let q = full_queue();
+        let go = Arc::new(AtomicBool::new(true));
+        let (q2, g2) = (q.clone(), go.clone());
+        let t = std::thread::spawn(move || {
+            q2.push_conn_banners_waiting(vec![conn(3)], &|| g2.load(Ordering::SeqCst))
+        });
+        wait_until("the producer waits", || lock(&q.st).room_waiters > 0);
+        let stopped = Instant::now();
+        go.store(false, Ordering::SeqCst);
+        assert!(!t.join().unwrap());
+        assert!(stopped.elapsed() < Duration::from_secs(5));
+        assert_eq!(lock(&q.st).results.len(), 2);
+        assert_eq!(lock(&q.st).room_waiters, 0);
+    }
+
+    /// Потребителя больше нет (`close`) или он ждёт потоки в `join`: ожидающий набор отбрасывается, `true`.
+    #[test]
+    fn waiting_push_gives_up_on_close_and_join() {
+        for close in [true, false] {
+            let q = full_queue();
+            let q2 = q.clone();
+            let t =
+                std::thread::spawn(move || q2.push_conn_banners_waiting(vec![conn(3)], &|| true));
+            wait_until("the producer waits", || lock(&q.st).room_waiters > 0);
+            if close {
+                q.close();
+            } else {
+                q.begin_join();
+            }
+            assert!(t.join().unwrap(), "close {close}");
+            assert!(
+                !lock(&q.st)
+                    .results
+                    .iter()
+                    .any(|e| matches!(e, Entry::ConnBanner(_))),
+                "close {close}"
+            );
+        }
+    }
+
+    /// Ожидающий набор встаёт и в пустую очередь, если он больше всего бюджета.
+    #[test]
+    fn waiting_push_of_a_set_larger_than_the_budget_lands_in_an_empty_queue() {
+        let q = Arc::new(Queue::new(4096, 10, 1000));
+        assert!(q.push_conn_banners(vec![conn(8)]));
+        let q2 = q.clone();
+        let t = std::thread::spawn(move || {
+            q2.push_conn_banners_waiting(vec![conn(50), conn(50)], &|| true)
+        });
+        wait_until("the producer waits", || lock(&q.st).room_waiters > 0);
+        assert_eq!(kinds(&q, Want::Outputs), ["C8"]);
+        assert!(t.join().unwrap());
+        assert_eq!(kinds(&q, Want::Outputs), ["C50", "C50"]);
     }
 }

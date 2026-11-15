@@ -1,0 +1,15 @@
+[
+{   "ip": "198.18.0.4",   "timestamp": "1794762183", "ports": [ {"port": 80, "proto": "tcp", "status": "open", "reason": "syn-ack", "ttl": 64} ] }
+,
+{   "ip": "198.18.0.5",   "timestamp": "1794762183", "ports": [ {"port": 80, "proto": "tcp", "status": "open", "reason": "syn-ack", "ttl": 64} ] }
+,
+{   "ip": "198.18.0.5",   "timestamp": "1794762183", "ports": [ {"port": 3389, "proto": "tcp", "status": "open", "reason": "syn-ack", "ttl": 64} ] }
+,
+{   "ip": "198.18.0.5",   "timestamp": "1794762186", "ports": [ {"port": 80, "proto": "tcp", "service": {"name": "http.server", "banner": "rmasscan-lab"} } ] }
+,
+{   "ip": "198.18.0.5",   "timestamp": "1794762186", "ports": [ {"port": 80, "proto": "tcp", "service": {"name": "http", "banner": "HTTP/1.1 200 OK\u000d\u000aServer: rmasscan-lab\u000d\u000a"} } ] }
+,
+{   "ip": "198.18.0.4",   "timestamp": "1794762189", "ports": [ {"port": 80, "proto": "tcp", "service": {"name": "http.server", "banner": "rmasscan-lab"} } ] }
+,
+{   "ip": "198.18.0.4",   "timestamp": "1794762189", "ports": [ {"port": 80, "proto": "tcp", "service": {"name": "http", "banner": "HTTP/1.1 200 OK\u000d\u000aServer: rmasscan-lab\u000d\u000aContent-Length: 0\u000d\u000a\u000d"} } ] }
+]

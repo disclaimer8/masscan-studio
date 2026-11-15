@@ -1,0 +1,18 @@
+{
+  "connection_timeout": 8,
+  "ports": [
+    [
+      22,
+      22
+    ],
+    [
+      80,
+      80
+    ]
+  ],
+  "reference": "t01_tcp4/oracle-list",
+  "source": "198.18.0.1",
+  "stand": "windows",
+  "tag": "wb01_banners",
+  "wait": 14
+}

@@ -1,0 +1,14 @@
+tcp-oracle v1 port=80 capture=none segments=1 bytes=292
+run whole calls=1
+app_proto 4
+record 17 1 "t"
+record 4 275 =stream
+record 31 250 "ssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss"
+end
+run bytewise calls=292
+app_proto 4
+record 1 6 =stream
+record 17 1 "t"
+record 31 250 "ssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss"
+record 4 275 =stream
+end

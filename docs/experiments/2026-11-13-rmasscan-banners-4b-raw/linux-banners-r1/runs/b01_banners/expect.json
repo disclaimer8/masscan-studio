@@ -1,0 +1,27 @@
+{
+  "tag": "b01_banners",
+  "plan_ports": "U:53,123,137,161,500,1900,5683,11211,16464",
+  "rawudp": false,
+  "steps": [
+    {
+      "name": "binary",
+      "who": "rmasscan",
+      "out": "binary"
+    },
+    {
+      "name": "oracle-binary",
+      "who": "oracle",
+      "out": "binary"
+    },
+    {
+      "name": "list",
+      "who": "rmasscan",
+      "out": "list"
+    },
+    {
+      "name": "oracle-list",
+      "who": "oracle",
+      "out": "list"
+    }
+  ]
+}

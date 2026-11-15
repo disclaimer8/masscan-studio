@@ -9,8 +9,8 @@ use std::fmt::Write as _;
 use std::path::Path;
 
 use rmasscan_core::config::{
-    ConfigError, EchoExtras, ScanConfig, apply_core_kv, conf_line_kv, echo_with, normalize_key,
-    parse_bool,
+    ConfLineBuffer, ConfigError, EchoExtras, ScanConfig, apply_core_conf_kv, apply_core_kv,
+    echo_with, normalize_key, parse_bool,
 };
 use rmasscan_core::ranges::RangeList;
 use rmasscan_core::targets::parse_ports_with;
@@ -208,8 +208,31 @@ pub fn banner_app(value: &str) -> Result<u16, String> {
     rmasscan_proto::app_from_name(value).ok_or_else(|| format!("{BAD_BANNER_APP}{value}\nerr"))
 }
 
+/// Индекс имени `ключ[N]` по правилу C: `masscan_set_parameter` (`src/main-conf.c:2437-2441`) берёт `ARRAY(name)`
+/// (:881-890: цифры сразу за первой `[`, `parseInt` без знака с переносом по модулю 2^64, затем `unsigned`) и при
+/// значении от 65536 печатает `"%s: bad index\n"` и выходит с кодом 1, до сравнения имени, то есть у любого ключа.
+/// Имя без `[` и `[` без цифр это индекс 0, как у C.
+pub(crate) fn check_c_index(name: &str) -> Result<(), String> {
+    let Some((_, rest)) = name.split_once('[') else {
+        return Ok(());
+    };
+    let n = rest
+        .bytes()
+        .take_while(u8::is_ascii_digit)
+        .fold(0u64, |n, d| {
+            n.wrapping_mul(10).wrapping_add(u64::from(d - b'0'))
+        });
+    if n % (1u64 << 32) >= 65536 {
+        return Err(format!("{name}: bad index"));
+    }
+    Ok(())
+}
+
 /// Применяет одну пару `name = value` в позиции разбора (ключи правее
 /// переопределяют ключи левее, как в `masscan_set_parameter`, main-conf.c:2429).
+/// `line` это буфер строки C, если пара пришла из файла конфигурации (его читает
+/// короткое написание `http-header`, [`apply_core_conf_kv`]); у файлов argv
+/// (`-c`, `--resume`) его нет.
 /// Отличия от C: неизвестный ключ и нечитаемый файл возвращают `Err` (C на
 /// `conf`/`resume` молча продолжает, :3889-3900).
 pub fn apply_conf_key(
@@ -218,7 +241,9 @@ pub fn apply_conf_key(
     base: &mut FullConf,
     include_loader: &mut dyn FnMut(&Path) -> Result<String, String>,
     depth: usize,
+    line: Option<&ConfLineBuffer>,
 ) -> Result<(), String> {
+    check_c_index(name)?;
     let o = &mut base.output;
     match normalize_key(name).as_str() {
         "conf" | "config" => {
@@ -246,6 +271,11 @@ pub fn apply_conf_key(
         "pcapfilename" | "pcap" => base.pcap_filename = Some(value.to_string()),
         "bannertypes" | "bannertype" | "bannerapps" | "bannerapp" => {
             base.scan.banner_types.insert(banner_app(value)?);
+        }
+        // `SET_hello_file` (`src/main-conf.c:1207-1254`): файл читает слой CLI и дальше это `hello-string[PORT]`;
+        // набранное имя ключа несёт индекс, как в argv.
+        "hellofile" | "hellofilename" => {
+            crate::banner_settings::apply_hello_file(&mut base.scan, name, value)?;
         }
         "ndjsonstatus" | "statusndjson" => base.ndjson_status = parse_bool(value),
         "jsonstatus" | "statusjson" => {
@@ -303,7 +333,11 @@ pub fn apply_conf_key(
         | "outputrotatefilesize"
         | "rotatefilesize" => {}
         _ => {
-            let taken = apply_core_kv(&mut base.scan, name, value).map_err(|e| e.to_string())?;
+            let taken = match line {
+                Some(line) => apply_core_conf_kv(&mut base.scan, name, value, line),
+                None => apply_core_kv(&mut base.scan, name, value),
+            }
+            .map_err(|e| e.to_string())?;
             if !taken {
                 return Err(format!("CONF: unknown config option: {name}={value}"));
             }
@@ -327,9 +361,11 @@ pub fn parse_conf_str(
             "configuration files nested deeper than {MAX_CONF_DEPTH} levels (a conf/resume cycle?)"
         ));
     }
-    for raw in text.lines() {
-        if let Some((name, value)) = conf_line_kv(raw) {
-            apply_conf_key(name, value, base, include_loader, depth)?;
+    // Один буфер строки C на файл (`char line[65536]` кадра `masscan_read_config_file`, main-conf.c:3886).
+    let mut line = ConfLineBuffer::default();
+    for raw in text.split_inclusive('\n') {
+        if let Some((name, value)) = line.feed(raw) {
+            apply_conf_key(name, value, base, include_loader, depth, Some(&line))?;
         }
     }
     Ok(())

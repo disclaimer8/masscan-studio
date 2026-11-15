@@ -1,0 +1,7 @@
+    Checking rmasscan-core v0.1.0 ($REPO/rmasscan/crates/rmasscan-core)
+    Checking rmasscan-engine v0.1.0 ($REPO/rmasscan/crates/rmasscan-engine)
+    Checking rmasscan-proto v0.1.0 ($REPO/rmasscan/crates/rmasscan-proto)
+    Checking rmasscan-net v0.1.0 ($REPO/rmasscan/crates/rmasscan-net)
+    Checking rmasscan-cli v0.1.0 ($REPO/rmasscan/crates/rmasscan-cli)
+    Checking rmasscan-lab v0.1.0 ($REPO/rmasscan/crates/rmasscan-lab)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 11.48s

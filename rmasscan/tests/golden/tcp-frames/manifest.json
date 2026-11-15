@@ -1,0 +1,244 @@
+{
+  "oracle": {
+    "masscan_git_head": "8e6b3b0c07a81e8ea61d557c06134a21a6881614",
+    "harness": "tcp_frame_oracle.c + build.sh + run-goldens.sh (kept off the repository, R14)",
+    "driver_sha256": "f371c80f2795f39a280f379ee872883dd2439565e4a469eba9ecfd686ec79436",
+    "build_script_sha256": "e9e8c28ee0b3515347cbbf1f36622a7577796a9aa90d25d49ff77269196c8c8a",
+    "runner_sha256": "1e1788077cec032302446b260c3eb16ace11e4656d68942c3192eece21002279",
+    "binary_sha256": "9f93133b9b2af24338ee28550d6e65fefc63cd9368d5c991505f1ccb5ccd12f7",
+    "compiler": "gcc (Ubuntu 15.2.0-16ubuntu1) 15.2.0",
+    "build": "-std=gnu99 -g -O2 (masscan Makefile CFLAGS)",
+    "linked_sources": ["templ-pkt", "templ-tcp-hdr", "proto-preprocess", "proto-sctp", "util-checksum", "syn-cookie", "crypto-siphash24", "util-malloc", "util-safefunc", "util-logger", "pixie-timer", "massip-addr"],
+    "linked_sources_sha256": {
+      "templ-pkt.c": "099a4be3e8c73bb7c9cdfe3bbd033345bbf9ef1b5e38dfade4ed4b05b2ca0595",
+      "templ-tcp-hdr.c": "ec402f6dcf0564b4722b3c747e8778de6e6f1ba8d8324dcedaf6d984ee42a4d9",
+      "proto-preprocess.c": "df4b75c854305bfe576fdbdd617e9e0f926668801b81470b6f27d4a5162375fd",
+      "proto-sctp.c": "b9953e2841a8824e6442cf3de97757f417be348f504608f69fb019518ad45d58",
+      "util-checksum.c": "199e652e7c9c81205e7e5605c19d5d6058dccbacf95e91ae5a06db0de9928e44",
+      "syn-cookie.c": "1d29cf801890b5fc2db6ecd88c1496527fab036ec393ff8c82dc3fcd1b7891b2",
+      "crypto-siphash24.c": "b41506fb5d4222995a23c8f908c348fb8b800083243645513899aa96ec0f37bc",
+      "util-malloc.c": "183cf87cc071c2c5244d4d25575837bf0bb765f7ecc87cbe63fe8acb341d0546",
+      "util-safefunc.c": "65f7db4136b2de5fb410128f2d2b78bbd4f4fe1b68bfa5be407c1e3e77bd8b9e",
+      "util-logger.c": "1b5b15d1b9d1eedab2ae02609a7e00c0ce9566ed4158759e6de374e43e3eab21",
+      "pixie-timer.c": "7b50a70582deb169583ed222bc389f2c460194641173b95e9cb6a9fb1712f74d",
+      "massip-addr.c": "f6ee3e86ae3c8dbc3fdf6e3580a6a81926609654c3cc7c64b10b1211b5e32316"
+    },
+    "stubs": "output_report_status (src/proto-sctp.c) and payloads_udp_lookup (src/templ-pkt.c, UDP probes) abort if called; no TCP frame reaches them",
+    "calls": "template_packet_init with the case's TemplateOptions, template_set_ttl when --ttl is set, tcp_create_packet into a 2040-byte buffer, tcp_set_window when the frame sets a window"
+  },
+  "host": "Ubuntu 26.04.1 LTS, kernel 7.0.0-38-generic, x86_64",
+  "captured_at": "2026-11-14T10:09:22Z",
+  "expected": "rmasscan TcpFrameBuilder::build equals each C frame byte for byte, except E1.10 frames (C's IPv4 header sum folded twice) and the TSval of --tcp-tsecho templates (C writes field[2] twice); the test derives both from rmasscan's frame and compares the result with C byte for byte",
+  "cases": [
+    {
+      "name": "eth-default-v4",
+      "about": "ethernet, IPv4, шаблон по умолчанию: MSS 1460, TTL 255",
+      "link": "ethernet",
+      "frames": 18,
+      "input": "cases/eth-default-v4.in.txt",
+      "input_sha256": "e5883212984d051aa48c41d63547103afdb95d74c6a9cf7f14245d8a34179cf7",
+      "output": "cases/eth-default-v4.out",
+      "output_sha256": "0eb38922cd5ad35c469efd79f23f9576c3d368afb04fc342e86e381d73b6107d"
+    },
+    {
+      "name": "eth-default-v6",
+      "about": "ethernet, IPv6, шаблон по умолчанию: MSS 1460, TTL 255",
+      "link": "ethernet",
+      "frames": 17,
+      "input": "cases/eth-default-v6.in.txt",
+      "input_sha256": "9d65513c552723188df1a383aa33a6b73cc7575f6c4cd5a6981d98f88d13da84",
+      "output": "cases/eth-default-v6.out",
+      "output_sha256": "39b166484217ab0ec92b2645855b9e68db519373371ec64306551f1a58d79a18"
+    },
+    {
+      "name": "eth-mss-1400-v4",
+      "about": "ethernet, IPv4, --tcp-mss 1400",
+      "link": "ethernet",
+      "frames": 18,
+      "input": "cases/eth-mss-1400-v4.in.txt",
+      "input_sha256": "1104bd1a2a9fde75f70a4f6cb31dc1e4c09437cce1f8e82f2eac20540f7ca8f3",
+      "output": "cases/eth-mss-1400-v4.out",
+      "output_sha256": "7d90153b6e540f72981cf1568fb019ad30964c1e9ac8c35e0a4a7e60bb63cf30"
+    },
+    {
+      "name": "eth-mss-1400-v6",
+      "about": "ethernet, IPv6, --tcp-mss 1400",
+      "link": "ethernet",
+      "frames": 17,
+      "input": "cases/eth-mss-1400-v6.in.txt",
+      "input_sha256": "9675fb1a39d8a80b4d49f1ba81e43b528ea548562bd0877c227e109ead0f9946",
+      "output": "cases/eth-mss-1400-v6.out",
+      "output_sha256": "9f23dcd0eed7211e0ad43ea79a242776a5fdfb8d80555c9087c473f31f171936"
+    },
+    {
+      "name": "eth-mss-off-v4",
+      "about": "ethernet, IPv4, --tcp-mss false: без опций, doff 5",
+      "link": "ethernet",
+      "frames": 18,
+      "input": "cases/eth-mss-off-v4.in.txt",
+      "input_sha256": "e9c4e4a706c424b9717a9e53802ee60fc040153a7292be86ed042c10fa154bb0",
+      "output": "cases/eth-mss-off-v4.out",
+      "output_sha256": "472995dbb8ea888dfe5a5a3a38c17a13795707a32846c9e57b30853fc230bf6b"
+    },
+    {
+      "name": "eth-mss-off-v6",
+      "about": "ethernet, IPv6, --tcp-mss false: без опций, doff 5",
+      "link": "ethernet",
+      "frames": 17,
+      "input": "cases/eth-mss-off-v6.in.txt",
+      "input_sha256": "5796f92769fbff6c47ccefa36a8906d7c9306dcae44f13a8e8cccb9b5511a01e",
+      "output": "cases/eth-mss-off-v6.out",
+      "output_sha256": "6b9af93e3c640f48111b7d49305abaa2fcec740e3464a09d755f1c2da5b13b1e"
+    },
+    {
+      "name": "eth-sackok-v4",
+      "about": "ethernet, IPv4, --tcp-sackok",
+      "link": "ethernet",
+      "frames": 18,
+      "input": "cases/eth-sackok-v4.in.txt",
+      "input_sha256": "d87fbb0754b95b4f34b5e4393433d83f4f6e88ae1a3017d3471ec7bc41f1c84f",
+      "output": "cases/eth-sackok-v4.out",
+      "output_sha256": "5af879fcbcd754f622a840cff2d65cc33c194322b5e08c36a94e582eec010ef7"
+    },
+    {
+      "name": "eth-sackok-v6",
+      "about": "ethernet, IPv6, --tcp-sackok",
+      "link": "ethernet",
+      "frames": 17,
+      "input": "cases/eth-sackok-v6.in.txt",
+      "input_sha256": "40179525415002e4f6c626e638dcf0365500e8f2649f4fcfc2a7011af35dd192",
+      "output": "cases/eth-sackok-v6.out",
+      "output_sha256": "8694726b9a556099b74775e07bb8ba05c58402f72be7c0dc5f1bb749ba7bceb4"
+    },
+    {
+      "name": "eth-wscale-7-v4",
+      "about": "ethernet, IPv4, --tcp-wscale 7",
+      "link": "ethernet",
+      "frames": 18,
+      "input": "cases/eth-wscale-7-v4.in.txt",
+      "input_sha256": "10f51e5a0ab5c20cf2f1a49d422fbebd81983de1af1ecdf0ab7eea0d75f2e9bc",
+      "output": "cases/eth-wscale-7-v4.out",
+      "output_sha256": "207b908517ed7f7bc5978d79d853aff358e927cfbc44d9379d9b6432da9a2d28"
+    },
+    {
+      "name": "eth-wscale-7-v6",
+      "about": "ethernet, IPv6, --tcp-wscale 7",
+      "link": "ethernet",
+      "frames": 17,
+      "input": "cases/eth-wscale-7-v6.in.txt",
+      "input_sha256": "dd14ab164db8e5783bd5add0252772d4323dccc4bee68446da3ed6daf3f0b3b5",
+      "output": "cases/eth-wscale-7-v6.out",
+      "output_sha256": "28c54b81a2e04387557ce20a5d4b4e7584feea6328e999a8458bc9d0d176ba28"
+    },
+    {
+      "name": "eth-tsecho-v4",
+      "about": "ethernet, IPv4, --tcp-tsecho (0x12345678): TSval C теряет ts >> 8 (src/templ-tcp-hdr.c:1111-1112)",
+      "link": "ethernet",
+      "frames": 18,
+      "input": "cases/eth-tsecho-v4.in.txt",
+      "input_sha256": "b3ff529da012233de6060df1a9ce91e625d342c9b8f1240fd3a47d0391c7150e",
+      "output": "cases/eth-tsecho-v4.out",
+      "output_sha256": "b4a2ea44fa6b87d17b4f90e783d8f0cb241e5ec365fb1680d61c9d3f8b6b7dcc"
+    },
+    {
+      "name": "eth-tsecho-v6",
+      "about": "ethernet, IPv6, --tcp-tsecho (0x12345678): TSval C теряет ts >> 8 (src/templ-tcp-hdr.c:1111-1112)",
+      "link": "ethernet",
+      "frames": 17,
+      "input": "cases/eth-tsecho-v6.in.txt",
+      "input_sha256": "44ce5ea7badf34014978d9f6a8c1865ed0a599735df9adf463d7e1883dd1140f",
+      "output": "cases/eth-tsecho-v6.out",
+      "output_sha256": "e2006fee97523e2a33fda684fe9ea498f0c68d3d197ab5fcf53103757e0725e8"
+    },
+    {
+      "name": "eth-ttl-64-v4",
+      "about": "ethernet, IPv4, --ttl 64 (у IPv6 hop limit остаётся 255)",
+      "link": "ethernet",
+      "frames": 18,
+      "input": "cases/eth-ttl-64-v4.in.txt",
+      "input_sha256": "6fdf04a13b21a5fcc0671c4dd53ef03a4ce292e2eec91e191eccc2aa374aa5e4",
+      "output": "cases/eth-ttl-64-v4.out",
+      "output_sha256": "c9f7628d0a58400f2387e8cf35428e3bae5c61ebb2539e226d04e78659e5e648"
+    },
+    {
+      "name": "eth-ttl-64-v6",
+      "about": "ethernet, IPv6, --ttl 64 (у IPv6 hop limit остаётся 255)",
+      "link": "ethernet",
+      "frames": 17,
+      "input": "cases/eth-ttl-64-v6.in.txt",
+      "input_sha256": "6f7659620e5b8b51b34a9af5c28b4ec9004c38f7624329de974d467a6f8eac6c",
+      "output": "cases/eth-ttl-64-v6.out",
+      "output_sha256": "3b74ce2fda679bb33018431e1cc9bd073b3dd371fce027ee0825e489ed055368"
+    },
+    {
+      "name": "eth-all-options-v4",
+      "about": "ethernet, IPv4, --tcp-mss 1400 --tcp-sackok --tcp-wscale 7 --tcp-tsecho --ttl 64: doff 10",
+      "link": "ethernet",
+      "frames": 18,
+      "input": "cases/eth-all-options-v4.in.txt",
+      "input_sha256": "d741b9edd0369c56745be916ea275778a68d423f86a398cc0074dd5240790e22",
+      "output": "cases/eth-all-options-v4.out",
+      "output_sha256": "7bd19b3d733ba933af47c4634a76182235c30c6e8b148993018c6558565006fa"
+    },
+    {
+      "name": "eth-all-options-v6",
+      "about": "ethernet, IPv6, --tcp-mss 1400 --tcp-sackok --tcp-wscale 7 --tcp-tsecho --ttl 64: doff 10",
+      "link": "ethernet",
+      "frames": 17,
+      "input": "cases/eth-all-options-v6.in.txt",
+      "input_sha256": "2b80abaaf275368aa52003d09d6d6d6a15eae148d99e2a73154119069e625ba3",
+      "output": "cases/eth-all-options-v6.out",
+      "output_sha256": "66b6e0d8dcd99830f2638bbd35b1af2e5337ce02a37f251366b4dae37430591a"
+    },
+    {
+      "name": "raw-default-v4",
+      "about": "raw, IPv4, набивка до 60 байт и без Ethernet (src/templ-pkt.c:510-513)",
+      "link": "raw",
+      "frames": 17,
+      "input": "cases/raw-default-v4.in.txt",
+      "input_sha256": "344f4678e61de29d9bd245546e4c63e4d890304682bdf19f5d7b74f7974c0c69",
+      "output": "cases/raw-default-v4.out",
+      "output_sha256": "0dcb277d9de6d9b7e293e853f535d4deec5916620914b19130212872d9aad7b8"
+    },
+    {
+      "name": "raw-default-v6",
+      "about": "raw, IPv6, без набивки",
+      "link": "raw",
+      "frames": 17,
+      "input": "cases/raw-default-v6.in.txt",
+      "input_sha256": "c57210fc651c918573ba486f4ec3210d7f3c3a4f3a2908607fa323ecb3420bf1",
+      "output": "cases/raw-default-v6.out",
+      "output_sha256": "5815c7aae58bd95e05826fbef93ba2dfdca3a4eeeaaaa8de2764fc8c09c4ecd3"
+    },
+    {
+      "name": "raw-mss-off-v4",
+      "about": "raw, IPv4, набивка до 60 байт и без Ethernet (src/templ-pkt.c:510-513)",
+      "link": "raw",
+      "frames": 17,
+      "input": "cases/raw-mss-off-v4.in.txt",
+      "input_sha256": "bc92b852166454657add167f51362c23bd392f66046fe33e126c2647eb124139",
+      "output": "cases/raw-mss-off-v4.out",
+      "output_sha256": "421c2ed906a3270f9b6c2710d2941f64f1e04eef04c27eab049e684a25e37aa0"
+    },
+    {
+      "name": "raw-mss-off-v6",
+      "about": "raw, IPv6, ровно 60 байт",
+      "link": "raw",
+      "frames": 17,
+      "input": "cases/raw-mss-off-v6.in.txt",
+      "input_sha256": "fc974b776bfb1b98d5f9e7720745a4595d88fd9a236f616775f1048661ee09c0",
+      "output": "cases/raw-mss-off-v6.out",
+      "output_sha256": "34d17160582507a0163c8520aec70b3fe6c36da0d63972004546b09ee04e2063"
+    },
+    {
+      "name": "eth-default-v4-e1-10",
+      "about": "ethernet, IPv4, вектор E1.10: без нагрузки сумма IP у C 0xffff вместо 0xfffe, с байтом нагрузки верна",
+      "link": "ethernet",
+      "frames": 4,
+      "input": "cases/eth-default-v4-e1-10.in.txt",
+      "input_sha256": "f920b3ba87a53e46512c412136d5bcd902df9fb9dcbb89dd810941c2b71e44fb",
+      "output": "cases/eth-default-v4-e1-10.out",
+      "output_sha256": "f1e4f9a98d1352f8ef4670d981e3b1ac9ba6ecfaf68a2d797534de2857f405ea"
+    }
+  ]
+}

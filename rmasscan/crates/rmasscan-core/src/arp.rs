@@ -1,13 +1,15 @@
 //! Кодек ARP для Ethernet/IPv4 (AGPL-3.0). Порт запроса и разбора ответа из
-//! `src/stack-arpv4.c` (`stack_arp_resolve` :103, `proto_arp_parse` :43) и
+//! `src/stack-arpv4.c` (`stack_arp_resolve` :103, `proto_arp_parse` :52) и
 //! `proto-preprocess.c:parse_arp`, masscan © Robert David Graham
-//! (github.com/robertdavidgraham/masscan, HEAD 8e6b3b0).
+//! (github.com/robertdavidgraham/masscan, HEAD 8e6b3b0), и ответчика на запросы
+//! к нашим адресам (`stack_arp_incoming_request`, `src/stack-arpv4.c:282-363`).
 //!
-//! Отличия от C, намеренные: C пропускает hw type 6 и проверяет длины через
+//! Отличия [`decode`] (резолвер и ответы ARP-скана) от C, намеренные: C пропускает hw type 6 и проверяет длины через
 //! `&&` (`protocol_length != 4 && hardware_length != 6`, то есть пропускает
 //! кадр с одной неверной длиной); здесь допустимо только 1/0x0800/6/4. VLAN
 //! возвращает [`ArpError::Vlan`]. Источник Ethernet должен совпадать с
-//! sender MAC в ARP.
+//! sender MAC в ARP. Ответчик ([`incoming_request`], [`answer_request`]) принимает запрос ровно как C, со всеми этими
+//! странностями: его ответ уходит на провод и обязан совпасть с ответом C.
 
 /// Длина кадра запроса: ARP 42 байта, дополнение до минимума Ethernet 60.
 pub const ARP_FRAME_LEN: usize = 60;
@@ -71,7 +73,9 @@ pub fn encode_request(my_mac: [u8; 6], my_ip: u32, target_ip: u32) -> [u8; ARP_F
     f
 }
 
-/// Кадр ответа, нужен тестам и отладке (в C ответы шлёт `stack_arp_incoming_request`).
+/// Кадр ответа ARP (60 байт, дополнение нулями): Ethernet от `sender_mac` к `target_mac`, opcode 2, отправитель
+/// `sender_mac`/`sender_ip`, получатель `target_mac`/`target_ip`. Раскладка `stack_arp_incoming_request`
+/// (`src/stack-arpv4.c:301-356`); им строит ответ [`answer_request`].
 pub fn encode_reply(
     sender_mac: [u8; 6],
     sender_ip: u32,
@@ -136,6 +140,77 @@ pub fn decode(frame: &[u8]) -> Result<ArpPacket, ArpError> {
         target_mac: mac_at(a, 18).ok_or(bad.clone())?,
         target_ip: ip_at(a, 24).ok_or(bad)?,
     })
+}
+
+/// Запрос ARP, на который отвечает C, в полях, которые C из него берёт.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct IncomingRequest {
+    /// `request.mac_src`: 6 байт с `px + 22`, какой бы ни была длина адреса оборудования в заголовке
+    /// (`src/stack-arpv4.c:81`, копия `:338`, `:350`).
+    pub sender_mac: [u8; 6],
+    /// `ip_src`: 4 байта сразу за адресом оборудования отправителя (`:84`).
+    pub sender_ip: u32,
+    /// `ip_dst`: 4 байта за адресом оборудования получателя (`:89`); C сравнивает его с нашим адресом.
+    pub target_ip: u32,
+}
+
+/// Кадр Ethernet, на который C зовёт `stack_arp_incoming_request` и тот принимает его как запрос
+/// (`src/main.c:799-887`, `src/stack-arpv4.c:52-94`, `:309-327`), без проверки адреса назначения: `None`, если C
+/// не ответил бы ни на какой наш адрес. Проверки, как у C:
+/// - кадр не длиннее 1514 байт (`src/main.c:799`);
+/// - EtherType 0x0806 в байтах 12..14: C разбирает запрос с фиксированного смещения 14 (`proto_arp_parse(&request,
+///   px, 14, length)`, `src/stack-arpv4.c:309`), а у кадра с тегом 802.1Q или 802.1ad и у LLC/SNAP, где
+///   `preprocess_frame` находит ARP дальше (`src/proto-preprocess.c:334-338`, `:473-497`), байты 16..18 это
+///   EtherType тега (0x0806, 0x8100) или байты LLC (0x0300, 0xaaaa), а не 0x0800, так что запрос с тегом у C ответа
+///   не получает никогда;
+/// - заголовок ARP и `2 × hl + 2 × pl` байт адресов в кадре (`VERIFY_REMAINING`, `src/proto-preprocess.c:599`, `:609`,
+///   `src/stack-arpv4.c:59`, `:79`);
+/// - opcode 1 (`src/main.c:879-880`), тип протокола 0x0800, тип оборудования 1 или 6 и отказ, только если неверны
+///   обе длины (`protocol_length != 4 && hardware_length != 6`, `src/stack-arpv4.c:70-75`).
+///
+/// Отличие от C (Р1 класс а): при длинах 6/0..6/3 адрес назначения C читает за проверенной частью, и в кадре короче
+/// `38 + pl` байт это чтение за краем кадра (`src/proto-preprocess.c:619-621`, `src/stack-arpv4.c:89`); здесь такой
+/// кадр запросом не считается. Тотальна: каждое чтение проверено, ничего не выделяет.
+pub fn incoming_request(frame: &[u8]) -> Option<IncomingRequest> {
+    if frame.len() > crate::receive::MAX_FRAME_LEN || frame.get(12..14)? != [0x08, 0x06] {
+        return None;
+    }
+    let a = frame.get(ETH_LEN..ETH_LEN + 8)?;
+    let ht = u16::from_be_bytes([a[0], a[1]]);
+    let pt = u16::from_be_bytes([a[2], a[3]]);
+    let (hl, pl) = (usize::from(a[4]), usize::from(a[5]));
+    let op = u16::from_be_bytes([a[6], a[7]]);
+    let addrs = ETH_LEN + 8;
+    if frame.len() < addrs + 2 * hl + 2 * pl
+        || op != 1
+        || (pl != 4 && hl != 6)
+        || pt != 0x0800
+        || (ht != 1 && ht != 6)
+    {
+        return None;
+    }
+    Some(IncomingRequest {
+        sender_mac: mac_at(frame, addrs)?,
+        sender_ip: ip_at(frame, addrs + hl)?,
+        target_ip: ip_at(frame, addrs + 2 * hl + pl)?,
+    })
+}
+
+/// Ответ на ARP-запрос к одному из наших адресов `first..=last` (`is_my_ip`, `src/stack-src.c:8-18`;
+/// `src/main.c:829`, `:878-887`): кадр [`encode_reply`] от `my_mac` с запрошенным адресом к `sender_mac` запроса
+/// (не к источнику Ethernet), как `stack_arp_incoming_request` (`src/stack-arpv4.c:331-356`). `None`, если C не
+/// ответил бы ([`incoming_request`]) или адрес не наш. Адрес источника, принадлежащий ОС, C не отличает: на запрос
+/// отвечают и ядро, и сканер.
+pub fn answer_request(
+    frame: &[u8],
+    my_mac: [u8; 6],
+    first: u32,
+    last: u32,
+) -> Option<[u8; ARP_FRAME_LEN]> {
+    let r = incoming_request(frame)?;
+    (first..=last)
+        .contains(&r.target_ip)
+        .then(|| encode_reply(my_mac, r.target_ip, r.sender_mac, r.sender_ip))
 }
 
 /// Ожидающее разрешение адреса (`stack_arp_resolve`). Принимает только ответ,

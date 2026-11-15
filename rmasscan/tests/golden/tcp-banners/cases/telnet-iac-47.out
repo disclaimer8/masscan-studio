@@ -1,0 +1,13 @@
+tcp-oracle v1 port=23 capture=none segments=1 bytes=6
+run whole calls=1
+app_proto 29
+action send flags=1 6 "\xff\xfc\x03\xff\xfe&"
+record 29 6 =stream
+end
+run bytewise calls=6
+app_proto 29
+action send flags=1 3 "\xff\xfe&"
+action send flags=1 3 "\xff\xfc\x03"
+record 1 4 =stream
+record 29 6 =stream
+end

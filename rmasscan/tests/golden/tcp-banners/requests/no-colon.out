@@ -1,0 +1,5 @@
+GET / HTTP/1.0
+User-Agent: ivre-masscan/1.3 https://github.com/robertdavidgraham/
+Accept: */*
+X-Lab: v
+

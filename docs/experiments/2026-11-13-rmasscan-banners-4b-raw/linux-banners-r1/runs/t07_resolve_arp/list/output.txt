@@ -1,0 +1,6 @@
+#masscan
+open tcp 80 198.18.0.2 1794762315
+banner tcp 80 198.18.0.2 1794762318 http.server rmasscan-lab
+banner tcp 80 198.18.0.2 1794762318 title rmasscan-lab
+banner tcp 80 198.18.0.2 1794762318 http HTTP/1.0 200 OK\x0d\x0aServer: rmasscan-lab\x0d\x0aContent-Type: text/html\x0d\x0a\x0d
+# end

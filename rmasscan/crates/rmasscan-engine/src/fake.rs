@@ -232,6 +232,11 @@ impl FakeAdapter {
         self.push_rx(RxStep::Frame(frame));
     }
 
+    /// Сколько шагов приёма (кадров, сбоев, серий таймаутов) ещё ждут `Rx::recv`.
+    pub fn rx_pending(&self) -> usize {
+        lock(&self.st).rx.len()
+    }
+
     /// Один и тот же кадр `n` раз (дубли).
     pub fn push_frame_n(&self, frame: &[u8], n: usize) {
         let mut st = lock(&self.st);

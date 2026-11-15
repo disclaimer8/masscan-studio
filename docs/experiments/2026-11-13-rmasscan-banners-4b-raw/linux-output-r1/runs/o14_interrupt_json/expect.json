@@ -1,0 +1,10 @@
+{
+  "tag": "o14_interrupt_json",
+  "kind": "interrupt",
+  "format": "json",
+  "target": "file",
+  "show_closed": true,
+  "stdout": "silent",
+  "status": "text",
+  "oracle": false
+}

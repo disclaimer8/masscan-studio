@@ -1,0 +1,8 @@
+#masscan
+open tcp 80 198.18.0.2 1794765165
+open tcp 22 198.18.0.2 1794765165
+banner tcp 22 198.18.0.2 1794765166 ssh SSH-2.0-OpenSSH_9.6 rmasscan-lab\x0d\x0a
+banner tcp 80 198.18.0.2 1794765168 http.server rmasscan-lab
+banner tcp 80 198.18.0.2 1794765168 title rmasscan-lab
+banner tcp 80 198.18.0.2 1794765168 http HTTP/1.0 200 OK\x0d\x0aServer: rmasscan-lab\x0d\x0aContent-Type: text/html\x0d\x0a\x0d
+# end

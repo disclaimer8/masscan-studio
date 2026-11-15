@@ -1484,6 +1484,12 @@ pub(crate) fn judge_tag(root: &Path, man: &Value, fx: &Value, it: &Value) -> (Ru
 /// Every run of `root` (kept, discarded or aborted) whose lab-isolation checks tripped. The suite
 /// refuses to start or to `--rerun` in a directory where this is not empty.
 pub fn safety_trips(root: &Path) -> Vec<String> {
+    if crate::banners_stand::stand_dir(root) {
+        return array(&crate::banners_stand::verify_dir(root)["safety_trips"])
+            .iter()
+            .map(|t| s(t).to_owned())
+            .collect();
+    }
     let man = read_json(root.join("manifest.json")).unwrap_or(Value::Null);
     [".work", "runs", "runs_discarded", "runs_aborted"]
         .iter()
@@ -1498,6 +1504,9 @@ pub fn safety_trips(root: &Path) -> Vec<String> {
 
 /// The verdict of one tag (`verdict`, `behaviour_fail`), for the rerun rule.
 pub fn run_status(root: &Path, tag: &str) -> (String, bool) {
+    if crate::banners_stand::stand_dir(root) {
+        return crate::banners_stand::run_status(root, tag);
+    }
     let _mac = verify::MacStandGuard::enter();
     let Some(man) = read_json(root.join("manifest.json")) else {
         return (NOT_RUN.into(), false);
@@ -1511,6 +1520,10 @@ pub fn run_status(root: &Path, tag: &str) -> (String, bool) {
 }
 
 pub fn verify_dir(root: &Path) -> Value {
+    // The TCP banner case (`macos-suite --plan banners`, manifest key `banners_stand`) has its own verifier.
+    if crate::banners_stand::stand_dir(root) {
+        return crate::banners_stand::verify_dir(root);
+    }
     let _mac = verify::MacStandGuard::enter();
     let mut result = json!({"schema":1,"dir":root.file_name().unwrap_or_default().to_string_lossy(),"runs":[],"groups":[],"discarded":[],"aborted":[]});
     let Some(man) = read_json(root.join("manifest.json")) else {
@@ -1649,6 +1662,10 @@ pub fn run(args: &[String]) -> Result<i32, String> {
         return Ok(0);
     }
     let dir = crate::windows_suite::required(&o, "dir")?;
+    if crate::banners_stand::stand_dir(Path::new(&dir)) {
+        // The TCP banner case: the verdict and the report are its own verifier's.
+        return crate::banners_stand::run(args);
+    }
     let res = verify_dir(Path::new(&dir));
     if let Some(out) = o.get("out").and_then(|v| v.first()) {
         fs::write(

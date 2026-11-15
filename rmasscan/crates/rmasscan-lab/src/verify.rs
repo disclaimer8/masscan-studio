@@ -3165,6 +3165,12 @@ fn autodetect_dir(root: &Path) -> bool {
 /// Every run of `root` (kept, discarded or aborted) whose lab-isolation checks tripped. The suite
 /// refuses to start or to `--rerun` in a directory where this is not empty.
 pub fn safety_trips(root: &Path) -> Vec<String> {
+    if crate::banners_stand::stand_dir(root) {
+        return array(&crate::banners_stand::verify_dir(root)["safety_trips"])
+            .iter()
+            .map(|t| s(t).to_owned())
+            .collect();
+    }
     if autodetect_dir(root) {
         return array(&crate::autodetect_verify::verify_dir(root)["safety_trips"])
             .iter()
@@ -3183,6 +3189,10 @@ pub fn safety_trips(root: &Path) -> Vec<String> {
         .collect()
 }
 pub fn verify_dir(root: &Path) -> Value {
+    // The TCP banner case (`windows-suite --plan banners`, manifest key `banners_stand`) has its own verifier.
+    if crate::banners_stand::stand_dir(root) {
+        return crate::banners_stand::verify_dir(root);
+    }
     if autodetect_dir(root) {
         return crate::autodetect_verify::verify_dir(root);
     }
@@ -3299,6 +3309,9 @@ pub fn verify_dir(root: &Path) -> Value {
     finish(result)
 }
 pub fn run_status(root: &Path, tag: &str) -> (String, bool) {
+    if crate::banners_stand::stand_dir(root) {
+        return crate::banners_stand::run_status(root, tag);
+    }
     if autodetect_dir(root) {
         let v = crate::autodetect_verify::verify_dir(root);
         return array(&v["runs"])
@@ -3364,6 +3377,10 @@ pub fn run(args: &[String]) -> Result<i32, String> {
         }
     }
     let root = Path::new(dir.ok_or("--dir required")?);
+    if crate::banners_stand::stand_dir(root) {
+        // The TCP banner case: the verdict and the report are its own verifier's.
+        return crate::banners_stand::run(args);
+    }
     if autodetect_dir(root) {
         // The verdict and the report are autodetect-verify's.
         return crate::autodetect_verify::run(args);

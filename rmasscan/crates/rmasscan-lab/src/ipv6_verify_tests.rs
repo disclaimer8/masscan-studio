@@ -1,14 +1,15 @@
 //! Synthetic, hermetic IPv6 evidence. The probes come from the scan plan (`ReadyPlan` + its cursor, the product's own
-//! plan); every answer of the peer (SYN-ACK, RST, the NA), the scanner side's own frames (the NS, the ARP who-has, the
-//! kernel's RST), the documents in C's byte forms and the `[+]` lines are built here by hand, never with the
-//! verifier's parsers or the product's NDP codec. One rule at a time is broken. Nothing touches a network.
+//! plan), either scanner's stateless RST from the product's own code (`product_rst`); every answer of the peer
+//! (SYN-ACK, RST, the NA), the scanner side's other frames (the NS, the ARP who-has, the kernel's RST), the documents
+//! in C's byte forms and the `[+]` lines are built here by hand, never with the verifier's parsers or the product's
+//! NDP codec. One rule at a time is broken. Nothing touches a network.
 use super::*;
 use crate::{
     autodetect_verify::{
         ArgvRecord, HASHES, MANIFEST_JSON,
         tests::{
-            LAB_ID, Sim as AdSim, T0, TEARDOWN, arp_request, linux_isolation, marker,
-            status_fragments,
+            LAB_ID, Sim as AdSim, T0, TEARDOWN, arp_request, linux_isolation, marker, os_reply,
+            peer_who_has, product_rst, responder_reply, status_fragments,
         },
     },
     link::{END_PAYLOAD, START_PAYLOAD},
@@ -158,62 +159,6 @@ fn scanner_rst(r: &[u8]) -> Vec<u8> {
             false,
         )
     }
-}
-/// C's own RST to reply `r` (a SYN-ACK or the RST of a closed port), as live 7b r1 caught it: tcp_send_RST builds it
-/// from the scan's template (tcp_create_packet), so flags 0x04, the reply's acknowledgment as its sequence number,
-/// acknowledgment 0, window 1200 and the template's MSS option (78 bytes over IPv6).
-fn c_rst(r: &[u8]) -> Vec<u8> {
-    let at = l4_at(r);
-    let mut l4 = tcp_l4(be16(r, at + 2), be16(r, at), be32(r, at + 8), 0, 0x04);
-    l4[12] = 0x60;
-    l4[14..16].copy_from_slice(&1200_u16.to_be_bytes());
-    l4.extend([2, 4, 0x05, 0xb4]);
-    if r[12..14] == [8, 0] {
-        ip_frame(
-            PEER_MAC,
-            SCANNER_MAC,
-            SCANNER_IP,
-            Ipv4Addr::new(r[26], r[27], r[28], r[29]),
-            6,
-            l4,
-        )
-    } else {
-        ip6_frame(
-            PEER_MAC,
-            SCANNER_MAC,
-            scanner6(),
-            v6_at(r, 22),
-            6,
-            255,
-            l4,
-            Some(16),
-            false,
-        )
-    }
-}
-/// A peer TCP reply on a step's wire (SYN-ACK or RST-ACK), by its flags.
-fn peer_tcp_reply(f: &[u8]) -> bool {
-    if f[6..12] != PEER_MAC {
-        return false;
-    }
-    let at = match &f[12..14] {
-        [8, 0] if f[23] == 6 => 34,
-        [0x86, 0xdd] if f[20] == 6 => 54,
-        _ => return false,
-    };
-    matches!(f.get(at + 13), Some(0x12 | 0x14))
-}
-/// Every TCP reply of a step's wire, followed 0.1 ms later by C's own RST to it.
-fn with_c_resets(frames: &Frames) -> Frames {
-    let mut out = Frames::new();
-    for (t, f) in frames {
-        out.push((*t, f.clone()));
-        if peer_tcp_reply(f) {
-            out.push((t + 0.0001, c_rst(f)));
-        }
-    }
-    out.sort_by(|a, b| a.0.total_cmp(&b.0));
-    out
 }
 fn ll_scanner() -> Ipv6Addr {
     IPV6_SCANNER_LL.parse().unwrap()
@@ -483,10 +428,11 @@ pub(crate) fn ipv6_isolation() -> Vec<u8> {
 
 /// The peer capture of one step and the records the stand's answers give, in reply order: the start marker, the
 /// IPv4 next-hop ARP of a scan with IPv4 targets, rmasscan's NS and the peer's NA (a step that resolves the IPv6 next
-/// hop, `ns` of them), each probe 10 ms apart with its answer 1 ms later (and the scanner kernel's RST to a SYN-ACK),
-/// the end markers.
+/// hop, `ns` of them), each probe 10 ms apart with its answer 1 ms later (and the scanner kernel's RST to a SYN-ACK,
+/// and either scanner's stateless RST of every reply), the end markers.
 fn wire(c: &CaseSpec, who: Who, ns: usize, t0: f64, probes: &[Vec<u8>]) -> (Frames, Vec<Rec>) {
     let st = stand();
+    let plan = ready_plan(c).unwrap();
     let mut fr: Frames = vec![(t0, marker(&st, START_PAYLOAD))];
     if c.has_ipv4() {
         fr.push((t0 + 0.2, next_hop_request()));
@@ -514,6 +460,8 @@ fn wire(c: &CaseSpec, who: Who, ns: usize, t0: f64, probes: &[Vec<u8>]) -> (Fram
         } else {
             fr.push((a, tcp_reply(p, 0x14)));
         }
+        // Either scanner's stateless RST (R8) of each first reply, the SYN-ACK and the closed port's RST alike.
+        fr.push((a + 0.0007, product_rst(&plan, p)));
         recs.push(rec);
         last = a;
     }
@@ -1448,74 +1396,172 @@ fn the_products_ns_passes_the_verifiers_hand_written_resolver_form() {
     assert_eq!(f.to_vec(), rm_ns());
 }
 
+/// The product's stateless RST of every probe of a case (what either scanner sends for the probe's first reply).
+fn own_rsts(tag: &str) -> Vec<Vec<u8>> {
+    let c = case(tag).unwrap();
+    let plan = ready_plan(&c).unwrap();
+    plan_stream(&c)
+        .unwrap()
+        .iter()
+        .map(|p| product_rst(&plan, p))
+        .collect()
+}
+
 #[test]
-fn cs_own_reset_of_each_first_reply_is_named_on_the_oracles_step_and_never_rmasscans() {
-    // Live 7b r1: C resets each distinct reply that passes its cookie check and dedup, the closed port's RST as well
-    // as the SYN-ACK (main.c:1048-1101: `TCP_IS_SYNACK || TCP_IS_RST`, then tcp_send_RST), in both families.
-    let mut sim = Sim::new("v02_mixed_v4_v6");
-    for name in ["oracle-binary", "oracle-list"] {
-        let s = sim.step_mut(name);
-        s.frames = with_c_resets(&s.frames);
-    }
-    let root = scratch();
-    sim.write(&root);
-    fs::write(root.join(av::TEARDOWN_JSON), format!("{TEARDOWN}\n")).unwrap();
-    let res = verify_dir(&root);
-    let run_ = run_of(&res, sim.tag).clone();
-    fs::remove_dir_all(&root).unwrap();
-    assert_eq!(s(&run_["verdict"]), PASS, "{:#?}", bad(&run_));
-    for name in ["oracle-binary", "oracle-list"] {
+fn both_scanners_reset_each_first_reply_statelessly_in_cs_form() {
+    // C (live 7b r1) and rmasscan (R8) reset each distinct reply that passes the cookie check and the dedup, the
+    // closed port's RST as well as the SYN-ACK (src/main.c:1048-1101), in both families and on both steps; the kernel
+    // resets the SYN-ACKs only, in its own form.
+    let (v, b, run_) = judge_with_notes(&Sim::new("v02_mixed_v4_v6"));
+    assert_eq!(v, PASS, "{b:#?}");
+    for name in ["binary", "list", "oracle-binary", "oracle-list"] {
         let n = &run_["notes"]["scanner_frames"][name];
-        // 16 probes, 8 open and 8 closed: the kernel's 8 resets and C's 8 of the SYN-ACKs, C's 8 of the RSTs
-        assert_eq!(n["rst_to_syn_ack"], 16, "{n}");
-        assert_eq!(n["at_most"]["rst_to_syn_ack"], 16, "{n}");
-        assert_eq!(n["rst_to_rst"], 8, "{n}");
-        assert_eq!(n["at_most"]["rst_to_rst"], 8, "{n}");
-        assert_eq!(n["unexplained"], 0, "{n}");
+        // 16 probes, 8 open and 8 closed: the kernel's 8 resets of the SYN-ACKs, the scanner's 16 of every first reply
+        assert_eq!(n["rst_to_syn_ack"], 8, "{name} {n}");
+        assert_eq!(n["at_most"]["rst_to_syn_ack"], 8, "{name} {n}");
+        assert_eq!(n["stateless_rst"], 16, "{name} {n}");
+        assert_eq!(n["at_most"]["stateless_rst"], 16, "{name} {n}");
+        assert_eq!(n["unexplained"], 0, "{name} {n}");
     }
-    // a second reset of C for the same RST is over the bound: a broken oracle (INVALID), never rmasscan's FAIL
-    let mut sim = Sim::new("v01_ndp_and_tcp6_syn");
-    let s = sim.step_mut("oracle-json");
-    s.frames = with_c_resets(&s.frames);
-    let i = s
-        .frames
-        .iter()
-        .position(|(_, f)| f[6..12] == PEER_MAC && f.get(54 + 13) == Some(&0x14))
-        .unwrap();
-    let (t, again) = (s.frames[i].0 + 0.0002, c_rst(&s.frames[i].1));
-    s.frames.insert(i + 2, (t, again));
-    let (v, b) = judge_one(&sim);
-    assert_eq!(v, INVALID, "{b:#?}");
-    assert_eq!(b.len(), 1, "{b:#?}");
-    assert!(
-        has(
-            &b,
-            INVALID,
-            "oracle-json: the named scanner-side frames stay within their bounds"
-        ) && b[0].contains("rst_to_rst 5 of at most 4"),
-        "{b:#?}"
-    );
-    // rmasscan has no RST path and no kernel answers an RST: the same frame on rmasscan's step is its FAIL
-    let mut sim = Sim::new("v01_ndp_and_tcp6_syn");
-    let s = sim.step_mut("json");
-    let i = s
-        .frames
-        .iter()
-        .position(|(_, f)| f[6..12] == PEER_MAC && f.get(54 + 13) == Some(&0x14))
-        .unwrap();
-    let (t, rst) = (s.frames[i].0 + 0.0001, c_rst(&s.frames[i].1));
-    s.frames.insert(i + 1, (t, rst));
-    let (v, b) = judge_one(&sim);
-    assert_eq!(v, FAIL, "{b:#?}");
-    assert_eq!(b.len(), 1, "{b:#?}");
-    assert!(
-        has(
-            &b,
-            FAIL,
-            "json: the named scanner-side frames stay within their bounds"
-        ) && b[0].contains("rst_to_rst 1 of at most 0"),
-        "{b:#?}"
-    );
+    const EXACT: &str = "the scanner's stateless RST (R8";
+    const BOUND: &str = "the named scanner-side frames stay within their bounds";
+    const NAMED: &str = "every frame of the scanner MAC is a probe";
+    let own = own_rsts("v01_ndp_and_tcp6_syn");
+    // the stand's RST of a closed port and the scanner's stateless RST of it
+    let closed = |s: &StepSim| {
+        let i = s
+            .frames
+            .iter()
+            .position(|(_, f)| f[6..12] == PEER_MAC && f.get(54 + 13) == Some(&0x14))
+            .unwrap();
+        let j = i + s.frames[i..]
+            .iter()
+            .position(|(_, f)| own.contains(f))
+            .unwrap();
+        (i, j)
+    };
+    for (step, want) in [("json", FAIL), ("oracle-json", INVALID)] {
+        // no stateless RST at all: only the exact count fails (none is over a bound)
+        let mut sim = Sim::new("v01_ndp_and_tcp6_syn");
+        let s = sim.step_mut(step);
+        s.frames.retain(|(_, f)| !own.contains(f));
+        let (v, b) = judge_one(&sim);
+        assert_eq!(v, want, "{step}: {b:#?}");
+        assert_eq!(b.len(), 1, "{step}: {b:#?}");
+        assert!(
+            has(&b, want, &format!("{step}: {EXACT}")) && b[0].contains("0 stateless RSTs, want 1"),
+            "{step}: {b:#?}"
+        );
+        // the closed port's one missing
+        let mut sim = Sim::new("v01_ndp_and_tcp6_syn");
+        let s = sim.step_mut(step);
+        let (_, j) = closed(s);
+        s.frames.remove(j);
+        let (v, b) = judge_one(&sim);
+        assert_eq!(v, want, "{step}: {b:#?}");
+        assert_eq!(b.len(), 1, "{step}: {b:#?}");
+        assert!(
+            has(&b, want, &format!("{step}: {EXACT}")) && b[0].contains("0 stateless RSTs, want 1"),
+            "{step}: {b:#?}"
+        );
+        // a second stateless RST for the same RST of the stand: over the bound and off the exact count
+        let mut sim = Sim::new("v01_ndp_and_tcp6_syn");
+        let s = sim.step_mut(step);
+        let (_, j) = closed(s);
+        let (t, again) = (s.frames[j].0 + 0.0002, s.frames[j].1.clone());
+        s.frames.insert(j + 1, (t, again));
+        let (v, b) = judge_one(&sim);
+        assert_eq!(v, want, "{step}: {b:#?}");
+        assert_eq!(b.len(), 2, "{step}: {b:#?}");
+        assert!(
+            has(&b, want, &format!("{step}: {BOUND}"))
+                && b.iter().any(|x| x.contains("stateless_rst 9 of at most 8")),
+            "{step}: {b:#?}"
+        );
+        assert!(
+            has(&b, want, &format!("{step}: {EXACT}"))
+                && b.iter().any(|x| x.contains("2 stateless RSTs, want 1")),
+            "{step}: {b:#?}"
+        );
+        // a reset of the stand's RST in the kernel's form (window 0, no options): no kernel answers an RST and it is
+        // not the scanner's form, so it is no frame of a named class
+        let mut sim = Sim::new("v01_ndp_and_tcp6_syn");
+        let s = sim.step_mut(step);
+        let (i, _) = closed(s);
+        let (t, kernel_form) = (s.frames[i].0 + 0.0001, scanner_rst(&s.frames[i].1));
+        s.frames.insert(i + 1, (t, kernel_form));
+        let (v, b) = judge_one(&sim);
+        assert_eq!(v, want, "{step}: {b:#?}");
+        assert_eq!(b.len(), 1, "{step}: {b:#?}");
+        assert!(
+            has(&b, want, &format!("{step}: {NAMED}"))
+                && b[0].contains("is no stateless RST of a probe"),
+            "{step}: {b:#?}"
+        );
+        // the IPv6 stateless RST of the closed port with a wrong TCP checksum (RFC 8200 pseudo-header): the sums'
+        // check alone (I2)
+        let mut sim = Sim::new("v01_ndp_and_tcp6_syn");
+        let s = sim.step_mut(step);
+        let (_, j) = closed(s);
+        assert_eq!(s.frames[j].1[12..14], [0x86, 0xdd]);
+        s.frames[j].1[54 + 16] ^= 0xff;
+        let (v, b) = judge_one(&sim);
+        assert_eq!(v, want, "{step}: {b:#?}");
+        assert_eq!(b.len(), 1, "{step}: {b:#?}");
+        assert!(
+            has(
+                &b,
+                want,
+                &format!("{step}: the scanner's stateless RSTs carry")
+            ) && b[0].contains("carries a wrong TCP checksum"),
+            "{step}: {b:#?}"
+        );
+    }
+}
+
+#[test]
+fn both_scanners_answer_the_peers_who_has_in_the_ipv4_part_once_in_cs_form() {
+    // The IPv4 part of the mixed scan: were the peer to ask who has 198.18.0.1 (its neighbour entry is permanent),
+    // both scanners answer it in C's form and the scanner namespace kernel too.
+    const CHECK: &str = "the scanner answers the peer's who-has for its address";
+    let st = stand();
+    let req = peer_who_has(&st);
+    let ans = responder_reply(&st, &req);
+    let os = os_reply(&st);
+    let with = |step: &str, answers: &[f64]| {
+        let mut sim = Sim::new("v02_mixed_v4_v6");
+        let s = sim.step_mut(step);
+        // just after the step's first SYN
+        let i = find(&s.frames, |f| {
+            f[6..12] == SCANNER_MAC && f.get(23) == Some(&6)
+        });
+        let t = s.frames[i].0 + 0.0001;
+        let mut add = vec![(t, req.clone()), (t + 0.00002, os.clone())];
+        add.extend(answers.iter().map(|dt| (t + dt, ans.clone())));
+        s.frames.extend(add);
+        s.frames.sort_by(|a, b| a.0.total_cmp(&b.0));
+        judge_one(&sim)
+    };
+    for (step, want) in [("list", FAIL), ("oracle-list", INVALID)] {
+        let (v, b) = with(step, &[0.00005]);
+        assert_eq!(v, PASS, "{step}: {b:#?}");
+        let (v, b) = with(step, &[]);
+        assert_eq!(v, want, "{step}: {b:#?}");
+        assert_eq!(b.len(), 1, "{step}: {b:#?}");
+        assert!(
+            has(&b, want, &format!("{step}: {CHECK}")) && b[0].contains("0 replies"),
+            "{step}: {b:#?}"
+        );
+        let (v, b) = with(step, &[0.00005, 0.00007]);
+        assert_eq!(v, want, "{step}: {b:#?}");
+        assert!(
+            b.iter()
+                .any(|x| x.contains("arp_reply_for_scanner 2 of at most 1"))
+                && b.iter()
+                    .any(|x| x.contains(CHECK) && x.contains("2 replies")),
+            "{step}: {b:#?}"
+        );
+    }
 }
 
 /// A step's verdict, its failing checks and the case's notes.

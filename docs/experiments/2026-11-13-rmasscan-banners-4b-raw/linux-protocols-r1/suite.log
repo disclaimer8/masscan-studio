@@ -1,0 +1,6 @@
+done p01_ping -> runs/p01_ping
+done p02_udp_payloads_and_closed -> runs/p02_udp_payloads_and_closed
+done p03_sctp_init_ack_abort -> runs/p03_sctp_init_ack_abort
+done p04_arp_scan -> runs/p04_arp_scan
+done p05_mixed_protos -> runs/p05_mixed_protos
+all selected runs executed; verify offline with rmasscan-lab protocols-verify --dir $OUT

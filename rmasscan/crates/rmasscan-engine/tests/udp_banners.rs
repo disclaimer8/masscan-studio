@@ -237,6 +237,7 @@ fn items(outputs: &[Output]) -> Vec<Item> {
                 replies.iter().copied().map(Item::Status).collect()
             }
             Output::Banner(b) => vec![Item::Banner(b.clone())],
+            Output::ConnectionBanner(b) => panic!("no TCP stack in the UDP banner tests: {b:?}"),
             Output::Event(_) => vec![],
         })
         .collect()
@@ -354,7 +355,7 @@ fn banners_off_changes_nothing() {
         .into_iter()
         .filter_map(|o| match o {
             Output::Event(e) => Some(e),
-            Output::Banner(_) => None,
+            Output::Banner(_) | Output::ConnectionBanner(_) => None,
         })
         .collect();
     assert_eq!(frames_out, frames_off);
@@ -953,5 +954,74 @@ fn udp_length_shorter_than_the_ip_payload_reaches_the_banner_like_c() {
                 (app_id::NONE, &b"helloTRAIL"[..])
             ]
         );
+    }
+}
+
+/// Парсер с банером в 64 КиБ на любой датаграмме (бюджет очереди в байтах, И7).
+fn big_banner_options() -> EngineOptions {
+    let mut o = no_stall_opts();
+    o.banners = Some(BannerOptions {
+        rawudp: false,
+        udp_parser: |_, _, _, _| vec![(0, vec![0x41; 64 * 1024])],
+    });
+    o
+}
+
+/// Запуск без чтения: ответы с баннером в 64 КиБ, потребитель не читает до конца запуска.
+fn run_unread_big_banners(byte_capacity: usize) -> (Vec<Output>, Outcome) {
+    let p = plan("U:53");
+    let clock = ManualClock::new();
+    let fake = FakeAdapter::new().with_clock(clock.clone());
+    fake.set_responder(udp_responder(1, |_| Some(vec![1, 2, 3])));
+    let mut o = big_banner_options();
+    o.result_byte_capacity = byte_capacity;
+    let h = start_manual(&p, &fake, &clock, o);
+    wait_for("outcome", || h.outcome().is_some());
+    let outputs = drain_outputs(&h);
+    (outputs, h.join().unwrap())
+}
+
+/// Бюджет 100 КиБ: ответ с баннером в 64 КиБ принят, второй не помещается по байтам при свободных записях.
+#[test]
+fn byte_budget_refuses_reply_whose_banners_overflow() {
+    let (outputs, outcome) = run_unread_big_banners(100 * 1024);
+    assert_eq!(
+        outcome.reason,
+        rmasscan_engine::Reason::Failed(rmasscan_engine::FailReason::ConsumerTooSlow)
+    );
+    assert_eq!(outcome.progress.received, 1);
+    let groups = grouped(&outputs);
+    assert_eq!(groups.len(), 1, "{outputs:?}");
+    assert_eq!(groups[0].1[0].payload.len(), 64 * 1024);
+}
+
+/// Бюджет 1 байт: пустая очередь принимает ответ с баннером в 64 КиБ целиком (иначе скан не принял бы ни одного).
+#[test]
+fn empty_queue_accepts_any_banner_set_in_engine() {
+    let (outputs, outcome) = run_unread_big_banners(1);
+    assert_eq!(
+        outcome.reason,
+        rmasscan_engine::Reason::Failed(rmasscan_engine::FailReason::ConsumerTooSlow)
+    );
+    assert_eq!(outcome.progress.received, 1);
+    let groups = grouped(&outputs);
+    assert_eq!(groups[0].1.len(), 1);
+    assert_eq!(groups[0].1[0].payload.len(), 64 * 1024);
+}
+
+/// Нулевой бюджет запрещён.
+#[test]
+fn zero_result_byte_capacity_is_rejected() {
+    let p = plan("U:53");
+    let clock = ManualClock::new();
+    let fake = FakeAdapter::new().with_clock(clock.clone());
+    let mut o = no_stall_opts();
+    o.result_byte_capacity = 0;
+    let c: Arc<dyn Clock + Send + Sync> = clock;
+    match Engine::start_with_clock(p, fake.pair(), o, c) {
+        Err(rmasscan_engine::StartError::InvalidOptions(m)) => {
+            assert!(m.contains("result_byte_capacity"), "{m}")
+        }
+        other => panic!("{:?}", other.map(|_| ())),
     }
 }

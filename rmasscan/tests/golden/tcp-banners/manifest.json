@@ -1,0 +1,4945 @@
+{
+  "oracle": {
+    "masscan_git_head": "8e6b3b0c07a81e8ea61d557c06134a21a6881614",
+    "harness": "tcp_oracle.c + build.sh + run-goldens.sh (kept off the repository, R14)",
+    "driver_sha256": "04c3af97a9e638f62e42077497e8d1e033254fde3c7c7806371c60a6132289c7",
+    "build_script_sha256": "a311bba4f271923e32f338cdb5c00456819b8a69bcf383414b44c443d90c7542",
+    "runner_sha256": "536f07858f7db122e34d2b82c45f53fc4589d52c60cc13a5df2b4f7cdd20b8f8",
+    "binaries_sha256": {
+      "default": "022bc297e1130ab05eb24acdd6d911bd4d914d28672ee768844de49fdeebf861",
+      "asan": "b512b76632b740725117bd988713419b190be749b962942faf3a6766134185b9"
+    },
+    "compiler": "Apple clang version 21.0.0 (clang-2100.4.1.1)",
+    "builds": {
+      "default": "-std=gnu99 -g -O2 (masscan Makefile CFLAGS)",
+      "asan": "-std=gnu99 -g -O1 -fno-omit-frame-pointer -fsanitize=address,undefined -fsanitize-recover=address"
+    },
+    "linked_sources": ["proto-banner1", "proto-banout", "smack1", "smackqueue", "proto-http", "proto-ftp", "proto-smtp", "proto-pop3", "proto-imap4", "proto-ssh", "proto-vnc", "proto-tcp-telnet", "proto-tcp-rdp", "proto-memcached", "proto-mc", "crypto-base64", "proto-ssl", "proto-ssl-test", "proto-x509", "proto-smb", "proto-ntlmssp", "proto-versioning", "scripting-banner", "stub-lua", "util-malloc", "util-logger", "util-safefunc", "pixie-timer", "crypto-siphash24", "massip-addr", "massip-rangesv4"],
+    "linked_sources_sha256": {
+      "proto-banner1.c": "4e0c677048c5392e0df115621d408cc4a9af3827454ff3032cf0696790b74e0f",
+      "proto-banout.c": "e59a6e46e62afff8644a44e581e24efdef06293cefb33b0de90b8ce423e2b814",
+      "smack1.c": "92ca3070fe0cf8781aa95e08b01880ac1f6c9a31d213db8c1d0a5de0c9519064",
+      "smackqueue.c": "614e1677f6723a809f68715826fba6d31b5a3eb527b147c155b4f29fdb4dbf4f",
+      "proto-http.c": "20cf593279c95a2ef311fd846a48c16029f27140099bafd7af61903643e52848",
+      "proto-ftp.c": "5c0995c5e0d484b24cd62e04ed69f8feffa712065c788c37f6dd892a28456b9b",
+      "proto-smtp.c": "5979f33440b3abd9a384bc4e96ffd2c308b8dc181f5f1e5c2e6fec8d369bced3",
+      "proto-pop3.c": "b3b34d4e2c8f8a545d0b09454ae8a9f8a21c2d8525dc145f8848f238d93157ef",
+      "proto-imap4.c": "64a007ed8c2fd40232276a97cea381628b5fa64ab692b14a3f3df323ba32300b",
+      "proto-ssh.c": "7b25e443c43ae289a1fbf58dbe4edcbcca6fe10272754e8c2a836793c5feb790",
+      "proto-vnc.c": "563bf590ab5e398ae3ea5b9d1170c54a306290d34f20589d6d7a436274309c47",
+      "proto-tcp-telnet.c": "2af7ec02ed83903072dccd62ffc8d7f349475bde340be56c16a09ce5e67efd1c",
+      "proto-tcp-rdp.c": "16f302f9943ba871484cabf7fface43365cd35afc15a074ed45eea3ca73dde9b",
+      "proto-memcached.c": "59848db02eeab32c8a222305a4a0d0c1d1107fccdf3623ba04aaf995e9fdd362",
+      "proto-mc.c": "f92f63ad49039327d7875ffdee27d7e8908e21a3526920beef20706dd87e4232",
+      "crypto-base64.c": "54b6f06740c9d728dbbb98b5623142ce1d29aaf81bb96a0cb84a58b1ff17ba5a",
+      "proto-ssl.c": "8e034b1b159790dcea93bc843027c28797f120008964679726470d45d189c573",
+      "proto-ssl-test.c": "2c9891cb6a088f5bf139ec16bbf51d2a88ca182bac613bfec8e6433b17bdf8fd",
+      "proto-x509.c": "6d205a64e4d87366e3c3c7323706f772b501d23fdd9f53caae804534088e0b40",
+      "proto-smb.c": "023936e3e88b478c8322ca83e1209ab3a46b0f148cd62f6efa42588eaebb41cc",
+      "proto-ntlmssp.c": "0f0c5e2f23c42ad2a891656dc1299b7759311486431eef3fccc0ee33ab131c30",
+      "proto-versioning.c": "fb575764378500a3e2c4e0043729ae1e473900fe34426f940b092ed05725425b",
+      "scripting-banner.c": "96122d0628a283a85ada7df509285ce2f26927fe6b1df9997de8d172d12e00ae",
+      "stub-lua.c": "de946cf569b45ad4befc83c33b8ff3b8454612f36e22f722d07db1e37e8767f5",
+      "util-malloc.c": "183cf87cc071c2c5244d4d25575837bf0bb765f7ecc87cbe63fe8acb341d0546",
+      "util-logger.c": "1b5b15d1b9d1eedab2ae02609a7e00c0ce9566ed4158759e6de374e43e3eab21",
+      "util-safefunc.c": "65f7db4136b2de5fb410128f2d2b78bbd4f4fe1b68bfa5be407c1e3e77bd8b9e",
+      "pixie-timer.c": "7b50a70582deb169583ed222bc389f2c460194641173b95e9cb6a9fb1712f74d",
+      "crypto-siphash24.c": "b41506fb5d4222995a23c8f908c348fb8b800083243645513899aa96ec0f37bc",
+      "massip-addr.c": "f6ee3e86ae3c8dbc3fdf6e3580a6a81926609654c3cc7c64b10b1211b5e32316",
+      "massip-rangesv4.c": "1394b8a36c6b9ad68266451165c21fffa474deef20a0345e1f1c9e199818900e"
+    },
+    "stubs": "tcpapi_send, tcpapi_close, tcpapi_recv, tcpapi_set_timeout, tcpapi_reconnect, tcpapi_change_app_state record their calls; output_report_banner, syn_cookie, default_udp_parse, pcapfile_*, preprocess_frame abort if called (banner1_parse never reaches them)",
+    "calls": "banner1_create once; per run a zeroed StreamState with the case's port, banout_init, banner1_parse per piece (whole stream, every byte, the given segments), then the records banner_flush reports (list order, length && protocol, app = protocol & 0x0FFFFFFF); each run in a forked child with a 2-second alarm"
+  },
+  "host": "Darwin 27.2.0, arm64",
+  "captured_at": "2026-11-14T20:52:35Z",
+  "expected": "rmasscan banner_stream on the whole stream, byte by byte, the given segments and 8 random splits: records (each C record cut at 65 536 bytes, R5) and app_proto equal C's whole run for expect=records, actions too on the whole stream; for expect=declared-4b the named 4b rule and C's app_proto: unknown-stream (the whole stream as one unknown record, no action) or starttls-unknown (the first segment ends with the STARTTLS go-ahead line: the text parser record and the actions before the TLS hello of C's run over that segment, the given run when there is a second segment, else the whole run; the bytes of the second segment as one unknown record; no TLS hello)",
+  "tables": [
+    {
+      "name": "patterns",
+      "about": "patterns[] of src/proto-banner1.c:34-106 as banner1_create compiles them",
+      "output": "patterns.out",
+      "output_sha256": "c15e0e958528588b52a2aff57babb75be88432624f6ed928f6d89723bcf79111",
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "hellos",
+      "about": "payloads.tcp[] after banner1_create: every port with a stream, hello bytes for the streams 4b sends",
+      "output": "hellos.out",
+      "output_sha256": "b8526204ba0da9b11a308501928f6cb596611470dd4f05d3c373532a1a94f51e",
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "banout",
+      "about": "direct banout_append scripts: head reuse, insertion after the head, head move at 200 bytes",
+      "input": "banout.in.txt",
+      "input_sha256": "daeba143a07d168828ab7d200209990a85c345d7763dcf2b76384c8d7dbc806c",
+      "output": "banout.out",
+      "output_sha256": "4f19b1d71c79d3b97f9763be4ad3437f9b753bff1ca3c76d84b7213a76ee3a9b",
+      "asan": {"same_output": true, "reports": 0}
+    }
+  ],
+  "cases": [
+    {
+      "name": "no-match-text",
+      "about": "текст без шаблона: h начинает HTTP/1. и обрывается, весь поток unknown",
+      "expect": "records",
+      "declared": "-",
+      "port": 9999,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 13,
+      "input": "cases/no-match-text.in.txt",
+      "input_sha256": "c8e5975c122db21b84a65701a0cdb388288b80d2ba4c0cded461e248c30394d3",
+      "output": "cases/no-match-text.out",
+      "output_sha256": "b9a53e878ff4fa95001f688537e7b5b32bcf948f4a503e0cb9ec1bbe48e4e521",
+      "c_app_proto": {
+        "whole": 0,
+        "bytewise": 0,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "no-match-binary",
+      "about": "двоичный поток без шаблона: 0x22 не после 0x7B, нет 0xFF",
+      "expect": "records",
+      "declared": "-",
+      "port": 9999,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 16,
+      "input": "cases/no-match-binary.in.txt",
+      "input_sha256": "fe3967a0635ca641e5d7760ef69ee05b1e8ceadf2dd6caceb4e005fd6269dcdc",
+      "output": "cases/no-match-binary.out",
+      "output_sha256": "0e7520575f6b97a2e478316e5e7447681ff420bf71e8a0a48663badb493c1fb2",
+      "c_app_proto": {
+        "whole": 0,
+        "bytewise": 0,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "no-match-70000",
+      "about": "70 000 байт без шаблона: у C запись 70 000 байт, у rmasscan первые 65 536 (Р5)",
+      "expect": "records",
+      "declared": "-",
+      "port": 7000,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 70000,
+      "input": "cases/no-match-70000.in.txt",
+      "input_sha256": "6fb2b9915409d6aaca320f7b4cb9ea6609945613809f1223e8b501bcffc770fc",
+      "output": "cases/no-match-70000.out",
+      "output_sha256": "795640c0b617fb7542143e98625fa4e6b381f71c65f7c9f46eb8dfd2c73af1eb",
+      "c_app_proto": {
+        "whole": 0,
+        "bytewise": 0,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "leading-space-ssh",
+      "about": "лишний ведущий байт: пробел перед SSH-2. гасит все якорные шаблоны",
+      "expect": "records",
+      "declared": "-",
+      "port": 22,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 22,
+      "input": "cases/leading-space-ssh.in.txt",
+      "input_sha256": "483c8bfc7bda8c9f778bf2f6172aa9a9d45052e310eb731ec8cdc022523e32a8",
+      "output": "cases/leading-space-ssh.out",
+      "output_sha256": "fea08bf88aa734fa7737da05e6291697e796cb88fe9101bfda00662944a69de3",
+      "c_app_proto": {
+        "whole": 0,
+        "bytewise": 0,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "leading-crlf-http",
+      "about": "CRLF перед HTTP/1. гасит якорь",
+      "expect": "records",
+      "declared": "-",
+      "port": 80,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 21,
+      "input": "cases/leading-crlf-http.in.txt",
+      "input_sha256": "3e22acb1e4e720a83c19d5921e389751a00ec5b8d7b088039f3642916211e330",
+      "output": "cases/leading-crlf-http.out",
+      "output_sha256": "c5c53c4bd7d5885708578b1aefea1e53fd4ee96bb168a83b2faf87502f0a3e58",
+      "c_app_proto": {
+        "whole": 0,
+        "bytewise": 0,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "leading-byte-ftp",
+      "about": "x перед 220 гасит якорь",
+      "expect": "records",
+      "declared": "-",
+      "port": 21,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 12,
+      "input": "cases/leading-byte-ftp.in.txt",
+      "input_sha256": "76590996bcdc702a260be8a544797df4367efb95d22ded580b141f129a68c5cb",
+      "output": "cases/leading-byte-ftp.out",
+      "output_sha256": "d75fddcbe551a9d48e8eff8dade0d48a4910e9e1071c1d062b7ec91841a6d0dc",
+      "c_app_proto": {
+        "whole": 0,
+        "bytewise": 0,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "smb-star-7b-first",
+      "about": "первая * SMB с 0x7B: переход в безъякорный {, SMB не совпал",
+      "expect": "records",
+      "declared": "-",
+      "port": 445,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 10,
+      "input": "cases/smb-star-7b-first.in.txt",
+      "input_sha256": "ac833d112437e03acc51a601c9b2f80caab10533014421eaf9f6aa061a36fee4",
+      "output": "cases/smb-star-7b-first.out",
+      "output_sha256": "b9571d61eb745b509c857247100f80fd326406506ba2a1c96dd5daa15b05ab0e",
+      "c_app_proto": {
+        "whole": 0,
+        "bytewise": 0,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "smb-star-7b-second",
+      "about": "вторая * SMB с 0x7B: SMB не совпал",
+      "expect": "records",
+      "declared": "-",
+      "port": 445,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 10,
+      "input": "cases/smb-star-7b-second.in.txt",
+      "input_sha256": "586acccae13da7a61aac71e2ddadc298442c4111155863fb34815225e579a1a5",
+      "output": "cases/smb-star-7b-second.out",
+      "output_sha256": "b9571d61eb745b509c857247100f80fd326406506ba2a1c96dd5daa15b05ab0e",
+      "c_app_proto": {
+        "whole": 0,
+        "bytewise": 0,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "smb-star-ff-first",
+      "about": "первая * SMB с 0xFF: переход в безъякорный IAC, SMB не совпал",
+      "expect": "records",
+      "declared": "-",
+      "port": 445,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 10,
+      "input": "cases/smb-star-ff-first.in.txt",
+      "input_sha256": "08b3ecbde845761307b6d987103b284a8c57f571dd27782172ed320bb2d9d30d",
+      "output": "cases/smb-star-ff-first.out",
+      "output_sha256": "b9571d61eb745b509c857247100f80fd326406506ba2a1c96dd5daa15b05ab0e",
+      "c_app_proto": {
+        "whole": 0,
+        "bytewise": 0,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "smb-star-ff-second",
+      "about": "вторая * SMB с 0xFF: SMB не совпал",
+      "expect": "records",
+      "declared": "-",
+      "port": 445,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 10,
+      "input": "cases/smb-star-ff-second.in.txt",
+      "input_sha256": "05d10bf72cd236d4bbf14dcc67226e0e12ba815d51c7f9937552fb90bcc5d6ca",
+      "output": "cases/smb-star-ff-second.out",
+      "output_sha256": "b9571d61eb745b509c857247100f80fd326406506ba2a1c96dd5daa15b05ab0e",
+      "c_app_proto": {
+        "whole": 0,
+        "bytewise": 0,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "smb-star-7b-then-quote",
+      "about": "00 00 7b 22: * не съедает 0x7B, совпадает безъякорный Minecraft (7b 22)",
+      "expect": "records",
+      "declared": "-",
+      "port": 445,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 9,
+      "input": "cases/smb-star-7b-then-quote.in.txt",
+      "input_sha256": "22c1ebc65aa6cf28b84b92bb8e940fa266952953a6fabaee7ff49fed62553a71",
+      "output": "cases/smb-star-7b-then-quote.out",
+      "output_sha256": "d360f0a92c34ab41c77ab3c71ee5019e295de6200cfcca1ab936f02129acc554",
+      "c_app_proto": {
+        "whole": 32,
+        "bytewise": 32,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "ssl3-16-0300",
+      "about": "запись TLS первой: SSL3 отвергнут без hello, весь поток unknown",
+      "expect": "records",
+      "declared": "-",
+      "port": 443,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 7,
+      "input": "cases/ssl3-16-0300.in.txt",
+      "input_sha256": "99c62b1dceaa4a7baf746b48705b2cd3768d8fdaea608385ce1911e5f9867f96",
+      "output": "cases/ssl3-16-0300.out",
+      "output_sha256": "e481505c3e808b2d91519b2909cc0a553b9d71ea4d1f8e080c6d5e724176e03c",
+      "c_app_proto": {
+        "whole": 0,
+        "bytewise": 0,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "ssl3-16-0301",
+      "about": "запись TLS первой: SSL3 отвергнут без hello, весь поток unknown",
+      "expect": "records",
+      "declared": "-",
+      "port": 443,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 7,
+      "input": "cases/ssl3-16-0301.in.txt",
+      "input_sha256": "a7196a675eb5127a9456fb8a4e04598e37f15326a2f67626adf143bd226b3e14",
+      "output": "cases/ssl3-16-0301.out",
+      "output_sha256": "e481505c3e808b2d91519b2909cc0a553b9d71ea4d1f8e080c6d5e724176e03c",
+      "c_app_proto": {
+        "whole": 0,
+        "bytewise": 0,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "ssl3-16-0302",
+      "about": "запись TLS первой: SSL3 отвергнут без hello, весь поток unknown",
+      "expect": "records",
+      "declared": "-",
+      "port": 443,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 7,
+      "input": "cases/ssl3-16-0302.in.txt",
+      "input_sha256": "093d34e0f82ee43de62b977b951038bca2be76fdec15f3ed173f98fc202cadfb",
+      "output": "cases/ssl3-16-0302.out",
+      "output_sha256": "e481505c3e808b2d91519b2909cc0a553b9d71ea4d1f8e080c6d5e724176e03c",
+      "c_app_proto": {
+        "whole": 0,
+        "bytewise": 0,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "ssl3-16-0303",
+      "about": "запись TLS первой: SSL3 отвергнут без hello, весь поток unknown",
+      "expect": "records",
+      "declared": "-",
+      "port": 443,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 7,
+      "input": "cases/ssl3-16-0303.in.txt",
+      "input_sha256": "c7936e413499fcb34fab2fe4788b6cad298d1e43d4daed3acd2ac79e4e8ba7b7",
+      "output": "cases/ssl3-16-0303.out",
+      "output_sha256": "e481505c3e808b2d91519b2909cc0a553b9d71ea4d1f8e080c6d5e724176e03c",
+      "c_app_proto": {
+        "whole": 0,
+        "bytewise": 0,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "ssl3-15-0300",
+      "about": "запись TLS первой: SSL3 отвергнут без hello, весь поток unknown",
+      "expect": "records",
+      "declared": "-",
+      "port": 443,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 7,
+      "input": "cases/ssl3-15-0300.in.txt",
+      "input_sha256": "819dd2b0993263cd0c58b32b50c452a642d1b5993019f5f9faebadd6b8b8678c",
+      "output": "cases/ssl3-15-0300.out",
+      "output_sha256": "e481505c3e808b2d91519b2909cc0a553b9d71ea4d1f8e080c6d5e724176e03c",
+      "c_app_proto": {
+        "whole": 0,
+        "bytewise": 0,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "ssl3-15-0301",
+      "about": "запись TLS первой: SSL3 отвергнут без hello, весь поток unknown",
+      "expect": "records",
+      "declared": "-",
+      "port": 443,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 7,
+      "input": "cases/ssl3-15-0301.in.txt",
+      "input_sha256": "dd00e85ec33a053b0d9f5dc1230d3e5755304164f3923bbc197f87a0fea556f6",
+      "output": "cases/ssl3-15-0301.out",
+      "output_sha256": "e481505c3e808b2d91519b2909cc0a553b9d71ea4d1f8e080c6d5e724176e03c",
+      "c_app_proto": {
+        "whole": 0,
+        "bytewise": 0,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "ssl3-15-0302",
+      "about": "запись TLS первой: SSL3 отвергнут без hello, весь поток unknown",
+      "expect": "records",
+      "declared": "-",
+      "port": 443,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 7,
+      "input": "cases/ssl3-15-0302.in.txt",
+      "input_sha256": "0a3cb7b6fe20c1b1eb9081bfe6cf633bbc2ed5f937cc32c1da5c39b99b07458b",
+      "output": "cases/ssl3-15-0302.out",
+      "output_sha256": "e481505c3e808b2d91519b2909cc0a553b9d71ea4d1f8e080c6d5e724176e03c",
+      "c_app_proto": {
+        "whole": 0,
+        "bytewise": 0,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "ssl3-15-0303",
+      "about": "запись TLS первой: SSL3 отвергнут без hello, весь поток unknown",
+      "expect": "records",
+      "declared": "-",
+      "port": 443,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 7,
+      "input": "cases/ssl3-15-0303.in.txt",
+      "input_sha256": "ca731d155dfc8d128529177925fb5567bf93e8d9f5bb577c0d987e8bd17a31ae",
+      "output": "cases/ssl3-15-0303.out",
+      "output_sha256": "e481505c3e808b2d91519b2909cc0a553b9d71ea4d1f8e080c6d5e724176e03c",
+      "c_app_proto": {
+        "whole": 0,
+        "bytewise": 0,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "ssl3-then-mc",
+      "about": "SSL3 первым, затем 7b 22 во втором сегменте: у C по сегментам MC (E2.2), целиком unknown",
+      "expect": "records",
+      "declared": "-",
+      "port": 443,
+      "capture": "none",
+      "segments": 2,
+      "bytes": 24,
+      "input": "cases/ssl3-then-mc.in.txt",
+      "input_sha256": "3b45eb605ecb160a52f2ba4d48e3ec544b7cd3569e56422fe846de2dcd8aeb98",
+      "output": "cases/ssl3-then-mc.out",
+      "output_sha256": "4c97d61c32ad84d4667d189e6ff4377506fe5db07dd4881407960ae42d542a7e",
+      "c_app_proto": {
+        "whole": 0,
+        "bytewise": 32,
+        "given": 32
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "ssl3-then-iac",
+      "about": "SSL3 первым, затем IAC во втором сегменте: у C по сегментам Telnet (E2.2), целиком unknown",
+      "expect": "records",
+      "declared": "-",
+      "port": 443,
+      "capture": "none",
+      "segments": 2,
+      "bytes": 13,
+      "input": "cases/ssl3-then-iac.in.txt",
+      "input_sha256": "ea683bd9e33722ebe337e2cf63a55cf2a486f0ebde29806c2c9d6dadca595089",
+      "output": "cases/ssl3-then-iac.out",
+      "output_sha256": "471faa0b39acd84bdeda7e56e75df145b64f0e626655961c9b96b97c9dc9f47f",
+      "c_app_proto": {
+        "whole": 0,
+        "bytewise": 29,
+        "given": 29
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "mc-json-at-start",
+      "about": "7b 22 (Minecraft) в начале потока",
+      "expect": "records",
+      "declared": "-",
+      "port": 9999,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 20,
+      "input": "cases/mc-json-at-start.in.txt",
+      "input_sha256": "d5a85225cdd5d763133dbbb78cb2d13b6bd30f133c4272becb7d283e05a769a0",
+      "output": "cases/mc-json-at-start.out",
+      "output_sha256": "e022f0cf17ef8098cc4d5997bad9b1559d232754fd1689c37a1693c6ffd634cf",
+      "c_app_proto": {
+        "whole": 32,
+        "bytewise": 32,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "mc-status-reply",
+      "about": "7b 22 после длины и номера пакета (безъякорный шаблон)",
+      "expect": "records",
+      "declared": "-",
+      "port": 25565,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 46,
+      "input": "cases/mc-status-reply.in.txt",
+      "input_sha256": "8aa172e1042b22958c1ccc94c5d7f38906355c15b9a96f62bf351678d13146bd",
+      "output": "cases/mc-status-reply.out",
+      "output_sha256": "0be9f74bda31b43ae87da224fb1bb5c6631af1552d78cef656253d8760bf1ba0",
+      "c_app_proto": {
+        "whole": 32,
+        "bytewise": 32,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "ssh1",
+      "about": "SSH-1. (app 2)",
+      "expect": "records",
+      "declared": "-",
+      "port": 22,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 24,
+      "input": "cases/ssh1.in.txt",
+      "input_sha256": "8adb6db1d59cf54fbf44c3f4a9205c959be586c1bc5f6907dcf5f75a80d06af5",
+      "output": "cases/ssh1.out",
+      "output_sha256": "3f14d47f430b4c845e9c3acfa8c863c9f01e6d0868cfad7a18d7b09804410ef4",
+      "c_app_proto": {
+        "whole": 2,
+        "bytewise": 2,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "ssh2",
+      "about": "SSH-2. (app 3)",
+      "expect": "records",
+      "declared": "-",
+      "port": 22,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 21,
+      "input": "cases/ssh2.in.txt",
+      "input_sha256": "b5db2452d7831e1a74ff05d9c45e80931bccf1a89902ff6156764f9ce47c1576",
+      "output": "cases/ssh2.out",
+      "output_sha256": "a0d730473cb8fb9ffbf55dd77e1e86bd28c6a9c54080bf12f9b295e9e8ae3b70",
+      "c_app_proto": {
+        "whole": 3,
+        "bytewise": 3,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "ssh2-lowercase",
+      "about": "ssh-2. строчными: регистр A-Z не важен",
+      "expect": "records",
+      "declared": "-",
+      "port": 2222,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 18,
+      "input": "cases/ssh2-lowercase.in.txt",
+      "input_sha256": "79715bc43dd7737fee34dc23ac473716d3d2a54385b92a52388d72cea09dc06f",
+      "output": "cases/ssh2-lowercase.out",
+      "output_sha256": "e7770278a9c1637321e67db32d93016878038d5d0d50d73bbd8d9151d8ede2c5",
+      "c_app_proto": {
+        "whole": 3,
+        "bytewise": 3,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "http-status",
+      "about": "HTTP/1.",
+      "expect": "records",
+      "declared": "-",
+      "port": 80,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 32,
+      "input": "cases/http-status.in.txt",
+      "input_sha256": "636cce2d4bd9c32432f3f409f954a8b1a6eaa5a0f48b719c9fb43d43f5b1a5a4",
+      "output": "cases/http-status.out",
+      "output_sha256": "89d5eae0c2115820f11af142a1fdc06043034eb54203a8f24cc74d6133ed3f4c",
+      "c_app_proto": {
+        "whole": 4,
+        "bytewise": 4,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "http-mixed-case",
+      "about": "hTtP/1. вперемешку",
+      "expect": "records",
+      "declared": "-",
+      "port": 8080,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 26,
+      "input": "cases/http-mixed-case.in.txt",
+      "input_sha256": "986acf66b99ff34303dc47d8d6bf43f1711de039d4c2dd533cb1538b9cf64717",
+      "output": "cases/http-mixed-case.out",
+      "output_sha256": "e8602180205820713c8c06948e801bb4be4657d71310e18f9c547e71936871c7",
+      "c_app_proto": {
+        "whole": 4,
+        "bytewise": 4,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "ftp-220-dash-21",
+      "about": "220- на 21: FTP",
+      "expect": "records",
+      "declared": "-",
+      "port": 21,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 24,
+      "input": "cases/ftp-220-dash-21.in.txt",
+      "input_sha256": "89c9d01c42609b401f50623a19953d3b4ec38105b85d461281071d03931589a5",
+      "output": "cases/ftp-220-dash-21.out",
+      "output_sha256": "5e24152679657450a3e2c23626839a2e63f42be87ed82ca0caeedd323d39f755",
+      "c_app_proto": {
+        "whole": 5,
+        "bytewise": 5,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "ftp-220-space-21",
+      "about": "220 на 21: FTP",
+      "expect": "records",
+      "declared": "-",
+      "port": 21,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 15,
+      "input": "cases/ftp-220-space-21.in.txt",
+      "input_sha256": "bd845f7f77b818ec774ae36631de7b6ebb27bf74153f10a78f4a34b5d3b4bdee",
+      "output": "cases/ftp-220-space-21.out",
+      "output_sha256": "8c696a64df24892a8e86e188183c4dd6c2136951278d1aea74da4bb45f9f2e58",
+      "c_app_proto": {
+        "whole": 5,
+        "bytewise": 5,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "smtp-220-space-25",
+      "about": "220 на 25: SMTP (src/proto-banner1.c:147-153)",
+      "expect": "records",
+      "declared": "-",
+      "port": 25,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 29,
+      "input": "cases/smtp-220-space-25.in.txt",
+      "input_sha256": "72ec514fd1d9c02a0f344396d976781011304eb684c99ca38590fd76a8e1a762",
+      "output": "cases/smtp-220-space-25.out",
+      "output_sha256": "a7c295f7293e7d2548801307cee6f069d06e9fea150da0f36395c5284627fe75",
+      "c_app_proto": {
+        "whole": 11,
+        "bytewise": 11,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "smtp-220-space-587",
+      "about": "220 на 587: SMTP",
+      "expect": "records",
+      "declared": "-",
+      "port": 587,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 29,
+      "input": "cases/smtp-220-space-587.in.txt",
+      "input_sha256": "7a255ed5f06f14f17e333fcbbff4a3f96ece89f14af3c050224ed0823e777316",
+      "output": "cases/smtp-220-space-587.out",
+      "output_sha256": "d5935aa574d1ffaec6d6ed4d858c6a1176f705b043135cf6fadfa9b83ed4b8bb",
+      "c_app_proto": {
+        "whole": 11,
+        "bytewise": 11,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "ftp-220-space-2525",
+      "about": "220 на 2525: FTP (E3.3)",
+      "expect": "records",
+      "declared": "-",
+      "port": 2525,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 29,
+      "input": "cases/ftp-220-space-2525.in.txt",
+      "input_sha256": "fe5311e0636f18c8b47d9d40b3603290b526df1b87e9867b015957425344890f",
+      "output": "cases/ftp-220-space-2525.out",
+      "output_sha256": "bde18ad63ae3bb1018c4ab47ae73c674e47795286148435a892494d16d8333a0",
+      "c_app_proto": {
+        "whole": 5,
+        "bytewise": 5,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "ftp-220-dash-25",
+      "about": "220- на 25: FTP (E3.3)",
+      "expect": "records",
+      "declared": "-",
+      "port": 25,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 37,
+      "input": "cases/ftp-220-dash-25.in.txt",
+      "input_sha256": "d1e9cea9e4280676236a943e1928baf994ef1119cd5c1799cd9e05ccdae449b8",
+      "output": "cases/ftp-220-dash-25.out",
+      "output_sha256": "884f7ae911a82532fbeeef6623612cd7a255fe617a5214764bd98cbcd22dad84",
+      "c_app_proto": {
+        "whole": 5,
+        "bytewise": 5,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "pop3",
+      "about": "+OK",
+      "expect": "records",
+      "declared": "-",
+      "port": 110,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 16,
+      "input": "cases/pop3.in.txt",
+      "input_sha256": "824bee8f974a13b69cd82b17acddfe43d7e4d71a5ec5cdfdaa23d372ab5bdc56",
+      "output": "cases/pop3.out",
+      "output_sha256": "f3d59eb3e12a1ef4bf388d2d378f76f9d2d8aa13d430595fd412d8371db5ffd4",
+      "c_app_proto": {
+        "whole": 12,
+        "bytewise": 12,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "pop3-lowercase",
+      "about": "+ok строчными",
+      "expect": "records",
+      "declared": "-",
+      "port": 110,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 10,
+      "input": "cases/pop3-lowercase.in.txt",
+      "input_sha256": "9988c053fd4b860b68447fd1bd83f1a468408e2eabdb9dbe9b77106747f5373c",
+      "output": "cases/pop3-lowercase.out",
+      "output_sha256": "fd618fecd0b6254f5c94728f4b7bc393bacbde7244e0f5c933a7057ed5358c9f",
+      "c_app_proto": {
+        "whole": 12,
+        "bytewise": 12,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "imap4",
+      "about": "* OK",
+      "expect": "records",
+      "declared": "-",
+      "port": 143,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 22,
+      "input": "cases/imap4.in.txt",
+      "input_sha256": "0cbb4b6f234f6df579157745495e322258a5c078c9db9d9dccb5eef9a197bce2",
+      "output": "cases/imap4.out",
+      "output_sha256": "0e07dc8c48422a6753ab1de92e8be68a4c9c8f735cfcba215e789ef688508ca9",
+      "c_app_proto": {
+        "whole": 13,
+        "bytewise": 13,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "imap4-lowercase",
+      "about": "* ok строчными",
+      "expect": "records",
+      "declared": "-",
+      "port": 143,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 11,
+      "input": "cases/imap4-lowercase.in.txt",
+      "input_sha256": "5a420bfcc1799810c0bb3b4eeccd21efe869291db8fa2e699177e1c5b0c0d7d3",
+      "output": "cases/imap4-lowercase.out",
+      "output_sha256": "cfd99368d9446169434f75cca024b492e54d6eb3eb31b6b43b7bd059dc501b35",
+      "c_app_proto": {
+        "whole": 13,
+        "bytewise": 13,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "smtp-521",
+      "about": "521 : SMTP на любом порту",
+      "expect": "records",
+      "declared": "-",
+      "port": 25,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 18,
+      "input": "cases/smtp-521.in.txt",
+      "input_sha256": "a6b41bb407a7001debc49879f100f813db367d6f08c1cdc367fd88c275669b28",
+      "output": "cases/smtp-521.out",
+      "output_sha256": "7c17a92d7ecb61e26586632feaca1954725cf132a61619959f2cc8b0ae8a5bd1",
+      "c_app_proto": {
+        "whole": 11,
+        "bytewise": 11,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "vnc-000-000",
+      "about": "строка версии RFB (app 33, версия = extra шаблона)",
+      "expect": "records",
+      "declared": "-",
+      "port": 5900,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 12,
+      "input": "cases/vnc-000-000.in.txt",
+      "input_sha256": "121866d422858b363ece69acce304597dc716be7ee623ee9d765f1fffce208c9",
+      "output": "cases/vnc-000-000.out",
+      "output_sha256": "3a77d19ebd3d2d3046ee77861fdb43ad25de0747c0cb3c610b0427f1dd08dce0",
+      "c_app_proto": {
+        "whole": 33,
+        "bytewise": 33,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "vnc-003-003",
+      "about": "строка версии RFB (app 33, версия = extra шаблона)",
+      "expect": "records",
+      "declared": "-",
+      "port": 5900,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 12,
+      "input": "cases/vnc-003-003.in.txt",
+      "input_sha256": "c3088d78af5d8892eaf89bd7e414592c618d0cb560c2ab6621e8875bb578af37",
+      "output": "cases/vnc-003-003.out",
+      "output_sha256": "3a77d19ebd3d2d3046ee77861fdb43ad25de0747c0cb3c610b0427f1dd08dce0",
+      "c_app_proto": {
+        "whole": 33,
+        "bytewise": 33,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "vnc-003-005",
+      "about": "строка версии RFB (app 33, версия = extra шаблона)",
+      "expect": "records",
+      "declared": "-",
+      "port": 5900,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 12,
+      "input": "cases/vnc-003-005.in.txt",
+      "input_sha256": "1526a91a008dafc452c510d015f9fbd13924c9cc35d1a8203c316b6e686a38f6",
+      "output": "cases/vnc-003-005.out",
+      "output_sha256": "3a77d19ebd3d2d3046ee77861fdb43ad25de0747c0cb3c610b0427f1dd08dce0",
+      "c_app_proto": {
+        "whole": 33,
+        "bytewise": 33,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "vnc-003-006",
+      "about": "строка версии RFB (app 33, версия = extra шаблона)",
+      "expect": "records",
+      "declared": "-",
+      "port": 5900,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 12,
+      "input": "cases/vnc-003-006.in.txt",
+      "input_sha256": "633b18ee2aa03908f581b00c68bfb60c35036e7f0b19a57a20bfbe58828f183d",
+      "output": "cases/vnc-003-006.out",
+      "output_sha256": "3a77d19ebd3d2d3046ee77861fdb43ad25de0747c0cb3c610b0427f1dd08dce0",
+      "c_app_proto": {
+        "whole": 33,
+        "bytewise": 33,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "vnc-003-007",
+      "about": "строка версии RFB (app 33, версия = extra шаблона)",
+      "expect": "records",
+      "declared": "-",
+      "port": 5900,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 12,
+      "input": "cases/vnc-003-007.in.txt",
+      "input_sha256": "623685325213de63bf9d3891af502971619c43c438e1fca5ffb31f4277431e32",
+      "output": "cases/vnc-003-007.out",
+      "output_sha256": "0068179baeacbd9b649c8632895387e989dafbbbab5a78f5c4ac4c722ace7531",
+      "c_app_proto": {
+        "whole": 33,
+        "bytewise": 33,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "vnc-003-008",
+      "about": "строка версии RFB (app 33, версия = extra шаблона)",
+      "expect": "records",
+      "declared": "-",
+      "port": 5900,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 12,
+      "input": "cases/vnc-003-008.in.txt",
+      "input_sha256": "9a6b78ac7d7515ae1b72b5f36194d0a8fe9b775ea154002c491cd6fa1786f470",
+      "output": "cases/vnc-003-008.out",
+      "output_sha256": "061c4baf7acb63bdb8c27f3d4ca4e85d8dc543adfceff4fdc437bc10a5810380",
+      "c_app_proto": {
+        "whole": 33,
+        "bytewise": 33,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "vnc-003-889",
+      "about": "строка версии RFB (app 33, версия = extra шаблона)",
+      "expect": "records",
+      "declared": "-",
+      "port": 5900,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 12,
+      "input": "cases/vnc-003-889.in.txt",
+      "input_sha256": "62b3014ca4bf7927541057fa09bdc287cf54689a63af39df3ce93298c2c4f9d2",
+      "output": "cases/vnc-003-889.out",
+      "output_sha256": "061c4baf7acb63bdb8c27f3d4ca4e85d8dc543adfceff4fdc437bc10a5810380",
+      "c_app_proto": {
+        "whole": 33,
+        "bytewise": 33,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "vnc-003-009",
+      "about": "строка версии RFB (app 33, версия = extra шаблона)",
+      "expect": "records",
+      "declared": "-",
+      "port": 5900,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 12,
+      "input": "cases/vnc-003-009.in.txt",
+      "input_sha256": "b13d895900b78ef5dc5857e05d51b3a7e094597bc1924ba6baf5296e88a03a25",
+      "output": "cases/vnc-003-009.out",
+      "output_sha256": "061c4baf7acb63bdb8c27f3d4ca4e85d8dc543adfceff4fdc437bc10a5810380",
+      "c_app_proto": {
+        "whole": 33,
+        "bytewise": 33,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "vnc-004-000",
+      "about": "строка версии RFB (app 33, версия = extra шаблона)",
+      "expect": "records",
+      "declared": "-",
+      "port": 5900,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 12,
+      "input": "cases/vnc-004-000.in.txt",
+      "input_sha256": "38ebeef26c81d58f915b2ecbfeb350df909f83abd51b0ce0540fefcafb620685",
+      "output": "cases/vnc-004-000.out",
+      "output_sha256": "061c4baf7acb63bdb8c27f3d4ca4e85d8dc543adfceff4fdc437bc10a5810380",
+      "c_app_proto": {
+        "whole": 33,
+        "bytewise": 33,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "vnc-004-001",
+      "about": "строка версии RFB (app 33, версия = extra шаблона)",
+      "expect": "records",
+      "declared": "-",
+      "port": 5900,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 12,
+      "input": "cases/vnc-004-001.in.txt",
+      "input_sha256": "a2c7b8b666ac1991efd052681a5682c1e312f65896767af8e8f502a7e8e90e9c",
+      "output": "cases/vnc-004-001.out",
+      "output_sha256": "061c4baf7acb63bdb8c27f3d4ca4e85d8dc543adfceff4fdc437bc10a5810380",
+      "c_app_proto": {
+        "whole": 33,
+        "bytewise": 33,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "vnc-004-002",
+      "about": "строка версии RFB (app 33, версия = extra шаблона)",
+      "expect": "records",
+      "declared": "-",
+      "port": 5900,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 12,
+      "input": "cases/vnc-004-002.in.txt",
+      "input_sha256": "d313ac6b9714b16b248d2feb471ac01d71cee1eceda028d4de991a6f29dfd9a4",
+      "output": "cases/vnc-004-002.out",
+      "output_sha256": "061c4baf7acb63bdb8c27f3d4ca4e85d8dc543adfceff4fdc437bc10a5810380",
+      "c_app_proto": {
+        "whole": 33,
+        "bytewise": 33,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "vnc-lowercase",
+      "about": "строка версии RFB (app 33, версия = extra шаблона)",
+      "expect": "records",
+      "declared": "-",
+      "port": 5900,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 12,
+      "input": "cases/vnc-lowercase.in.txt",
+      "input_sha256": "26702eca29077e89b56c628ad09048381240db0267b76c1e93914735783bb8b0",
+      "output": "cases/vnc-lowercase.out",
+      "output_sha256": "061c4baf7acb63bdb8c27f3d4ca4e85d8dc543adfceff4fdc437bc10a5810380",
+      "c_app_proto": {
+        "whole": 33,
+        "bytewise": 33,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "memcached-stat",
+      "about": "STAT pid",
+      "expect": "records",
+      "declared": "-",
+      "port": 11211,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 35,
+      "input": "cases/memcached-stat.in.txt",
+      "input_sha256": "a47a1c5bffa790b4da74308bdea6585aa3329e812c25d7ae0f912222b6664bad",
+      "output": "cases/memcached-stat.out",
+      "output_sha256": "56c79c24676c0f5bb968515e6ab707de18f3318f0b51404ccdd4f5a8b4c20b99",
+      "c_app_proto": {
+        "whole": 25,
+        "bytewise": 25,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "telnet-iac-37",
+      "about": "безъякорная последовательность IAC (app 29)",
+      "expect": "records",
+      "declared": "-",
+      "port": 23,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 6,
+      "input": "cases/telnet-iac-37.in.txt",
+      "input_sha256": "26f9fa86155dbf4bb6ede3194e0653102de99db41fe7bb777eff31d9b35c6dfa",
+      "output": "cases/telnet-iac-37.out",
+      "output_sha256": "7bfe8f76963ac4a99af3fb9697b98026df19d73d2948809483900a021db12a7c",
+      "c_app_proto": {
+        "whole": 29,
+        "bytewise": 29,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "telnet-iac-38",
+      "about": "безъякорная последовательность IAC (app 29)",
+      "expect": "records",
+      "declared": "-",
+      "port": 23,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 8,
+      "input": "cases/telnet-iac-38.in.txt",
+      "input_sha256": "f38e6cd9af8f4d7f33cf5fd7fca8d18bd9947ab9cf657f37cdc04e1fb78051b1",
+      "output": "cases/telnet-iac-38.out",
+      "output_sha256": "91e3694f04a3f821c02d24d01be2f398587d42fd944ec23a456919de89a140c2",
+      "c_app_proto": {
+        "whole": 29,
+        "bytewise": 29,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "telnet-iac-39",
+      "about": "безъякорная последовательность IAC (app 29)",
+      "expect": "records",
+      "declared": "-",
+      "port": 23,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 6,
+      "input": "cases/telnet-iac-39.in.txt",
+      "input_sha256": "f2ee7c72c5d145a2d544d66fe768c27d7520f51c480fc0f3efbeeb67a083ef36",
+      "output": "cases/telnet-iac-39.out",
+      "output_sha256": "2c6ae1ae0869c0e86cca8061675b535d9d5ee623eb8becd096842670a244e6c4",
+      "c_app_proto": {
+        "whole": 29,
+        "bytewise": 29,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "telnet-iac-40",
+      "about": "безъякорная последовательность IAC (app 29)",
+      "expect": "records",
+      "declared": "-",
+      "port": 23,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 8,
+      "input": "cases/telnet-iac-40.in.txt",
+      "input_sha256": "e942cf312ea326991c1e3e0634a49d8163233d96c662aad7863f85c001375b55",
+      "output": "cases/telnet-iac-40.out",
+      "output_sha256": "870f1fd086cce183c0b288552db003eb767593b03ea4c3d010633003073bc122",
+      "c_app_proto": {
+        "whole": 29,
+        "bytewise": 29,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "telnet-iac-41",
+      "about": "безъякорная последовательность IAC (app 29)",
+      "expect": "records",
+      "declared": "-",
+      "port": 23,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 6,
+      "input": "cases/telnet-iac-41.in.txt",
+      "input_sha256": "dd989e2af3da957dc6984de401242719b90156127013f9d2df674c893b0fcb6f",
+      "output": "cases/telnet-iac-41.out",
+      "output_sha256": "90833afc0218716b7486512ce69ecf060f77720f4cdcee390bba994b58729bb1",
+      "c_app_proto": {
+        "whole": 29,
+        "bytewise": 29,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "telnet-iac-42",
+      "about": "безъякорная последовательность IAC (app 29)",
+      "expect": "records",
+      "declared": "-",
+      "port": 23,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 8,
+      "input": "cases/telnet-iac-42.in.txt",
+      "input_sha256": "a0afe2c63e3a6a3b68874fa68785b33f0c4c5effb059a12fedbd773173525d91",
+      "output": "cases/telnet-iac-42.out",
+      "output_sha256": "cd262e2dbda1ddc04325293bc472029348660f886ed44bc9db72544d29ca5b07",
+      "c_app_proto": {
+        "whole": 29,
+        "bytewise": 29,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "telnet-iac-43",
+      "about": "безъякорная последовательность IAC (app 29)",
+      "expect": "records",
+      "declared": "-",
+      "port": 23,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 6,
+      "input": "cases/telnet-iac-43.in.txt",
+      "input_sha256": "d287d1680f1c47efbd6eb202d8b0c635eb8401417f6f5ccfbd1cf1f40fc29273",
+      "output": "cases/telnet-iac-43.out",
+      "output_sha256": "7bfe8f76963ac4a99af3fb9697b98026df19d73d2948809483900a021db12a7c",
+      "c_app_proto": {
+        "whole": 29,
+        "bytewise": 29,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "telnet-iac-44",
+      "about": "безъякорная последовательность IAC (app 29)",
+      "expect": "records",
+      "declared": "-",
+      "port": 23,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 8,
+      "input": "cases/telnet-iac-44.in.txt",
+      "input_sha256": "069e4e203b8c0aaf35d5021e4735890586b4b3fc83849135f0faa21622046589",
+      "output": "cases/telnet-iac-44.out",
+      "output_sha256": "cd262e2dbda1ddc04325293bc472029348660f886ed44bc9db72544d29ca5b07",
+      "c_app_proto": {
+        "whole": 29,
+        "bytewise": 29,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "telnet-iac-45",
+      "about": "безъякорная последовательность IAC (app 29)",
+      "expect": "records",
+      "declared": "-",
+      "port": 23,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 6,
+      "input": "cases/telnet-iac-45.in.txt",
+      "input_sha256": "54e6beb4b7cbfe04fc0460b3a172f0cc3340c9f881e7a0c365127d7663ce8839",
+      "output": "cases/telnet-iac-45.out",
+      "output_sha256": "7bfe8f76963ac4a99af3fb9697b98026df19d73d2948809483900a021db12a7c",
+      "c_app_proto": {
+        "whole": 29,
+        "bytewise": 29,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "telnet-iac-46",
+      "about": "безъякорная последовательность IAC (app 29)",
+      "expect": "records",
+      "declared": "-",
+      "port": 23,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 8,
+      "input": "cases/telnet-iac-46.in.txt",
+      "input_sha256": "5ebc38bbd2b5293f1b6f54d1c4093a2ed59b76d3e146ed2bd3ec6d1a8a153341",
+      "output": "cases/telnet-iac-46.out",
+      "output_sha256": "da5a465c6ff2cdc27ef57d859aa0cc1f2bd4454b4257c516d24ac1d5d2fa1f91",
+      "c_app_proto": {
+        "whole": 29,
+        "bytewise": 29,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "telnet-iac-47",
+      "about": "безъякорная последовательность IAC (app 29)",
+      "expect": "records",
+      "declared": "-",
+      "port": 23,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 6,
+      "input": "cases/telnet-iac-47.in.txt",
+      "input_sha256": "f14c2e90eae399f4dd29fcd0c49cf081da05cd5c70bad63ff74f1009c392c25b",
+      "output": "cases/telnet-iac-47.out",
+      "output_sha256": "659ef1191988249e7a3509eaffd69763cc213dcfd529c8cfa1782b92b2c37bd4",
+      "c_app_proto": {
+        "whole": 29,
+        "bytewise": 29,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "telnet-iac-48",
+      "about": "безъякорная последовательность IAC (app 29)",
+      "expect": "records",
+      "declared": "-",
+      "port": 23,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 8,
+      "input": "cases/telnet-iac-48.in.txt",
+      "input_sha256": "2ab57c833b8e5ec127fba845141e146cd99c291132094c8e7386034ff292a08a",
+      "output": "cases/telnet-iac-48.out",
+      "output_sha256": "8a14baf4bdcf6f42a12036f6efa041884dd10709b1471c5d75d1a0a8412cf216",
+      "c_app_proto": {
+        "whole": 29,
+        "bytewise": 29,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "telnet-iac-49",
+      "about": "безъякорная последовательность IAC (app 29)",
+      "expect": "records",
+      "declared": "-",
+      "port": 23,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 6,
+      "input": "cases/telnet-iac-49.in.txt",
+      "input_sha256": "26458a4a60d528706916febf35aa574a1fb908d6593c41d17341ad6a64523172",
+      "output": "cases/telnet-iac-49.out",
+      "output_sha256": "c978bca461fcdea813ee2b1568edd5b15e96fd402c3264fcd03f037e1f83ec11",
+      "c_app_proto": {
+        "whole": 29,
+        "bytewise": 29,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "telnet-iac-50",
+      "about": "безъякорная последовательность IAC (app 29)",
+      "expect": "records",
+      "declared": "-",
+      "port": 23,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 8,
+      "input": "cases/telnet-iac-50.in.txt",
+      "input_sha256": "c81fef16b7db8271d6a05dac4a52e0157f7896f684a0e7c25883876743c952b8",
+      "output": "cases/telnet-iac-50.out",
+      "output_sha256": "357dcfca597e6be2e9cf4e871f051a7d615b07e1bc7a26656f285acc17478e20",
+      "c_app_proto": {
+        "whole": 29,
+        "bytewise": 29,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "telnet-iac-51",
+      "about": "безъякорная последовательность IAC (app 29)",
+      "expect": "records",
+      "declared": "-",
+      "port": 23,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 6,
+      "input": "cases/telnet-iac-51.in.txt",
+      "input_sha256": "ba0fd0d56987ce3e8a22689e222b1cd8abeebdf541b2e8bce2343ea62354f467",
+      "output": "cases/telnet-iac-51.out",
+      "output_sha256": "e1342e8106343b5e28f891a88804abaf3cd7b7c97a7fc55ca53904d85683672c",
+      "c_app_proto": {
+        "whole": 29,
+        "bytewise": 29,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "telnet-anchored-esc",
+      "about": "якорный шаблон Telnet",
+      "expect": "records",
+      "declared": "-",
+      "port": 23,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 7,
+      "input": "cases/telnet-anchored-esc.in.txt",
+      "input_sha256": "6b1de83e5dcaf2d570a3fbf09c6d9c6b6e9eabbd1de79c7150bb3c78c9c48f4e",
+      "output": "cases/telnet-anchored-esc.out",
+      "output_sha256": "998a6f216cab37d85e351c44cde667bc0578224b38b3f7ce62cbf8a88347405d",
+      "c_app_proto": {
+        "whole": 29,
+        "bytewise": 29,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "telnet-anchored-input",
+      "about": "якорный шаблон Telnet",
+      "expect": "records",
+      "declared": "-",
+      "port": 23,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 10,
+      "input": "cases/telnet-anchored-input.in.txt",
+      "input_sha256": "cb3ff731e5dd2dd8c41880adfe044632a4c03e91b482950b6de67451265be0f9",
+      "output": "cases/telnet-anchored-input.out",
+      "output_sha256": "a055713c7191b27d0d6eef40cd961d688797514cfd44acb7a912a9a2b89c751a",
+      "c_app_proto": {
+        "whole": 29,
+        "bytewise": 29,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "telnet-anchored-spaces",
+      "about": "якорный шаблон Telnet",
+      "expect": "records",
+      "declared": "-",
+      "port": 23,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 7,
+      "input": "cases/telnet-anchored-spaces.in.txt",
+      "input_sha256": "6a48c9f7a97ee10273e0b428e7e7b4f3519359ae874b3d4d4bb0f3d87ab5b235",
+      "output": "cases/telnet-anchored-spaces.out",
+      "output_sha256": "20a21c4887661ab4d566de69b49db92551ac47852c540d1ea9b91b78e7796fef",
+      "c_app_proto": {
+        "whole": 29,
+        "bytewise": 29,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "telnet-anchored-login-iac",
+      "about": "якорный шаблон Telnet",
+      "expect": "records",
+      "declared": "-",
+      "port": 23,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 10,
+      "input": "cases/telnet-anchored-login-iac.in.txt",
+      "input_sha256": "9c6ca42c60bcea063ad8e212fafa96748130747284f46261f676c5a269108a19",
+      "output": "cases/telnet-anchored-login-iac.out",
+      "output_sha256": "a055713c7191b27d0d6eef40cd961d688797514cfd44acb7a912a9a2b89c751a",
+      "c_app_proto": {
+        "whole": 29,
+        "bytewise": 29,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "telnet-login",
+      "about": "якорный шаблон Telnet",
+      "expect": "records",
+      "declared": "-",
+      "port": 23,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 7,
+      "input": "cases/telnet-login.in.txt",
+      "input_sha256": "81d00cb9ab2e8a3356ebb3af807822cce7be5046b8ab84c1ca1297294ab7edb0",
+      "output": "cases/telnet-login.out",
+      "output_sha256": "c895e407c34838de98976607ef209413a386eb3a7063af68b0d1535a9f9b8e20",
+      "c_app_proto": {
+        "whole": 29,
+        "bytewise": 29,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "telnet-password",
+      "about": "якорный шаблон Telnet",
+      "expect": "records",
+      "declared": "-",
+      "port": 23,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 10,
+      "input": "cases/telnet-password.in.txt",
+      "input_sha256": "918235e0e5dbe0d4112b7c0ebcf34caf9a4a904ad6a1851329a52383d4e77467",
+      "output": "cases/telnet-password.out",
+      "output_sha256": "7d9b71da6518c82b7537350195f64de5e441760e085d21c6741c8fda0cabdfcc",
+      "c_app_proto": {
+        "whole": 29,
+        "bytewise": 29,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "telnet-login-uppercase",
+      "about": "якорный шаблон Telnet",
+      "expect": "records",
+      "declared": "-",
+      "port": 23,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 7,
+      "input": "cases/telnet-login-uppercase.in.txt",
+      "input_sha256": "f49d171fe08ade1e8d5cd7a1cb50660f55bb6e6a05ae2d836cf821cc01c64008",
+      "output": "cases/telnet-login-uppercase.out",
+      "output_sha256": "c895e407c34838de98976607ef209413a386eb3a7063af68b0d1535a9f9b8e20",
+      "c_app_proto": {
+        "whole": 29,
+        "bytewise": 29,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "telnet-password-capital",
+      "about": "якорный шаблон Telnet",
+      "expect": "records",
+      "declared": "-",
+      "port": 23,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 10,
+      "input": "cases/telnet-password-capital.in.txt",
+      "input_sha256": "8835471dab0436543d167fa8af50c4f6b193dbc8d0518a82ff4fc95c664c218a",
+      "output": "cases/telnet-password-capital.out",
+      "output_sha256": "7d9b71da6518c82b7537350195f64de5e441760e085d21c6741c8fda0cabdfcc",
+      "c_app_proto": {
+        "whole": 29,
+        "bytewise": 29,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "rdp-beef",
+      "about": "12 байт ответа RDP с cookie beef",
+      "expect": "records",
+      "declared": "-",
+      "port": 3389,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 19,
+      "input": "cases/rdp-beef.in.txt",
+      "input_sha256": "466bb2fa11ef4f3c8f64a63b3b189e7064b1d190c014fbdba2f9570b8099dbaf",
+      "output": "cases/rdp-beef.out",
+      "output_sha256": "575a7ac45d676767b77fb6495330e169f61287d349fa725ba5ebb6879128b944",
+      "c_app_proto": {
+        "whole": 30,
+        "bytewise": 30,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "rdp-zero",
+      "about": "12 байт ответа RDP с нулевым cookie",
+      "expect": "records",
+      "declared": "-",
+      "port": 3389,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 19,
+      "input": "cases/rdp-zero.in.txt",
+      "input_sha256": "991b6a73b7cb5108b02858bf7c43c3b925d1da030b8813db6ef7f35b84c15e85",
+      "output": "cases/rdp-zero.out",
+      "output_sha256": "575a7ac45d676767b77fb6495330e169f61287d349fa725ba5ebb6879128b944",
+      "c_app_proto": {
+        "whole": 30,
+        "bytewise": 30,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "http-split-after-2",
+      "about": "HTTP/1. разрезан после HT: совпадение во втором сегменте (E2.1, у C по сегментам лишняя запись unknown)",
+      "expect": "records",
+      "declared": "-",
+      "port": 80,
+      "capture": "none",
+      "segments": 2,
+      "bytes": 19,
+      "input": "cases/http-split-after-2.in.txt",
+      "input_sha256": "fcef56f6a46735378032759372cbfa8c15419b70757d99c8575d48b0a4e6b9ef",
+      "output": "cases/http-split-after-2.out",
+      "output_sha256": "0b9cda7151ed9b5653897a980e1ec1df84ae0de662378a54d0e011e1f2103ae6",
+      "c_app_proto": {
+        "whole": 4,
+        "bytewise": 4,
+        "given": 4
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "telnet-split-in-pattern",
+      "about": "безъякорный IAC через границу сегментов (состояние smack между сегментами)",
+      "expect": "records",
+      "declared": "-",
+      "port": 23,
+      "capture": "none",
+      "segments": 2,
+      "bytes": 8,
+      "input": "cases/telnet-split-in-pattern.in.txt",
+      "input_sha256": "634087734911deb8119438328d7e9b7b41a4aee1622e3a948eefc06e8735b42a",
+      "output": "cases/telnet-split-in-pattern.out",
+      "output_sha256": "83923aacb1e999db2ddf3ec30ce24787f654fa8d8ac1c27b5238ee4c5bc92372",
+      "c_app_proto": {
+        "whole": 29,
+        "bytewise": 29,
+        "given": 29
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "smb1-negotiate",
+      "about": "00 00 * * ff SMB: ответ SMB1 в сессии NetBIOS",
+      "expect": "declared-4b",
+      "declared": "unknown-stream",
+      "port": 445,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 37,
+      "input": "cases/smb1-negotiate.in.txt",
+      "input_sha256": "b6a005c39ac82c18ef4b239e1301020d0f8f598137bbd29054d042a263c1ad8d",
+      "output": "cases/smb1-negotiate.out",
+      "output_sha256": "7353c75afa7065ebd8038bc814046280bd26398747357f00c7ba6547ad3fb7d2",
+      "c_app_proto": {
+        "whole": 10,
+        "bytewise": 10,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "smb2-negotiate",
+      "about": "00 00 * * fe SMB: ответ SMB2",
+      "expect": "declared-4b",
+      "declared": "unknown-stream",
+      "port": 445,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 28,
+      "input": "cases/smb2-negotiate.in.txt",
+      "input_sha256": "3c9006caec075cd0d58f50779893c7cfe1d5b7d5b5ba001fbc8394c0f3f5d18f",
+      "output": "cases/smb2-negotiate.out",
+      "output_sha256": "06a56ba1a76b3cc170c1f0039f606fcd8000a655f7a6f7b989c35c64f5718327",
+      "c_app_proto": {
+        "whole": 10,
+        "bytewise": 10,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "smb-star-literal",
+      "about": "00 00 * * ff SMB с байтами 2a 2a",
+      "expect": "declared-4b",
+      "declared": "unknown-stream",
+      "port": 445,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 13,
+      "input": "cases/smb-star-literal.in.txt",
+      "input_sha256": "80b3a6bfc27b69b31d94c6ed26a322e709c612dfb1217e433d549521cfa5d5d6",
+      "output": "cases/smb-star-literal.out",
+      "output_sha256": "fba008f1404bc7b9be5e9e64b090638bc76ffdccaa6263a44bb8af1a57213f08",
+      "c_app_proto": {
+        "whole": 10,
+        "bytewise": 10,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "smb-star-letters",
+      "about": "00 00 A B fe SMB: * любые байты",
+      "expect": "declared-4b",
+      "declared": "unknown-stream",
+      "port": 445,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 10,
+      "input": "cases/smb-star-letters.in.txt",
+      "input_sha256": "ae7f61a3cf46210e024fd2c34a6b4fad65cac5127c2e6c82b5596f80e7d57069",
+      "output": "cases/smb-star-letters.out",
+      "output_sha256": "6289d3eb10b3e8125c367bf2ef65ffbf2b0973b5902b0aae824cbb573a150e6e",
+      "c_app_proto": {
+        "whole": 10,
+        "bytewise": 10,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "smb-82",
+      "about": "82 00 00 00: положительный ответ сессии NetBIOS",
+      "expect": "declared-4b",
+      "declared": "unknown-stream",
+      "port": 139,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 4,
+      "input": "cases/smb-82.in.txt",
+      "input_sha256": "2466df9cd20083886b89359f8e520ad86c27394b89c379e116b2095b443a20f7",
+      "output": "cases/smb-82.out",
+      "output_sha256": "80b21e9a8692e2adf9d4354b52faf852f671cf327ec5374a5d388336c0b977c7",
+      "c_app_proto": {
+        "whole": 10,
+        "bytewise": 10,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "smb-83-80",
+      "about": "83 00 00 01 и код отказа сессии NetBIOS",
+      "expect": "declared-4b",
+      "declared": "unknown-stream",
+      "port": 139,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 5,
+      "input": "cases/smb-83-80.in.txt",
+      "input_sha256": "2a5b5e1d875cb1d7a5acbcfda3580cafd792f990433cfd63ef5d9801baf9f55b",
+      "output": "cases/smb-83-80.out",
+      "output_sha256": "27911b2acad2132b09454f799536279a463524923fdcb584eb80581ea456c0df",
+      "c_app_proto": {
+        "whole": 10,
+        "bytewise": 10,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "smb-83-81",
+      "about": "83 00 00 01 и код отказа сессии NetBIOS",
+      "expect": "declared-4b",
+      "declared": "unknown-stream",
+      "port": 139,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 5,
+      "input": "cases/smb-83-81.in.txt",
+      "input_sha256": "0d64f3f975162198e7529eb857224c2564f83ef990160ae389ffc2e1260f052b",
+      "output": "cases/smb-83-81.out",
+      "output_sha256": "17e4948f8dbaf5a6c1720814a78cfd549d96c77d6bab4182b7e858c007514bc4",
+      "c_app_proto": {
+        "whole": 10,
+        "bytewise": 10,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "smb-83-82",
+      "about": "83 00 00 01 и код отказа сессии NetBIOS",
+      "expect": "declared-4b",
+      "declared": "unknown-stream",
+      "port": 139,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 5,
+      "input": "cases/smb-83-82.in.txt",
+      "input_sha256": "76f897b717a931fb4f8da4f6f083a1ecdf21676bbc460e68284bb6e45f0d8e17",
+      "output": "cases/smb-83-82.out",
+      "output_sha256": "1ab156a1d137b54838ea530cdbc7b1d96704f603a09a21f7a8f5ae115253246a",
+      "c_app_proto": {
+        "whole": 10,
+        "bytewise": 10,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "smb-83-83",
+      "about": "83 00 00 01 и код отказа сессии NetBIOS",
+      "expect": "declared-4b",
+      "declared": "unknown-stream",
+      "port": 139,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 5,
+      "input": "cases/smb-83-83.in.txt",
+      "input_sha256": "170f18f6484aa59d95b659c75f0a34e01db79e14ecb7bd16d55221c19b078e50",
+      "output": "cases/smb-83-83.out",
+      "output_sha256": "1ddd9f9b7c37a5750dba9f77573a39a3b5cd869ecb0ecd57b922578709916e1d",
+      "c_app_proto": {
+        "whole": 10,
+        "bytewise": 10,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "smb-83-8f",
+      "about": "83 00 00 01 и код отказа сессии NetBIOS",
+      "expect": "declared-4b",
+      "declared": "unknown-stream",
+      "port": 139,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 5,
+      "input": "cases/smb-83-8f.in.txt",
+      "input_sha256": "712d3118c4e917d843db284c4a0f46a2d5d3d3dbcd6107db94cce7face752603",
+      "output": "cases/smb-83-8f.out",
+      "output_sha256": "799ec2f43c64fec1d852b8c81cd77cc9ef94734516dea0164fba5ccc028cc1a4",
+      "c_app_proto": {
+        "whole": 10,
+        "bytewise": 10,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "smb-split",
+      "about": "SMB1, разрезан после 00 00: совпадение во втором сегменте",
+      "expect": "declared-4b",
+      "declared": "unknown-stream",
+      "port": 445,
+      "capture": "none",
+      "segments": 2,
+      "bytes": 13,
+      "input": "cases/smb-split.in.txt",
+      "input_sha256": "b560876ec0197ac6e68a257c2ae8129e2cf212787f17db20a35629d9c5464111",
+      "output": "cases/smb-split.out",
+      "output_sha256": "ad78c2bf3b43df840311d24113956f839565682e79e642f534198eabeff273f9",
+      "c_app_proto": {
+        "whole": 10,
+        "bytewise": 10,
+        "given": 10
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "ftp-auth-530",
+      "about": "приветствие одной строкой, AUTH TLS, ответ 530 без последнего перевода строки, закрытие",
+      "expect": "records",
+      "declared": "-",
+      "port": 21,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 63,
+      "input": "cases/ftp-auth-530.in.txt",
+      "input_sha256": "52f610ff6ff3c519ac8960042b6b9c008c0103e3f868172b6654f1e29ea2c280",
+      "output": "cases/ftp-auth-530.out",
+      "output_sha256": "7aafcb279f717525a75f8beb287422a38c37161e2fb582ebde14949ee1693d27",
+      "c_app_proto": {
+        "whole": 5,
+        "bytewise": 5,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "ftp-multiline-greeting-500",
+      "about": "три строки приветствия с кодом, AUTH TLS после последней, ответ 500",
+      "expect": "records",
+      "declared": "-",
+      "port": 21,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 86,
+      "input": "cases/ftp-multiline-greeting-500.in.txt",
+      "input_sha256": "17f1207acea4cb97340567c91571b91c1b93ea8530e4d4afcc4e09e2d0458ca2",
+      "output": "cases/ftp-multiline-greeting-500.out",
+      "output_sha256": "78ce6b9f91ed3cc5dc29ead7194495ab9b95d3f0c5c209df8d219b0a3523dbda",
+      "c_app_proto": {
+        "whole": 5,
+        "bytewise": 5,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "ftp-line-without-code",
+      "about": "строка продолжения без кода: не цифра, закрытие, AUTH TLS не шлётся",
+      "expect": "records",
+      "declared": "-",
+      "port": 21,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 47,
+      "input": "cases/ftp-line-without-code.in.txt",
+      "input_sha256": "32a1ccc8a4c80bb8ec98b1cf530e5010c74356d7119fdbf35a028431b6a03591",
+      "output": "cases/ftp-line-without-code.out",
+      "output_sha256": "08e31f44a421dcc9455702a8dc2ea6f0277df8a7a58ae20e9f7ae0aa4e6ce08f",
+      "c_app_proto": {
+        "whole": 5,
+        "bytewise": 5,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "ftp-tab-in-greeting",
+      "about": "TAB в тексте приветствия: не isprint, закрытие без записи байта",
+      "expect": "records",
+      "declared": "-",
+      "port": 21,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 19,
+      "input": "cases/ftp-tab-in-greeting.in.txt",
+      "input_sha256": "820e7bfe3249cdf761804ecc2cbb8fb478657ae0e97ef9f0cb6dd25965130b80",
+      "output": "cases/ftp-tab-in-greeting.out",
+      "output_sha256": "e019c56ea40fe93ccc07d8b906d78eb555be4c5c6b69f7b9d8de7299ceb7d969",
+      "c_app_proto": {
+        "whole": 5,
+        "bytewise": 5,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "ftp-nonprint-in-greeting",
+      "about": "байт 0xE9 в тексте: не isprint в локали C, закрытие",
+      "expect": "records",
+      "declared": "-",
+      "port": 21,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 20,
+      "input": "cases/ftp-nonprint-in-greeting.in.txt",
+      "input_sha256": "4d0746bdc22375c50c6a20067bcd5eba2c4a7a6ba0c4984969c516657583b4f0",
+      "output": "cases/ftp-nonprint-in-greeting.out",
+      "output_sha256": "f0a6e7972693a39cadf6967465ed233cc8c2556aa521bcd18588d8e72d85010c",
+      "c_app_proto": {
+        "whole": 5,
+        "bytewise": 5,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "ftp-nul-in-greeting",
+      "about": "NUL в тексте приветствия: закрытие",
+      "expect": "records",
+      "declared": "-",
+      "port": 21,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 15,
+      "input": "cases/ftp-nul-in-greeting.in.txt",
+      "input_sha256": "076b269955b9573ff6a3077fc17e3839f84e1aa079332b989bbdf631f1e39b8a",
+      "output": "cases/ftp-nul-in-greeting.out",
+      "output_sha256": "fbb401e381abd3d92cfcefe5c6b3143dcb5a0e649867885c11317df355ff848f",
+      "c_app_proto": {
+        "whole": 5,
+        "bytewise": 5,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "ftp-bad-separator",
+      "about": "вторая строка 220x: разделитель не пробел и не минус, закрытие",
+      "expect": "records",
+      "declared": "-",
+      "port": 21,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 23,
+      "input": "cases/ftp-bad-separator.in.txt",
+      "input_sha256": "9d7edf02d93e8fe0d6209e9aa10f0d10e1516f083c23e0b7bdf83573a37b0faf",
+      "output": "cases/ftp-bad-separator.out",
+      "output_sha256": "bfdd3ce8ac69cbce03d326eac64808a80c23bef75e55519e62c23aaf8e9250aa",
+      "c_app_proto": {
+        "whole": 5,
+        "bytewise": 5,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "ftp-short-code",
+      "about": "вторая строка с кодом из двух цифр: пробел вместо третьей цифры, закрытие",
+      "expect": "records",
+      "declared": "-",
+      "port": 21,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 22,
+      "input": "cases/ftp-short-code.in.txt",
+      "input_sha256": "b53be60495a07c1d80d25b36fd203b7beb78fbc93db4dbfbef544198f4adda26",
+      "output": "cases/ftp-short-code.out",
+      "output_sha256": "454b57e787139f5128cef5746ae065fa6f20a3fec6c470d17cff17af41b2979a",
+      "c_app_proto": {
+        "whole": 5,
+        "bytewise": 5,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "ftp-cr-inside-text",
+      "about": "CR внутри текста строк пропускается, в записи его нет",
+      "expect": "records",
+      "declared": "-",
+      "port": 21,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 19,
+      "input": "cases/ftp-cr-inside-text.in.txt",
+      "input_sha256": "d6e612bac199872de2155c6dfa683dc5cbf67fb56752c0cd6fa141ab8795d85e",
+      "output": "cases/ftp-cr-inside-text.out",
+      "output_sha256": "017bb5650cdda65decd599ba361322c8cc959e3a244aab51ccd33de98d02a3d6",
+      "c_app_proto": {
+        "whole": 5,
+        "bytewise": 5,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "ftp-bare-lf",
+      "about": "строки с одним LF",
+      "expect": "records",
+      "declared": "-",
+      "port": 21,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 15,
+      "input": "cases/ftp-bare-lf.in.txt",
+      "input_sha256": "2ae396abb644bc2dffcc799b3dac7aa3e6ecbfcc072dfc3f40735ae3d4970e0b",
+      "output": "cases/ftp-bare-lf.out",
+      "output_sha256": "985d4560cc5be89b1ca3e66643bb6ae13b21406c659945cfba949d74de2f4d1a",
+      "c_app_proto": {
+        "whole": 5,
+        "bytewise": 5,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "ftp-auth-reply-multiline",
+      "about": "ответ 530- из двух строк: читается только первая, на её LF закрытие",
+      "expect": "records",
+      "declared": "-",
+      "port": 21,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 41,
+      "input": "cases/ftp-auth-reply-multiline.in.txt",
+      "input_sha256": "41cd439c8ac530daf2efc5543632cd4481763e803960ce5f9ce47679131a7332",
+      "output": "cases/ftp-auth-reply-multiline.out",
+      "output_sha256": "449c6d33aeb9be88e5ee2b3c0d9a5a30e3823acbafa432ff8973a2ff311348e3",
+      "c_app_proto": {
+        "whole": 5,
+        "bytewise": 5,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "ftp-auth-reply-tab",
+      "about": "TAB в ответе на AUTH TLS: закрытие",
+      "expect": "records",
+      "declared": "-",
+      "port": 21,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 17,
+      "input": "cases/ftp-auth-reply-tab.in.txt",
+      "input_sha256": "d07206d261de0d0f03182ee815d58b42f2f627bdcda07f7ec3e12b2b05eeb127",
+      "output": "cases/ftp-auth-reply-tab.out",
+      "output_sha256": "5119ab76fb805b1b9c2b5311343d2a07272affd7b0b1aac65036c59afdd99414",
+      "c_app_proto": {
+        "whole": 5,
+        "bytewise": 5,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "ftp-auth-reply-without-newline",
+      "about": "ответ на AUTH TLS без перевода строки: записан, закрытия нет",
+      "expect": "records",
+      "declared": "-",
+      "port": 21,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 25,
+      "input": "cases/ftp-auth-reply-without-newline.in.txt",
+      "input_sha256": "84865bc9982cea796d985def7a44987f0028a996fbf06c19ebbf3073b72acdc5",
+      "output": "cases/ftp-auth-reply-without-newline.out",
+      "output_sha256": "150260f2288dc70afcf90b46205b188d83e5a5bebd9be660e3478d2ef44cbc52",
+      "c_app_proto": {
+        "whole": 5,
+        "bytewise": 5,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "ftp-auth-234-without-newline",
+      "about": "234 без перевода строки: передачи STARTTLS нет, app_proto 5",
+      "expect": "records",
+      "declared": "-",
+      "port": 21,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 23,
+      "input": "cases/ftp-auth-234-without-newline.in.txt",
+      "input_sha256": "c32c4ab1593a6ceb105cf7448145805af27c75ea86401a842d8f7d67e5795456",
+      "output": "cases/ftp-auth-234-without-newline.out",
+      "output_sha256": "79d1a8910de85f0604d461476d960df69eb0468ebe9d64e75605aa592774e822",
+      "c_app_proto": {
+        "whole": 5,
+        "bytewise": 5,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "ftp-auth-reply-not-a-code",
+      "about": "ответ на AUTH TLS без кода: закрытие, байт не записан",
+      "expect": "records",
+      "declared": "-",
+      "port": 21,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 15,
+      "input": "cases/ftp-auth-reply-not-a-code.in.txt",
+      "input_sha256": "0542ee945d061037819ad8104c40fc69b9c1db3c29a0b10e2c16a22d9f75acd0",
+      "output": "cases/ftp-auth-reply-not-a-code.out",
+      "output_sha256": "a927a7211cc07682b4c4aa24163a9ad1e70f239624ad61e895e6d0878b55804e",
+      "c_app_proto": {
+        "whole": 5,
+        "bytewise": 5,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "ftp-auth-code-four-digits",
+      "about": "ответ 2345: четвёртая цифра на месте разделителя, закрытие, записано 234",
+      "expect": "records",
+      "declared": "-",
+      "port": 21,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 16,
+      "input": "cases/ftp-auth-code-four-digits.in.txt",
+      "input_sha256": "46d2bc69ba15744611901fee2f621b46da1e5f2144091713e73071feab22f480",
+      "output": "cases/ftp-auth-code-four-digits.out",
+      "output_sha256": "1ba561cf56816927841a46ee261d5a94556b5daaf1bad816d903e9b10e992a30",
+      "c_app_proto": {
+        "whole": 5,
+        "bytewise": 5,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "ftp-cr-before-code",
+      "about": "пустая строка CRLF между строками приветствия: CR на месте цифры, закрытие",
+      "expect": "records",
+      "declared": "-",
+      "port": 21,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 16,
+      "input": "cases/ftp-cr-before-code.in.txt",
+      "input_sha256": "41554030539ce1a813a9d85e9f6cde25c3ec59008a4f95eacdbf761b9000a42c",
+      "output": "cases/ftp-cr-before-code.out",
+      "output_sha256": "49500765d1ff0d34e83274b3c533e8e092aca892a21102316fd6ecf44256bedf",
+      "c_app_proto": {
+        "whole": 5,
+        "bytewise": 5,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "ftp-code-234-in-greeting",
+      "about": "строка 234 в приветствии это последняя строка приветствия, не согласие: AUTH TLS, затем 530",
+      "expect": "records",
+      "declared": "-",
+      "port": 21,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 32,
+      "input": "cases/ftp-code-234-in-greeting.in.txt",
+      "input_sha256": "94586abbde3b3fbe2c05e06204732cb59714bf48ee4154ba83eb1a1028e0a58d",
+      "output": "cases/ftp-code-234-in-greeting.out",
+      "output_sha256": "8001cefaf92e2e15510994a771c4439f67650033bd22d99d62821f9b5a0978a3",
+      "c_app_proto": {
+        "whole": 5,
+        "bytewise": 5,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "ftp-220-dash-25-auth",
+      "about": "220- на 25 это FTP (E3.3): AUTH TLS почтовому серверу, ответ 502",
+      "expect": "records",
+      "declared": "-",
+      "port": 25,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 78,
+      "input": "cases/ftp-220-dash-25-auth.in.txt",
+      "input_sha256": "27c42db98d7442946b3c411b09256d646549bfe28d7470df9bd38a5f92a22d5a",
+      "output": "cases/ftp-220-dash-25-auth.out",
+      "output_sha256": "815a51c9614694601b959f3130e525559200fdc845149bf16260731faa80b341",
+      "c_app_proto": {
+        "whole": 5,
+        "bytewise": 5,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "ftp-220-space-2525-auth",
+      "about": "220 на 2525 это FTP (E3.3): AUTH TLS, ответ 502",
+      "expect": "records",
+      "declared": "-",
+      "port": 2525,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 70,
+      "input": "cases/ftp-220-space-2525-auth.in.txt",
+      "input_sha256": "ebdd66a7e7c1c40d595f4521158d9b6479bf1ef59491dd4a96a8f8080cb8101b",
+      "output": "cases/ftp-220-space-2525-auth.out",
+      "output_sha256": "7950774c880229be2b1edc95767e2de942e45217ba42eb4770ac7e2fc32fa8f1",
+      "c_app_proto": {
+        "whole": 5,
+        "bytewise": 5,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "ftp-split-crlf-and-code",
+      "about": "заданные сегменты режут CRLF и код ответа",
+      "expect": "records",
+      "declared": "-",
+      "port": 21,
+      "capture": "none",
+      "segments": 3,
+      "bytes": 22,
+      "input": "cases/ftp-split-crlf-and-code.in.txt",
+      "input_sha256": "359044bc1407be3e1f066df03a296366b153d51ba048ee27eba980ff60ac8c80",
+      "output": "cases/ftp-split-crlf-and-code.out",
+      "output_sha256": "4f58b500f7a3c43173a16ce7d8480c12ffb18c807a0ad6c782a1334735a4374b",
+      "c_app_proto": {
+        "whole": 5,
+        "bytewise": 5,
+        "given": 5
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "ftp-greeting-70000",
+      "about": "строка приветствия 70 004 байта с LF: у C запись 70 011 байт, у rmasscan первые 65 536 (Р5), AUTH TLS и закрытие как у C",
+      "expect": "records",
+      "declared": "-",
+      "port": 21,
+      "capture": "none",
+      "segments": 3,
+      "bytes": 70012,
+      "input": "cases/ftp-greeting-70000.in.txt",
+      "input_sha256": "f8caf1b37fb21b3602788de95e4850bb8f362c82f53fe1e5ac667625653d97d0",
+      "output": "cases/ftp-greeting-70000.out",
+      "output_sha256": "7b7dbee6cf7f8719d74963bb220e3f95cbccd00c7053dfee5d2b9cda0fd1f923",
+      "c_app_proto": {
+        "whole": 5,
+        "bytewise": 5,
+        "given": 5
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "smtp-ehlo-starttls-454",
+      "about": "EHLO со STARTTLS в списке, STARTTLS, ответ 454: закрытие",
+      "expect": "records",
+      "declared": "-",
+      "port": 25,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 154,
+      "input": "cases/smtp-ehlo-starttls-454.in.txt",
+      "input_sha256": "2783f15ee8442e5b59233de724475888b300b55485f641e5aefb8e65d771fb71",
+      "output": "cases/smtp-ehlo-starttls-454.out",
+      "output_sha256": "80a3e6c8bf967bb7897ace14f6c6d59cc74c7d1eba813ab3a529fcd4e478b0ac",
+      "c_app_proto": {
+        "whole": 11,
+        "bytewise": 11,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "smtp-ehlo-without-starttls",
+      "about": "EHLO без STARTTLS в списке: STARTTLS шлётся всё равно, ответ 502",
+      "expect": "records",
+      "declared": "-",
+      "port": 25,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 100,
+      "input": "cases/smtp-ehlo-without-starttls.in.txt",
+      "input_sha256": "27d7a91558432e890f166d0915f9af4d7caed3d126004344c0a594964c3c824d",
+      "output": "cases/smtp-ehlo-without-starttls.out",
+      "output_sha256": "86d8af922ffe678c2e7036af0ce7c49c66508f1bc27c5bd7044529c6f1a1a642",
+      "c_app_proto": {
+        "whole": 11,
+        "bytewise": 11,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "smtp-ehlo-rejected-587",
+      "about": "на 587 EHLO отвергнут кодом 500: STARTTLS шлётся всё равно, ответ 503",
+      "expect": "records",
+      "declared": "-",
+      "port": 587,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 85,
+      "input": "cases/smtp-ehlo-rejected-587.in.txt",
+      "input_sha256": "c8c3fcb006194f25ee587bdcd07ab7e5fee34337e8b6045671d126e171cd76d2",
+      "output": "cases/smtp-ehlo-rejected-587.out",
+      "output_sha256": "92e8e39a5f68546e31c3204ef4d0dd81079ead3c3763df743c48f29c9818dbfd",
+      "c_app_proto": {
+        "whole": 11,
+        "bytewise": 11,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "smtp-521-ehlo-reply",
+      "about": "521 на любом порту это SMTP: EHLO, ответ 221, STARTTLS",
+      "expect": "records",
+      "declared": "-",
+      "port": 2525,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 27,
+      "input": "cases/smtp-521-ehlo-reply.in.txt",
+      "input_sha256": "a26773c8d481e87523d1211f0388299d12f1483f82b86288fefa74c701d3d617",
+      "output": "cases/smtp-521-ehlo-reply.out",
+      "output_sha256": "1ad7b04d75e9e53ca6334c77d3c79f2578710893c5b9cd4853f492feb2687eea",
+      "c_app_proto": {
+        "whole": 11,
+        "bytewise": 11,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "smtp-tab-in-ehlo",
+      "about": "TAB в строке ответа на EHLO: закрытие",
+      "expect": "records",
+      "declared": "-",
+      "port": 25,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 25,
+      "input": "cases/smtp-tab-in-ehlo.in.txt",
+      "input_sha256": "4e7d3a09a8f3e190ba009abf5ead7d1e041e55fb6befbc3eff99e3d03f29c23f",
+      "output": "cases/smtp-tab-in-ehlo.out",
+      "output_sha256": "9c8919ccc32e1d32679f276af9620b597f41d7486d0aa7c11d74cac24840968d",
+      "c_app_proto": {
+        "whole": 11,
+        "bytewise": 11,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "smtp-nonprint-in-starttls-reply",
+      "about": "байт 0x7F в ответе на STARTTLS: закрытие",
+      "expect": "records",
+      "declared": "-",
+      "port": 25,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 22,
+      "input": "cases/smtp-nonprint-in-starttls-reply.in.txt",
+      "input_sha256": "025bb3c762459030a0ecb181bfde3180a2bc8e381dd267ac444093ec02be53d6",
+      "output": "cases/smtp-nonprint-in-starttls-reply.out",
+      "output_sha256": "6e579edeebc6acda3051665d2ed7832989de9ded00f3bf06f2676c1e793dab32",
+      "c_app_proto": {
+        "whole": 11,
+        "bytewise": 11,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "smtp-starttls-reply-without-newline",
+      "about": "ответ на STARTTLS без перевода строки: записан, закрытия нет",
+      "expect": "records",
+      "declared": "-",
+      "port": 25,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 24,
+      "input": "cases/smtp-starttls-reply-without-newline.in.txt",
+      "input_sha256": "974d6d613aca7a135eaba0a834d19c8df08de871083d3ac19332870f2e9f3306",
+      "output": "cases/smtp-starttls-reply-without-newline.out",
+      "output_sha256": "a44d166fcfc946e24f7364d6fb235ab9ae9ea2d3ea40d281c4a70bd2ec355ac3",
+      "c_app_proto": {
+        "whole": 11,
+        "bytewise": 11,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "smtp-ehlo-line-without-code",
+      "about": "строка без кода в ответе на EHLO: закрытие, STARTTLS не шлётся",
+      "expect": "records",
+      "declared": "-",
+      "port": 25,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 28,
+      "input": "cases/smtp-ehlo-line-without-code.in.txt",
+      "input_sha256": "dd86953f086a0d1d58c4ad9b1a7d668ed690929e7cc9bdb6991a59c435fee042",
+      "output": "cases/smtp-ehlo-line-without-code.out",
+      "output_sha256": "ce5d31e20b0fad6e52700048aa2dea6efded7e078401ef4a2acc45f039d8a5ec",
+      "c_app_proto": {
+        "whole": 11,
+        "bytewise": 11,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "smtp-starttls-reply-multiline",
+      "about": "ответ 454- из двух строк: читается первая, закрытие на её LF",
+      "expect": "records",
+      "declared": "-",
+      "port": 25,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 38,
+      "input": "cases/smtp-starttls-reply-multiline.in.txt",
+      "input_sha256": "d318292cf1bafe5976d5324a84520022c6e78182123d54e8990e7bbe5b730d2c",
+      "output": "cases/smtp-starttls-reply-multiline.out",
+      "output_sha256": "b66ef14fa1e615cdc939f8f0a7b1e8ed326e48687b1ca99c35bfcf215c09bf55",
+      "c_app_proto": {
+        "whole": 11,
+        "bytewise": 11,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "smtp-ehlo-bad-separator",
+      "about": "ответ на EHLO 250+: разделитель не пробел и не минус, закрытие",
+      "expect": "records",
+      "declared": "-",
+      "port": 25,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 15,
+      "input": "cases/smtp-ehlo-bad-separator.in.txt",
+      "input_sha256": "b71537af053080cbdf3cdaf275e04a00c47210f5bc9804a4660dcda19a295f1d",
+      "output": "cases/smtp-ehlo-bad-separator.out",
+      "output_sha256": "5105cc6b344b333990f0d8e164ffc582c45226617bef185780471d5841b8b39b",
+      "c_app_proto": {
+        "whole": 11,
+        "bytewise": 11,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "smtp-starttls-reply-221",
+      "about": "221 на STARTTLS: передача только на 220, закрытие",
+      "expect": "records",
+      "declared": "-",
+      "port": 25,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 30,
+      "input": "cases/smtp-starttls-reply-221.in.txt",
+      "input_sha256": "22b03c1c3073c1ad7235fdb7ddd5eac03cc639cb636a5db547dd7a2d08108bb0",
+      "output": "cases/smtp-starttls-reply-221.out",
+      "output_sha256": "939fa722d0dd7662fb28ff58cad060eaac20565f3f0a58540c7bd09b105f8fb7",
+      "c_app_proto": {
+        "whole": 11,
+        "bytewise": 11,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "pop3-capa-err",
+      "about": "-ERR на CAPA: строка записана, закрытие, STLS не шлётся",
+      "expect": "records",
+      "declared": "-",
+      "port": 110,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 45,
+      "input": "cases/pop3-capa-err.in.txt",
+      "input_sha256": "fde9754acec4ec28ab51425b9b2b5a88c285ceab2e94b8ff70690f559d84f53c",
+      "output": "cases/pop3-capa-err.out",
+      "output_sha256": "049108d4949892902c1ca1c15fbd179b9fba911f6a9d9241e8e9abd9df0f17de",
+      "c_app_proto": {
+        "whole": 12,
+        "bytewise": 12,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "pop3-capa-stls-err",
+      "about": "список CAPA со STLS до точки, STLS, ответ -ERR: закрытие",
+      "expect": "records",
+      "declared": "-",
+      "port": 110,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 97,
+      "input": "cases/pop3-capa-stls-err.in.txt",
+      "input_sha256": "bc423b831caad248f5b2f024e1d492021248c565c8f92b3631c763caa037a0e6",
+      "output": "cases/pop3-capa-stls-err.out",
+      "output_sha256": "11f8d0d0bed46e929daa5f5d1280c17891d444147dd3bc8867a87bbbdc4eaef1",
+      "c_app_proto": {
+        "whole": 12,
+        "bytewise": 12,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "pop3-capa-without-stls",
+      "about": "список CAPA без STLS: STLS шлётся всё равно",
+      "expect": "records",
+      "declared": "-",
+      "port": 110,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 53,
+      "input": "cases/pop3-capa-without-stls.in.txt",
+      "input_sha256": "733b250b31a5d2ce375539f5a4161c5b255780346a35287708cbd725fa5bbac6",
+      "output": "cases/pop3-capa-without-stls.out",
+      "output_sha256": "e9b704a580cb883fdd1fa18e7780e4f5cda74f28d8a223bc294db89d95ef0d02",
+      "c_app_proto": {
+        "whole": 12,
+        "bytewise": 12,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "pop3-capa-bad-reply",
+      "about": "ответ на CAPA без + и -: байт записан, закрытие",
+      "expect": "records",
+      "declared": "-",
+      "port": 110,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 18,
+      "input": "cases/pop3-capa-bad-reply.in.txt",
+      "input_sha256": "49b5dbdcf94e202a4eef7adf65e4b143be180c436a9566eebdcf91c265e2fbae",
+      "output": "cases/pop3-capa-bad-reply.out",
+      "output_sha256": "a79a34e458e341ac60cf084832b20c1f51b8bcfd03eac848437188768cbda610",
+      "c_app_proto": {
+        "whole": 12,
+        "bytewise": 12,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "pop3-capa-plus-no",
+      "about": "ответ +NO на CAPA: N не O, закрытие",
+      "expect": "records",
+      "declared": "-",
+      "port": 110,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 16,
+      "input": "cases/pop3-capa-plus-no.in.txt",
+      "input_sha256": "a794bcfa06451cbd81fe79f53a3ccb1044ee1607883265554514286e152cf4cb",
+      "output": "cases/pop3-capa-plus-no.out",
+      "output_sha256": "8f56c832485cba69545eeb74dac14f5f5fa332b36e0497f61597e3b1660fc6f0",
+      "c_app_proto": {
+        "whole": 12,
+        "bytewise": 12,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "pop3-dot-lines",
+      "about": "строки с точкой в начале и пустые строки в списке CAPA, конец только на строке из точки",
+      "expect": "records",
+      "declared": "-",
+      "port": 110,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 44,
+      "input": "cases/pop3-dot-lines.in.txt",
+      "input_sha256": "bf5d2e522ce9b53d69c323730ce6c022d6bc69fb8df009552c7da60e2142d3bc",
+      "output": "cases/pop3-dot-lines.out",
+      "output_sha256": "b5f8e44ee2be4144b5789c3b826ed6078821f7d34a45563ed1e9b2beb5cedaed",
+      "c_app_proto": {
+        "whole": 12,
+        "bytewise": 12,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "pop3-nonprint-kept",
+      "about": "TAB, 0x01, 0x80 и 0xFF в приветствии записаны: проверки isprint у POP3 нет",
+      "expect": "records",
+      "declared": "-",
+      "port": 110,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 25,
+      "input": "cases/pop3-nonprint-kept.in.txt",
+      "input_sha256": "33d0cbdedd354bd573300769e6674b93c30c812fe6e9891bb20909e4ed42058a",
+      "output": "cases/pop3-nonprint-kept.out",
+      "output_sha256": "6881c0368724bfa63450587080f26e37d9fca01001387942206d4d26e28eba6a",
+      "c_app_proto": {
+        "whole": 12,
+        "bytewise": 12,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "pop3-greeting-without-newline",
+      "about": "приветствие без перевода строки: CAPA не шлётся",
+      "expect": "records",
+      "declared": "-",
+      "port": 110,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 9,
+      "input": "cases/pop3-greeting-without-newline.in.txt",
+      "input_sha256": "d304c0ee61c68974c275da97b34e1e12cb50214d47fdec348eb9213bc29fa2c3",
+      "output": "cases/pop3-greeting-without-newline.out",
+      "output_sha256": "1d5ca4a5577c98a02eacb9b97f31b5bd6a3165b007fce7f8265ad1c01c997523",
+      "c_app_proto": {
+        "whole": 12,
+        "bytewise": 12,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "pop3-bare-lf",
+      "about": "строки с одним LF до ответа -ERR на STLS",
+      "expect": "records",
+      "declared": "-",
+      "port": 110,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 28,
+      "input": "cases/pop3-bare-lf.in.txt",
+      "input_sha256": "c20f2e9131a65f9d5ee8d449320bc9a4cf5ee5bc38e10d637ac4541290e22112",
+      "output": "cases/pop3-bare-lf.out",
+      "output_sha256": "3e5e38a9aff157c7857c488b84d79344973db37f1c91d3dcb332c79adb5f5bbf",
+      "c_app_proto": {
+        "whole": 12,
+        "bytewise": 12,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "pop3-stls-reply-bad",
+      "about": "ответ +ON на STLS: N не K, закрытие",
+      "expect": "records",
+      "declared": "-",
+      "port": 110,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 20,
+      "input": "cases/pop3-stls-reply-bad.in.txt",
+      "input_sha256": "5413b0094df014c91dc40f72ca326acd8d5301b1f5bd035e259afcdc850c71f3",
+      "output": "cases/pop3-stls-reply-bad.out",
+      "output_sha256": "0d68c72662efe48f84b1f17646c5987fa8ca585f709483c656268da4bfbc47b2",
+      "c_app_proto": {
+        "whole": 12,
+        "bytewise": 12,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "pop3-empty-line-before-dot",
+      "about": "пустая строка перед строкой из точки: начало строки остаётся, точка кончает список CAPA",
+      "expect": "records",
+      "declared": "-",
+      "port": 110,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 33,
+      "input": "cases/pop3-empty-line-before-dot.in.txt",
+      "input_sha256": "90259ada7253d7a03173f73c7d1e7ec3fcfbac0aad121741e7948551e4d08a11",
+      "output": "cases/pop3-empty-line-before-dot.out",
+      "output_sha256": "ec1b6eb8f0ad7554d8ee424730130ca7c1c7959b33f733932b3ad6f314c1062d",
+      "c_app_proto": {
+        "whole": 12,
+        "bytewise": 12,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "imap4-capability-banner",
+      "about": "приветствие с CAPABILITY и STARTTLS: запись * OK, два закрытия",
+      "expect": "records",
+      "declared": "-",
+      "port": 143,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 62,
+      "input": "cases/imap4-capability-banner.in.txt",
+      "input_sha256": "19ac47b6ff7231089dbd440422e4f60be0f2b3027ab1ec8e9d11809b3855f340",
+      "output": "cases/imap4-capability-banner.out",
+      "output_sha256": "a9358fca687cf4707bcc4d8bbdd8c80423cc1172331d682ef12467f17095738a",
+      "c_app_proto": {
+        "whole": 13,
+        "bytewise": 13,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "imap4-starttls-dialogue",
+      "about": "полный диалог STARTTLS: CAPABILITY не шлётся, запись * OK, два закрытия",
+      "expect": "records",
+      "declared": "-",
+      "port": 143,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 87,
+      "input": "cases/imap4-starttls-dialogue.in.txt",
+      "input_sha256": "c51c526367eb2e9dea362feb374ea41f4b8d26c3859285e1a1d9377378035d59",
+      "output": "cases/imap4-starttls-dialogue.out",
+      "output_sha256": "9ae61ccafe47565a88e89ef4e7e61b4b8c3f2cc98bdc1da0c283db804c987e8e",
+      "c_app_proto": {
+        "whole": 13,
+        "bytewise": 13,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "imap4-two-spaces",
+      "about": "два пробела после звезды: шаблона * OK нет, поток unknown",
+      "expect": "records",
+      "declared": "-",
+      "port": 143,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 13,
+      "input": "cases/imap4-two-spaces.in.txt",
+      "input_sha256": "6048202785e44f9fed7bc11e69ce1d84d003bde77e5b37b0e777cb13a3ac25ac",
+      "output": "cases/imap4-two-spaces.out",
+      "output_sha256": "8b32b6b6bc2a581b4d4f75e2339f9420bb5b61d378f56fa398f4f3804148559c",
+      "c_app_proto": {
+        "whole": 0,
+        "bytewise": 0,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "imap4-bye",
+      "about": "* BYE: шаблона нет, поток unknown",
+      "expect": "records",
+      "declared": "-",
+      "port": 143,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 28,
+      "input": "cases/imap4-bye.in.txt",
+      "input_sha256": "b19da48b6929c5288442146314aa120881df625182ccf9880808bbb673e5b0f9",
+      "output": "cases/imap4-bye.out",
+      "output_sha256": "14be15eefedb2e925e899246a5ee8ac2c6672d3a342e9448a3a5ae664658d5e5",
+      "c_app_proto": {
+        "whole": 0,
+        "bytewise": 0,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "imap4-ok-without-space",
+      "about": "* OK и сразу CRLF: шаблону нужен пробел, поток unknown",
+      "expect": "records",
+      "declared": "-",
+      "port": 143,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 6,
+      "input": "cases/imap4-ok-without-space.in.txt",
+      "input_sha256": "1721ef052551571dd6bf91cf8b7d55f8d45dad3663588357fb11c394fd525db1",
+      "output": "cases/imap4-ok-without-space.out",
+      "output_sha256": "ea08024e5e4b3b82ad1e2b163f14d318c17616c3ce64ee6f1550b080c2c14dc6",
+      "c_app_proto": {
+        "whole": 0,
+        "bytewise": 0,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "imap4-split-after-star",
+      "about": "звезда отдельным сегментом: совпадение во втором сегменте, повтор HEUR",
+      "expect": "records",
+      "declared": "-",
+      "port": 143,
+      "capture": "none",
+      "segments": 2,
+      "bytes": 12,
+      "input": "cases/imap4-split-after-star.in.txt",
+      "input_sha256": "ac1dbe9e3be40fd3a81acc42516504af9b9bcd3bd7acbaa465fa69c5d9f606bc",
+      "output": "cases/imap4-split-after-star.out",
+      "output_sha256": "fbfeb4d9d5bf4d617fa23768e87a7c8bc652301c18c02690338bf671942203c6",
+      "c_app_proto": {
+        "whole": 13,
+        "bytewise": 13,
+        "given": 13
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "ftp-auth-234",
+      "about": "234 на AUTH TLS: передача TLS",
+      "expect": "declared-4b",
+      "declared": "starttls-unknown",
+      "port": 21,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 51,
+      "input": "cases/ftp-auth-234.in.txt",
+      "input_sha256": "a02e5d1c002f41750d6d6e0f59d04f58beb3224541af41444fda7f2596329d21",
+      "output": "cases/ftp-auth-234.out",
+      "output_sha256": "09a58a238ade5431ae7783b048e08b5ff65b6d5ca8e455576b0e6838b517ca29",
+      "c_app_proto": {
+        "whole": 9,
+        "bytewise": 9,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "ftp-auth-234-dash-25-tail",
+      "about": "220- на 25 это FTP, 234- передаёт на первом LF; хвост с цифр у C целиком снова приветствие FTP со вторым AUTH TLS, по сегментам TLS",
+      "expect": "declared-4b",
+      "declared": "starttls-unknown",
+      "port": 25,
+      "capture": "none",
+      "segments": 2,
+      "bytes": 59,
+      "input": "cases/ftp-auth-234-dash-25-tail.in.txt",
+      "input_sha256": "f73ba19e0bd849dc88d51cc4f105693177323817b8591371369d453fb9641045",
+      "output": "cases/ftp-auth-234-dash-25-tail.out",
+      "output_sha256": "7dc6e20c3133635c6829aec38c44e806ded55bf0c5103e4791147ab206f4fb6c",
+      "c_app_proto": {
+        "whole": 9,
+        "bytewise": 9,
+        "given": 9
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "smtp-starttls-220",
+      "about": "EHLO со STARTTLS, 220 на STARTTLS: передача TLS",
+      "expect": "declared-4b",
+      "declared": "starttls-unknown",
+      "port": 25,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 112,
+      "input": "cases/smtp-starttls-220.in.txt",
+      "input_sha256": "2d4f3d7fb391ab7ee8132a7ad2c3d5d4b3ea0c8fb10858cf5c436196c1086225",
+      "output": "cases/smtp-starttls-220.out",
+      "output_sha256": "58a8538eb55eac3e05c7ba4bbbf1f8afcbaec5abfb3ab3624efb44abd0279e95",
+      "c_app_proto": {
+        "whole": 9,
+        "bytewise": 9,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "smtp-starttls-220-587",
+      "about": "на 587 EHLO без STARTTLS в списке, 220 на STARTTLS: передача TLS",
+      "expect": "declared-4b",
+      "declared": "starttls-unknown",
+      "port": 587,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 66,
+      "input": "cases/smtp-starttls-220-587.in.txt",
+      "input_sha256": "20d786ed9767832d199c2951441370dc8ed5c662b22a8cb2b71e05d6fa23f622",
+      "output": "cases/smtp-starttls-220-587.out",
+      "output_sha256": "2279175f59a151060ae08e3ff3bf02af51848dc63ba7e23e8d606cc3ae1a8e14",
+      "c_app_proto": {
+        "whole": 9,
+        "bytewise": 9,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "smtp-starttls-220-tail",
+      "about": "220- на STARTTLS передаёт на первом LF; хвост у C целиком снова приветствие SMTP со вторым EHLO, по сегментам TLS",
+      "expect": "declared-4b",
+      "declared": "starttls-unknown",
+      "port": 25,
+      "capture": "none",
+      "segments": 2,
+      "bytes": 47,
+      "input": "cases/smtp-starttls-220-tail.in.txt",
+      "input_sha256": "4266041bcc4f7981db494fe02a64e12da96d2c768ebd9ba156bc24281e9b78c8",
+      "output": "cases/smtp-starttls-220-tail.out",
+      "output_sha256": "831c71f2bb873622984179552984f87e6668fc0e23caff77dcba66a8472e1c9f",
+      "c_app_proto": {
+        "whole": 9,
+        "bytewise": 9,
+        "given": 9
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "pop3-stls-ok",
+      "about": "список CAPA со STLS, +OK на STLS: передача TLS, строка +OK записана с LF",
+      "expect": "declared-4b",
+      "declared": "starttls-unknown",
+      "port": 110,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 91,
+      "input": "cases/pop3-stls-ok.in.txt",
+      "input_sha256": "6745bcac75a6bd955284e4499490ae071838e2a5e6db7ab2dd59290ec0e38aff",
+      "output": "cases/pop3-stls-ok.out",
+      "output_sha256": "930708cdcc71046460460c34ba71aef216fc155490e9888fe078cfcaf9095008",
+      "c_app_proto": {
+        "whole": 9,
+        "bytewise": 9,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "pop3-stls-ok-tail",
+      "about": "+OK на STLS; хвост +OK у C целиком снова приветствие POP3 со вторым CAPA, по сегментам TLS",
+      "expect": "declared-4b",
+      "declared": "starttls-unknown",
+      "port": 110,
+      "capture": "none",
+      "segments": 2,
+      "bytes": 38,
+      "input": "cases/pop3-stls-ok-tail.in.txt",
+      "input_sha256": "bf015f6628288eb2b5e643ef68b889901338c44a1afa883520fb6f1c7e8b12b5",
+      "output": "cases/pop3-stls-ok-tail.out",
+      "output_sha256": "e94141aab7bf29b6f09d272e2aac116d2f14a5958fb8c550a534a75e2940b060",
+      "c_app_proto": {
+        "whole": 9,
+        "bytewise": 9,
+        "given": 9
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "ssh-ident-nul",
+      "about": "SSH ident/raw bytes и fallthrough framing",
+      "expect": "records",
+      "declared": "-",
+      "port": 22,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 15,
+      "input": "cases/ssh-ident-nul.in.txt",
+      "input_sha256": "45858fe0524b1b8ba5fc18f0c8d3cd79bc7018b1387647bf0bad70cef0df0eb7",
+      "output": "cases/ssh-ident-nul.out",
+      "output_sha256": "07683da3e7fd006e7bb2c1ddef8174847fee8d7752ccf30a3d3f68169cf676d5",
+      "c_app_proto": {
+        "whole": 3,
+        "bytewise": 3,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "ssh-ident-utf8",
+      "about": "SSH ident/raw bytes и fallthrough framing",
+      "expect": "records",
+      "declared": "-",
+      "port": 22,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 18,
+      "input": "cases/ssh-ident-utf8.in.txt",
+      "input_sha256": "98cbe015bec567fcdcb610945b14e01de8451182f448a03ec9a0cf33a70bcb19",
+      "output": "cases/ssh-ident-utf8.out",
+      "output_sha256": "16384f1169462d360aa3a18f7a406e5a6258f715dc69d3d8b5159d556d9a53db",
+      "c_app_proto": {
+        "whole": 3,
+        "bytewise": 3,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "ssh-ident-ws",
+      "about": "SSH ident/raw bytes и fallthrough framing",
+      "expect": "records",
+      "declared": "-",
+      "port": 22,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 14,
+      "input": "cases/ssh-ident-ws.in.txt",
+      "input_sha256": "18b198827fefb07f591bfad287489d96d3d1b6557826db30610db23384eb7264",
+      "output": "cases/ssh-ident-ws.out",
+      "output_sha256": "4056d1a6b2f826c7f1ef48a43e13d246edcf0133b86bf2739845fd29526d1632",
+      "c_app_proto": {
+        "whole": 2,
+        "bytewise": 2,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "ssh-leading-line",
+      "about": "SSH ident/raw bytes и fallthrough framing",
+      "expect": "records",
+      "declared": "-",
+      "port": 22,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 19,
+      "input": "cases/ssh-leading-line.in.txt",
+      "input_sha256": "c3484a1782978fc31e397c090fce2f09a7e5b513c51fa17240983377210b95ec",
+      "output": "cases/ssh-leading-line.out",
+      "output_sha256": "4e385c889fb56c2b3c625fd9c5643f92ead5b7d595a975128247ee051cc459d5",
+      "c_app_proto": {
+        "whole": 0,
+        "bytewise": 0,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "ssh-two-packets",
+      "about": "SSH ident/raw bytes и fallthrough framing",
+      "expect": "records",
+      "declared": "-",
+      "port": 22,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 33,
+      "input": "cases/ssh-two-packets.in.txt",
+      "input_sha256": "13dcb0d33ff4e65328803aff1eb12ad9a2228d59eef422b4003ecbb12417b40e",
+      "output": "cases/ssh-two-packets.out",
+      "output_sha256": "a32f360aceb3fd3c69044228d71c420e12b8b3eb8231fcf00f8b1b07f1f4474f",
+      "c_app_proto": {
+        "whole": 3,
+        "bytewise": 3,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "ssh-length-underflow",
+      "about": "SSH ident/raw bytes и fallthrough framing",
+      "expect": "records",
+      "declared": "-",
+      "port": 22,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 20,
+      "input": "cases/ssh-length-underflow.in.txt",
+      "input_sha256": "d98507f82da3867b01dd3a19199a665c3ceca7ee3fcf131fcb24696c025c6847",
+      "output": "cases/ssh-length-underflow.out",
+      "output_sha256": "74aba9cd58c45c5162f3c7973d30ffcd5106ebacf0ea69e433130ad57838e3b2",
+      "c_app_proto": {
+        "whole": 3,
+        "bytewise": 3,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "telnet-selftest-1",
+      "about": "Telnet raw bytes, SB, invalid и negotiation",
+      "expect": "records",
+      "declared": "-",
+      "port": 23,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 9,
+      "input": "cases/telnet-selftest-1.in.txt",
+      "input_sha256": "55516006b984c61b7f613684971c155cdb80953b12939f206619de8a03b9ad69",
+      "output": "cases/telnet-selftest-1.out",
+      "output_sha256": "8f371c3a11f6e2c0ae81bf2d6bf5f2415f2ff2dfb7f846502acebdf5d3f80c75",
+      "c_app_proto": {
+        "whole": 0,
+        "bytewise": 0,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "telnet-selftest-2",
+      "about": "Telnet raw bytes, SB, invalid и negotiation",
+      "expect": "records",
+      "declared": "-",
+      "port": 23,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 7,
+      "input": "cases/telnet-selftest-2.in.txt",
+      "input_sha256": "76204dfd7e6961acecf47dca75a8fc9a7dc07228d949bbffcdd3f058c930e8c3",
+      "output": "cases/telnet-selftest-2.out",
+      "output_sha256": "71d0781aa1bac2a837fa3296739cfdc06ac5bed13f4346d65714c5405153fb68",
+      "c_app_proto": {
+        "whole": 29,
+        "bytewise": 29,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "telnet-selftest-3",
+      "about": "Telnet raw bytes, SB, invalid и negotiation",
+      "expect": "records",
+      "declared": "-",
+      "port": 23,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 75,
+      "input": "cases/telnet-selftest-3.in.txt",
+      "input_sha256": "9115f55c2d3499e208544d40302cfe07ef79373ba7fdc2dc6f929fa849c9ae42",
+      "output": "cases/telnet-selftest-3.out",
+      "output_sha256": "1fbc6173fe7e48747108c5f91a4c1334c566e7d53a33068e30230c0da1f33e4b",
+      "c_app_proto": {
+        "whole": 29,
+        "bytewise": 29,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "telnet-selftest-4",
+      "about": "Telnet raw bytes, SB, invalid и negotiation",
+      "expect": "records",
+      "declared": "-",
+      "port": 23,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 29,
+      "input": "cases/telnet-selftest-4.in.txt",
+      "input_sha256": "8e6a775f07a778886378f9cf91ebd8a3bf7a27683d1501ee80be3dbd59f05401",
+      "output": "cases/telnet-selftest-4.out",
+      "output_sha256": "61c907f31b5c664516c861ec05af66159f8fb1208983735b31bae6d3fff2214b",
+      "c_app_proto": {
+        "whole": 29,
+        "bytewise": 29,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "telnet-iac-iac-stop",
+      "about": "Telnet raw bytes, SB, invalid и negotiation",
+      "expect": "records",
+      "declared": "-",
+      "port": 23,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 12,
+      "input": "cases/telnet-iac-iac-stop.in.txt",
+      "input_sha256": "3df124e485a070e4bd1ad66eaf4cbaaf4035cd5ad8138ff0d95230796f439a1a",
+      "output": "cases/telnet-iac-iac-stop.out",
+      "output_sha256": "4107bba0e2975e10bcdfc8ddc48a8a58dcf19beeab5ddc41f78507d8e79a4d28",
+      "c_app_proto": {
+        "whole": 29,
+        "bytewise": 29,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "telnet-invalid-stop",
+      "about": "Telnet raw bytes, SB, invalid и negotiation",
+      "expect": "records",
+      "declared": "-",
+      "port": 23,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 12,
+      "input": "cases/telnet-invalid-stop.in.txt",
+      "input_sha256": "a8cc9ab1757264e5c22a0b0e753112ba49bb282e26777a6b8d797b2c44404516",
+      "output": "cases/telnet-invalid-stop.out",
+      "output_sha256": "4107bba0e2975e10bcdfc8ddc48a8a58dcf19beeab5ddc41f78507d8e79a4d28",
+      "c_app_proto": {
+        "whole": 29,
+        "bytewise": 29,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "telnet-last-command",
+      "about": "Telnet raw bytes, SB, invalid и negotiation",
+      "expect": "records",
+      "declared": "-",
+      "port": 23,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 19,
+      "input": "cases/telnet-last-command.in.txt",
+      "input_sha256": "29f8f0f45b8a98bb2fb5601660954396d8084c10f8bc86259ee8da17cfeccff4",
+      "output": "cases/telnet-last-command.out",
+      "output_sha256": "1eaa4aac7dbef4b1ef63081e56726c27fe10e2a87002e20bb7f81b4c51e6fda7",
+      "c_app_proto": {
+        "whole": 29,
+        "bytewise": 29,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "telnet-sb",
+      "about": "Telnet raw bytes, SB, invalid и negotiation",
+      "expect": "records",
+      "declared": "-",
+      "port": 23,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 19,
+      "input": "cases/telnet-sb.in.txt",
+      "input_sha256": "6c9e53240c74d3b3a2c965f0ff1420cef32dd45e074de52e315d6753194c3a72",
+      "output": "cases/telnet-sb.out",
+      "output_sha256": "7e2886c23016536b2b6b4e8a9486536a2f75c2e10abbd5bb251a900eaeccfee7",
+      "c_app_proto": {
+        "whole": 29,
+        "bytewise": 29,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "rdp-selftest-success",
+      "about": "C selftest success",
+      "expect": "records",
+      "declared": "-",
+      "port": 3389,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 19,
+      "input": "cases/rdp-selftest-success.in.txt",
+      "input_sha256": "82a4723e031e819f89510ac807d52013026b11e615920f68fa4bcc27991d76ec",
+      "output": "cases/rdp-selftest-success.out",
+      "output_sha256": "221433706d5cb29e42d0c26690ed1f08d87691fdd72ff991f0511cbd5e3d652d",
+      "c_app_proto": {
+        "whole": 30,
+        "bytewise": 30,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "rdp-selftest-failure",
+      "about": "RDP C selftest или malformed second TPKT",
+      "expect": "records",
+      "declared": "-",
+      "port": 3389,
+      "capture": "none",
+      "segments": 2,
+      "bytes": 38,
+      "input": "cases/rdp-selftest-failure.in.txt",
+      "input_sha256": "d2ef7a547f6bae1ed5f92603efe5e927e241ee36e6ddb9d80d55fae1e454fc87",
+      "output": "cases/rdp-selftest-failure.out",
+      "output_sha256": "6f299c5c945e402c3d967b3da331d4d04ba42fccc54a501427a510763d0ae586",
+      "c_app_proto": {
+        "whole": 30,
+        "bytewise": 30,
+        "given": 30
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "rdp-other-failure",
+      "about": "RDP C selftest или malformed second TPKT",
+      "expect": "records",
+      "declared": "-",
+      "port": 3389,
+      "capture": "none",
+      "segments": 2,
+      "bytes": 38,
+      "input": "cases/rdp-other-failure.in.txt",
+      "input_sha256": "4d16a4d951f21c04953087217dedef21ff1fa5de3b4c831a3f827715deebe8a5",
+      "output": "cases/rdp-other-failure.out",
+      "output_sha256": "33382c643caf959eef976f2976ceac38869ca345ff7e365962e55ee38f569119",
+      "c_app_proto": {
+        "whole": 30,
+        "bytewise": 30,
+        "given": 30
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "rdp-second-non3",
+      "about": "RDP C selftest или malformed second TPKT",
+      "expect": "records",
+      "declared": "-",
+      "port": 3389,
+      "capture": "none",
+      "segments": 2,
+      "bytes": 24,
+      "input": "cases/rdp-second-non3.in.txt",
+      "input_sha256": "debee4f1add57d3c0ee06af3890cd55f84998e51d3a17e7047c83f56d7db90a2",
+      "output": "cases/rdp-second-non3.out",
+      "output_sha256": "f281a87ea56ba937ccccbc53f8ebda0775951b090e68f3849a3bce07001fc10a",
+      "c_app_proto": {
+        "whole": 30,
+        "bytewise": 30,
+        "given": 30
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "rdp-short-tpkt",
+      "about": "RDP C selftest или malformed second TPKT",
+      "expect": "records",
+      "declared": "-",
+      "port": 3389,
+      "capture": "none",
+      "segments": 2,
+      "bytes": 27,
+      "input": "cases/rdp-short-tpkt.in.txt",
+      "input_sha256": "7aaee5562fcbcc31714a3b86fa9f9063f55ca760f0906f187416a7e646185547",
+      "output": "cases/rdp-short-tpkt.out",
+      "output_sha256": "61a5c6a1970c169ffa0e6bb0348f5cb5f144dc886a82c98a1269c8f5e6102d07",
+      "c_app_proto": {
+        "whole": 30,
+        "bytewise": 30,
+        "given": 30
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "rdp-short-tpkt-no-tail",
+      "about": "RDP C selftest или malformed second TPKT",
+      "expect": "records",
+      "declared": "-",
+      "port": 3389,
+      "capture": "none",
+      "segments": 2,
+      "bytes": 23,
+      "input": "cases/rdp-short-tpkt-no-tail.in.txt",
+      "input_sha256": "c13785ce0f836edaea8b845d352e96220a5553a44b34b0c66de95a7d1e56ef4d",
+      "output": "cases/rdp-short-tpkt-no-tail.out",
+      "output_sha256": "5f86437acbee34a68c7375771fc981ef61b0d068a2b53c92bde871c77e76a486",
+      "c_app_proto": {
+        "whole": 30,
+        "bytewise": 30,
+        "given": 30
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "rdp-empty-tpkt",
+      "about": "RDP C selftest или malformed second TPKT",
+      "expect": "records",
+      "declared": "-",
+      "port": 3389,
+      "capture": "none",
+      "segments": 2,
+      "bytes": 23,
+      "input": "cases/rdp-empty-tpkt.in.txt",
+      "input_sha256": "813dc7eadc1d81f05290173d543cf753f14265852f2a98320964b9243281d552",
+      "output": "cases/rdp-empty-tpkt.out",
+      "output_sha256": "5f86437acbee34a68c7375771fc981ef61b0d068a2b53c92bde871c77e76a486",
+      "c_app_proto": {
+        "whole": 30,
+        "bytewise": 30,
+        "given": 30
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "rdp-high-length",
+      "about": "RDP C selftest или malformed second TPKT",
+      "expect": "records",
+      "declared": "-",
+      "port": 3389,
+      "capture": "none",
+      "segments": 2,
+      "bytes": 38,
+      "input": "cases/rdp-high-length.in.txt",
+      "input_sha256": "d072c3f18d2224c2a17167526f00d2841cd5c90d23b69fd5fce858c58b8ce83e",
+      "output": "cases/rdp-high-length.out",
+      "output_sha256": "aeb547d96817c98d9769655f8162b8e1d5f76d52a8f274dc811fea5a05c991f5",
+      "c_app_proto": {
+        "whole": 30,
+        "bytewise": 30,
+        "given": 30
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "rdp-cotp-unknown",
+      "about": "RDP C selftest или malformed second TPKT",
+      "expect": "records",
+      "declared": "-",
+      "port": 3389,
+      "capture": "none",
+      "segments": 2,
+      "bytes": 31,
+      "input": "cases/rdp-cotp-unknown.in.txt",
+      "input_sha256": "5e262e4bc1a0f2144d1dd72707f85ad76ce034b2cd42070b2e6accafbc814055",
+      "output": "cases/rdp-cotp-unknown.out",
+      "output_sha256": "73c5b5a6ca3e004bc0e9db5da1da0700406d0ddaf76107ebfd7bf009bf770b65",
+      "c_app_proto": {
+        "whole": 30,
+        "bytewise": 30,
+        "given": 30
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "rdp-short-cotp",
+      "about": "RDP C selftest или malformed second TPKT",
+      "expect": "records",
+      "declared": "-",
+      "port": 3389,
+      "capture": "none",
+      "segments": 2,
+      "bytes": 28,
+      "input": "cases/rdp-short-cotp.in.txt",
+      "input_sha256": "3847eadeca40a2a8f979c893ddc0723506f9cbb72c5411493fc3bbee657e502e",
+      "output": "cases/rdp-short-cotp.out",
+      "output_sha256": "4a1812cc5871ca6070ace20ddf81ba886df5e4e9f78fef5eb29526f1d92a91f0",
+      "c_app_proto": {
+        "whole": 30,
+        "bytewise": 30,
+        "given": 30
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "rdp-short-neg",
+      "about": "RDP C selftest или malformed second TPKT",
+      "expect": "records",
+      "declared": "-",
+      "port": 3389,
+      "capture": "none",
+      "segments": 2,
+      "bytes": 38,
+      "input": "cases/rdp-short-neg.in.txt",
+      "input_sha256": "66779f403d5013ee4ed5689c8ffee455b4c30baf5637aa95fd3e35f442e6dd0d",
+      "output": "cases/rdp-short-neg.out",
+      "output_sha256": "64e6beb0cc6bf9db9b8d9a9a85c54f5728fd2b8e7ff7ce1dedfdc8ec781e4b57",
+      "c_app_proto": {
+        "whole": 30,
+        "bytewise": 30,
+        "given": 30
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "vnc33-none-init",
+      "about": "VNC выбор None и ServerInit",
+      "expect": "records",
+      "declared": "-",
+      "port": 5900,
+      "capture": "none",
+      "segments": 3,
+      "bytes": 47,
+      "input": "cases/vnc33-none-init.in.txt",
+      "input_sha256": "eb12b5a824d4f6197dd6d26906a140c24011e5d3f58256fe4219d8eba6ec20c6",
+      "output": "cases/vnc33-none-init.out",
+      "output_sha256": "2988be1d1c651065498d6aab2582ef38d020d27be6a2e00e848570a7b938b345",
+      "c_app_proto": {
+        "whole": 33,
+        "bytewise": 33,
+        "given": 33
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "vnc37-none-init",
+      "about": "VNC выбор None и ServerInit",
+      "expect": "records",
+      "declared": "-",
+      "port": 5900,
+      "capture": "none",
+      "segments": 3,
+      "bytes": 45,
+      "input": "cases/vnc37-none-init.in.txt",
+      "input_sha256": "2fa60826ba05d9aaa7be98af0ffe542fcefdc058f635b92c244c328920320582",
+      "output": "cases/vnc37-none-init.out",
+      "output_sha256": "b67fa740937b1cc5c6bec13eea538003956793b5d6d7dd12b7bb32a99f6f0f34",
+      "c_app_proto": {
+        "whole": 33,
+        "bytewise": 33,
+        "given": 33
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "vnc37-not-offered-init",
+      "about": "VNC выбор None и ServerInit",
+      "expect": "records",
+      "declared": "-",
+      "port": 5900,
+      "capture": "none",
+      "segments": 3,
+      "bytes": 45,
+      "input": "cases/vnc37-not-offered-init.in.txt",
+      "input_sha256": "2bca6ce148ebad603350a1de115af1bf5b618270040f051adc02fa9a1c441131",
+      "output": "cases/vnc37-not-offered-init.out",
+      "output_sha256": "5b60b7c3497ee5daefd9f6cb9f8106c6de5b1725e3eaaae6f3cc962cd4c987fc",
+      "c_app_proto": {
+        "whole": 33,
+        "bytewise": 33,
+        "given": 33
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "vnc38-none-init",
+      "about": "VNC выбор None и ServerInit",
+      "expect": "records",
+      "declared": "-",
+      "port": 5900,
+      "capture": "none",
+      "segments": 3,
+      "bytes": 49,
+      "input": "cases/vnc38-none-init.in.txt",
+      "input_sha256": "19b150b115ea08e14fb4a4a3b004f8daadba4fa970cb25694e2b18c1b31fb016",
+      "output": "cases/vnc38-none-init.out",
+      "output_sha256": "050d2201742d36ebdd061a415850f73642177928bbe7e83186148fa2229d825b",
+      "c_app_proto": {
+        "whole": 33,
+        "bytewise": 33,
+        "given": 33
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "vnc38-not-offered-init",
+      "about": "VNC выбор None и ServerInit",
+      "expect": "records",
+      "declared": "-",
+      "port": 5900,
+      "capture": "none",
+      "segments": 3,
+      "bytes": 50,
+      "input": "cases/vnc38-not-offered-init.in.txt",
+      "input_sha256": "2b6e83c485242399732083fa292c488cd289af731d99d330d0caa1586c51218c",
+      "output": "cases/vnc38-not-offered-init.out",
+      "output_sha256": "b5d94760ebb0a031c71af97b1af70512c3b1b504ee715054f89a4aa710a343d3",
+      "c_app_proto": {
+        "whole": 33,
+        "bytewise": 33,
+        "given": 33
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "vnc33-chap",
+      "about": "VNC security types и error length",
+      "expect": "records",
+      "declared": "-",
+      "port": 5900,
+      "capture": "none",
+      "segments": 2,
+      "bytes": 20,
+      "input": "cases/vnc33-chap.in.txt",
+      "input_sha256": "d73d763a09f21b603e10444e83245aefdba237caafa49446b1de43359966e60e",
+      "output": "cases/vnc33-chap.out",
+      "output_sha256": "79dc87f4114586668aaf4897dc88f78a2334f28cb120e0181458e4623380ccc0",
+      "c_app_proto": {
+        "whole": 33,
+        "bytewise": 33,
+        "given": 33
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "vnc33-error-lowbyte",
+      "about": "VNC security types и error length",
+      "expect": "records",
+      "declared": "-",
+      "port": 5900,
+      "capture": "none",
+      "segments": 2,
+      "bytes": 27,
+      "input": "cases/vnc33-error-lowbyte.in.txt",
+      "input_sha256": "c3eed18341f4ff797e1dceff839c1b7bb3239b6ae64ba1e565f5559c6ee022de",
+      "output": "cases/vnc33-error-lowbyte.out",
+      "output_sha256": "39fbe68bbca0ff4a7149afca189c27ee5fa7f97df4b0d209898480c0b9b0c8b8",
+      "c_app_proto": {
+        "whole": 33,
+        "bytewise": 33,
+        "given": 33
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "vnc38-error-lowbyte",
+      "about": "VNC security types и error length",
+      "expect": "records",
+      "declared": "-",
+      "port": 5900,
+      "capture": "none",
+      "segments": 2,
+      "bytes": 24,
+      "input": "cases/vnc38-error-lowbyte.in.txt",
+      "input_sha256": "9d924d2146270450b8af76a3c806e27679d50977934ae61c99e09cd80b3b22ef",
+      "output": "cases/vnc38-error-lowbyte.out",
+      "output_sha256": "fa7c662f802eed57ed96c8b0cc4105d6bc877d2ff63a5ec809565610410f3d9e",
+      "c_app_proto": {
+        "whole": 33,
+        "bytewise": 33,
+        "given": 33
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "vnc38-result-error",
+      "about": "VNC security types и error length",
+      "expect": "records",
+      "declared": "-",
+      "port": 5900,
+      "capture": "none",
+      "segments": 2,
+      "bytes": 29,
+      "input": "cases/vnc38-result-error.in.txt",
+      "input_sha256": "20f8d320684eb5f4b69782e0667f8704ecdb667425f68285b2cb71fcd324e14f",
+      "output": "cases/vnc38-result-error.out",
+      "output_sha256": "0886fd622cb24dbd34d0c7d770c876ea3b42b1a33df81c4a4075de39fba796ec",
+      "c_app_proto": {
+        "whole": 33,
+        "bytewise": 33,
+        "given": 33
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "vnc38-security-names",
+      "about": "VNC security types и error length",
+      "expect": "records",
+      "declared": "-",
+      "port": 5900,
+      "capture": "none",
+      "segments": 2,
+      "bytes": 32,
+      "input": "cases/vnc38-security-names.in.txt",
+      "input_sha256": "c5ee4e18c80da60f25dd93d45621e33e44252faaaa5c2585bad52881220bb770",
+      "output": "cases/vnc38-security-names.out",
+      "output_sha256": "9faed8c841511b847c32df59828f636d1ad687bec87c8294cf4f6f72f66a46da",
+      "c_app_proto": {
+        "whole": 33,
+        "bytewise": 33,
+        "given": 33
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "vnc38-zero-name",
+      "about": "VNC security types и error length",
+      "expect": "records",
+      "declared": "-",
+      "port": 5900,
+      "capture": "none",
+      "segments": 2,
+      "bytes": 46,
+      "input": "cases/vnc38-zero-name.in.txt",
+      "input_sha256": "6103ea0b2044c7a112724d6a4f19b7d147ce21d86eb2db60586221c3ee43641f",
+      "output": "cases/vnc38-zero-name.out",
+      "output_sha256": "cd2ef9723fbf56ae1004808a64a4d82f3f358e58a366a8fc716029fba92fff68",
+      "c_app_proto": {
+        "whole": 33,
+        "bytewise": 33,
+        "given": 33
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "memcached-stats-full",
+      "about": "memcached STAT по TCP, строки и END",
+      "expect": "records",
+      "declared": "-",
+      "port": 11211,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 115,
+      "input": "cases/memcached-stats-full.in.txt",
+      "input_sha256": "5cf59bb3317dcdd20a15828bd607f87e9975b6c29dcb45dcdf148e9bebd38304",
+      "output": "cases/memcached-stats-full.out",
+      "output_sha256": "290e27574b9b28290ff9e591592f46dd7355de78b4cbca81dd18c4d00ace9445",
+      "c_app_proto": {
+        "whole": 25,
+        "bytewise": 25,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "memcached-unknown-stat",
+      "about": "memcached STAT по TCP, строки и END",
+      "expect": "records",
+      "declared": "-",
+      "port": 11211,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 49,
+      "input": "cases/memcached-unknown-stat.in.txt",
+      "input_sha256": "a3e17bfd0504660e01982ecc59e977e4f1d11c303875fdda274d9cd61112b037",
+      "output": "cases/memcached-unknown-stat.out",
+      "output_sha256": "56ca7bdfbb7681c833a780dabecb78f912a0ff6c74d9d7532fb5fa69abb71a25",
+      "c_app_proto": {
+        "whole": 25,
+        "bytewise": 25,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "memcached-stat-newline",
+      "about": "memcached STAT по TCP, строки и END",
+      "expect": "records",
+      "declared": "-",
+      "port": 11211,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 45,
+      "input": "cases/memcached-stat-newline.in.txt",
+      "input_sha256": "ff043696e34c5d8a80fca860f14c65815554fd26194b2cdd1dc1312ec4c4e623",
+      "output": "cases/memcached-stat-newline.out",
+      "output_sha256": "da7302502d776e801eeffad000cc591ae3c89d4fcf58af2e0a06f63d8be39266",
+      "c_app_proto": {
+        "whole": 25,
+        "bytewise": 25,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "memcached-error-line",
+      "about": "memcached STAT по TCP, строки и END",
+      "expect": "records",
+      "declared": "-",
+      "port": 11211,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 34,
+      "input": "cases/memcached-error-line.in.txt",
+      "input_sha256": "50fea58852b63626ba989eb3973abf46f543b9daccf237e14c09430bc7b649ab",
+      "output": "cases/memcached-error-line.out",
+      "output_sha256": "bcf392a22ec413cd7d2b6552362a7f0dbb5d53cbaae0dab3a82c48427667995a",
+      "c_app_proto": {
+        "whole": 25,
+        "bytewise": 25,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "memcached-error-lf",
+      "about": "memcached STAT по TCP, строки и END",
+      "expect": "records",
+      "declared": "-",
+      "port": 11211,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 46,
+      "input": "cases/memcached-error-lf.in.txt",
+      "input_sha256": "d2950b96e82612cadcaf683f98d4101122335d89088074587f308fdb91cce3c7",
+      "output": "cases/memcached-error-lf.out",
+      "output_sha256": "ee4f010ff3471220c8ece2cf46425041c263b93c8a76aa7f1a1dbbad7d0f8096",
+      "c_app_proto": {
+        "whole": 25,
+        "bytewise": 25,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "memcached-tcp-past-segment",
+      "about": "E1.4: сегмент кончается в пропуске строки, байт за ним не читается",
+      "expect": "records",
+      "declared": "-",
+      "port": 11211,
+      "capture": "none",
+      "segments": 2,
+      "bytes": 30,
+      "input": "cases/memcached-tcp-past-segment.in.txt",
+      "input_sha256": "fa893907394096ad2958aba0ab9afe0d18c42d0726bd70d98031074bc410fce1",
+      "output": "cases/memcached-tcp-past-segment.out",
+      "output_sha256": "aa1c066b1a8373cd2f45d717292ec0f25c81e8bf1fc0f7dfa6bff1d22f06f27a",
+      "c_app_proto": {
+        "whole": 25,
+        "bytewise": 25,
+        "given": 25
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "memcached-split-keyword",
+      "about": "E2.6: STAT второй строки разрезан границей сегментов",
+      "expect": "records",
+      "declared": "-",
+      "port": 11211,
+      "capture": "none",
+      "segments": 2,
+      "bytes": 27,
+      "input": "cases/memcached-split-keyword.in.txt",
+      "input_sha256": "5f435c97916b316ca7ce0272e9c51020560d342f322f86080ebcceac52a6ed8f",
+      "output": "cases/memcached-split-keyword.out",
+      "output_sha256": "429be1efda3b8910652f91bd45afc4d186bc6db4f273faa79b7f072eadd5b07d",
+      "c_app_proto": {
+        "whole": 25,
+        "bytewise": 25,
+        "given": 25
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "mc-json-balanced",
+      "about": "Minecraft: счёт скобок и сырая запись на сбросе",
+      "expect": "records",
+      "declared": "-",
+      "port": 25565,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 53,
+      "input": "cases/mc-json-balanced.in.txt",
+      "input_sha256": "c3fc699053b7bb4486ac718859d9f7cb665167b2c4ef41b12ab89bfa249ba46f",
+      "output": "cases/mc-json-balanced.out",
+      "output_sha256": "57f0ddb5059a4bcdc4f0abc77f1e5341b6bb1459f57efd39e6c73664bf383f4b",
+      "c_app_proto": {
+        "whole": 32,
+        "bytewise": 32,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "mc-favicon",
+      "about": "Minecraft: счёт скобок и сырая запись на сбросе",
+      "expect": "records",
+      "declared": "-",
+      "port": 25565,
+      "capture": "none",
+      "segments": 2,
+      "bytes": 77,
+      "input": "cases/mc-favicon.in.txt",
+      "input_sha256": "0680a46e1868793c8afb19e91dc04a88548209510b5aad7a8344f5c1461b04c9",
+      "output": "cases/mc-favicon.out",
+      "output_sha256": "69fbcb5e3e051475cae49198cef4897eaf0e45ccef0382b9a036f179c37437c5",
+      "c_app_proto": {
+        "whole": 32,
+        "bytewise": 32,
+        "given": 32
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "mc-unbalanced",
+      "about": "Minecraft: счёт скобок и сырая запись на сбросе",
+      "expect": "records",
+      "declared": "-",
+      "port": 25565,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 28,
+      "input": "cases/mc-unbalanced.in.txt",
+      "input_sha256": "63004ac65c80369d2c2405e846a9e0340e17ba211b8867083d72d107fe610b02",
+      "output": "cases/mc-unbalanced.out",
+      "output_sha256": "becda662205b87a4964235a6325c6238b9819d660538ea9b67baaf91225a23a7",
+      "c_app_proto": {
+        "whole": 32,
+        "bytewise": 32,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "mc-extra-close",
+      "about": "Minecraft: счёт скобок и сырая запись на сбросе",
+      "expect": "records",
+      "declared": "-",
+      "port": 25565,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 12,
+      "input": "cases/mc-extra-close.in.txt",
+      "input_sha256": "d5b2c84ec0855739ed5070183b1903e611e417b12ed942a1f598c23c950dd90f",
+      "output": "cases/mc-extra-close.out",
+      "output_sha256": "cb6a4adf944d35a764b213873b4d7c187f730b7c8208739bf267de5b1c1d1716",
+      "c_app_proto": {
+        "whole": 32,
+        "bytewise": 32,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "mc-braces-in-string",
+      "about": "Minecraft: счёт скобок и сырая запись на сбросе",
+      "expect": "records",
+      "declared": "-",
+      "port": 25565,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 10,
+      "input": "cases/mc-braces-in-string.in.txt",
+      "input_sha256": "e6e3a52654c28508d1a3684b9f9c925ccc8d5e7ae9411fd7df37809ab9046ae8",
+      "output": "cases/mc-braces-in-string.out",
+      "output_sha256": "5d655b87a7a3e0c91f9233c7f549bb78be0e4eb6d21360730472ee6ba0614745",
+      "c_app_proto": {
+        "whole": 32,
+        "bytewise": 32,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "mc-json-any-port",
+      "about": "Minecraft: счёт скобок и сырая запись на сбросе",
+      "expect": "records",
+      "declared": "-",
+      "port": 8080,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 18,
+      "input": "cases/mc-json-any-port.in.txt",
+      "input_sha256": "4e3afa852851b65e2392709a618ad95152a26114557973c4ac9dfe347185b21a",
+      "output": "cases/mc-json-any-port.out",
+      "output_sha256": "92eb8754c2083c77a8a7b02b2b883553274f68a12bb71a37a64f3b0950871c10",
+      "c_app_proto": {
+        "whole": 32,
+        "bytewise": 32,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "http-302",
+      "about": "HTTP: статус, поля и title как C на целом потоке",
+      "expect": "records",
+      "declared": "-",
+      "port": 80,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 38,
+      "input": "cases/http-302.in.txt",
+      "input_sha256": "60e677b6606b73402aa57b9380b1856b16daad18633f2b1543a40dd09d185f75",
+      "output": "cases/http-302.out",
+      "output_sha256": "67256fcc01705d546f34c204c8ab9c1d495e4116b53d913b7f38c91bc14969ce",
+      "c_app_proto": {
+        "whole": 4,
+        "bytewise": 4,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "http-gws",
+      "about": "HTTP: статус, поля и title как C на целом потоке",
+      "expect": "records",
+      "declared": "-",
+      "port": 80,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 48,
+      "input": "cases/http-gws.in.txt",
+      "input_sha256": "222e065f453b575668aed150ba9b067512cada785bc27c3112eb117951b9cc98",
+      "output": "cases/http-gws.out",
+      "output_sha256": "063f9f3f5e4d1464cde3952659f88aac4283cf37800add584d43061dae0b6a07",
+      "c_app_proto": {
+        "whole": 4,
+        "bytewise": 4,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "http-two-server",
+      "about": "HTTP: статус, поля и title как C на целом потоке",
+      "expect": "records",
+      "declared": "-",
+      "port": 80,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 44,
+      "input": "cases/http-two-server.in.txt",
+      "input_sha256": "21f588937b7bd5acee5184d0d4589378bc3bef8873c1d917a4db84502c61f513",
+      "output": "cases/http-two-server.out",
+      "output_sha256": "d0e3c340a086d975a35878447afd323776e14b9f6a406fb6fee9e209ccc9bcee",
+      "c_app_proto": {
+        "whole": 4,
+        "bytewise": 4,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "http-server-space",
+      "about": "HTTP: статус, поля и title как C на целом потоке",
+      "expect": "records",
+      "declared": "-",
+      "port": 80,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 31,
+      "input": "cases/http-server-space.in.txt",
+      "input_sha256": "d3a02ba2fe5b267bbd800f4ad3a00cd499b14fa5cb0dcb85f6c41ec2f2da2651",
+      "output": "cases/http-server-space.out",
+      "output_sha256": "0effe20db40bc8df1f290049cb7a60231bd8c22d149f3c1eaf55e33cbcb6c454",
+      "c_app_proto": {
+        "whole": 4,
+        "bytewise": 4,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "http-title",
+      "about": "HTTP: статус, поля и title как C на целом потоке",
+      "expect": "records",
+      "declared": "-",
+      "port": 80,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 32,
+      "input": "cases/http-title.in.txt",
+      "input_sha256": "0140c28534fc52bcb561898ce6207c7da13af8bc509b53636013a9e132716e8e",
+      "output": "cases/http-title.out",
+      "output_sha256": "e19f354110ac1603e7e2ed6b73b632437798471ecfa0e65b52e9645c65358c23",
+      "c_app_proto": {
+        "whole": 4,
+        "bytewise": 4,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "http-title-attributes",
+      "about": "HTTP: статус, поля и title как C на целом потоке",
+      "expect": "records",
+      "declared": "-",
+      "port": 80,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 37,
+      "input": "cases/http-title-attributes.in.txt",
+      "input_sha256": "859ae8a8d1f1b6ffa1d69e0d3b84504439edb5836e5b80bb0325e5f62ac2fc68",
+      "output": "cases/http-title-attributes.out",
+      "output_sha256": "6893dd64ad1b7a3570808faa8b895045eb8a24525ffa2fc6331ca3cfe083000a",
+      "c_app_proto": {
+        "whole": 4,
+        "bytewise": 4,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "http-title-prefix",
+      "about": "HTTP: статус, поля и title как C на целом потоке",
+      "expect": "records",
+      "declared": "-",
+      "port": 80,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 33,
+      "input": "cases/http-title-prefix.in.txt",
+      "input_sha256": "6b63264ed1b289cd6cd57c286911cd5f320eaf7e942250a2ac6cc3a5e9dc85ab",
+      "output": "cases/http-title-prefix.out",
+      "output_sha256": "d50c813b96a3d0a15ac89f232b290633c7ec9db1aab77c41f62dbf74a384f521",
+      "c_app_proto": {
+        "whole": 4,
+        "bytewise": 4,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "http-title-no-lt",
+      "about": "HTTP: статус, поля и title как C на целом потоке",
+      "expect": "records",
+      "declared": "-",
+      "port": 80,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 32,
+      "input": "cases/http-title-no-lt.in.txt",
+      "input_sha256": "d9d7546015702d337f9ad14f85098567662e8b4f89c0e897e0d96ba379172b01",
+      "output": "cases/http-title-no-lt.out",
+      "output_sha256": "cc3d23de48a9bf02d77aa294382120b6ddc60b1294a20305afac15cfb2f49c90",
+      "c_app_proto": {
+        "whole": 4,
+        "bytewise": 4,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "http-no-title",
+      "about": "HTTP: статус, поля и title как C на целом потоке",
+      "expect": "records",
+      "declared": "-",
+      "port": 80,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 32,
+      "input": "cases/http-no-title.in.txt",
+      "input_sha256": "fb458b4905d44d27f86f895142963058b962a1e8513aea0a5adec0b337d74f1a",
+      "output": "cases/http-no-title.out",
+      "output_sha256": "d34bee958f3fa542fe09fcb7ae095552bf25fe357ab474fcf95d8e95740cb87e",
+      "c_app_proto": {
+        "whole": 4,
+        "bytewise": 4,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "http-title-unclosed-tag",
+      "about": "HTTP: статус, поля и title как C на целом потоке",
+      "expect": "records",
+      "declared": "-",
+      "port": 80,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 27,
+      "input": "cases/http-title-unclosed-tag.in.txt",
+      "input_sha256": "b24e6fa10bdb62094cde04fc8e7716589a76e93623b14d949ecc177ab112dd84",
+      "output": "cases/http-title-unclosed-tag.out",
+      "output_sha256": "44d9d2dbaf36618cf242c7889d9e2741ee911b9572b614a8828c67b43dd7d1e2",
+      "c_app_proto": {
+        "whole": 4,
+        "bytewise": 4,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "http-title-two",
+      "about": "HTTP: статус, поля и title как C на целом потоке",
+      "expect": "records",
+      "declared": "-",
+      "port": 80,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 44,
+      "input": "cases/http-title-two.in.txt",
+      "input_sha256": "de5580058a95cc2adfbdcff28b91c55558a1a565e5c29bdd24478200c9af3994",
+      "output": "cases/http-title-two.out",
+      "output_sha256": "28d403379dfd3bf712f6bbc6d1418308b64d917e428010b63f482c5baaf4df61",
+      "c_app_proto": {
+        "whole": 4,
+        "bytewise": 4,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "http-title-overlap",
+      "about": "HTTP: статус, поля и title как C на целом потоке",
+      "expect": "records",
+      "declared": "-",
+      "port": 80,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 44,
+      "input": "cases/http-title-overlap.in.txt",
+      "input_sha256": "77fe5a83ad971bceb9c6e5ed4810c537d0a01903d48de6b61937987112389c40",
+      "output": "cases/http-title-overlap.out",
+      "output_sha256": "8925795f77cca01fb5c63bf766fe89fa664a88d19968101d4faec4f2eae52d74",
+      "c_app_proto": {
+        "whole": 4,
+        "bytewise": 4,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "http-failed-status",
+      "about": "HTTP: статус, поля и title как C на целом потоке",
+      "expect": "records",
+      "declared": "-",
+      "port": 80,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 26,
+      "input": "cases/http-failed-status.in.txt",
+      "input_sha256": "c2f801ce6b5a5370c04f4e6a4ea87a4b3ba8f638a242ad932708db8ee8c3c7cf",
+      "output": "cases/http-failed-status.out",
+      "output_sha256": "26e3f3d08ebea6e8165701822a82c3965a85698b3c8479ac9aac286892d830aa",
+      "c_app_proto": {
+        "whole": 4,
+        "bytewise": 4,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "http-failed-status-split",
+      "about": "HTTP: статус, поля и title как C на целом потоке",
+      "expect": "records",
+      "declared": "-",
+      "port": 80,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 8,
+      "input": "cases/http-failed-status-split.in.txt",
+      "input_sha256": "abd620f633b8b451efc1f5218702d0725cfcf82236c521a7959daff266fde6c9",
+      "output": "cases/http-failed-status-split.out",
+      "output_sha256": "44cc8e56e8608755f87f3a02b145a68bffe81af7e42c1d1728433b8685474daa",
+      "c_app_proto": {
+        "whole": 4,
+        "bytewise": 4,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "http-incomplete-status",
+      "about": "HTTP: статус, поля и title как C на целом потоке",
+      "expect": "records",
+      "declared": "-",
+      "port": 80,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 7,
+      "input": "cases/http-incomplete-status.in.txt",
+      "input_sha256": "c73c375dfd28b9ede8a1303815723eeab2b72e35c0e576ec93b001647e80b012",
+      "output": "cases/http-incomplete-status.out",
+      "output_sha256": "cf09ff06fe402b868c540f7e38c99b8c0a0d004bbeb86f761a8a03fffe624f3d",
+      "c_app_proto": {
+        "whole": 4,
+        "bytewise": 4,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "http-incomplete-header",
+      "about": "HTTP: статус, поля и title как C на целом потоке",
+      "expect": "records",
+      "declared": "-",
+      "port": 80,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 25,
+      "input": "cases/http-incomplete-header.in.txt",
+      "input_sha256": "cd3f4c907ea2870ca025821ae22db023b0a02b8c80a3a84a1a17226cf3dc2c85",
+      "output": "cases/http-incomplete-header.out",
+      "output_sha256": "572f91ce24b0bca3252e207c55b91041b80853896909b97aa08b36f6b1d1a852",
+      "c_app_proto": {
+        "whole": 4,
+        "bytewise": 4,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "http-empty-version",
+      "about": "HTTP: статус, поля и title как C на целом потоке",
+      "expect": "records",
+      "declared": "-",
+      "port": 80,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 14,
+      "input": "cases/http-empty-version.in.txt",
+      "input_sha256": "44c80092332face04162bf4bc009a9ca8ff86f44c0153fd813a04da6c45b52b2",
+      "output": "cases/http-empty-version.out",
+      "output_sha256": "6d18503177b361d7e25858a389fd4aa9a7b00762a88bd53d23d995ee201d6307",
+      "c_app_proto": {
+        "whole": 0,
+        "bytewise": 0,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "http-lf-only",
+      "about": "HTTP: статус, поля и title как C на целом потоке",
+      "expect": "records",
+      "declared": "-",
+      "port": 80,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 36,
+      "input": "cases/http-lf-only.in.txt",
+      "input_sha256": "3979fae2f14ca76819defb7750e764729c146dd3add68db3bf2edc95cd8b5239",
+      "output": "cases/http-lf-only.out",
+      "output_sha256": "d88a305879c7d7df66f8438100cbaa4b24b9931bdff875a9c5fc0c92ec0fcca7",
+      "c_app_proto": {
+        "whole": 4,
+        "bytewise": 4,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "http-cr-field",
+      "about": "HTTP: статус, поля и title как C на целом потоке",
+      "expect": "records",
+      "declared": "-",
+      "port": 80,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 38,
+      "input": "cases/http-cr-field.in.txt",
+      "input_sha256": "82a7d0e6d90e30b0a5c36a4769e2042ff61d3050cbeca6597eb10ff5b802e52f",
+      "output": "cases/http-cr-field.out",
+      "output_sha256": "33ce6df1a543ec454df630fa7cf822fb9ce6234a5fa29a1ae9916fae6fdebc18",
+      "c_app_proto": {
+        "whole": 4,
+        "bytewise": 4,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "http-field-without-colon",
+      "about": "HTTP: статус, поля и title как C на целом потоке",
+      "expect": "records",
+      "declared": "-",
+      "port": 80,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 38,
+      "input": "cases/http-field-without-colon.in.txt",
+      "input_sha256": "8f2c33efd81db593fcef117df7ee452c2a53be00bcbbc612d77f9407c12ad4a6",
+      "output": "cases/http-field-without-colon.out",
+      "output_sha256": "07bd236ed2160192cb336efcdc03930c30104fffb4b5cdd24d8f379d856179c0",
+      "c_app_proto": {
+        "whole": 4,
+        "bytewise": 4,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "http-failure-given",
+      "about": "E2.3: неуспешный статус после конца сегмента",
+      "expect": "records",
+      "declared": "-",
+      "port": 80,
+      "capture": "none",
+      "segments": 2,
+      "bytes": 9,
+      "input": "cases/http-failure-given.in.txt",
+      "input_sha256": "6a0867923eaf8d543d3dd1f99d38fe6b4ce30df545c38047eb25976ca05e89cc",
+      "output": "cases/http-failure-given.out",
+      "output_sha256": "e68d822c543acf62da95ee3219c059f1a36ed469e269f7f191cb7cbaca151711",
+      "c_app_proto": {
+        "whole": 4,
+        "bytewise": 4,
+        "given": 4
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "http-order-1",
+      "about": "порядок banout: длина Server вокруг 200 байт",
+      "expect": "records",
+      "declared": "-",
+      "port": 80,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 43,
+      "input": "cases/http-order-1.in.txt",
+      "input_sha256": "44ebd35f4e330fe1ce4b74a947dfae6e63aae16c661e87878b53d7d59757cdb9",
+      "output": "cases/http-order-1.out",
+      "output_sha256": "983428d906693ab239f6a02627d6d0257fbee75801354e7e49a75abc7e755c3f",
+      "c_app_proto": {
+        "whole": 4,
+        "bytewise": 4,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "http-order-199",
+      "about": "порядок banout: длина Server вокруг 200 байт",
+      "expect": "records",
+      "declared": "-",
+      "port": 80,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 241,
+      "input": "cases/http-order-199.in.txt",
+      "input_sha256": "8e5651ff7e76684abc1aaf196d2082cd148878e83c362f932a0a270bdae09520",
+      "output": "cases/http-order-199.out",
+      "output_sha256": "b9226db639ea237c06fa1132c5085bd12969d19fc4a97bb22a71f1dcae312cd5",
+      "c_app_proto": {
+        "whole": 4,
+        "bytewise": 4,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "http-order-200",
+      "about": "порядок banout: длина Server вокруг 200 байт",
+      "expect": "records",
+      "declared": "-",
+      "port": 80,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 242,
+      "input": "cases/http-order-200.in.txt",
+      "input_sha256": "2d40aaa42b402bdeb1a7d3d5c56a3dd1b77cd940db7d1fc8d4deab8afbbeac37",
+      "output": "cases/http-order-200.out",
+      "output_sha256": "936660736873ef7ec3622dbcc6fbeb93e046bfbec553739f0626ed3b694a0e9e",
+      "c_app_proto": {
+        "whole": 4,
+        "bytewise": 4,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "http-order-250",
+      "about": "порядок banout: длина Server вокруг 200 байт",
+      "expect": "records",
+      "declared": "-",
+      "port": 80,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 292,
+      "input": "cases/http-order-250.in.txt",
+      "input_sha256": "8808c373e452397f628e1628db12ddd7f195e15008cfacbc8478dc8a0ddd50e5",
+      "output": "cases/http-order-250.out",
+      "output_sha256": "5e89a4ee0b811ffd3584884e4f0316fff2466edaffda836f86b44491fee313a7",
+      "c_app_proto": {
+        "whole": 4,
+        "bytewise": 4,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "http-capture-off",
+      "about": "полный HTML и несколько title",
+      "expect": "records",
+      "declared": "-",
+      "port": 80,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 73,
+      "input": "cases/http-capture-off.in.txt",
+      "input_sha256": "7d87e024ad4761d4cbaafbc0df6aeb8807a83cada6385979a03a882a3cacdcd7",
+      "output": "cases/http-capture-off.out",
+      "output_sha256": "0c9e5bd6359d29f7c23ef5dc6871929d9342c852be35806d285a2c765d4b6f7b",
+      "c_app_proto": {
+        "whole": 4,
+        "bytewise": 4,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "http-title-long",
+      "about": "большой заголовок и HTML вокруг переноса головы",
+      "expect": "records",
+      "declared": "-",
+      "port": 80,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 537,
+      "input": "cases/http-title-long.in.txt",
+      "input_sha256": "757b7487d4f578923a303955d151afe41504943b13d8d7a93c63ea8dd5ae1487",
+      "output": "cases/http-title-long.out",
+      "output_sha256": "16a2fd46fcc02dcbeb3c56e86fc56aae890c6e471cbfe55233067efaefd56f3a",
+      "c_app_proto": {
+        "whole": 4,
+        "bytewise": 4,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "http-capture",
+      "about": "полный HTML и несколько title",
+      "expect": "records",
+      "declared": "-",
+      "port": 80,
+      "capture": "html",
+      "segments": 1,
+      "bytes": 73,
+      "input": "cases/http-capture.in.txt",
+      "input_sha256": "e36d9a8aa7b8636ec8d494543d33a7481fb557689830550c27f2196481c41643",
+      "output": "cases/http-capture.out",
+      "output_sha256": "10476c7e9560d7f2d37d85d8969ad141de03965de5a4dc3ab8cb0091c673f0aa",
+      "c_app_proto": {
+        "whole": 4,
+        "bytewise": 4,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "http-capture-long",
+      "about": "большой заголовок и HTML вокруг переноса головы",
+      "expect": "records",
+      "declared": "-",
+      "port": 80,
+      "capture": "html",
+      "segments": 1,
+      "bytes": 537,
+      "input": "cases/http-capture-long.in.txt",
+      "input_sha256": "827e1969e55f028fee77ee60342a48ff725eb9211c153de76bab81136c7903f0",
+      "output": "cases/http-capture-long.out",
+      "output_sha256": "a893db1abe80b3e88d88aff7a8e5b9f6fb6ebf935076137eba00db203c18241c",
+      "c_app_proto": {
+        "whole": 4,
+        "bytewise": 4,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    },
+    {
+      "name": "http-version-2000",
+      "about": "2000 цифр версии без пробела: незавершённый статус",
+      "expect": "records",
+      "declared": "-",
+      "port": 80,
+      "capture": "none",
+      "segments": 1,
+      "bytes": 2007,
+      "input": "cases/http-version-2000.in.txt",
+      "input_sha256": "62bd3eb6bab14895bdf02a23d5d4b27a2fb46dc1fa49f5c6bd727d9723ec2abd",
+      "output": "cases/http-version-2000.out",
+      "output_sha256": "419f797a0ac6d659ec7613f6f0a2e3f017fc0347659cad79827a3726bfd47b3e",
+      "c_app_proto": {
+        "whole": 4,
+        "bytewise": 4,
+        "given": null
+      },
+      "asan": {"same_output": true, "reports": 0}
+    }
+  ],
+  "http_requests": {
+    "oracle": {
+      "harness": "request_oracle.c includes tcp_oracle.c with renamed main; unmodified pinned proto-http.c; artifacts off repository (R14)",
+      "driver_sha256": "38a518f56ff8a99e1b047266c243c820fb436fd7b1327658e0d6561c1053749c",
+      "build_script_sha256": "a9c0b8b6e7bb46a93b9b6c6d66d3536fe2e723d603ac816a7478e4bede1e3513",
+      "runner_sha256": "284a934abf310fcfe2a0a76e90be4f1924aa39eeeec38d02ab86d31d95b1c3ff",
+      "binaries_sha256": {
+        "default": "05858f1f2dbbb10c80feaba2d18b75e6141ed9c4e2bedf8d0450840649603f96",
+        "asan": "3047b5ab3188be872f56f16215c03a0467a5dc79e5b2d7152f8f5926847b25c7"
+      },
+      "compiler": "Apple clang version 21.0.0 (clang-2100.4.1.1)",
+      "calls": "banner1_create; copy default hello; http_change_requestline and http_change_field in C3 order; explicit lengths for values, C strings for field names",
+      "sanitizer": "recovering AddressSanitizer/UndefinedBehaviorSanitizer. Ordinary output is the comparison fixture; E1.7/E1.17 memory defects are documented, allocator bytes are never adopted"
+    },
+    "cases": [
+      {
+        "name": "bare-lf",
+        "input": "requests/bare-lf.in.txt",
+        "input_sha256": "5561ab20f5aaca81d74c2a946054dba05db0ca11859c6bb039354b2a3c3f49d9",
+        "output": "requests/bare-lf.out",
+        "output_sha256": "f2db6aeba1cf761d92c2fe32aa01fff923646af13aa28638d9425c04c58d9e23",
+        "sanitizer": {
+          "reports": 0,
+          "same_output": true,
+          "stdout_sha256": "f2db6aeba1cf761d92c2fe32aa01fff923646af13aa28638d9425c04c58d9e23"
+        }
+      },
+      {
+        "name": "binary",
+        "input": "requests/binary.in.txt",
+        "input_sha256": "76105041200858ab2de143417f8c850927480ebda5bd51db7f256b319ff00312",
+        "output": "requests/binary.out",
+        "output_sha256": "d1672ce8dd851025c136b165c04cafa4bd0126a08983a399ddf4af80dc0e0c2a",
+        "sanitizer": {
+          "reports": 0,
+          "same_output": true,
+          "stdout_sha256": "d1672ce8dd851025c136b165c04cafa4bd0126a08983a399ddf4af80dc0e0c2a"
+        }
+      },
+      {
+        "name": "combined",
+        "input": "requests/combined.in.txt",
+        "input_sha256": "39a8c58b2f3d72f5cff149a49596c39eb59b8290868cd31f072bf1685481b15c",
+        "output": "requests/combined.out",
+        "output_sha256": "2b95dcf27d0840d9aa1a91de810dcb3a0124e339826f3084466c4bb698e7df4c",
+        "sanitizer": {
+          "reports": 1,
+          "same_output": true,
+          "stdout_sha256": "2b95dcf27d0840d9aa1a91de810dcb3a0124e339826f3084466c4bb698e7df4c"
+        }
+      },
+      {
+        "name": "cookies",
+        "input": "requests/cookies.in.txt",
+        "input_sha256": "f777c18a58f2111aa5b563975dc05b8f68a7b439a16900e7d86ba9c7c2c8573d",
+        "output": "requests/cookies.out",
+        "output_sha256": "15e8a44e7c39632e84a205b3f6c3b6205921de22495606476659c6d87750bb90",
+        "sanitizer": {
+          "reports": 0,
+          "same_output": true,
+          "stdout_sha256": "15e8a44e7c39632e84a205b3f6c3b6205921de22495606476659c6d87750bb90"
+        }
+      },
+      {
+        "name": "crlf",
+        "input": "requests/crlf.in.txt",
+        "input_sha256": "1dbe259e1c0c878645f27f6e587eb95997a2ca2d3f6e7e1376597674c0e56555",
+        "output": "requests/crlf.out",
+        "output_sha256": "f4e5f5c74ec075c086665dfe6687265ecd2c545813ed805423974f68b0fd9f96",
+        "sanitizer": {
+          "reports": 0,
+          "same_output": true,
+          "stdout_sha256": "f4e5f5c74ec075c086665dfe6687265ecd2c545813ed805423974f68b0fd9f96"
+        }
+      },
+      {
+        "name": "default",
+        "input": "requests/default.in.txt",
+        "input_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "output": "requests/default.out",
+        "output_sha256": "195492d57cde4ccce01f197edf6159a548c1d213b1742709bda8ac09e03f51e4",
+        "sanitizer": {
+          "reports": 0,
+          "same_output": true,
+          "stdout_sha256": "195492d57cde4ccce01f197edf6159a548c1d213b1742709bda8ac09e03f51e4"
+        }
+      },
+      {
+        "name": "host-10",
+        "input": "requests/host-10.in.txt",
+        "input_sha256": "787aa5f83d9c8a892828ed43ac48833a694ce3bcb8efb77058a8673214c7e4ce",
+        "output": "requests/host-10.out",
+        "output_sha256": "9d09fdfe5a3130eb6cbac75079584d60aec7624a98ffdb1130335ae100127887",
+        "sanitizer": {
+          "reports": 0,
+          "same_output": true,
+          "stdout_sha256": "9d09fdfe5a3130eb6cbac75079584d60aec7624a98ffdb1130335ae100127887"
+        }
+      },
+      {
+        "name": "host-11",
+        "input": "requests/host-11.in.txt",
+        "input_sha256": "197115b8ac65a8bb525fc9d2fdb5a2d68fa251c75bb04ce185abb5478a8abea5",
+        "output": "requests/host-11.out",
+        "output_sha256": "2949235c748fafe5facf5339b8c388997bb5278c8d1c5c8c43c04cfde3fd671b",
+        "sanitizer": {
+          "reports": 0,
+          "same_output": true,
+          "stdout_sha256": "2949235c748fafe5facf5339b8c388997bb5278c8d1c5c8c43c04cfde3fd671b"
+        }
+      },
+      {
+        "name": "host-12",
+        "input": "requests/host-12.in.txt",
+        "input_sha256": "4f548a27e3a8441a92307f0cc39447bdce55b752cf974a63c708518a87fa0e5d",
+        "output": "requests/host-12.out",
+        "output_sha256": "0a4876518bcd57e00e27e930a08171588de8c5e6213609335f25652fcd512a40",
+        "sanitizer": {
+          "reports": 0,
+          "same_output": true,
+          "stdout_sha256": "0a4876518bcd57e00e27e930a08171588de8c5e6213609335f25652fcd512a40"
+        }
+      },
+      {
+        "name": "method-1",
+        "input": "requests/method-1.in.txt",
+        "input_sha256": "64029f39debd7a12d218f5909f4ab410ab7fd43673c49bcf42c15d4d70bcf806",
+        "output": "requests/method-1.out",
+        "output_sha256": "15722cb8ac758d77a242f1312b7b141375db8469bd69b67c700ca7dc38ac0724",
+        "sanitizer": {
+          "reports": 0,
+          "same_output": true,
+          "stdout_sha256": "15722cb8ac758d77a242f1312b7b141375db8469bd69b67c700ca7dc38ac0724"
+        }
+      },
+      {
+        "name": "method-2",
+        "input": "requests/method-2.in.txt",
+        "input_sha256": "d71f3e76a8cad5734a4feb6d0a5b05454497d25dbed4b23a888a82649720a4ca",
+        "output": "requests/method-2.out",
+        "output_sha256": "837e8b17d9ecc116a35d74b1fcdb836709ace1238e48085bf0eacfafd1e684db",
+        "sanitizer": {
+          "reports": 1,
+          "same_output": false,
+          "stdout_sha256": "c1d0a4cf47eb53ae08f75473309ac29777e25cdaea65775d7889d68bbefdc999"
+        }
+      },
+      {
+        "name": "method-3",
+        "input": "requests/method-3.in.txt",
+        "input_sha256": "48fcb5b2f89795eed9cb745e5c5b2fbcc8535ceea523bab63236f924aa674493",
+        "output": "requests/method-3.out",
+        "output_sha256": "f0435bacf6fd805dfaee073f36a92a1a9636ea172e4ee69f1d71da11c63167bd",
+        "sanitizer": {
+          "reports": 0,
+          "same_output": true,
+          "stdout_sha256": "f0435bacf6fd805dfaee073f36a92a1a9636ea172e4ee69f1d71da11c63167bd"
+        }
+      },
+      {
+        "name": "no-colon",
+        "input": "requests/no-colon.in.txt",
+        "input_sha256": "e0676dce23a149018019e4d4ff802150306fbf8d1296f579ec582fcd839e7263",
+        "output": "requests/no-colon.out",
+        "output_sha256": "c1f2ca76d1feeae0b41876f9b99228f3969424f8885577f49d88a2ccd848b9fe",
+        "sanitizer": {
+          "reports": 0,
+          "same_output": true,
+          "stdout_sha256": "c1f2ca76d1feeae0b41876f9b99228f3969424f8885577f49d88a2ccd848b9fe"
+        }
+      },
+      {
+        "name": "payload-16",
+        "input": "requests/payload-16.in.txt",
+        "input_sha256": "bb45e17c0d7d34cf4984323d551a33d1c0e8268d09c0814bbce1db8e2624844d",
+        "output": "requests/payload-16.out",
+        "output_sha256": "9c3652afb5e24146f820c4ab189b2e1b92fe43c3fb2dc412b9b706c75dc25146",
+        "sanitizer": {
+          "reports": 0,
+          "same_output": true,
+          "stdout_sha256": "9c3652afb5e24146f820c4ab189b2e1b92fe43c3fb2dc412b9b706c75dc25146"
+        }
+      },
+      {
+        "name": "payload-17",
+        "input": "requests/payload-17.in.txt",
+        "input_sha256": "8655d1d547fcd44ebf9011a0d9030d41507a1eeee32eeffa0b23e3a19ca7fb7d",
+        "output": "requests/payload-17.out",
+        "output_sha256": "17380d10ac29579a10e25c4fec62fc85f6624eff503129c318deabb36f8b1939",
+        "sanitizer": {
+          "reports": 0,
+          "same_output": true,
+          "stdout_sha256": "17380d10ac29579a10e25c4fec62fc85f6624eff503129c318deabb36f8b1939"
+        }
+      },
+      {
+        "name": "payload-18",
+        "input": "requests/payload-18.in.txt",
+        "input_sha256": "5bc4fa9db96aa58b97ae4406e31d85e96a6435f2a7ea7c98dc079c13c87e00f5",
+        "output": "requests/payload-18.out",
+        "output_sha256": "ddd9e69fe4171225091ef7635411d4eb3d05b45fed843d43de88f1f46e801870",
+        "sanitizer": {
+          "reports": 0,
+          "same_output": true,
+          "stdout_sha256": "ddd9e69fe4171225091ef7635411d4eb3d05b45fed843d43de88f1f46e801870"
+        }
+      },
+      {
+        "name": "replace-case",
+        "input": "requests/replace-case.in.txt",
+        "input_sha256": "902990964beedfc1445eca758789026d3c06680ba9321dd3817dfeee2cd49600",
+        "output": "requests/replace-case.out",
+        "output_sha256": "06fc310c15c158597cae434097d1874bdeee6ad5dc45b6a944e31ff1424bc926",
+        "sanitizer": {
+          "reports": 0,
+          "same_output": true,
+          "stdout_sha256": "06fc310c15c158597cae434097d1874bdeee6ad5dc45b6a944e31ff1424bc926"
+        }
+      },
+      {
+        "name": "space-empty",
+        "input": "requests/space-empty.in.txt",
+        "input_sha256": "0c1160e9aeaee132c027bad22a28ddc19a7402af72f6982a7c6f7226880348f8",
+        "output": "requests/space-empty.out",
+        "output_sha256": "a2bf07c0179d455136f455a8388595da2472c2bf243ef5c04eb8592c0c15b878",
+        "sanitizer": {
+          "reports": 0,
+          "same_output": true,
+          "stdout_sha256": "a2bf07c0179d455136f455a8388595da2472c2bf243ef5c04eb8592c0c15b878"
+        }
+      },
+      {
+        "name": "url-4",
+        "input": "requests/url-4.in.txt",
+        "input_sha256": "fc12665a62f8f360b3c5f3833a79b962c1422e2a26b6df53f581bc1db2d9525e",
+        "output": "requests/url-4.out",
+        "output_sha256": "e6d3d4280b487ffb53141246d2b227fd3b534d7c26fbf51acfff7156dce6617b",
+        "sanitizer": {
+          "reports": 0,
+          "same_output": true,
+          "stdout_sha256": "e6d3d4280b487ffb53141246d2b227fd3b534d7c26fbf51acfff7156dce6617b"
+        }
+      },
+      {
+        "name": "url-5",
+        "input": "requests/url-5.in.txt",
+        "input_sha256": "37fda25f3060afa1e4fbe20c19092f4eed5b3149cfd3901a132ffad4ae2e083e",
+        "output": "requests/url-5.out",
+        "output_sha256": "6be20cbb928a3b4ea46fca5567b1be522320e7aa57dfa8cc8760962374aa7265",
+        "sanitizer": {
+          "reports": 0,
+          "same_output": true,
+          "stdout_sha256": "6be20cbb928a3b4ea46fca5567b1be522320e7aa57dfa8cc8760962374aa7265"
+        }
+      },
+      {
+        "name": "url-6",
+        "input": "requests/url-6.in.txt",
+        "input_sha256": "7e2584d2d68659a81f725db2203af8a75e17cff7b97536c047806109dac9d31b",
+        "output": "requests/url-6.out",
+        "output_sha256": "8443d1be2d0a5dc923c8a4f509f344ba43f3538734a944b7689e7989716214a2",
+        "sanitizer": {
+          "reports": 1,
+          "same_output": true,
+          "stdout_sha256": "8443d1be2d0a5dc923c8a4f509f344ba43f3538734a944b7689e7989716214a2"
+        }
+      },
+      {
+        "name": "user_agent-13",
+        "input": "requests/user_agent-13.in.txt",
+        "input_sha256": "c94e43ceed2b23edf60ff2a8319b565944b94bde04c0adcac3995fdd95adf4b9",
+        "output": "requests/user_agent-13.out",
+        "output_sha256": "94fe67efa2ebef6990ed911a59a13d5ba001a1ed57bc76716c19751695580635",
+        "sanitizer": {
+          "reports": 1,
+          "same_output": true,
+          "stdout_sha256": "94fe67efa2ebef6990ed911a59a13d5ba001a1ed57bc76716c19751695580635"
+        }
+      },
+      {
+        "name": "user_agent-14",
+        "input": "requests/user_agent-14.in.txt",
+        "input_sha256": "f37c0b7ea74b614a403820a010323991e915d6376f7173a4488dbc384b3e725b",
+        "output": "requests/user_agent-14.out",
+        "output_sha256": "04d9e2502c1744e9b5d2b8474ea21c9319e05dca207f64bfe30476122d1b644e",
+        "sanitizer": {
+          "reports": 1,
+          "same_output": true,
+          "stdout_sha256": "04d9e2502c1744e9b5d2b8474ea21c9319e05dca207f64bfe30476122d1b644e"
+        }
+      },
+      {
+        "name": "user_agent-15",
+        "input": "requests/user_agent-15.in.txt",
+        "input_sha256": "9a516492cecd321a1b55d7289e6a5589381c53796e7a91da66abf766761a23d0",
+        "output": "requests/user_agent-15.out",
+        "output_sha256": "76e4e7baf9e7a7cc6943cac0f545954169c01de57b66dbd0a190e9b19fc398d2",
+        "sanitizer": {
+          "reports": 1,
+          "same_output": true,
+          "stdout_sha256": "76e4e7baf9e7a7cc6943cac0f545954169c01de57b66dbd0a190e9b19fc398d2"
+        }
+      },
+      {
+        "name": "version-7",
+        "input": "requests/version-7.in.txt",
+        "input_sha256": "63d22510cc3f945d08df28e2f370b8d6c8aaf2cb3ad51168bdee176dd3d9a619",
+        "output": "requests/version-7.out",
+        "output_sha256": "5414a6b31c19ac816ddba112ca887eb761a11a9351570b602db993505b67e62c",
+        "sanitizer": {
+          "reports": 0,
+          "same_output": true,
+          "stdout_sha256": "5414a6b31c19ac816ddba112ca887eb761a11a9351570b602db993505b67e62c"
+        }
+      },
+      {
+        "name": "version-8",
+        "input": "requests/version-8.in.txt",
+        "input_sha256": "31cd7ba4e61d58a20ae1a6e165c781198143c870fa7a06fadbeba065f419dcfb",
+        "output": "requests/version-8.out",
+        "output_sha256": "5860855e6405bc2fe54b7d6f3ecf3bd74a955a12bc5b1e1378bd297b361aec95",
+        "sanitizer": {
+          "reports": 1,
+          "same_output": false,
+          "stdout_sha256": "496b80080d96550ebfb41fbffc347f1f5e23751f0276c6135274ac1d16551a9f"
+        }
+      },
+      {
+        "name": "version-9",
+        "input": "requests/version-9.in.txt",
+        "input_sha256": "36e9e35bc7f727e034f82ce34daef3b746b967f2a95d2d10fe528520dc3fb774",
+        "output": "requests/version-9.out",
+        "output_sha256": "051e4400a1985d0eea4d4b569447c62a039e120de233a078b112134e40a0a144",
+        "sanitizer": {
+          "reports": 1,
+          "same_output": false,
+          "stdout_sha256": "11b95409d4826c59dc3937c4192b3815c84afdd5825f91b47595e277b7018860"
+        }
+      }
+    ]
+  }
+}

@@ -1,0 +1,59 @@
+tcp-banout-input v1
+# Прямые banout_append (src/proto-banout.c:326-363): app, длина, seed (байт k = (seed + 131*k) & 0xFF).
+script head-reuse
+append 4 10 1
+end
+script insert-after-head
+append 31 5 2
+append 17 5 3
+append 4 5 4
+end
+script head-stays-at-199
+append 31 199 5
+append 17 3 6
+end
+script head-moves-at-200-total
+append 31 199 7
+append 31 1 8
+append 17 3 9
+end
+script head-moves-on-first-200
+append 31 200 10
+append 4 6 11
+end
+script head-moves-mid-append
+append 31 150 12
+append 31 60 13
+append 17 4 14
+append 4 2 15
+end
+script non-head-grows-in-place
+append 31 5 16
+append 17 300 17
+append 4 5 18
+append 17 5 19
+end
+script two-head-moves
+append 31 250 20
+append 17 250 21
+append 4 5 22
+end
+script zero-length-creates-record
+append 31 0 23
+append 4 5 24
+append 31 3 25
+end
+script same-app-concatenates
+append 4 3 26
+append 31 2 27
+append 4 4 28
+end
+script heur-moved-then-taken-head
+append 1 150 29
+append 1 100 30
+append 4 5 31
+end
+script app-zero-into-head
+append 0 5 32
+append 4 3 33
+end

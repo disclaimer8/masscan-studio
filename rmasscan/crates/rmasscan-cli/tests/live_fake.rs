@@ -30,7 +30,7 @@ use rmasscan_core::probe::AdapterBinding;
 use rmasscan_core::receive::{PortStatus, Reply};
 use rmasscan_core::throttle::Clock;
 use rmasscan_engine::fake::{
-    FakeAdapter, HealthStep, ManualClock, RxStep, port_unreachable_for, reply_to_echo,
+    FakeAdapter, HealthStep, ManualClock, RxStep, TxStep, port_unreachable_for, reply_to_echo,
     reply_to_sctp, reply_to_syn, reply_to_udp,
 };
 use rmasscan_engine::{AdapterPair, FailReason, Outcome, Progress, Reason, RxHealth};
@@ -58,9 +58,14 @@ const OPEN: [(Ipv4Addr, u16); 2] = [(T1, 80), (T2, 81)];
 const OPEN_UDP: [Ipv4Addr; 1] = [T1];
 /// Хосты, у которых порт SCTP 2905 отвечает INIT-ACK; остальные порты отвечают ABORT.
 const OPEN_SCTP: [Ipv4Addr; 1] = [T2];
-/// `--wait 1` идёт по `ManualClock` (около 20 пустых `recv` по 50 мс, миллисекунды реального времени); при `--wait 0`
-/// RX engine выходит в той же итерации, где увидел конец TX, и ответы фиктивной сети, ещё лежащие в очереди, теряются.
-const LIVE: [&str; 4] = ["198.51.100.1-198.51.100.2", "-p80,81", "--wait", "1"];
+/// `--wait` идёт по `ManualClock` (пустой `recv` это 50 мс; 10 с это около 200 `recv`, миллисекунды реального
+/// времени); при `--wait 0` RX engine выходит в той же итерации, где увидел конец TX, и ответы фиктивной сети, ещё
+/// лежащие в очереди, теряются. Окно `--wait 10`, а не 1 (ревью задачи 14, I3): тесты на этих аргументах закрепляют
+/// RST без состояния на каждый ответ (Р8), а RST последнего ответа уходит из очереди TX уже в окне ожидания. Часы
+/// двигает опрос приёма (50 мс на пустой `recv` за ~100 мкс реального времени), поэтому под нагрузкой окно в 1 с
+/// кончалось, пока TX стоял, и RST оставался в очереди (конец скана, как C). 10 с дают TX запас втрое больше худшего
+/// ухода часов на нагрузочном прогоне ревью (3,8 с).
+const LIVE: [&str; 4] = ["198.51.100.1-198.51.100.2", "-p80,81", "--wait", "10"];
 
 fn route(gateway: Option<Ipv4Addr>) -> Route {
     Route {
@@ -170,7 +175,7 @@ struct FakeBackend {
     silent_targets: bool,
     /// Ctrl-C посреди передачи (Р4, Задача 4).
     press_in_tx: Option<PressInTx>,
-    /// С `press_in_tx`: адаптер сценария перед нажатием ждёт, пока первый открытый адаптер отправит столько кадров.
+    /// С `press_in_tx`: адаптер сценария перед нажатием ждёт, пока первый открытый адаптер отправит столько SYN.
     hold_for_peer: Option<usize>,
     /// Записи `paused.conf`: показание часов на момент записи и содержимое. Диска фейк не касается.
     paused_writes: Mutex<Vec<(u64, String)>>,
@@ -181,22 +186,58 @@ struct FakeBackend {
     pcap_opened: Mutex<Vec<String>>,
     /// На каждый SYN сверх обычного ответа приходят RST с плохим cookie на наш `ip:port` и кадр на чужой адрес.
     inject_noise: bool,
-    /// Передача встаёт после этого кадра адаптера скана, пока цикл событий CLI не опросит `interrupts()` ещё
+    /// Передача встаёт после этого SYN адаптера скана, пока цикл событий CLI не опросит `interrupts()` ещё
     /// [`STALL_POLLS`] раз: строка статуса видит позицию посреди передачи (приём и часы идут дальше).
     stall_tx_at: Option<usize>,
     /// Ответы для баннеров UDP: `T1:53` отвечает DNS version.bind CHAOS TXT `9.18.24` с id зонда, `T1:9999` датаграммой
     /// `hello`; остальное как обычно.
     udp_banners: bool,
+    /// Пир TCP с настоящими номерами (задача 14): кадры TCP поверх IPv4 адаптера скана идут ему, а не в `respond`.
+    tcp_peer: Option<Arc<Mutex<TcpPeer>>>,
+    /// Сценарий отправки адаптера скана (`FakeAdapter::script_tx`), по шагу на кадр.
+    scan_tx_script: Vec<TxStep>,
+    /// Пачка SYN-ACK (ревью задачи 14, M1): адаптер скана молчит, пока не уйдёт столько SYN, и с последним отвечает
+    /// SYN-ACK на все разом. Тогда же часы перестают идти от снов (`ManualClock::set_hold`), и их двигает только пустой
+    /// `recv` приёма: вся пачка разбирается до первого шага часов, внутри окна `--wait`, при любой загрузке машины.
+    synack_burst: Option<usize>,
     /// Каждое чтение `unix_time()` прибавляет секунду: время записи не может совпасть случайно.
     tick_time: bool,
     ticks: AtomicU64,
+    /// Шлюз не знает MAC адреса источника (задача 14a): на первый SYN адаптера скана он присылает этот ARP-запрос
+    /// «кто имеет» (и за ним кадр не ARP, [`GATE_TRAILER`]) и держит ответы на SYN, пока сканер не ответит ARP-ответом
+    /// от этого адреса; ответ и всё, что было удержано, идут в RX сразу за ним. TX стоит в хуке первого SYN, пока RX не
+    /// снимет хвост, то есть пока запрос не разобран: ответ может уйти до второго SYN, если TX отправляет ответы посреди
+    /// зондов (ревью задачи 14a, I2). `None`: шлюз адрес знает.
+    arp_gate: Option<ArpGate>,
 }
+
+/// Сценарий [`FakeBackend::arp_gate`]: запрос шлюза и адрес, ответа за который он ждёт.
+#[derive(Clone)]
+struct ArpGate {
+    request: Vec<u8>,
+    address: Ipv4Addr,
+}
+
+/// Кадр сразу за запросом шлюза [`ArpGate`]: не ARP и не ответ, приём его отбрасывает.
+const GATE_TRAILER: [u8; 60] = [0; 60];
 
 /// Сколько итераций цикла событий CLI переждать в сценарии `stall_tx_at`.
 const STALL_POLLS: usize = 40;
 
 /// Файл захвата в памяти.
 struct MemPcap(Arc<Mutex<Vec<u8>>>);
+
+/// Отправленных SYN адаптера. Хуки сценариев считают зонды, а не кадры: RST без состояния (Р8) встают между SYN в
+/// порядке, который зависит от того, когда приём увидел ответ.
+fn syn_count(a: &FakeAdapter) -> usize {
+    a.sent_frames().iter().filter(|f| is_syn(f)).count()
+}
+
+/// Последний отправленный кадр адаптера это его `n`-й SYN (хук отправки зовётся после каждого кадра).
+fn sent_syn_number(a: &FakeAdapter, n: usize) -> bool {
+    let frames = a.sent_frames();
+    frames.last().is_some_and(|f| is_syn(f)) && frames.iter().filter(|f| is_syn(f)).count() == n
+}
 
 impl std::io::Write for MemPcap {
     fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
@@ -283,8 +324,12 @@ impl FakeBackend {
             inject_noise: false,
             stall_tx_at: None,
             udp_banners: false,
+            tcp_peer: None,
+            scan_tx_script: Vec::new(),
+            synack_burst: None,
             tick_time: false,
             ticks: AtomicU64::new(0),
+            arp_gate: None,
         }
     }
 
@@ -321,7 +366,8 @@ impl FakeBackend {
     }
 }
 
-/// Ответчик фиктивной сети: ARP-запрос к соседу → ответ соседа; SYN → SYN-ACK для [`OPEN`], иначе RST.
+/// Ответчик фиктивной сети: ARP-запрос к соседу → ответ соседа; SYN → SYN-ACK для [`OPEN`], иначе RST; на прочие
+/// кадры TCP (RST без состояния) ответа нет.
 fn respond(frame: &[u8], neighbors: &[(Ipv4Addr, [u8; 6])]) -> Vec<Vec<u8>> {
     match frame.get(12..14) {
         Some([0x08, 0x06]) => {
@@ -366,7 +412,8 @@ fn respond(frame: &[u8], neighbors: &[(Ipv4Addr, [u8; 6])]) -> Vec<Vec<u8>> {
             };
             reply_to_sctp(frame, ty).into_iter().collect()
         }
-        Some([0x08, 0x00]) => {
+        // Только SYN: на RST без состояния (Р8) и прочие наши сегменты хост не отвечает.
+        Some([0x08, 0x00]) if is_syn(frame) => {
             let (ip, port) = syn_dst(frame);
             let flags = if OPEN.contains(&(ip, port)) {
                 0x12
@@ -413,11 +460,21 @@ impl Backend for FakeBackend {
         if let Some(h) = &self.health {
             adapter.set_health(h.clone());
         }
+        if !opened.is_empty() {
+            adapter.script_tx(self.scan_tx_script.clone());
+        }
         let (neighbors, tx) = (self.neighbors.clone(), self.tx.clone());
         let (presses, press_during_arp) = (self.presses.clone(), self.press_during_arp);
         let silent_targets = self.silent_targets;
         let inject_noise = self.inject_noise;
         let udp_banners = self.udp_banners;
+        let (tcp_peer, peer_clock) = (self.tcp_peer.clone(), self.clock.clone());
+        let burst = self.synack_burst.filter(|_| !opened.is_empty());
+        // Шлюз, который ждёт нашего ARP-ответа (только адаптер скана): `asked` после его запроса, `held` удержанные ответы.
+        let gate = self.arp_gate.clone().filter(|_| !opened.is_empty());
+        let gated = gate.is_some();
+        let (mut gate_asked, mut gate_known, mut gate_held) = (false, false, Vec::<Vec<u8>>::new());
+        let (burst_clock, mut burst_syns) = (self.clock.clone(), Vec::<Vec<u8>>::new());
         // Сценарий действует на адаптер скана (не на ARP-адаптер, открытый первым).
         let scenario = self.press_in_tx.filter(|_| !opened.is_empty());
         let held: Arc<Mutex<Option<Vec<u8>>>> = Arc::new(Mutex::new(None));
@@ -438,8 +495,42 @@ impl Backend for FakeBackend {
                 *held_r.lock().unwrap() = reply_to_syn(f, 0x12);
                 return vec![];
             }
+            if let Some(n) = burst.filter(|_| is_syn(f)) {
+                burst_syns.push(f.to_vec());
+                if burst_syns.len() < n {
+                    return vec![];
+                }
+                burst_clock.set_hold(true);
+                return burst_syns
+                    .drain(..)
+                    .filter_map(|syn| reply_to_syn(&syn, 0x12))
+                    .collect();
+            }
             if let Some(replies) = udp_banners.then(|| banner_reply(f)).flatten() {
                 return replies;
+            }
+            if let Some(peer) = tcp_peer.as_ref().filter(|_| is_tcp4(f)) {
+                return peer.lock().unwrap().respond(f, peer_clock.now_micros());
+            }
+            if let Some(g) = gate.as_ref().filter(|_| !gate_known) {
+                if is_arp(f) {
+                    let ours = decode(f).is_ok_and(|p| {
+                        p.op == ArpOp::Reply
+                            && p.sender_ip == u32::from(g.address)
+                            && p.target_ip == u32::from(GW)
+                    });
+                    if ours {
+                        gate_known = true;
+                        return std::mem::take(&mut gate_held);
+                    }
+                    return vec![];
+                }
+                gate_held.extend(respond(f, &neighbors));
+                if is_syn(f) && !gate_asked {
+                    gate_asked = true;
+                    return vec![g.request.clone(), GATE_TRAILER.to_vec()];
+                }
+                return vec![];
             }
             let mut replies = respond(f, &neighbors);
             if inject_noise && is_syn(f) {
@@ -453,14 +544,14 @@ impl Backend for FakeBackend {
             .filter(|_| scenario.is_some());
         if let Some(PressInTx { at, .. }) = scenario {
             let (polls, handle) = (self.polls.clone(), adapter.clone());
-            adapter.set_send_hook(move |count| {
-                if count != at {
+            adapter.set_send_hook(move |_| {
+                if !sent_syn_number(&handle, at) {
                     return;
                 }
                 // Детерминизм: нажатие только после того, как соседний адаптер отправил ровно ожидаемое число кадров.
                 if let Some((peer, n)) = &peer {
                     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-                    while peer.sent_count() < *n && std::time::Instant::now() < deadline {
+                    while syn_count(peer) < *n && std::time::Instant::now() < deadline {
                         std::thread::sleep(std::time::Duration::from_millis(1));
                     }
                 }
@@ -480,10 +571,22 @@ impl Backend for FakeBackend {
                 }
             });
         }
+        if gated {
+            let handle = adapter.clone();
+            adapter.set_send_hook(move |_| {
+                if !sent_syn_number(&handle, 1) {
+                    return;
+                }
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+                while handle.rx_pending() > 0 && std::time::Instant::now() < deadline {
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                }
+            });
+        }
         if let Some(at) = self.stall_tx_at.filter(|_| !opened.is_empty()) {
-            let polls = self.polls.clone();
-            adapter.set_send_hook(move |count| {
-                if count != at {
+            let (polls, handle) = (self.polls.clone(), adapter.clone());
+            adapter.set_send_hook(move |_| {
+                if !sent_syn_number(&handle, at) {
                     return;
                 }
                 let before = polls.load(Ordering::SeqCst);
@@ -620,6 +723,52 @@ fn is_syn(f: &[u8]) -> bool {
     f.get(12..14) == Some(&[0x08, 0x00][..]) && f.get(47) == Some(&0x02)
 }
 
+/// SYN среди кадров адаптера, по порядку.
+fn syns(frames: &[Vec<u8>]) -> Vec<Vec<u8>> {
+    frames.iter().filter(|f| is_syn(f)).cloned().collect()
+}
+
+/// Р8 (`src/main.c:1094-1100`, справка A7): без `--banners` и `--noreset` кадры адаптера скана это SYN и ровно один RST
+/// без состояния на каждый свежий ответ (SYN-ACK или RST): тот же адрес и порт назначения, тот же адрес и порт
+/// источника, что у его SYN (C берёт их из ответа, `ip_me`/`port_me`), seq = ack ответа (seq SYN + 1), ack 0, флаги
+/// `0x04`, без нагрузки, после своего SYN; повтор ответа (повтор зонда, `--retries`) глушит дедуп. Фиктивная сеть
+/// отвечает на каждый SYN, поэтому RST получает каждый (адрес, порт, источник, seq) зондов. Возвращает SYN по порядку.
+fn syns_and_one_rst_per_reply(frames: &[Vec<u8>]) -> Vec<Vec<u8>> {
+    let (mut probes, mut want, mut got) = (Vec::new(), BTreeSet::new(), Vec::new());
+    for f in frames {
+        let s = parse_ours(f, 0).unwrap_or_else(|| panic!("not TCP over IPv4: {f:?}"));
+        let from = tcp4_src(f);
+        if is_syn(f) {
+            probes.push(f.clone());
+            want.insert((s.to, from, s.seq.wrapping_add(1)));
+            continue;
+        }
+        assert_eq!(
+            (s.flags, s.ack, s.payload.len()),
+            (TCP_RST, 0, 0),
+            "only SYNs and stateless RSTs: {s:?}"
+        );
+        assert!(
+            want.contains(&(s.to, from, s.seq)),
+            "an RST follows its SYN, from the SYN's source address and port: {s:?} from {from:?}"
+        );
+        got.push((s.to, from, s.seq));
+    }
+    let set: BTreeSet<_> = got.iter().copied().collect();
+    assert_eq!(set.len(), got.len(), "one RST per reply: {got:?}");
+    assert_eq!(set, want, "every answered probe gets its RST");
+    probes
+}
+
+/// Адрес и порт источника нашего кадра TCP поверх IPv4.
+fn tcp4_src(f: &[u8]) -> (Ipv4Addr, u16) {
+    let tcp = 14 + usize::from(f[14] & 0x0f) * 4;
+    (
+        Ipv4Addr::new(f[26], f[27], f[28], f[29]),
+        u16::from_be_bytes([f[tcp], f[tcp + 1]]),
+    )
+}
+
 fn syn_dst(f: &[u8]) -> (Ipv4Addr, u16) {
     (
         Ipv4Addr::new(f[30], f[31], f[32], f[33]),
@@ -648,20 +797,15 @@ fn live_scan_detects_resolves_and_prints_discovered_lines() {
         arp.adapter.sent_frames(),
         vec![encode_request(MY_MAC, u32::from(MY_IP), u32::from(GW)).to_vec()]
     );
-    let syns = scan.adapter.sent_frames();
-    assert!(!syns.is_empty());
-    assert!(
-        syns.iter().all(|f| is_syn(f) && !is_arp(f)),
-        "scan adapter sends only SYN"
-    );
-    for f in &syns {
-        assert_eq!(&f[0..6], &GW_MAC, "SYN goes to the resolved MAC");
-        assert_eq!(&f[6..12], &MY_MAC, "SYN source MAC is the detected one");
-        assert_eq!(
-            &f[26..30],
-            &MY_IP.octets(),
-            "SYN source IP is the detected one"
-        );
+    // Р8: каждый из 4 ответов (2 SYN-ACK, 2 RST) получает RST без состояния; ARP с адаптера скана не уходит.
+    let frames = scan.adapter.sent_frames();
+    let syns = syns_and_one_rst_per_reply(&frames);
+    assert_eq!(frames.len(), 8, "4 SYNs and 4 stateless RSTs");
+    for f in &frames {
+        assert!(!is_arp(f));
+        assert_eq!(&f[0..6], &GW_MAC, "SYN and RST go to the resolved MAC");
+        assert_eq!(&f[6..12], &MY_MAC, "source MAC is the detected one");
+        assert_eq!(&f[26..30], &MY_IP.octets(), "source IP is the detected one");
         assert_eq!(
             &f[34..36],
             &TIME_PORT.to_be_bytes(),
@@ -672,14 +816,14 @@ fn live_scan_detects_resolves_and_prints_discovered_lines() {
     let journal = b.tx_journal();
     assert_eq!(
         journal.len(),
-        1 + syns.len(),
-        "every frame on the wire: 1 ARP + the SYNs"
+        1 + frames.len(),
+        "every frame on the wire: 1 ARP + the scan adapter's frames"
     );
     assert!(is_arp(&journal[0]), "the ARP request comes first");
     assert_eq!(
         &journal[1..],
-        &syns[..],
-        "then only the scan adapter's SYNs"
+        &frames[..],
+        "then only the scan adapter's frames"
     );
     assert_eq!(
         scan.binding,
@@ -720,6 +864,112 @@ fn live_scan_detects_resolves_and_prints_discovered_lines() {
     assert_eq!(out.len(), 2 * 80);
 }
 
+/// Кадр `index` эталона C `tests/golden/arp-replies/cases/<name>`: строка `frame` входа и ответ C (`reply len=60`) из
+/// `.out` (`None`, если C не ответил).
+fn arp_golden(name: &str, index: usize) -> (Vec<u8>, Option<Vec<u8>>) {
+    let read = |file: String| {
+        let path = format!(
+            "{}/../../tests/golden/arp-replies/cases/{file}",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}"))
+    };
+    let input = read(format!("{name}.in.txt"));
+    let frame = input
+        .lines()
+        .filter_map(|l| l.strip_prefix("frame "))
+        .nth(index)
+        .map(|h| if h == "-" { Vec::new() } else { unhex(h) })
+        .unwrap_or_else(|| panic!("{name}: no frame {index}"));
+    let output = read(format!("{name}.out"));
+    let line = output
+        .lines()
+        .find_map(|l| l.strip_prefix(&format!("frame {index} ")))
+        .unwrap_or_else(|| panic!("{name}.out: no frame {index}"))
+        .to_string();
+    let reply = (line != "none").then(|| {
+        unhex(
+            line.strip_prefix("reply len=60 ")
+                .unwrap_or_else(|| panic!("{name}.out: {line}")),
+        )
+    });
+    (frame, reply)
+}
+
+/// Задача 14a (`src/main.c:829`, `:878-887`, `stack_arp_incoming_request`, `src/stack-arpv4.c:282-363`): адрес
+/// `--adapter-ip`, которым ОС не владеет, шлюз сначала спрашивает ARP-ом. Запрос это кадр эталона C `plain` 3 (шлюз
+/// 192.0.2.1 спрашивает 192.0.2.250, MAC сканера `02-00-00-00-00-01`; источник Ethernet `02-00-00-00-00-0b` не равен
+/// MAC отправителя из ARP `02-00-00-00-00-fe`, ревью задачи 14a, M2), ответ сканера побайтно ответ C из того же эталона
+/// (к MAC отправителя из ARP), и только после него шлюз отдаёт SYN-ACK: скан находит оба открытых порта. Ответ уходит
+/// посреди зондов, раньше последнего SYN (ревью задачи 14a, I2).
+#[test]
+fn live_fake_router_asks_who_has_the_adapter_ip_and_gets_cs_reply() {
+    let (request, c_reply) = arp_golden("plain", 3);
+    let c_reply = c_reply.expect("C answers plain frame 3");
+    assert_ne!(
+        request[6..12],
+        request[22..28],
+        "Ethernet source is not the ARP sender"
+    );
+    assert_eq!(c_reply[0..6], request[22..28], "C answers the ARP sender");
+    let b = FakeBackend {
+        arp_gate: Some(ArpGate {
+            request,
+            address: Ipv4Addr::new(192, 0, 2, 250),
+        }),
+        ..FakeBackend::new()
+    };
+    let args = with(
+        &LIVE,
+        &[
+            "--adapter-ip",
+            "192.0.2.250",
+            "--adapter-mac",
+            "02-00-00-00-00-01",
+        ],
+    );
+    let (r, out, log) = cli(&b, &args);
+    r.unwrap();
+    let opened = b.opened();
+    let frames = opened[1].adapter.sent_frames();
+    let arps: Vec<usize> = (0..frames.len()).filter(|&i| is_arp(&frames[i])).collect();
+    assert_eq!(arps.len(), 1, "one ARP reply from the scan adapter");
+    assert_eq!(frames[arps[0]], c_reply, "the reply is C's, byte for byte");
+    let last_syn = (0..frames.len()).rfind(|&i| is_syn(&frames[i])).unwrap();
+    assert!(
+        arps[0] < last_syn,
+        "the reply (frame {}) leaves while probes still go out (last SYN: frame {last_syn})",
+        arps[0]
+    );
+    // Шлюз держал ответы до нашего ARP-ответа: RST без состояния (Р8) на SYN-ACK и RST идут после него.
+    let non_syn: Vec<usize> = (0..frames.len())
+        .filter(|&i| !is_arp(&frames[i]) && !is_syn(&frames[i]))
+        .collect();
+    assert_eq!(non_syn.len(), 4, "one stateless RST per reply: {log}");
+    assert!(
+        non_syn.iter().all(|&i| i > arps[0]),
+        "replies only after our ARP reply"
+    );
+    let syns: Vec<Vec<u8>> = frames.iter().filter(|f| is_syn(f)).cloned().collect();
+    assert_eq!(syns.len(), 4);
+    assert!(syns.iter().all(|f| f[26..30] == [192, 0, 2, 250]));
+    let finished = plus_lines(&log)
+        .into_iter()
+        .find(|l| l.starts_with("[+] finished"))
+        .map(str::to_string);
+    assert_eq!(
+        finished.as_deref(),
+        Some("[+] finished: Completed, sent 4, replies 4, open 2"),
+        "{log}"
+    );
+    let want: BTreeSet<String> = OPEN
+        .iter()
+        .map(|&(ip, port)| discovered_line(ip, port))
+        .collect();
+    let got: BTreeSet<String> = out.split_inclusive('\n').map(str::to_string).collect();
+    assert_eq!(got, want, "{out}");
+}
+
 #[test]
 fn router_mac_override_sends_no_arp() {
     let b = FakeBackend::new();
@@ -728,12 +978,8 @@ fn router_mac_override_sends_no_arp() {
     let opened = b.opened();
     assert_eq!(opened.len(), 1, "no ARP adapter");
     let frames = opened[0].adapter.sent_frames();
-    assert_eq!(frames.len(), 4);
-    assert!(
-        frames
-            .iter()
-            .all(|f| is_syn(f) && f[0..6] == [0x02, 0xaa, 0, 0, 0, 9])
-    );
+    assert_eq!(syns_and_one_rst_per_reply(&frames).len(), 4);
+    assert!(frames.iter().all(|f| f[0..6] == [0x02, 0xaa, 0, 0, 0, 9]));
     let plus = plus_lines(&log);
     assert!(
         plus.contains(&"[+] router-mac = 02-aa-00-00-00-09 (given)"),
@@ -869,7 +1115,8 @@ fn retries_shard_and_resume_window_run_on_the_live_path() {
         r.unwrap();
         assert!(log.contains("finished: Completed"), "{extra:?}: {log}");
         let opened = b.opened();
-        opened.last().unwrap().adapter.sent_frames()
+        // Поток зондов; RST без состояния (Р8) идут по одному на отвеченный (адрес, порт).
+        syns_and_one_rst_per_reply(&opened.last().unwrap().adapter.sent_frames())
     };
     // range = 2 адреса x 2 порта = 4; поток одного адаптера 1/1.
     let all = sent(&["--seed", "7"]);
@@ -905,13 +1152,13 @@ fn resume_file_continues_the_scan_from_its_index() {
     let b = FakeBackend::new();
     let (r, _, _) = cli(&b, &with(&LIVE, &["--seed", "7"]));
     r.unwrap();
-    let all = b.opened().last().unwrap().adapter.sent_frames();
+    let all = syns_and_one_rst_per_reply(&b.opened().last().unwrap().adapter.sent_frames());
     assert_eq!(all.len(), 4);
 
     let dir = Scratch::new();
     let file = dir.write(
         "paused.conf",
-        b"\n# resume information\nresume-index = 1\nseed = 7\nrate = 100\nwait = 1\n\
+        b"\n# resume information\nresume-index = 1\nseed = 7\nrate = 100\nwait = 10\n\
 nocapture = servername\nnocapture = servername\n\n\n\
 # TARGET SELECTION (IP, PORTS, EXCLUDES)\nports = 80,81\nrange = 198.51.100.1-198.51.100.2\n",
     );
@@ -920,13 +1167,16 @@ nocapture = servername\nnocapture = servername\n\n\n\
     let (r, _, log) = cli(&b, &["--resume", f]);
     r.unwrap();
     assert!(log.contains("finished: Completed"), "{log}");
-    assert_eq!(b.opened().last().unwrap().adapter.sent_frames(), all[1..]);
+    let tail = |b: &FakeBackend| {
+        syns_and_one_rst_per_reply(&b.opened().last().unwrap().adapter.sent_frames())
+    };
+    assert_eq!(tail(&b), all[1..]);
 
     // Ключ правее файла переопределяет его: `--resume-index 3` шлёт один последний кадр.
     let b = FakeBackend::new();
     let (r, _, _) = cli(&b, &["--resume", f, "--resume-index", "3"]);
     r.unwrap();
-    assert_eq!(b.opened().last().unwrap().adapter.sent_frames(), all[3..]);
+    assert_eq!(tail(&b), all[3..]);
 }
 
 #[test]
@@ -1323,11 +1573,11 @@ fn zero_adapter_ip_is_unset_and_the_interface_address_is_detected() {
             "{flag}: the ARP sender IP is the interface address"
         );
         assert_eq!(opened[1].binding.source_ipv4, u32::from(MY_IP), "{flag}");
-        let syns = opened[1].adapter.sent_frames();
-        assert_eq!(syns.len(), 4, "{flag}");
+        let frames = opened[1].adapter.sent_frames();
+        assert_eq!(syns_and_one_rst_per_reply(&frames).len(), 4, "{flag}");
         assert!(
-            syns.iter().all(|f| f[26..30] == MY_IP.octets()),
-            "{flag}: SYNs come from the interface address"
+            frames.iter().all(|f| f[26..30] == MY_IP.octets()),
+            "{flag}: SYNs and RSTs come from the interface address"
         );
         assert_eq!(out.len(), 2 * 80, "{flag}");
     }
@@ -1357,11 +1607,11 @@ fn zero_router_mac_is_unset_and_the_router_is_resolved_with_arp() {
         vec![encode_request(MY_MAC, u32::from(MY_IP), u32::from(GW)).to_vec()]
     );
     assert_eq!(opened[1].binding.next_hop_mac, GW_MAC);
-    let syns = opened[1].adapter.sent_frames();
-    assert_eq!(syns.len(), 4);
+    let frames = opened[1].adapter.sent_frames();
+    assert_eq!(syns_and_one_rst_per_reply(&frames).len(), 4);
     assert!(
-        syns.iter().all(|f| f[0..6] == GW_MAC),
-        "SYNs go to the resolved MAC"
+        frames.iter().all(|f| f[0..6] == GW_MAC),
+        "SYNs and RSTs go to the resolved MAC"
     );
     assert_eq!(out.len(), 2 * 80);
 }
@@ -1445,6 +1695,9 @@ impl Sink for FailingSink {
     fn report_reply_banner(&mut self, b: BannerRecord) -> Result<(), String> {
         self.report_banner(&b)
     }
+    fn report_connection_banner(&mut self, b: BannerRecord) -> Result<(), String> {
+        self.report_banner(&b)
+    }
     fn finish(&mut self) -> Result<(), String> {
         assert!(
             self.on_finish,
@@ -1474,7 +1727,8 @@ fn sink_report_failure_still_prints_finished_with_the_engine_sent_count() {
         rmasscan_cli::error_text(&e),
         format!("rmasscan: error: {SINK_ERROR}")
     );
-    let sent = b.opened()[1].adapter.sent_count();
+    // `sent` это зонды; RST без состояния (Р8), успевшие уйти до Stop, в него не входят.
+    let sent = syn_count(&b.opened()[1].adapter);
     let fin = plus_lines(&log).last().copied().unwrap_or_default();
     let reason = fin
         .strip_prefix("[+] finished: ")
@@ -1597,7 +1851,8 @@ fn failed_outcome_exits_one_with_reason() {
         rmasscan_cli::error_text(&e).starts_with("rmasscan: error: "),
         "{e}"
     );
-    let sent = b.opened()[1].adapter.sent_count();
+    // `sent` строки это зонды (`Progress.sent`), RST без состояния в него не входят (Р8).
+    let sent = syn_count(&b.opened()[1].adapter);
     let fin = plus_lines(&log)
         .last()
         .copied()
@@ -2022,12 +2277,13 @@ fn mac_m1_adapter_cases_skip_the_route_lookup_and_print_the_table_lines() {
     }
 }
 
-/// Открытые порты в порядке ответов (= порядок SYN адаптера скана).
+/// Открытые порты в порядке ответов (= порядок SYN адаптера скана; RST без состояния, Р8, не в счёт).
 fn open_in_reply_order(b: &FakeBackend) -> Vec<(Ipv4Addr, u16)> {
     b.opened()[1]
         .adapter
         .sent_frames()
         .iter()
+        .filter(|f| is_syn(f))
         .map(|f| syn_dst(f))
         .filter(|d| OPEN.contains(d))
         .collect()
@@ -2178,7 +2434,10 @@ fn file_format_without_a_filename_sends_no_frame() {
     let (r, out, _) = cli(&b, &with(&LIVE, &["--output-format", "none"]));
     r.unwrap();
     assert_eq!(out, "");
-    assert_eq!(b.opened()[1].adapter.sent_count(), 4);
+    assert_eq!(
+        syns_and_one_rst_per_reply(&b.opened()[1].adapter.sent_frames()).len(),
+        4
+    );
 }
 
 /// stdout, который отказывает (не EPIPE) после `limit` байт.
@@ -2222,8 +2481,9 @@ fn write_error_mid_scan_stops_and_fails() {
     );
     let fin = plus_lines(&log).last().copied().unwrap_or_default();
     assert!(fin.starts_with("[+] finished: "), "{log}");
+    // `sent` это зонды; RST без состояния (Р8), успевшие уйти до Stop, в него не входят.
     assert!(
-        fin.contains(&format!("sent {}", b.opened()[1].adapter.sent_count())),
+        fin.contains(&format!("sent {}", syn_count(&b.opened()[1].adapter))),
         "{log}"
     );
 }
@@ -2410,7 +2670,10 @@ fn wait_countdown_starts_at_the_end_of_transmission_with_retries() {
     b.stall_tx_at = Some(12);
     let (r, _, log) = cli(&b, &with(&LIVE5, &["--retries", "1"]));
     r.unwrap();
-    assert_eq!(b.opened().last().unwrap().adapter.sent_count(), 16);
+    // 16 SYN; RST без состояния получают 4 свежих ответа, повторы ответа на повторы зондов глушит дедуп (Р8).
+    let frames = b.opened().last().unwrap().adapter.sent_frames();
+    assert_eq!(syns_and_one_rst_per_reply(&frames).len(), 16);
+    assert_eq!(frames.len(), 20);
     let frags = status_fragments(&log);
     let (waiting, running): (Vec<&str>, Vec<&str>) =
         frags.iter().partition(|f| f.contains(" waiting "));
@@ -2468,6 +2731,9 @@ impl Sink for PressOnFirstOpen<'_> {
     }
     fn report_reply_banner(&mut self, b: BannerRecord) -> Result<(), String> {
         Sink::report_reply_banner(&mut self.pipeline, b)
+    }
+    fn report_connection_banner(&mut self, b: BannerRecord) -> Result<(), String> {
+        Sink::report_connection_banner(&mut self.pipeline, b)
     }
     fn finish(&mut self) -> Result<(), String> {
         self.pipeline.finish()
@@ -2587,7 +2853,8 @@ fn first_interrupt_pauses_and_finishes_outputs() {
             !open.is_empty(),
             "the first two probes include an open reply"
         );
-        let sent = b.opened()[1].adapter.sent_count();
+        // `sent` строки это зонды; RST без состояния на ответы (Р8) идут и после паузы, в окне `--wait`.
+        let sent = syns_and_one_rst_per_reply(&b.opened()[1].adapter.sent_frames()).len();
         let finished = format!(
             "[+] finished: Paused, sent {sent}, replies {}, open {}",
             reported.len(),
@@ -2857,7 +3124,10 @@ fn closed_stderr_live_scan_completes_all_probes() {
         &mut ClosedStderr,
     );
     r.unwrap();
-    assert_eq!(b.opened()[1].adapter.sent_count(), 4);
+    assert_eq!(
+        syns_and_one_rst_per_reply(&b.opened()[1].adapter.sent_frames()).len(),
+        4
+    );
     let open = open_replies(&b);
     assert_eq!(open.len(), 2);
     assert_eq!(std::fs::read_to_string(&path).unwrap(), json_file(&open));
@@ -2992,8 +3262,10 @@ fn first_ctrl_c_pauses_saves_conf_waits_for_late_reply_and_closes_footer() {
         secs.iter().any(|n| *n < 300) && secs.iter().all(|n| (0..=300).contains(n)),
         "{secs:?}"
     );
-    let sent = b.opened()[1].adapter.sent_count();
-    assert_eq!(sent, 2);
+    // Р8: и поздний SYN-ACK из окна `--wait` получает свой RST без состояния (TX дожёвывает очередь до конца приёма).
+    let frames = b.opened()[1].adapter.sent_frames();
+    let sent = syns_and_one_rst_per_reply(&frames).len();
+    assert_eq!((sent, frames.len()), (2, 4));
     let finished = format!(
         "[+] finished: Paused, sent {sent}, replies {}, open {}",
         reported.len(),
@@ -3210,7 +3482,14 @@ fn infinite_scan_runs_multiple_passes_until_ctrl_c() {
         b.paused_writes().is_empty(),
         "no paused.conf for --infinite"
     );
-    let frames = b.opened()[1].adapter.sent_frames();
+    // Проходы это SYN; RST без состояния (Р8) идут на свежие ответы и в перестановку не входят.
+    let all = b.opened()[1].adapter.sent_frames();
+    assert!(
+        all.iter()
+            .all(|f| is_syn(f) || parse_ours(f, 0).unwrap().flags == TCP_RST),
+        "SYNs and stateless RSTs only"
+    );
+    let frames = syns(&all);
     assert!(frames.len() >= 9, "sent {}", frames.len());
     let first: BTreeSet<_> = frames[..3].iter().map(|f| syn_dst(f)).collect();
     assert_eq!(first.len(), 3, "pass 1 covers each target once");
@@ -3380,7 +3659,7 @@ fn conf_file_and_includefile_drive_a_live_scan() {
     let dir = Scratch::new();
     let conf = dir.write(
         "scan.conf",
-        b"# live scan from a file\nseed = 7\nports = 80\nrange = 198.51.100.1\nwait = 1\npcap-filename = from-conf.pcap\n",
+        b"# live scan from a file\nseed = 7\nports = 80\nrange = 198.51.100.1\nwait = 10\npcap-filename = from-conf.pcap\n",
     );
     let inc = dir.write("more.txt", b"198.51.100.2 # second target\n");
     let (c, i) = (conf.to_str().unwrap(), inc.to_str().unwrap());
@@ -3389,7 +3668,10 @@ fn conf_file_and_includefile_drive_a_live_scan() {
     let (r, _, log) = cli(&b, &["-c", c, "-iL", i]);
     r.unwrap();
     assert!(log.contains("finished: Completed"), "{log}");
-    assert_eq!(b.opened().last().unwrap().adapter.sent_count(), 2);
+    // Шум (RST с плохим cookie, ответ на чужой адрес) RST без состояния не получает: только два настоящих ответа.
+    let frames = b.opened().last().unwrap().adapter.sent_frames();
+    assert_eq!(syns_and_one_rst_per_reply(&frames).len(), 2);
+    assert_eq!(frames.len(), 4);
     assert_eq!(*b.pcap_opened.lock().unwrap(), ["from-conf.pcap"]);
 
     let b = FakeBackend::new();
@@ -3659,11 +3941,12 @@ fn offline_packet_trace_prints_the_c_icmp_sent_line() {
     );
 }
 
+/// `--wait 10` по той же причине, что у [`LIVE`].
 const TWO_NICS: [&str; 13] = [
     "198.51.100.1-198.51.100.2",
     "-p80,81",
     "--wait",
-    "1",
+    "10",
     "--seed",
     "7",
     "--adapter[0]",
@@ -3697,7 +3980,7 @@ fn adapter_index_out_of_bounds_fails() {
     let b1 = FakeBackend::new();
     let (r, _, _) = cli(&b1, &with(&LIVE, &["--seed", "7"]));
     r.unwrap();
-    let all = b1.opened().last().unwrap().adapter.sent_frames();
+    let all = syns_and_one_rst_per_reply(&b1.opened().last().unwrap().adapter.sent_frames());
     assert_eq!(all.len(), 4);
 
     let b = two_nic_backend();
@@ -3706,10 +3989,9 @@ fn adapter_index_out_of_bounds_fails() {
     assert!(log.contains("finished: Completed"), "{log}");
     let opened = b.opened();
     assert_eq!(opened.len(), 2, "no ARP adapter: both routers are given");
+    // Р8: RST без состояния уходит с того адаптера, чей приём взял ответ, то есть с адаптера его SYN.
     let dsts = |k: usize| -> Vec<(Ipv4Addr, u16)> {
-        opened[k]
-            .adapter
-            .sent_frames()
+        syns_and_one_rst_per_reply(&opened[k].adapter.sent_frames())
             .iter()
             .map(|f| syn_dst(f))
             .collect()
@@ -3781,7 +4063,7 @@ fn multi_adapter_paused_conf_round_trips_and_resumes() {
         let o = b.opened();
         let mut v: Vec<(Ipv4Addr, u16)> = o
             .iter()
-            .flat_map(|x| x.adapter.sent_frames())
+            .flat_map(|x| syns_and_one_rst_per_reply(&x.adapter.sent_frames()))
             .map(|f| syn_dst(&f))
             .collect();
         v.sort_unstable();
@@ -3813,9 +4095,7 @@ fn multi_adapter_paused_conf_round_trips_and_resumes() {
     // (индекс 1). Исчерпанный адаптер в минимум не входит (T7 I-2), база возобновления это база адаптера 1:
     // позиция 3 минус смещение 1.
     let dsts = |b: &FakeBackend, k: usize| -> Vec<(Ipv4Addr, u16)> {
-        b.opened()[k]
-            .adapter
-            .sent_frames()
+        syns_and_one_rst_per_reply(&b.opened()[k].adapter.sent_frames())
             .iter()
             .map(|f| syn_dst(f))
             .collect()
@@ -3825,10 +4105,7 @@ fn multi_adapter_paused_conf_round_trips_and_resumes() {
         let (r, _, _) = cli(&b1, &with(&LIVE, &["--seed", "7"]));
         r.unwrap();
         let o = b1.opened();
-        o.last()
-            .unwrap()
-            .adapter
-            .sent_frames()
+        syns_and_one_rst_per_reply(&o.last().unwrap().adapter.sent_frames())
             .iter()
             .map(|f| syn_dst(f))
             .collect()
@@ -4294,4 +4571,1078 @@ fn banner_sink_error_stops_the_scan_and_fails() {
     let fin = plus_lines(&log).last().copied().unwrap_or_default();
     assert!(fin.starts_with("[+] finished: "), "{log}");
     assert!(fin.ends_with(", open 1"), "{log}");
+}
+
+// ---------- TCP-баннеры с настоящим стеком (задача 14) ----------
+
+/// ISN пира: тот же, что у `reply_to_syn`.
+const PEER_ISN: u32 = 0x0bad_f00d;
+const TCP_FIN: u8 = 0x01;
+const TCP_SYN: u8 = 0x02;
+const TCP_RST: u8 = 0x04;
+const TCP_PSH: u8 = 0x08;
+const TCP_ACK: u8 = 0x10;
+
+/// Кадр Ethernet/IPv4/TCP.
+fn is_tcp4(f: &[u8]) -> bool {
+    f.get(12..14) == Some(&[0x08, 0x00][..]) && f.get(23) == Some(&6)
+}
+
+// Сценарии стека на `FakeAdapter` (ревью задачи 14, I3). Часы `ManualClock` двигает опрос приёма: пустой `recv` это
+// 50 мс часов за ~100 мкс реального времени, а TX опрашивает свою очередь по реальному времени. Под нагрузкой TX стоит,
+// пока часы уходят на секунды, поэтому всё, что зависит от задержки TX в часах движка, меняется: hello (+2 с) уходит
+// раньше, чем сервер ответил на наш ACK; неподтверждённый сегмент успевает повториться на тике +2 с; кадр не успевает
+// уйти до конца короткого `--wait`. Правило сценариев: окно `--wait 20` (меньше тика жизни +32 с), сервер, который
+// говорит первым, говорит вместе с SYN-ACK (`on_syn`), повтор сегмента допускается, а номера, байты и флаги
+// проверяются точно. Сетку тиков точно закрепляют тесты таблицы `rmasscan-proto` (`tcp/stack.rs`).
+
+/// Один сегмент пира; номера ведёт [`TcpPeer`].
+#[derive(Clone, Debug)]
+enum PeerAct {
+    Data(Vec<u8>),
+    Fin,
+    Rst,
+    Ack,
+}
+
+/// Сценарий порта: что послать сразу за SYN-ACK (не дожидаясь нашего ACK), на наш ACK SYN-ACK (сервер говорит первым),
+/// на наш первый сегмент с данными (hello или ответ парсера) и на наш FIN. Наш сегмент с данными без ответа сценария
+/// получает голый ACK, как у настоящего сервера.
+#[derive(Clone, Debug, Default)]
+struct PeerScript {
+    on_syn: Vec<PeerAct>,
+    on_connect: Vec<PeerAct>,
+    on_data: Vec<PeerAct>,
+    on_fin: Vec<PeerAct>,
+}
+
+/// Наш сегмент TCP поверх IPv4 глазами пира и момент его отправки по `ManualClock`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Sent {
+    at: u64,
+    to: (Ipv4Addr, u16),
+    flags: u8,
+    seq: u32,
+    ack: u32,
+    payload: Vec<u8>,
+}
+
+/// Состояние соединения у пира: их следующий номер и наш следующий номер (их ack).
+struct PeerConn {
+    next: u32,
+    ours: u32,
+    connected: bool,
+    answered: bool,
+}
+
+/// Пир TCP с настоящими номерами: SYN на порт со сценарием получает SYN-ACK (ISN [`PEER_ISN`]), SYN на прочие порты
+/// RST; дальше сегменты пира по [`PeerScript`]. Записывает каждый наш кадр TCP.
+struct TcpPeer {
+    scripts: Vec<(u16, PeerScript)>,
+    conns: std::collections::HashMap<(Ipv4Addr, u16), PeerConn>,
+    sent: Vec<Sent>,
+}
+
+impl TcpPeer {
+    fn new(scripts: Vec<(u16, PeerScript)>) -> Arc<Mutex<TcpPeer>> {
+        Arc::new(Mutex::new(TcpPeer {
+            scripts,
+            conns: std::collections::HashMap::new(),
+            sent: Vec::new(),
+        }))
+    }
+
+    fn script(&self, port: u16) -> Option<&PeerScript> {
+        self.scripts
+            .iter()
+            .find(|(p, _)| *p == port)
+            .map(|(_, s)| s)
+    }
+
+    fn respond(&mut self, f: &[u8], now: u64) -> Vec<Vec<u8>> {
+        let Some(s) = parse_ours(f, now) else {
+            return vec![];
+        };
+        self.sent.push(s.clone());
+        if s.flags == TCP_SYN {
+            if self.script(s.to.1).is_none() {
+                return reply_to_syn(f, TCP_RST).into_iter().collect();
+            }
+            let on_syn = self
+                .script(s.to.1)
+                .map(|p| p.on_syn.clone())
+                .unwrap_or_default();
+            let mut c = PeerConn {
+                next: PEER_ISN.wrapping_add(1),
+                ours: s.seq.wrapping_add(1),
+                connected: false,
+                answered: false,
+            };
+            let mut out: Vec<Vec<u8>> = reply_to_syn(f, TCP_SYN | TCP_ACK).into_iter().collect();
+            out.extend(c.segments(f, on_syn));
+            self.conns.insert(s.to, c);
+            return out;
+        }
+        let Some(script) = self.script(s.to.1).cloned() else {
+            return vec![];
+        };
+        let Some(c) = self.conns.get_mut(&s.to) else {
+            return vec![];
+        };
+        if s.flags & TCP_RST != 0 {
+            return vec![];
+        }
+        let fin = u32::from(s.flags & TCP_FIN != 0);
+        let end = s.seq.wrapping_add(s.payload.len() as u32).wrapping_add(fin);
+        if end.wrapping_sub(c.ours) < 0x8000_0000 {
+            c.ours = end;
+        }
+        let acts = if fin != 0 {
+            script.on_fin
+        } else if !s.payload.is_empty() {
+            match std::mem::replace(&mut c.answered, true) {
+                false if !script.on_data.is_empty() => script.on_data,
+                _ => vec![PeerAct::Ack],
+            }
+        } else if !std::mem::replace(&mut c.connected, true) {
+            script.on_connect
+        } else {
+            vec![]
+        };
+        c.segments(f, acts)
+    }
+}
+
+impl PeerConn {
+    /// Сегменты пира по порядку; номер их следующего байта растёт на данные и FIN.
+    fn segments(&mut self, f: &[u8], acts: Vec<PeerAct>) -> Vec<Vec<u8>> {
+        let c = self;
+        acts.into_iter()
+            .map(|a| {
+                let (flags, payload) = match a {
+                    PeerAct::Data(p) => (TCP_PSH | TCP_ACK, p),
+                    PeerAct::Fin => (TCP_FIN | TCP_ACK, Vec::new()),
+                    PeerAct::Rst => (TCP_RST | TCP_ACK, Vec::new()),
+                    PeerAct::Ack => (TCP_ACK, Vec::new()),
+                };
+                let frame = peer_frame(f, flags, c.next, c.ours, &payload);
+                c.next = c
+                    .next
+                    .wrapping_add(payload.len() as u32)
+                    .wrapping_add(u32::from(flags & TCP_FIN != 0));
+                frame
+            })
+            .collect()
+    }
+}
+
+/// Наш кадр TCP поверх IPv4: адресат, флаги, номера и нагрузка (по длине IP: кадры короче 60 байт добиты нулями).
+fn parse_ours(f: &[u8], at: u64) -> Option<Sent> {
+    if !is_tcp4(f) {
+        return None;
+    }
+    let ihl = usize::from(f[14] & 0x0f) * 4;
+    let total = usize::from(u16::from_be_bytes([f[16], f[17]]));
+    let tcp = 14 + ihl;
+    let doff = usize::from(f.get(tcp + 12)? >> 4) * 4;
+    let be32 = |i: usize| u32::from_be_bytes(f[i..i + 4].try_into().unwrap());
+    Some(Sent {
+        at,
+        to: (
+            Ipv4Addr::new(f[30], f[31], f[32], f[33]),
+            u16::from_be_bytes([f[tcp + 2], f[tcp + 3]]),
+        ),
+        flags: f[tcp + 13],
+        seq: be32(tcp + 4),
+        ack: be32(tcp + 8),
+        payload: f.get(tcp + doff..14 + total)?.to_vec(),
+    })
+}
+
+/// Сегмент пира в ответ на наш кадр `ours`: MAC, адреса и порты наоборот, TTL 64, окно 1024, верные суммы.
+fn peer_frame(ours: &[u8], flags: u8, seq: u32, ack: u32, payload: &[u8]) -> Vec<u8> {
+    use rmasscan_core::checksum::{checksum_ipv4, ip_header_checksum};
+    let ihl = usize::from(ours[14] & 0x0f) * 4;
+    let tcp = 14 + ihl;
+    let me = u32::from_be_bytes(ours[26..30].try_into().unwrap());
+    let them = u32::from_be_bytes(ours[30..34].try_into().unwrap());
+    let mut t = vec![0u8; 20];
+    t[0..2].copy_from_slice(&ours[tcp + 2..tcp + 4]);
+    t[2..4].copy_from_slice(&ours[tcp..tcp + 2]);
+    t[4..8].copy_from_slice(&seq.to_be_bytes());
+    t[8..12].copy_from_slice(&ack.to_be_bytes());
+    t[12] = 5 << 4;
+    t[13] = flags;
+    t[14..16].copy_from_slice(&1024u16.to_be_bytes());
+    t.extend_from_slice(payload);
+    let sum = checksum_ipv4(them, me, 6, &t);
+    t[16..18].copy_from_slice(&sum.to_be_bytes());
+    let mut i = vec![0u8; 20];
+    i[0] = 0x45;
+    i[2..4].copy_from_slice(&(20 + t.len() as u16).to_be_bytes());
+    i[8] = 64;
+    i[9] = 6;
+    i[12..16].copy_from_slice(&them.to_be_bytes());
+    i[16..20].copy_from_slice(&me.to_be_bytes());
+    let s = !ip_header_checksum(&i, 0, 20);
+    i[10..12].copy_from_slice(&s.to_be_bytes());
+    let mut f = Vec::new();
+    f.extend_from_slice(&ours[6..12]);
+    f.extend_from_slice(&ours[0..6]);
+    f.extend_from_slice(&[0x08, 0x00]);
+    f.extend_from_slice(&i);
+    f.extend_from_slice(&t);
+    f
+}
+
+impl FakeBackend {
+    /// Наши кадры TCP, которые видел пир, по порядку.
+    fn peer_sent(&self) -> Vec<Sent> {
+        self.tcp_peer.as_ref().unwrap().lock().unwrap().sent.clone()
+    }
+}
+
+fn unhex(s: &str) -> Vec<u8> {
+    (0..s.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+        .collect()
+}
+
+/// Каталог эталонов C `tests/golden/tcp-banners`.
+fn tcp_golden(rel: &str) -> String {
+    let path = format!(
+        "{}/../../tests/golden/tcp-banners/{rel}",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}"))
+}
+
+/// Поток сервера эталона C (`cases/<name>.in.txt`, сегменты подряд) и блок `run whole` его `.out`: вывод
+/// `banner1_parse` C на неразрезанном потоке (Р13, Р14).
+fn c_case(name: &str) -> (Vec<u8>, String) {
+    let input = tcp_golden(&format!("cases/{name}.in.txt"));
+    let stream = input
+        .lines()
+        .filter_map(|l| l.strip_prefix("segment "))
+        .flat_map(unhex)
+        .collect();
+    let out = tcp_golden(&format!("cases/{name}.out"));
+    let whole = out
+        .split("run whole")
+        .nth(1)
+        .and_then(|r| r.split("\nend").next())
+        .map(|r| format!("run whole{r}\nend"))
+        .unwrap_or_else(|| panic!("{name}.out has no whole run"));
+    (stream, whole)
+}
+
+/// Hello порта из таблицы `banner1_create` C (`hellos.out`).
+fn c_hello(port: u16) -> Vec<u8> {
+    let table = tcp_golden("hellos.out");
+    let line = table
+        .lines()
+        .find(|l| l.starts_with(&format!("hello port={port} ")))
+        .unwrap_or_else(|| panic!("no hello for port {port}"));
+    unhex(line.rsplit(' ').next().unwrap())
+}
+
+/// Наши кадры к `to` после SYN (без SYN).
+fn after_syn(sent: &[Sent], to: (Ipv4Addr, u16)) -> Vec<Sent> {
+    sent.iter()
+        .filter(|s| s.to == to && s.flags != TCP_SYN)
+        .cloned()
+        .collect()
+}
+
+/// Момент нашего SYN к `to`.
+fn syn_at(sent: &[Sent], to: (Ipv4Addr, u16)) -> u64 {
+    sent.iter()
+        .find(|s| s.to == to && s.flags == TCP_SYN)
+        .unwrap_or_else(|| panic!("no SYN to {to:?}: {sent:?}"))
+        .at
+}
+
+/// Строки `-oL` баннеров адреса `ip` порта `port` (текст после времени), по порядку файла.
+fn list_banners(file: &str, port: u16, ip: Ipv4Addr) -> Vec<String> {
+    let prefix = format!("banner tcp {port} {ip} {UNIX_TIME} ");
+    file.lines()
+        .filter_map(|l| l.strip_prefix(&prefix))
+        .map(str::to_string)
+        .collect()
+}
+
+/// Решение задачи 14: отказ 4a (`--banners` с портом TCP) снят: живой скан и `--offline` с `--banners` или `--rawudp`
+/// и портом TCP идут до конца, текста отказа больше нет.
+#[test]
+fn tcp_banners_no_longer_refused() {
+    for extra in [
+        &["-p80,81", "--banners"][..],
+        &["-p80,U:53", "--rawudp"],
+        &["--banners", "-pU:53,T:443"],
+    ] {
+        let b = FakeBackend::new();
+        let (r, _, log) = cli(
+            &b,
+            &with(&["198.51.100.1-198.51.100.2", "--wait", "1"], extra),
+        );
+        r.unwrap_or_else(|e| panic!("{extra:?}: {e}"));
+        assert!(log.contains("finished: Completed"), "{extra:?}: {log}");
+        assert!(!log.contains("next sub-stage"), "{log}");
+        let (r, _, log) = cli(
+            &hermetic(),
+            &with(
+                &[
+                    "--offline",
+                    "198.51.100.1",
+                    "--seed",
+                    "1",
+                    "--adapter-ip",
+                    "10.255.0.1",
+                    "--adapter-mac",
+                    "00-11-22-33-44-55",
+                    "--source-port",
+                    "40000",
+                ],
+                extra,
+            ),
+        );
+        r.unwrap_or_else(|e| panic!("offline {extra:?}: {e}"));
+        assert!(!log.contains("next sub-stage"), "{log}");
+    }
+}
+
+/// Р8 (`src/main.c:1094-1100`, справка A7): без `--banners` за каждым свежим ответом SYN-ACK и RST идёт один RST без
+/// состояния (seq = ack ответа, ack 0, флаги `0x04`); `--noreset` его снимает; с `--banners` его нет и без
+/// `--noreset` (C: `tcpcon != NULL`), вместо него стек отвечает на SYN-ACK своим ACK.
+///
+/// Ревью задачи 14, I3: часы `ManualClock` двигает опрос приёма по реальному времени, поэтому под нагрузкой они
+/// уходят вперёд, пока TX стоит. Окно `--wait 10` ([`LIVE`], вместо 1) оставляет TX время отправить каждый RST; ветка
+/// `--banners` не считает кадры (hello порта 80 и его повторы уходят, если часы ушли за 2 с) и берёт
+/// `--connection-timeout 3600`, чтобы RST по сроку жизни не появился при любом уходе часов: проверяются пустые ACK
+/// стека и отсутствие любого RST.
+#[test]
+fn stateless_rst_by_default_off_with_noreset_and_banners() {
+    let scan = |extra: &[&str]| {
+        let b = FakeBackend::new();
+        let (r, _, log) = cli(&b, &with(&LIVE, extra));
+        r.unwrap();
+        assert!(
+            log.contains("finished: Completed, sent 4, replies 4, open 2"),
+            "{log}"
+        );
+        b.opened()[1].adapter.sent_frames()
+    };
+    let rst_of = |f: &[u8]| {
+        let s = parse_ours(f, 0).unwrap();
+        (s.to, s.flags, s.seq, s.ack, s.payload.len())
+    };
+    let default = scan(&[]);
+    let syns: Vec<&Vec<u8>> = default.iter().filter(|f| is_syn(f)).collect();
+    assert_eq!(syns.len(), 4);
+    let rsts: Vec<_> = default
+        .iter()
+        .filter(|f| !is_syn(f))
+        .map(|f| rst_of(f))
+        .collect();
+    let mut want: Vec<_> = syns
+        .iter()
+        .map(|f| {
+            let s = parse_ours(f, 0).unwrap();
+            (s.to, TCP_RST, s.seq.wrapping_add(1), 0, 0)
+        })
+        .collect();
+    let mut got = rsts.clone();
+    want.sort_unstable();
+    got.sort_unstable();
+    assert_eq!(got, want, "one RST per fresh SYN-ACK and RST reply");
+    for extra in [&["--noreset"][..], &["--noreset=true"]] {
+        let frames = scan(extra);
+        assert_eq!(frames.len(), 4, "{extra:?}: SYNs only");
+        assert!(frames.iter().all(|f| is_syn(f)));
+    }
+    let off = scan(&["--noreset", "--noreset=false"]);
+    assert_eq!(off.len(), 8, "--noreset=false keeps the RSTs");
+    let life = ["--connection-timeout", "3600"];
+    for extra in [&["--banners"][..], &["--banners", "--noreset"]] {
+        let frames = scan(&with(extra, &life));
+        let ours: Vec<_> = frames
+            .iter()
+            .filter(|f| !is_syn(f))
+            .map(|f| parse_ours(f, 0).unwrap())
+            .collect();
+        assert!(
+            ours.iter().all(|s| s.flags & TCP_RST == 0),
+            "{extra:?}: no RST with --banners: {ours:?}"
+        );
+        let mut acks: Vec<_> = ours
+            .iter()
+            .filter(|s| s.payload.is_empty())
+            .map(|s| (s.to, s.flags, s.ack))
+            .collect();
+        acks.sort_unstable();
+        let want: Vec<_> = OPEN.iter().map(|&to| (to, TCP_ACK, PEER_ISN + 1)).collect();
+        assert_eq!(
+            acks, want,
+            "{extra:?}: the stack ACKs each SYN-ACK once, nothing else is empty: {ours:?}"
+        );
+        // Сегменты с данными это только hello открытого порта 80 (байты C) и его повторы; у 81 hello нет.
+        assert!(
+            ours.iter()
+                .filter(|s| !s.payload.is_empty())
+                .all(|s| s.to == (T1, 80) && s.payload == c_hello(80)),
+            "{extra:?}: {ours:?}"
+        );
+    }
+}
+
+/// Сценарий HTTP: SYN-ACK, через 2 с по `ManualClock` уходит hello порта 80 (`GET` 99 байт, `src/stack-tcp-app.c:76`,
+/// байты `banner1_create` C), ответ с `Server` и `<title>` и FIN; `-oL` даёт `open`, затем `http.server`, `title` и
+/// `http` в порядке banout C с байтами `banner1_parse` C на этом потоке (эталон `http-gws`).
+///
+/// Ревью задачи 14, I3: момент отправки hello проверяется только снизу (не раньше 2 с от SYN). Сверху его держит TX,
+/// которого под нагрузкой можно не дождаться, пока опрос приёма двигает часы; сетку тиков точно закрепляет
+/// `hello_two_seconds_after_synack_when_server_silent` (`rmasscan-proto`). Повтор hello (TX опоздал на 2 с) допустим:
+/// проверяется первый сегмент с данными.
+#[test]
+fn live_fake_http_banner_end_to_end() {
+    let (stream, whole) = c_case("http-gws");
+    assert_eq!(
+        whole,
+        "run whole calls=1\napp_proto 4\nrecord 31 3 \"gws\"\nrecord 17 1 \"x\"\nrecord 4 31 =stream\nend"
+    );
+    let mut b = FakeBackend::new();
+    b.tcp_peer = Some(TcpPeer::new(vec![(
+        80,
+        PeerScript {
+            on_data: vec![PeerAct::Data(stream.clone()), PeerAct::Fin],
+            on_fin: vec![PeerAct::Ack],
+            ..PeerScript::default()
+        },
+    )]));
+    let (r, out, log) = cli(
+        &b,
+        &[
+            "198.51.100.1",
+            "-p80",
+            "--banners",
+            "--wait",
+            "20",
+            "-oL",
+            "-",
+        ],
+    );
+    r.unwrap();
+    assert!(
+        log.contains("finished: Completed, sent 1, replies 1, open 1"),
+        "{log}"
+    );
+    let header = String::from_utf8_lossy(&stream[..31])
+        .replace('\r', "\\x0d")
+        .replace('\n', "\\x0a");
+    assert_eq!(
+        out,
+        format!(
+            "#masscan\nopen tcp 80 {T1} {UNIX_TIME}\n\
+             banner tcp 80 {T1} {UNIX_TIME} http.server gws\n\
+             banner tcp 80 {T1} {UNIX_TIME} title x\n\
+             banner tcp 80 {T1} {UNIX_TIME} http {header}\n# end\n"
+        )
+    );
+    let sent = b.peer_sent();
+    let to = (T1, 80);
+    let ours = after_syn(&sent, to);
+    let hello = ours
+        .iter()
+        .find(|s| !s.payload.is_empty())
+        .expect("the hello");
+    assert_eq!(hello.payload, c_hello(80));
+    assert_eq!(hello.payload.len(), 99);
+    assert!(hello.payload.starts_with(b"GET / HTTP/1.0\r\n"));
+    let delay = hello.at - syn_at(&sent, to);
+    assert!(
+        delay >= 2_000_000,
+        "the hello leaves no earlier than 2 s after the SYN-ACK: {delay} us"
+    );
+    // ACK на SYN-ACK до hello; FIN нашей стороны после FIN сервера (CLOSE_WAIT -> LAST_ACK).
+    assert_eq!((ours[0].flags, ours[0].ack), (TCP_ACK, PEER_ISN + 1));
+    assert!(ours.iter().any(|s| s.flags & TCP_FIN != 0), "{ours:?}");
+    assert!(ours.iter().all(|s| s.flags & TCP_RST == 0), "{ours:?}");
+}
+
+/// Сервер говорит первым (`App_ReceiveHello` + `RECV_PAYLOAD`, справка B5): hello порта (здесь `--hello http`, иначе
+/// у 22 его нет) не уходит никогда; ответ парсера SSH (`SSH-2.0-OPENSSH_7.9`, эталон `ssh2`) уходит, запись `ssh` это
+/// весь поток. Контроль: молчащий сервер на том же порту получает hello через 2 с.
+///
+/// Сервер шлёт приветствие вместе с SYN-ACK (`on_syn`): если бы он ждал нашего ACK, то TX, опоздавший под нагрузкой на
+/// 2 с часов, отдал бы ACK уже после тика hello. Каждый наш сегмент с данными это ответ парсера (повтор допустим).
+#[test]
+fn live_fake_ssh_server_first() {
+    let (stream, whole) = c_case("ssh2");
+    assert_eq!(
+        whole,
+        "run whole calls=1\napp_proto 3\naction send flags=0 21 \"SSH-2.0-OPENSSH_7.9\\x0d\\x0a\"\nrecord 3 21 =stream\nend"
+    );
+    let run = |on_syn: Vec<PeerAct>| {
+        let mut b = FakeBackend::new();
+        b.tcp_peer = Some(TcpPeer::new(vec![(
+            22,
+            PeerScript {
+                on_syn,
+                ..PeerScript::default()
+            },
+        )]));
+        let (r, out, log) = cli(
+            &b,
+            &[
+                "198.51.100.1",
+                "-p22",
+                "--banners",
+                "--hello",
+                "http",
+                "--wait",
+                "20",
+                "-oL",
+                "-",
+            ],
+        );
+        r.unwrap();
+        assert!(log.contains("finished: Completed"), "{log}");
+        (
+            after_syn(&b.peer_sent(), (T1, 22)),
+            out,
+            syn_at(&b.peer_sent(), (T1, 22)),
+        )
+    };
+    let (ours, out, _) = run(vec![PeerAct::Data(stream.clone())]);
+    let sends: Vec<&[u8]> = ours
+        .iter()
+        .filter(|s| !s.payload.is_empty())
+        .map(|s| s.payload.as_slice())
+        .collect();
+    assert!(!sends.is_empty(), "the parser's reply leaves: {ours:?}");
+    assert!(
+        sends
+            .iter()
+            .all(|p| *p == b"SSH-2.0-OPENSSH_7.9\r\n".as_slice()),
+        "no hello, only the parser's reply: {sends:?}"
+    );
+    assert_eq!(
+        list_banners(&out, 22, T1),
+        ["ssh SSH-2.0-OpenSSH_9.6\\x0d\\x0a"]
+    );
+    let (ours, out, syn) = run(vec![]);
+    let hello = ours.iter().find(|s| !s.payload.is_empty()).expect("hello");
+    assert_eq!(hello.payload, c_hello(80), "--hello http on port 22");
+    assert!(hello.at - syn >= 2_000_000);
+    assert!(list_banners(&out, 22, T1).is_empty(), "{out}");
+}
+
+/// Парсер закрывает соединение (IMAP4 после `* OK`, `src/proto-imap4.c:54-55`, эталон `imap4`): наш FIN уходит с
+/// ack за приветствием, сервер подтверждает его, запись `imap` (`* OK`) сбрасывается (`APP_CLOSE`).
+#[test]
+fn live_fake_parser_close_sends_our_fin() {
+    let (stream, whole) = c_case("imap4");
+    assert_eq!(
+        whole,
+        "run whole calls=1\napp_proto 13\naction close\naction close\nrecord 13 4 =stream\nend"
+    );
+    let mut b = FakeBackend::new();
+    b.tcp_peer = Some(TcpPeer::new(vec![(
+        143,
+        PeerScript {
+            on_connect: vec![PeerAct::Data(stream.clone())],
+            on_fin: vec![PeerAct::Ack, PeerAct::Fin],
+            ..PeerScript::default()
+        },
+    )]));
+    let (r, out, log) = cli(
+        &b,
+        &[
+            "198.51.100.1",
+            "-p143",
+            "--banners",
+            "--wait",
+            "20",
+            "-oL",
+            "-",
+        ],
+    );
+    r.unwrap();
+    assert!(log.contains("finished: Completed"), "{log}");
+    let sent = b.peer_sent();
+    let ours = after_syn(&sent, (T1, 143));
+    let syn = sent.iter().find(|s| s.flags == TCP_SYN).unwrap();
+    let after_greeting = PEER_ISN + 1 + stream.len() as u32;
+    let fin = ours
+        .iter()
+        .find(|s| s.flags & TCP_FIN != 0)
+        .unwrap_or_else(|| panic!("our FIN: {ours:?}"));
+    assert_eq!(
+        (fin.seq, fin.ack, fin.payload.len()),
+        (syn.seq + 1, after_greeting, 0),
+        "{ours:?}"
+    );
+    assert!(
+        ours.iter().all(|s| s.payload.is_empty()),
+        "no hello on 143: {ours:?}"
+    );
+    assert!(ours.iter().all(|s| s.flags & TCP_RST == 0), "{ours:?}");
+    assert_eq!(list_banners(&out, 143, T1), ["imap * OK"]);
+}
+
+/// RST сервера посреди ответа (справка A4: RST уничтожает блок): накопленное сбрасывается как у C на этом потоке
+/// (эталон `http-incomplete-header`: `http.server` и неполный заголовок), после RST мы ничего не шлём: последний наш
+/// кадр это ACK данных сервера, выданный до разбора RST. Повтор hello (TX опоздал на 2 с) встаёт в очередь раньше этого
+/// ACK: данные сервера подтверждают hello, и после них повторять нечего.
+#[test]
+fn live_fake_peer_rst_mid_reply_flushes() {
+    let (stream, whole) = c_case("http-incomplete-header");
+    assert_eq!(
+        whole,
+        "run whole calls=1\napp_proto 4\nrecord 31 3 \"gws\"\nrecord 4 25 =stream\nend"
+    );
+    let mut b = FakeBackend::new();
+    b.tcp_peer = Some(TcpPeer::new(vec![(
+        80,
+        PeerScript {
+            on_data: vec![PeerAct::Data(stream.clone()), PeerAct::Rst],
+            ..PeerScript::default()
+        },
+    )]));
+    let (r, out, log) = cli(
+        &b,
+        &[
+            "198.51.100.1",
+            "-p80",
+            "--banners",
+            "--wait",
+            "20",
+            "-oL",
+            "-",
+        ],
+    );
+    r.unwrap();
+    assert!(log.contains("finished: Completed"), "{log}");
+    let header = String::from_utf8_lossy(&stream[..25])
+        .replace('\r', "\\x0d")
+        .replace('\n', "\\x0a");
+    assert_eq!(
+        list_banners(&out, 80, T1),
+        ["http.server gws".to_string(), format!("http {header}")]
+    );
+    let ours = after_syn(&b.peer_sent(), (T1, 80));
+    // ACK на SYN-ACK, hello (и, может быть, его повтор), ACK данных сервера; после RST ни кадра, своего RST и FIN нет.
+    assert_eq!(
+        (ours[0].flags, ours[0].ack),
+        (TCP_ACK, PEER_ISN + 1),
+        "{ours:?}"
+    );
+    let last = ours.last().unwrap();
+    assert_eq!(
+        (last.flags, last.ack, last.payload.len()),
+        (TCP_ACK, PEER_ISN + 1 + stream.len() as u32, 0),
+        "the ACK of the server's data is our last frame: {ours:?}"
+    );
+    let middle = &ours[1..ours.len() - 1];
+    assert!(!middle.is_empty(), "{ours:?}");
+    assert!(
+        middle.iter().all(|s| s.payload == c_hello(80)),
+        "only the hello in between: {ours:?}"
+    );
+    assert!(
+        ours.iter().all(|s| s.flags & (TCP_RST | TCP_FIN) == 0),
+        "{ours:?}"
+    );
+}
+
+/// Срок жизни (`src/stack-tcp-core.c:1970-1980`, Р6): с `--connection-timeout 6` молчащее после приветствия соединение
+/// получает наш RST на тике +8 с (сетка 2 с от SYN-ACK, `created + 6 < tick`), seq наш следующий номер, ack их
+/// следующий; накопленный баннер (`unknown`, порт без парсера) сбрасывается. `--noreset` этот RST не снимает (Р8).
+///
+/// Ревью задачи 14, I3: момент RST проверяется только снизу (не раньше +8 с от SYN): тик +8 с, а не +6 и не +10, точно
+/// закрепляет `lifetime_rst_on_tick_after_timeout_with_late_processing` (`rmasscan-proto`), а отправку под нагрузкой
+/// держит TX, пока опрос приёма двигает часы. `--wait 30` (вместо 12) оставляет TX запас часов, чтобы RST ушёл до конца
+/// приёма. Сервер здоровается вместе с SYN-ACK (`on_syn`), так что ack нашего RST не зависит от того, когда TX отдал
+/// наш ACK.
+#[test]
+fn live_fake_lifetime_rst_at_timeout() {
+    for noreset in [false, true] {
+        let mut b = FakeBackend::new();
+        b.tcp_peer = Some(TcpPeer::new(vec![(
+            9999,
+            PeerScript {
+                on_syn: vec![PeerAct::Data(b"hello".to_vec())],
+                ..PeerScript::default()
+            },
+        )]));
+        let mut args = vec![
+            "198.51.100.1",
+            "-p9999",
+            "--banners",
+            "--connection-timeout",
+            "6",
+            "--wait",
+            "30",
+            "-oL",
+            "-",
+        ];
+        if noreset {
+            args.push("--noreset");
+        }
+        let (r, out, log) = cli(&b, &args);
+        r.unwrap();
+        assert!(log.contains("finished: Completed"), "{log}");
+        let sent = b.peer_sent();
+        let to = (T1, 9999);
+        let syn = sent.iter().find(|s| s.flags == TCP_SYN).unwrap().clone();
+        let ours = after_syn(&sent, to);
+        let rst: Vec<&Sent> = ours.iter().filter(|s| s.flags & TCP_RST != 0).collect();
+        assert_eq!(rst.len(), 1, "noreset {noreset}: {ours:?}");
+        assert_eq!(
+            (rst[0].flags, rst[0].seq, rst[0].ack),
+            (TCP_RST, syn.seq + 1, PEER_ISN + 1 + 5),
+            "{ours:?}"
+        );
+        let delay = rst[0].at - syn.at;
+        assert!(
+            delay >= 8_000_000,
+            "noreset {noreset}: lifetime RST no earlier than +8 s, got {delay} us"
+        );
+        assert_eq!(*ours.last().unwrap(), *rst[0], "nothing after the RST");
+        assert_eq!(list_banners(&out, 9999, T1), ["unknown hello"]);
+    }
+}
+
+/// Review Focus 1, Р6: сервер HTTP/1.1 держит соединение (`--wait 20` короче тика жизни +32 с); баннеры сбрасываются в
+/// конце окна ожидания без FIN и RST (`tcpcon_destroy_table`, `src/stack-tcp-core.c:933-961`), как у C на этом потоке
+/// (эталон `http-status`), и итог `Completed`.
+#[test]
+fn live_fake_keepalive_flushed_at_end_of_wait() {
+    let (stream, whole) = c_case("http-status");
+    assert_eq!(
+        whole,
+        "run whole calls=1\napp_proto 4\nrecord 31 3 \"lab\"\nrecord 4 31 =stream\nend"
+    );
+    let mut b = FakeBackend::new();
+    b.tcp_peer = Some(TcpPeer::new(vec![(
+        80,
+        PeerScript {
+            on_data: vec![PeerAct::Data(stream.clone())],
+            ..PeerScript::default()
+        },
+    )]));
+    let (r, out, log) = cli(
+        &b,
+        &[
+            "198.51.100.1",
+            "-p80",
+            "--banners",
+            "--wait",
+            "20",
+            "-oL",
+            "-",
+        ],
+    );
+    r.unwrap();
+    assert!(log.contains("finished: Completed"), "{log}");
+    let header = String::from_utf8_lossy(&stream[..31])
+        .replace('\r', "\\x0d")
+        .replace('\n', "\\x0a");
+    assert_eq!(
+        out,
+        format!(
+            "#masscan\nopen tcp 80 {T1} {UNIX_TIME}\n\
+             banner tcp 80 {T1} {UNIX_TIME} http.server lab\n\
+             banner tcp 80 {T1} {UNIX_TIME} http {header}\n# end\n"
+        )
+    );
+    let ours = after_syn(&b.peer_sent(), (T1, 80));
+    assert!(
+        ours.iter().all(|s| s.flags & (TCP_RST | TCP_FIN) == 0),
+        "the end-of-scan flush sends nothing: {ours:?}"
+    );
+}
+
+/// Review Focus 5: Ctrl-C с живым соединением. Пауза останавливает SYN, стек дожёвывает соединение до конца `--wait`,
+/// его баннер записан сбросом таблицы в конце (`tcpcon_destroy_table`); `paused.conf` побайтно тот же, что у того же
+/// argv с молчащим пиром.
+///
+/// Сценарий `PressInTx` держит TX внутри отправки первого SYN, пока цикл событий не увидит нажатие, и ещё 500 мс
+/// реального времени; приём в это время крутит пустые `recv`, и каждый двигает `ManualClock` на 50 мс (минуты часов
+/// движка). Поэтому сервер говорит первым прямо за SYN-ACK (наш ACK и всё, что стек ставит в очередь, ждут TX), а
+/// `--connection-timeout 3600` держит соединение живым через этот прогон часов до паузы и окна `--wait`.
+#[test]
+fn live_fake_pause_with_live_connections() {
+    let args = [
+        "198.51.100.1-198.51.100.3",
+        "-p80",
+        "--banners",
+        "--connection-timeout",
+        "3600",
+        "--wait",
+        "5",
+        "--seed",
+        "7",
+        "-oL",
+        "-",
+    ];
+    let run = |silent: bool| {
+        let mut b = FakeBackend::new();
+        b.press_in_tx = Some(PressInTx {
+            at: 1,
+            late_first: false,
+        });
+        b.silent_targets = silent;
+        b.tcp_peer = Some(TcpPeer::new(vec![(
+            80,
+            PeerScript {
+                on_syn: vec![PeerAct::Data(b"hello\r\n".to_vec())],
+                ..PeerScript::default()
+            },
+        )]));
+        let (r, out, log) = cli(&b, &args);
+        r.unwrap();
+        assert!(log.contains("finished: Paused, sent 1, "), "{log}");
+        assert_eq!(b.presses(), 1);
+        let writes = b.paused_writes();
+        assert_eq!(writes.len(), 1, "{log}");
+        let first = syn_dst(&b.opened()[1].adapter.sent_frames()[0]);
+        (out, writes[0].1.clone(), first)
+    };
+    let (out, conf, first) = run(false);
+    assert!(conf.contains("resume-index = 1\n"), "{conf}");
+    assert_eq!(
+        list_banners(&out, 80, first.0),
+        ["unknown hello\\x0d\\x0a"],
+        "the live connection's banner is written after --wait: {out}"
+    );
+    assert!(out.ends_with("# end\n"), "{out}");
+    let (silent_out, silent_conf, silent_first) = run(true);
+    assert_eq!(silent_first, first);
+    assert_eq!(
+        conf, silent_conf,
+        "paused.conf is the same with a silent peer"
+    );
+    // Ни одной записи: файл C пуст, без заголовка и подвала (`output.c:247-269`).
+    assert_eq!(silent_out, "");
+}
+
+/// Баннеры UDP с `--banners` не меняются, хотя движку теперь передан и стек TCP (`tcpcon` C при `is_banners`,
+/// `src/main.c:605`): те же строки, а на проводе только зонды UDP (ни RST без состояния, ни кадров стека).
+#[test]
+fn live_fake_udp_banners_unchanged() {
+    for extra in [&["--banners"][..], &["--rawudp"]] {
+        let mut b = FakeBackend::new();
+        b.udp_banners = true;
+        let (r, out, log) = cli(
+            &b,
+            &with(
+                &["198.51.100.1-198.51.100.2", "-pU:53,U:9999", "--wait", "1"],
+                extra,
+            ),
+        );
+        r.unwrap();
+        assert!(
+            log.contains("finished: Completed, sent 4, replies 4, open 2"),
+            "{log}"
+        );
+        let frames = b.opened()[1].adapter.sent_frames();
+        assert_eq!(frames.len(), 4, "{extra:?}: probes only");
+        assert!(frames.iter().all(|f| f.get(23) == Some(&17)), "{extra:?}");
+        let pad = |s: String| format!("{s:<79}\n");
+        let dns_open = pad(format!("Discovered open port 53/udp on {T1}"));
+        let dns = pad(format!("Banner on port 53/udp on {T1}: [dns-ver] 9.18.24"));
+        assert!(
+            out.contains(&format!("{dns_open}{dns}")),
+            "{extra:?}: {out}"
+        );
+        let other = pad(format!("Banner on port 9999/udp on {T1}: [unknown] hello"));
+        assert_eq!(out.matches(&other).count(), 2, "{extra:?}: {out}");
+    }
+}
+
+/// Строка `--infinite` (`main-status.c:214`) несёт `N-tcbs`, где N это созданные TCB (`status_tcb_count`,
+/// `src/main.c:984`), а не 0, как без стека.
+#[test]
+fn infinite_status_shows_tcbs() {
+    let mut b = FakeBackend::new();
+    b.press_in_tx = Some(PressInTx {
+        at: 6,
+        late_first: false,
+    });
+    let (r, _, log) = cli(
+        &b,
+        &with(&LIVE5, &["--infinite", "--banners", "--seed", "7"]),
+    );
+    r.unwrap();
+    let frags = status_fragments(&log);
+    assert!(!frags.is_empty(), "{log:?}");
+    let tcbs: Vec<u64> = frags
+        .iter()
+        .filter_map(|f| f.split(", ").find_map(|p| p.strip_suffix("-tcbs")))
+        .map(|n| n.parse().unwrap())
+        .collect();
+    assert_eq!(tcbs.len(), frags.len(), "{frags:?}");
+    assert_eq!(
+        tcbs.last(),
+        Some(&2),
+        "two open ports, one TCB each: {frags:?}"
+    );
+    assert!(tcbs.windows(2).all(|w| w[0] <= w[1]), "{frags:?}");
+}
+
+/// `--ndjson-status --infinite` (`json_fmt_infinite`, `src/main-status.c:54-67`): поле `"tcb"` это созданные TCB из
+/// `stack_stats()`, а `"tcbps"` их прирост за отсчёт (`:189-191`), ненулевой на отсчёте, где TCB появились.
+#[test]
+fn json_status_tcb_fields_follow_stack_stats() {
+    let mut b = FakeBackend::new();
+    b.press_in_tx = Some(PressInTx {
+        at: 6,
+        late_first: false,
+    });
+    let (r, _, log) = cli(
+        &b,
+        &with(
+            &LIVE5,
+            &["--infinite", "--banners", "--seed", "7", "--ndjson-status"],
+        ),
+    );
+    r.unwrap();
+    let frags = status_fragments(&log);
+    let field = |f: &str, name: &str| -> f64 {
+        let at = f
+            .find(&format!("\"{name}\":"))
+            .unwrap_or_else(|| panic!("{name} in {f}"));
+        f[at + name.len() + 3..]
+            .split([',', '}'])
+            .next()
+            .unwrap()
+            .parse()
+            .unwrap()
+    };
+    let tcb: Vec<f64> = frags.iter().map(|f| field(f, "tcb")).collect();
+    assert_eq!(tcb.last(), Some(&2.0), "{frags:?}");
+    // `tcbps` ненулевой ровно на отсчётах, где число TCB выросло (`current_tcbs = total - status->total_tcbs`).
+    let mut last = 0.0;
+    for (f, &n) in frags.iter().zip(&tcb) {
+        assert_eq!(field(f, "tcbps") > 0.0, n > last, "{f}");
+        last = n;
+    }
+    assert!(tcb.iter().any(|&n| n > 0.0));
+}
+
+/// Перенос 3 (ревью задачи 4, N1): ветка `Output::ConnectionBanner` цикла событий CLI, путь ошибки приёмника. Ошибка
+/// записи баннера соединения (не EPIPE) останавливает скан, как ошибка записи статуса: `[+] finished` с `sent`
+/// движка, затем ошибка приёмника (код 1).
+#[test]
+fn connection_banner_sink_error_stops_the_scan_and_fails() {
+    let mut b = FakeBackend::new();
+    b.tcp_peer = Some(TcpPeer::new(vec![(
+        9999,
+        PeerScript {
+            on_connect: vec![PeerAct::Data(b"hello".to_vec()), PeerAct::Fin],
+            on_fin: vec![PeerAct::Ack],
+            ..PeerScript::default()
+        },
+    )]));
+    let mut log = Vec::new();
+    let mut sink = FailingSink {
+        reports: 0,
+        on_finish: false,
+        on_banner: true,
+        banners: 0,
+    };
+    let args = ["198.51.100.1", "-p9999", "--banners", "--wait", "3600"];
+    let r = live::run_live(&config(&args), &b, &mut sink, &mut log);
+    let log = String::from_utf8(log).unwrap();
+    assert_eq!(r.unwrap_err(), SINK_ERROR);
+    assert_eq!(sink.banners, 1);
+    let fin = plus_lines(&log).last().copied().unwrap_or_default();
+    assert!(fin.starts_with("[+] finished: Stopped, sent 1, "), "{log}");
+    assert!(fin.ends_with(", open 1"), "{log}");
+}
+
+/// Итог счётчиков стека через цикл событий (решение 20): адаптер не принял ACK стека на SYN-ACK (кадр не повторяется,
+/// `src/stack-queue.c:74`, и считается в `frames_dropped`), и после строки статуса, до `[+] finished`, идёт ровно одна
+/// строка итога. Без потерь строк итога нет, сколько бы кадров ни осталось в очереди к концу `--wait` (ревью задачи 14,
+/// I2: они в `frames_left_unsent`, который итог не печатает; под нагрузкой hello через 2 с мог встать в очередь в
+/// последний момент окна).
+#[test]
+fn stack_summary_printed_after_the_event_loop() {
+    let run = |script: Vec<TxStep>| {
+        let mut b = FakeBackend::new();
+        b.tcp_peer = Some(TcpPeer::new(vec![(80, PeerScript::default())]));
+        b.scan_tx_script = script;
+        // `--wait 10`: ACK стека, который адаптер отказывает, должен успеть уйти до конца приёма и под нагрузкой.
+        let (r, _, log) = cli(&b, &["198.51.100.1", "-p80", "--banners", "--wait", "10"]);
+        r.unwrap();
+        log
+    };
+    let log = run(vec![TxStep::Sent, TxStep::WouldBlockUnsent]);
+    let line = "[-] banners: 1 stack frames dropped (transmit queue full)\n";
+    assert_eq!(log.matches("[-] banners:").count(), 1, "{log}");
+    let at = log.find(line).unwrap_or_else(|| panic!("{log}"));
+    let fin = log.find("[+] finished: Completed").unwrap();
+    assert_eq!(at + line.len(), fin, "right before [+] finished: {log}");
+    assert!(
+        log[..at].ends_with(&format!("{}\r", " ".repeat(77))),
+        "after the erased status line: {log:?}"
+    );
+    let log = run(Vec::new());
+    assert!(!log.contains("[-] banners:"), "{log}");
+}
+
+/// Ревью задачи 14, M1 и I2: ёмкость таблицы, которую CLI отдаёт движку, это `table_capacity` по `--rate` и
+/// `--connection-timeout` (`--rate 220 --connection-timeout 1`: `220 × (1 + 4)` = 1100, а не пол 1024), и строка «table
+/// full» итога приходит через цикл событий. 1150 целей молчат до последнего SYN, затем SYN-ACK приходят пачкой: 1100
+/// получают соединение, 50 только запись `open`. ACK стека 1100 соединений за `--wait 1` при `--rate 220` уйти не
+/// успевают; остаток очереди в конце скана C бросает молча, и строки «stack frames dropped» нет.
+#[test]
+fn stack_summary_table_full_through_the_event_loop() {
+    const TARGETS: usize = 1150;
+    let mut b = FakeBackend::new();
+    b.synack_burst = Some(TARGETS);
+    let (r, _, log) = cli(
+        &b,
+        &[
+            "198.18.0.0-198.18.4.125",
+            "-p80",
+            "--banners",
+            "--rate",
+            "220",
+            "--connection-timeout",
+            "1",
+            "--wait",
+            "1",
+        ],
+    );
+    r.unwrap();
+    assert!(
+        log.contains("finished: Completed, sent 1150, replies 1150, open 1150"),
+        "{log}"
+    );
+    let line = "[-] banners: 50 SYN-ACKs got no connection (table full, 1100 entries)\n";
+    assert_eq!(log.matches("[-] banners:").count(), 1, "{log}");
+    let at = log.find(line).unwrap_or_else(|| panic!("{log}"));
+    let fin = log.find("[+] finished: Completed").unwrap();
+    assert_eq!(at + line.len(), fin, "right before [+] finished: {log}");
+    let frames = b.opened()[1].adapter.sent_frames();
+    let syns = frames.iter().filter(|f| is_syn(f)).count();
+    assert_eq!(syns, TARGETS);
+    let acks: Vec<Sent> = frames
+        .iter()
+        .filter(|f| !is_syn(f))
+        .map(|f| parse_ours(f, 0).unwrap())
+        .collect();
+    assert!(
+        acks.iter()
+            .all(|s| s.flags == TCP_ACK && s.payload.is_empty()),
+        "only the stack's ACKs: {acks:?}"
+    );
+    assert!(
+        acks.len() < 1100,
+        "the end of --wait left stack frames in the queue: {} ACKs sent",
+        acks.len()
+    );
 }

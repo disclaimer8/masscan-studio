@@ -17,7 +17,9 @@ pub mod ranges;
 pub mod ranges6;
 pub mod receive;
 pub mod scan;
+pub mod stack;
 pub mod targets;
+pub mod tcp_frame;
 pub mod throttle;
 pub mod top_ports;
 #[cfg(test)]

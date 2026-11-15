@@ -683,6 +683,8 @@ enum Peer {
     Reply(Reply),
     /// The peer's ARP reply for the IPv4 default gateway to the scanner's next-hop resolution.
     NextHop,
+    /// The peer's who-has for the scanner's IPv4 address ([`av::peer_request_for`]): both scanners answer it.
+    RequestForScanner,
     Na(Na),
     Noise(&'static str, Option<(Ipv6Addr, Ipv6Addr)>),
     Unexpected(String),
@@ -690,6 +692,9 @@ enum Peer {
 fn answer(t: f64, f: &[u8], st: &Stand, v: &WireView) -> Peer {
     let unexpected = |what: &str| Peer::Unexpected(format!("{what} ({} bytes)", f.len()));
     if f.get(12..14) == Some(&[8, 6][..]) {
+        if av::peer_request_for(f, st.peer_mac, st.scanner_ip) {
+            return Peer::RequestForScanner;
+        }
         let ok = f.len() >= 42
             && f[14..22] == [0, 1, 8, 0, 6, 4, 0, 2]
             && f[38..42] == st.scanner_ip.octets()
@@ -780,6 +785,13 @@ pub struct WireView {
     pub peer_ns: Vec<(Ipv6Addr, Ipv6Addr)>,
     /// The peer's ARP replies to the next-hop resolution of the IPv4 part.
     pub next_hop_replies: usize,
+    /// The peer's who-has for the scanner's IPv4 address, with its time (none while the peer keeps its permanent
+    /// neighbour entry; both scanners answer one, [`pv::own_frame_checks`]'s rule).
+    pub peer_requests: Vec<(f64, Vec<u8>)>,
+    /// The scanner MAC's ARP replies that are not its kernel's: the scanner's own, judged against `peer_requests`.
+    pub scanner_arp_replies: Vec<(f64, Vec<u8>)>,
+    /// Each stateless RST of the scanner (R8), with the connection of the probe whose reply it resets.
+    pub stateless_rsts: Vec<av::OwnRst>,
     /// Frames of the scanner MAC that are no probe and belong to one of [`SCANNER_CLASSES`], by its key.
     pub scanner_named: BTreeMap<&'static str, usize>,
     /// Every other frame of the scanner MAC that is no probe and no [`STAND_NOISE`]: described.
@@ -803,7 +815,7 @@ impl StepView for WireView {
     }
 }
 /// The frames of the scanner MAC that are no probe of the scan and that the scanner side sends on the stand.
-pub const SCANNER_CLASSES: [(&str, &str); 5] = [
+pub const SCANNER_CLASSES: [(&str, &str); 7] = [
     (
         "next_hop_who_has",
         "the IPv4 next-hop resolution of a scan with IPv4 targets: an ARP who-has 198.18.0.2 from 198.18.0.1, 60 bytes zero-padded (the resolver form of C stack-arpv4.c and rmasscan)",
@@ -814,33 +826,35 @@ pub const SCANNER_CLASSES: [(&str, &str); 5] = [
     ),
     (
         "rst_to_syn_ack",
-        "a TCP RST (no other flag) from the scanner's address of the family whose sequence number is the acknowledgment of a SYN-ACK of the stand: the scanner namespace kernel resets a SYN-ACK no socket owns, and C resets each distinct SYN-ACK itself once it passed its dedup (main.c:1067-1068, :1095; tcp_send_RST builds IPv6 too)",
+        "the scanner namespace kernel's reset of a SYN-ACK no socket owns: a TCP RST (no other flag) from the scanner's address of the family whose sequence number is the acknowledgment of a SYN-ACK of the stand, in any form but the SYN template's (that one is stateless_rst)",
     ),
     (
         "na_to_peer_ns",
         "a Neighbor Advertisement of the scanner's address answering a Neighbor Solicitation of the peer for it: the scanner namespace kernel, and on rmasscan's step its NS responder (T4)",
     ),
     (
-        "rst_to_rst",
-        "C's own TCP RST (no other flag) from the scanner's address of the family whose sequence number is the acknowledgment of an RST of the stand (a closed port): C resets each distinct reply that passes its cookie check and dedup, the RST as well as the SYN-ACK (main.c:1048-1101, `TCP_IS_SYNACK || TCP_IS_RST`, then tcp_send_RST; live 7b r1), in its template's form (window 1200, the MSS option); only on the oracle's step: rmasscan has no RST path and no kernel answers an RST",
+        "stateless_rst",
+        "the scanner's own stateless RST (R8) of either family, both scanners alike: C resets each distinct reply that passes its cookie check and dedup, the RST of a closed port as well as the SYN-ACK (src/main.c:1048-1101, `TCP_IS_SYNACK || TCP_IS_RST`, then tcp_send_RST, which builds IPv6 too; live 7b r1), rmasscan the same (rmasscan_core::tcp_frame::stateless_rst); the frame is the probe's SYN template with seq the reply's acknowledgment, ack 0, flags 0x04, window 1200 (autodetect_verify::is_stateless_rst, 78 bytes over IPv6); no kernel answers an RST",
+    ),
+    (
+        "arp_reply_for_scanner",
+        "the IPv4 part: the scanner's own ARP reply to the peer's who-has for 198.18.0.1, both scanners alike (C src/main.c:878-887, src/stack-arpv4.c:282-363; rmasscan's responder), 60 bytes to the requester; judged against the requests (none while the peer keeps its permanent neighbour entry)",
+    ),
+    (
+        "kernel_arp_reply_for_scanner",
+        "the IPv4 part: the scanner namespace kernel's 42-byte ARP reply to the same who-has",
     ),
 ];
 /// How many frames of each [`SCANNER_CLASSES`] entry a step may hold: the resolver's request count when the step
 /// resolves that family's next hop ([`pv::NEXT_HOP_WHO_HAS_MAX_RMASSCAN`], [`pv::NEXT_HOP_WHO_HAS_MAX_C`],
 /// [`NEXT_HOP_NS_MAX`]; 0 otherwise: a scan without IPv4 targets never ARPs, a step given `--router-mac-ipv6` and C,
-/// which is always given it here, never solicit), one kernel reset per SYN-ACK frame plus on the oracle's step one
-/// reset of C per distinct SYN-ACK, per peer NS for the scanner one NA of the kernel plus, on rmasscan's step, one
-/// of its responder, and on the oracle's step one reset of C per distinct RST of the stand (none on rmasscan's).
-/// `(class, count, at most)` in [`SCANNER_CLASSES`] order.
-pub fn scanner_bounds(v: &WireView, who: Who, c: &CaseSpec) -> [(&'static str, usize, usize); 5] {
+/// which is always given it here, never solicit), one kernel reset per SYN-ACK frame, per peer NS for the scanner one
+/// NA of the kernel plus, on rmasscan's step, one of its responder, one stateless RST per distinct reply of the stand
+/// (SYN-ACK or RST, on both steps: the exact count is [`scanner_frames`]'s), and per who-has of the peer for the
+/// scanner's IPv4 address one ARP reply of the scanner and one of its kernel. `(class, count, at most)` in
+/// [`SCANNER_CLASSES`] order.
+pub fn scanner_bounds(v: &WireView, who: Who, c: &CaseSpec) -> [(&'static str, usize, usize); 7] {
     let syn_acks = v.replies.iter().filter(|r| r.st == St::Open).count();
-    let distinct = v
-        .replies
-        .iter()
-        .filter(|r| r.st == St::Open)
-        .map(|r| (r.ip, r.port))
-        .collect::<BTreeSet<_>>()
-        .len();
     let who_has = match (c.has_ipv4(), who) {
         (false, _) => 0,
         (true, Who::Rmasscan) => pv::NEXT_HOP_WHO_HAS_MAX_RMASSCAN,
@@ -851,23 +865,47 @@ pub fn scanner_bounds(v: &WireView, who: Who, c: &CaseSpec) -> [(&'static str, u
     } else {
         0
     };
-    let distinct_rst = v
-        .replies
-        .iter()
-        .filter(|r| r.st == St::Closed)
-        .map(|r| (r.ip, r.port))
-        .collect::<BTreeSet<_>>()
-        .len();
-    let (resets, na, c_resets_of_rst) = match who {
-        Who::Rmasscan => (syn_acks, 2 * v.peer_ns.len(), 0),
-        Who::Oracle => (syn_acks + distinct, v.peer_ns.len(), distinct_rst),
+    let na = match who {
+        Who::Rmasscan => 2 * v.peer_ns.len(),
+        Who::Oracle => v.peer_ns.len(),
     };
-    let max = [who_has, ns, resets, na, c_resets_of_rst];
-    let mut out = [("", 0, 0); 5];
+    let max = [
+        who_has,
+        ns,
+        syn_acks,
+        na,
+        distinct_replies(v).len(),
+        v.peer_requests.len(),
+        v.peer_requests.len(),
+    ];
+    let mut out = [("", 0, 0); 7];
     for (i, (k, _)) in SCANNER_CLASSES.iter().enumerate() {
         out[i] = (*k, v.scanner_named.get(k).copied().unwrap_or(0), max[i]);
     }
     out
+}
+/// A connection of the scan by C's dedup key (ip_them, port_them, ip_me, port_me; src/main.c:1067), ip_me fixed per
+/// family.
+fn conn_key(p: &Probe) -> String {
+    format!("{}:{} (scanner port {})", show_ip(p.ip), p.port, p.sport)
+}
+/// The distinct replies of the stand (SYN-ACK or RST), by [`conn_key`], each with the time of its first copy: each is
+/// owed one stateless RST, after that copy.
+fn distinct_replies(v: &WireView) -> BTreeMap<String, f64> {
+    let mut out: BTreeMap<String, f64> = BTreeMap::new();
+    for r in &v.replies {
+        if let Some(k) = v.probes.get(r.probe).map(conn_key) {
+            let first = out.entry(k).or_insert(r.t);
+            *first = first.min(r.t);
+        }
+    }
+    out
+}
+/// The probe whose SYN template a stateless RST `f` carries ([`av::is_stateless_rst`]).
+fn stateless_probe(f: &[u8], probes: &[Probe]) -> Option<usize> {
+    probes
+        .iter()
+        .position(|p| av::is_stateless_rst(&p.frame, f))
 }
 
 enum Mine {
@@ -877,6 +915,21 @@ enum Mine {
 }
 fn scanner_frame(f: &[u8], st: &Stand, v: &WireView) -> Mine {
     if f.get(12..14) == Some(&[8, 6][..]) {
+        if f.get(20..22) == Some(&[0, 2][..]) {
+            // An ARP reply: the kernel's to a who-has of the peer for the scanner's address, or the scanner's own
+            // (judged against the requests in `scanner_frames`).
+            return if v
+                .peer_requests
+                .iter()
+                .any(|(_, q)| av::kernel_arp_reply(q, f, st.scanner_mac, st.scanner_ip))
+            {
+                Mine::Class(SCANNER_CLASSES[6].0)
+            } else if f.len() == 60 {
+                Mine::Class(SCANNER_CLASSES[5].0)
+            } else {
+                Mine::Other(describe(f))
+            };
+        }
         return if av::resolver_request(f)
             && f[28..32] == st.scanner_ip.octets()
             && f[38..42] == GATEWAY.octets()
@@ -900,24 +953,24 @@ fn scanner_frame(f: &[u8], st: &Stand, v: &WireView) -> Mine {
         return Mine::Other(describe(f));
     }
     if let Some(x) = tcp(&p).filter(|x| x.flags & 0x04 != 0) {
-        // the reply of status `st` that this RST answers: its ports reversed, its acknowledgment as the sequence
-        let answers = |st: St| {
-            x.flags == 0x04
-                && v.replies.iter().any(|r| {
-                    r.st == st
-                        && r.ip == p.dst
-                        && pkt(&r.frame)
-                            .and_then(|q| tcp(&q))
-                            .is_some_and(|y| (y.sp, y.dp, y.ack) == (x.dp, x.sp, x.seq))
-                })
-        };
-        return if answers(St::Open) {
+        if stateless_probe(f, &v.probes).is_some() {
+            return Mine::Class(SCANNER_CLASSES[4].0);
+        }
+        // The kernel's reset of a SYN-ACK: its ports reversed, its acknowledgment as the sequence. No kernel resets an
+        // RST, so an RST of a closed port is answered only by the stateless RST above.
+        let kernel = x.flags == 0x04
+            && v.replies.iter().any(|r| {
+                r.st == St::Open
+                    && r.ip == p.dst
+                    && pkt(&r.frame)
+                        .and_then(|q| tcp(&q))
+                        .is_some_and(|y| (y.sp, y.dp, y.ack) == (x.dp, x.sp, x.seq))
+            });
+        return if kernel {
             Mine::Class(SCANNER_CLASSES[2].0)
-        } else if answers(St::Closed) {
-            Mine::Class(SCANNER_CLASSES[4].0)
         } else {
             Mine::Other(format!(
-                "{}, which resets no SYN-ACK and no RST of the stand",
+                "{}, which resets no SYN-ACK of the stand the kernel's way and is no stateless RST of a probe",
                 describe(f)
             ))
         };
@@ -985,7 +1038,7 @@ pub fn view(fr: &Frames, st: &Stand) -> WireView {
     let (start, end) = av::window(&w);
     let inside = |t: f64| (start..=end).contains(&t);
     let mut v = WireView::default();
-    let mut mine: Vec<&Vec<u8>> = Vec::new();
+    let mut mine: Vec<(f64, &Vec<u8>)> = Vec::new();
     let marker = |f: &[u8]| f.get(12..14) == Some(&crate::link::MARKER_ETHERTYPE[..]);
     for (t, f) in fr {
         if marker(f) {
@@ -1009,7 +1062,7 @@ pub fn view(fr: &Frames, st: &Stand) -> WireView {
                     resolver_form: is_next_hop_ns(f, st),
                 });
             }
-            mine.push(f);
+            mine.push((*t, f));
             continue;
         }
         if f.get(6..12) == Some(&st.peer_mac[..]) {
@@ -1019,6 +1072,7 @@ pub fn view(fr: &Frames, st: &Stand) -> WireView {
                     v.replies.push(r);
                 }
                 Peer::NextHop => v.next_hop_replies += 1,
+                Peer::RequestForScanner => v.peer_requests.push((*t, f.clone())),
                 Peer::Na(n) => {
                     v.outside_window += usize::from(!inside(*t));
                     v.na.push(n);
@@ -1035,9 +1089,21 @@ pub fn view(fr: &Frames, st: &Stand) -> WireView {
             }
         }
     }
-    for f in mine {
+    for (t, f) in mine {
         match scanner_frame(f, st, &v) {
-            Mine::Class(k) => *v.scanner_named.entry(k).or_insert(0) += 1,
+            Mine::Class(k) => {
+                if k == SCANNER_CLASSES[4].0 {
+                    let probe = stateless_probe(f, &v.probes).and_then(|i| v.probes.get(i));
+                    v.stateless_rsts.extend(probe.map(|p| av::OwnRst {
+                        t,
+                        key: conn_key(p),
+                        frame: f.clone(),
+                    }));
+                } else if k == SCANNER_CLASSES[5].0 {
+                    v.scanner_arp_replies.push((t, f.clone()));
+                }
+                *v.scanner_named.entry(k).or_insert(0) += 1;
+            }
             Mine::Noise(k) => *v.noise.entry(k).or_insert(0) += 1,
             Mine::Other(what) => v.scanner_unexplained.push(what),
         }
@@ -1133,6 +1199,11 @@ pub fn plan_frames(targets: &str, ports: &str) -> Result<Vec<Vec<u8>>, String> {
 }
 pub fn plan_stream(c: &CaseSpec) -> Result<Vec<Vec<u8>>, String> {
     plan_frames(c.targets, c.ports)
+}
+/// The product's plan of a case ([`plan_stream`]).
+pub fn ready_plan(c: &CaseSpec) -> Result<ReadyPlan, String> {
+    ReadyPlan::new_cli(effective(c.targets, c.ports)?, vec![nic_binding()])
+        .map_err(|e| e.to_string())
 }
 /// The v4-order invariant on the wire, bytes: every IPv4 probe of the mixed scan is, byte for byte, the probe the
 /// IPv4-only plan (the same scan without its IPv6 targets) sends to the same address and port, and the IPv4-only plan
@@ -1569,10 +1640,23 @@ fn scanner_frames(r: &mut Run, s: &Side<WireView>, v: &WireView, c: &CaseSpec) {
     scanner_frame_checks(
         r,
         s,
-        "every frame of the scanner MAC is a probe of the scan or of a named class (next-hop who-has, next-hop NS, RST to a SYN-ACK, C's RST to an RST of the stand, NA to a peer NS)",
+        "every frame of the scanner MAC is a probe of the scan or of a named class (next-hop who-has, next-hop NS, the kernel's RST to a SYN-ACK, NA to a peer NS, the scanner's stateless RST, ARP replies for the scanner's IPv4 address)",
         &v.scanner_unexplained,
-        "the named scanner-side frames stay within their bounds (who-has and NS: the resolver's request count when the step resolves that next hop, else 0; RST: one per SYN-ACK frame, on the oracle's step plus one per distinct SYN-ACK; C's RST to an RST: one per distinct RST of the stand on the oracle's step, none on rmasscan's; NA: per peer NS one of the kernel, plus one of rmasscan's responder)",
+        "the named scanner-side frames stay within their bounds (who-has and NS: the resolver's request count when the step resolves that next hop, else 0; the kernel's RST: one per SYN-ACK frame; NA: per peer NS one of the kernel, plus one of rmasscan's responder; the stateless RST: one per distinct reply of the stand, SYN-ACK or RST; ARP replies of the scanner and of its kernel: one each per who-has of the peer)",
         &scanner_bounds(v, s.spec.who, c),
+    );
+    pair_verify::own_frame_checks(
+        r,
+        s,
+        &distinct_replies(v),
+        &v.stateless_rsts,
+        &v.peer_requests,
+        &v.scanner_arp_replies,
+        v.probes
+            .first()
+            .zip(v.probes.last())
+            .map(|(a, b)| (a.t, b.t)),
+        &stand(),
     );
 }
 

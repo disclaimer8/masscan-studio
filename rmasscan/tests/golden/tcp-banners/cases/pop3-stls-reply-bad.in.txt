@@ -1,0 +1,4 @@
+tcp-banner-input v1
+port 110
+capture none
+segment 2b4f4b20780d0a2b4f4b0d0a2e0d0a2b4f4e0d0a

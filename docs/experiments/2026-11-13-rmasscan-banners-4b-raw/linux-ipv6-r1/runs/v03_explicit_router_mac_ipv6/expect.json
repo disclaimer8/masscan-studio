@@ -1,0 +1,22 @@
+{
+  "tag": "v03_explicit_router_mac_ipv6",
+  "targets": "[fd00:198:18::2]-[fd00:198:18::5]",
+  "ports": "80,81",
+  "router_mac_given": true,
+  "oracle_extra": [
+    "--adapter-ip",
+    "fd00:198:18::1"
+  ],
+  "steps": [
+    {
+      "name": "json",
+      "who": "rmasscan",
+      "out": "json"
+    },
+    {
+      "name": "oracle-json",
+      "who": "oracle",
+      "out": "json"
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+tcp-oracle v1 port=25 capture=none segments=1 bytes=37
+run whole calls=1
+app_proto 5
+action send flags=0 10 "AUTH TLS\x0d\x0a"
+record 5 35 "220-mail.example.test ESMTP\x0a220 ok\x0a"
+end
+run bytewise calls=37
+app_proto 5
+action send flags=0 10 "AUTH TLS\x0d\x0a"
+record 1 3 =stream
+record 5 35 "220-mail.example.test ESMTP\x0a220 ok\x0a"
+end

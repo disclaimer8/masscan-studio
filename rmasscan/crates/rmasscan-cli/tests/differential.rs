@@ -210,6 +210,40 @@ fn dead_stderr_error_exits_one_not_panic() {
     }
 }
 
+/// Parse errors from clap exit 1 like C's `exit(1)` for an unknown name (`src/main-conf.c:3036`), not clap's 2, with
+/// clap's text on stderr and nothing on stdout; so does an unclosed `[` (Р17). `--help` and `-V` print to stdout and
+/// exit 0 (C prints its help and exits 1, `:3225-3227`).
+#[test]
+fn clap_errors_exit_1() {
+    for (args, text) in [
+        (&["--echo", "--bogus"][..], "unexpected argument '--bogus'"),
+        (
+            &["--echo", "10.0.0.0/30", "-p80", "--seed"][..],
+            "a value is required for '--seed <N>'",
+        ),
+        (
+            &["--echo", "10.0.0.0/30", "-p80", "--seed", "x"][..],
+            "invalid value 'x' for '--seed <N>'",
+        ),
+        (
+            &["--echo", "--rate[", "100"][..],
+            "--rate[: unclosed '[' in the option name",
+        ),
+    ] {
+        let out = spawn_readonly(args);
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(1), "{args:?}: {err}");
+        assert!(out.stdout.is_empty(), "{args:?}");
+        assert!(err.contains(text), "{args:?}: {err}");
+    }
+    for args in [&["--help"][..], &["-V"][..]] {
+        let out = spawn_readonly(args);
+        assert_eq!(out.status.code(), Some(0), "{args:?}");
+        assert!(!out.stdout.is_empty(), "{args:?}");
+        assert!(out.stderr.is_empty(), "{args:?}");
+    }
+}
+
 /// Launches the CLI once (`--help`) and waits for it, outside any timed region,
 /// so the OS loader / antivirus cost of a freshly linked EXE is paid up front.
 /// Bounded: a hanging `--help` is killed and fails the test after 60 s instead of

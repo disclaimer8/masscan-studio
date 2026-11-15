@@ -335,6 +335,13 @@ impl Sink for Pipeline<'_> {
         Pipeline::report_banner(self, &b)
     }
 
+    /// Время по часам приёмника в момент обработки (`global_now` при сбросе TCB, `src/stack-tcp-core.c:800-830`,
+    /// справка B3), а не время последней записи статуса: соединение кончается позже, чем записан его `open`.
+    fn report_connection_banner(&mut self, mut b: BannerRecord) -> Result<(), String> {
+        b.timestamp = self.env.wall.unix_time();
+        Pipeline::report_banner(self, &b)
+    }
+
     /// `close_rotate` (`output.c:247–269`): подвал только если файл не пуст, затем flush и закрытие.
     fn finish(&mut self) -> Result<(), String> {
         let cx = file_ctx(
@@ -1219,5 +1226,77 @@ mod tests {
         assert_eq!(count(&banner9(1_800_000_001)), 2, "{bin:?}");
         assert_eq!(count(&banner9(1_700_000_000)), 1, "{bin:?}");
         assert_eq!(count(&banner9(0)), 0, "{bin:?}");
+    }
+
+    /// Баннер соединения TCP (`Sink::report_connection_banner`) к записи статуса не привязан: время записи это часы
+    /// приёмника в момент обработки (`global_now` C при сбросе TCB, `banner_flush`, `src/stack-tcp-core.c:800-830`,
+    /// справка B3), а не время последней записи статуса и не 0 от движка; так в `-oL` и в записи типа 9 `-oB`.
+    #[test]
+    fn connection_banner_stamped_at_processing() {
+        // Часы, которые двигает только тест: сколько раз их читает конвейер, не важно.
+        struct Manual(std::cell::Cell<u64>);
+        impl Wall for Manual {
+            fn unix_time(&self) -> u64 {
+                self.0.get()
+            }
+            fn utc_offset_secs(&self, _: u64) -> i32 {
+                0
+            }
+        }
+        let run = |format: Format| {
+            let wall = Manual(std::cell::Cell::new(1_800_000_000));
+            let mut out = Vec::new();
+            {
+                let env = OutputEnv {
+                    wall: &wall,
+                    services: services::empty(),
+                    ports: Vec::new(),
+                    scan_started: None,
+                };
+                let mut p = Pipeline::new(opts(format, Some("-")), &mut out, env);
+                p.open().unwrap();
+                let reply = Reply {
+                    remote_ip: 0x0102_0304,
+                    remote_port: 80,
+                    local_ip: 0xC000_0205,
+                    local_port: 40000,
+                    status: rmasscan_core::receive::PortStatus::Open,
+                    tcp_flags: 0x12,
+                    ttl: 57,
+                    ip_proto: 6,
+                    mac: None,
+                    ip6: None,
+                };
+                wall.0.set(1_800_000_010);
+                p.report(&reply).unwrap();
+                let conn = BannerRecord {
+                    timestamp: 0,
+                    ..http_banner()
+                };
+                wall.0.set(1_800_000_020);
+                p.report_connection_banner(conn.clone()).unwrap();
+                wall.0.set(1_800_000_030);
+                p.report_connection_banner(conn).unwrap();
+                p.finish().unwrap();
+            }
+            out
+        };
+        let list = String::from_utf8(run(Format::List)).unwrap();
+        let times = |kind: &str| -> Vec<String> {
+            list.lines()
+                .filter(|l| l.starts_with(kind))
+                .filter_map(|l| l.split(' ').nth(4).map(str::to_string))
+                .collect()
+        };
+        assert_eq!(times("open "), ["1800000010"], "{list}");
+        assert_eq!(times("banner "), ["1800000020", "1800000030"], "{list}");
+        // `-oB`: запись типа 9 (`src/out-binary.c:293-355`) несёт время BE, затем адрес.
+        let bin = run(Format::Binary);
+        let at = |ts: u32| {
+            let rec = [&ts.to_be_bytes()[..], &[1, 2, 3, 4]].concat();
+            bin.windows(rec.len()).filter(|w| *w == rec).count()
+        };
+        assert_eq!((at(1_800_000_020), at(1_800_000_030)), (1, 1), "{bin:?}");
+        assert_eq!(at(0), 0, "{bin:?}");
     }
 }

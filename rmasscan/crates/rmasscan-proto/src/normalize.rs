@@ -101,4 +101,34 @@ mod tests {
         assert_eq!(s.len(), 65_532 + 2);
         assert!(s.ends_with("xy"));
     }
+
+    /// Все 256 байт одиночкой и подряд по `normalize_json_string` (`src/out-json.c:69-97`): `isprint` без
+    /// `< > & \ " '` как есть, остальное `\u00nn` строчными.
+    #[test]
+    fn normalize_json_string_all_bytes() {
+        let mut want_all = String::new();
+        for b in 0u8..=255 {
+            let printable = (0x20..=0x7E).contains(&b) && !b"<>&\\\"'".contains(&b);
+            let want = if printable {
+                char::from(b).to_string()
+            } else {
+                format!("\\u00{b:02x}")
+            };
+            assert_eq!(normalize_json_string(&[b]), want, "byte {b:#x}");
+            want_all.push_str(&want);
+        }
+        let all: Vec<u8> = (0u8..=255).collect();
+        assert_eq!(normalize_json_string(&all), want_all);
+        // Ровно шесть знаков на экранированный байт, начало и конец таблицы.
+        assert_eq!(normalize_json_string(&[0x00]), "\\u0000");
+        assert_eq!(normalize_json_string(&[0xFF]), "\\u00ff");
+        assert_eq!(normalize_json_string(&[0x7F]), "\\u007f");
+        // Жёсткие литералы по `src/out-json.c:82`: `"` и `\` экранируются `\u00nn`, не `\"`/`\\`.
+        assert_eq!(normalize_json_string(b"\""), "\\u0022");
+        assert_eq!(normalize_json_string(b"\\"), "\\u005c");
+        assert_eq!(normalize_json_string(&[0x80]), "\\u0080");
+        assert_eq!(normalize_json_string(&[0x1F]), "\\u001f");
+        assert_eq!(normalize_json_string(b" "), " ");
+        assert_eq!(normalize_json_string(b"~"), "~");
+    }
 }

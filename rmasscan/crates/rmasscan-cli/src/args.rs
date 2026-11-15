@@ -3,7 +3,7 @@
 //! :2434) из masscan © Robert David Graham
 //! (github.com/robertdavidgraham/masscan, HEAD 8e6b3b0).
 //!
-//! Любая опция вне подмножества (например `--heartbleed` или `--hello`) - ошибка clap,
+//! Любая опция вне подмножества (например `--heartbleed` или `--script`) - ошибка clap,
 //! а не молчаливый пропуск (Review Focus №5).
 //!
 //! Опции вывода (`SET_output_*`, main-conf.c:1616–1806, `-o<буква>` :3401–3459) разбираются с семантикой C:
@@ -25,7 +25,7 @@ use rmasscan_core::targets::{
     TEMPL_ICMP_ECHO, TEMPL_SCTP, TEMPL_UDP, add_top_ports, parse_ports_with, range_parse_ipv4,
 };
 
-use crate::conf::{FullConf, OutputConfPatch, apply_conf_key, banner_app};
+use crate::conf::{FullConf, OutputConfPatch, apply_conf_key, banner_app, check_c_index};
 use crate::output::{Format, OutputOptions};
 use crate::status::StatusMode;
 
@@ -48,7 +48,7 @@ const REDIS_REFUSAL: &str =
     version,
     about = "Rust port of masscan: TCP SYN scan with adapter and gateway auto-detection, masscan output formats, --readscan, --offline, -sL, --echo and --iflist",
     disable_help_subcommand = true,
-    after_help = "Examples:\n  sudo rmasscan 198.51.100.0/24 -p80,443\n  rmasscan --offline 198.51.100.0/24 -p80 --seed 1\n  rmasscan --iflist\n  rmasscan -sL 10.0.0.0/24 -p80,443 --seed 1\n  rmasscan --echo 10.0.0.0/24 -p80 --seed 1\n  rmasscan --offline --packet-trace 10.0.0.0/30 -p80 --seed 1 \\\n    --adapter-ip 10.255.0.1 --adapter-mac 00-11-22-33-44-55 --source-port 40000-40003\n  sudo rmasscan 198.51.100.0/24 -p80 -oB scan.bin\n  rmasscan -p80 --readscan scan.bin -oJ scan.json\n  sudo rmasscan 198.51.100.0/24 -pU:53,123,161 --banners -oB udp.bin\n\nOutput (scan and --readscan only): -oL list, -oJ json, -oD ndjson, -oG grepable, -oX xml, -oB binary,\n-oH hostonly, -oU unicornscan, each followed by FILE (- is stdout); --output-format certs\n--output-filename FILE prints banners as PEM certificates on stdout. With a file format stdout is silent\nunless --interactive is given. --banners (UDP ports only in this version) adds banner records.\n\nWithout an operation flag rmasscan scans: it picks the interface that routes to the targets, its first IPv4\naddress and MAC, resolves the next hop with ARP (unless --router-mac is given) and needs root/Administrator\nonly to open the adapter. IPv6 targets (TCP only) take the source address and next hop of the IPv6 route,\nresolved with an NDP neighbor solicitation (unless --router-mac-ipv6 is given). Detection, --offline and\n--iflist only read the OS and never transmit.\nOperations: -sL, --echo, --echo-all, --offline [--packet-trace], --iflist, --readscan (mutually exclusive).\n--seed is required (and must be non-zero) for -sL, --echo and --offline; a live scan without --seed uses\nOS entropy and prints it. [+] lines go to stderr. Any other masscan option is an error."
+    after_help = "Examples:\n  sudo rmasscan 198.51.100.0/24 -p80,443\n  rmasscan --offline 198.51.100.0/24 -p80 --seed 1\n  rmasscan --iflist\n  rmasscan -sL 10.0.0.0/24 -p80,443 --seed 1\n  rmasscan --echo 10.0.0.0/24 -p80 --seed 1\n  rmasscan --offline --packet-trace 10.0.0.0/30 -p80 --seed 1 \\\n    --adapter-ip 10.255.0.1 --adapter-mac 00-11-22-33-44-55 --source-port 40000-40003\n  sudo rmasscan 198.51.100.0/24 -p80 -oB scan.bin\n  rmasscan -p80 --readscan scan.bin -oJ scan.json\n  sudo rmasscan 198.51.100.0/24 --banners -p80 -oB tcp.bin\n  sudo rmasscan 198.51.100.0/24 -pU:53,123,161 --banners -oB udp.bin\n\nOutput (scan and --readscan only): -oL list, -oJ json, -oD ndjson, -oG grepable, -oX xml, -oB binary,\n-oH hostonly, -oU unicornscan, each followed by FILE (- is stdout); --output-format certs\n--output-filename FILE prints banners as PEM certificates on stdout. With a file format stdout is silent\nunless --interactive is given. --banners adds banner records: UDP replies, and TCP connections through a\nuser-mode TCP stack (give --adapter-ip an address the OS does not own, or the kernel resets them).\nTCP banner options whose name carries a port or a field (not in the list above):\n  --hello-string[PORT] BASE64  the hello sent on TCP port PORT (base64)\n  --hello-file[PORT] FILE      the same from a file (alias: --hello-filename[PORT])\n  --http-header NAME:VALUE     a field of the HTTP banner request, also --http-header[NAME] VALUE (at most 16)\n\nWithout an operation flag rmasscan scans: it picks the interface that routes to the targets, its first IPv4\naddress and MAC, resolves the next hop with ARP (unless --router-mac is given) and needs root/Administrator\nonly to open the adapter. IPv6 targets (TCP only) take the source address and next hop of the IPv6 route,\nresolved with an NDP neighbor solicitation (unless --router-mac-ipv6 is given). Detection, --offline and\n--iflist only read the OS and never transmit.\nOperations: -sL, --echo, --echo-all, --offline [--packet-trace], --iflist, --readscan (mutually exclusive).\n--seed is required (and must be non-zero) for -sL, --echo and --offline; a live scan without --seed uses\nOS entropy and prints it. [+] lines go to stderr. Any other masscan option is an error."
 )]
 pub struct Cli {
     // Цели: IP, CIDR, `a.b.c.d-e.f.g.h`, списки через запятую.
@@ -57,9 +57,11 @@ pub struct Cli {
         help = "Targets: IPv4 or IPv6 address, CIDR, a.b.c.d-e.f.g.h, or comma-separated list"
     )]
     pub targets: Vec<String>,
-    // `--range` (main-conf.c:2729): то же, что позиционная цель.
+    // `--range` (main-conf.c:2730-2734, синонимы C `ranges`, `ip`, `ipv4`, `dst-ip`, `dest-ip`, `destination-ip`,
+    // `target-ip`): то же, что позиционная цель.
     #[arg(
         long = "range",
+        aliases = ["ranges", "ip", "ipv4", "dst-ip", "dest-ip", "destination-ip", "target-ip"],
         value_name = "RANGE",
         help = "Target range (same as a positional target)"
     )]
@@ -88,10 +90,12 @@ pub struct Cli {
         help = "Read UDP probe payloads from the packets of a .pcap capture (read before --nmap-payloads)"
     )]
     pub pcap_payloads: Option<String>,
-    // `-p80,443`, `-p0-65535`, `--ports 22,80`.
+    // `-p80,443`, `-p0-65535`, `--ports 22,80` (main-conf.c:2663-2666, синонимы C `port`, `dst-port`, `dest-port`,
+    // `destination-port`, `target-port`).
     #[arg(
         short = 'p',
         long = "ports",
+        aliases = ["port", "dst-port", "dest-port", "destination-port", "target-port"],
         value_name = "PORTS",
         help = "Ports to scan, e.g. -p80,443 or -p0-65535; prefixes T: U: S: I: O: stay in effect until the next one, e.g. -pU:53,161,T:80,I:0"
     )]
@@ -125,6 +129,7 @@ pub struct Cli {
     // логическое (см. [`preprocess_args`]); `--top-port` синоним.
     #[arg(
         long = "top-ports",
+        alias = "top-port",
         num_args = 0..=1,
         require_equals = true,
         default_missing_value = "",
@@ -133,8 +138,10 @@ pub struct Cli {
         help = "Also scan the N most common ports (default 20); with -sU the UDP table, with -sS -sU both"
     )]
     pub top_ports: Vec<String>,
+    // main-conf.c:2744-2750: синонимы C `exclude-range`, `exclude-ranges`, `exclude-ip`, `exclude-ipv4`.
     #[arg(
         long,
+        aliases = ["exclude-range", "exclude-ranges", "exclude-ip", "exclude-ipv4"],
         value_name = "RANGE",
         help = "Address range to exclude (repeatable)"
     )]
@@ -151,7 +158,13 @@ pub struct Cli {
         help = "Randomization seed, non-zero (required for -sL, --echo and --offline; a live scan defaults to OS entropy)"
     )]
     pub seed: Option<u64>,
-    #[arg(long, value_name = "PPS", help = "Packets per second (default 100)")]
+    // main-conf.c:2375: синоним C `max-rate`.
+    #[arg(
+        long,
+        alias = "max-rate",
+        value_name = "PPS",
+        help = "Packets per second (default 100)"
+    )]
     pub rate: Option<String>,
     // Р4, main-conf.c:3028-3032: число секунд или `forever` (`INT_MAX`); разбирает ключ ядра `wait`, как в файле.
     #[arg(
@@ -160,14 +173,18 @@ pub struct Cli {
         help = "Seconds to wait for replies after the scan, or forever (default 10)"
     )]
     pub wait: Option<String>,
+    // main-conf.c:2380: синонимы C `retry`, `max-retries`, `max-retry`.
     #[arg(
         long,
+        aliases = ["retry", "max-retries", "max-retry"],
         value_name = "N",
         help = "Number of retries (default 0, below 1000)"
     )]
     pub retries: Option<u32>,
+    // main-conf.c:2376: синоним C `shards`.
     #[arg(
         long,
+        alias = "shards",
         value_name = "ONE/OF",
         help = "Scan only shard ONE of OF, e.g. 2/3"
     )]
@@ -219,12 +236,12 @@ pub struct Cli {
         help = "File of targets: addresses, CIDRs and ranges separated by whitespace or commas, # starts a comment (alias: -iL)"
     )]
     pub includefile: Vec<String>,
-    // main-conf.c:2486-2550: `source-ip` - синоним `adapter-ip`; диапазон `A-B` степени двойки (Р6); адрес IPv6
-    // (main-conf.c:2508-2512) идёт в `nics[0].adapter_ipv6`. Одно значение на командную строку: второе семейство
-    // задаёт `--adapter-ip[0]` или файл `-c`.
+    // main-conf.c:2486-2550: `source-ip`, `source-address`, `spoof-ip`, `spoof-address`, `src-ip` - синонимы
+    // `adapter-ip`; диапазон `A-B` степени двойки (Р6); адрес IPv6 (main-conf.c:2508-2512) идёт в
+    // `nics[0].adapter_ipv6`. Одно значение на командную строку: второе семейство задаёт `--adapter-ip[0]` или файл `-c`.
     #[arg(
         long = "adapter-ip",
-        alias = "source-ip",
+        aliases = ["source-ip", "source-address", "spoof-ip", "spoof-address", "src-ip"],
         value_name = "IP",
         help = "Source IPv4 address, or a range A-B / CIDR of 1, 2, 4, 8, ... addresses, or the source IPv6 address (alias: --source-ip; the other family: --adapter-ip[0])"
     )]
@@ -243,6 +260,7 @@ pub struct Cli {
     )]
     pub badsum: bool,
     // Р9: `F_BOOL` (main-conf.c:2381), singleton (:3083): значение только `--noreset=<bool>`, следующее слово не берётся.
+    // Снимает RST без состояния (Р8 этапа баннеров, `src/main.c:1094-1100`); RST стека `--banners` идут и с ним.
     #[arg(
         long,
         num_args = 0..=1,
@@ -250,11 +268,11 @@ pub struct Cli {
         default_missing_value = "",
         action = clap::ArgAction::Append,
         value_name = "BOOL",
-        help = "Accepted for masscan compatibility (rmasscan sends no RST anyway)"
+        help = "Send no RST to a SYN-ACK or RST reply (without --banners every fresh reply gets one, like masscan)"
     )]
     pub noreset: Vec<String>,
     // Р9: `F_NUMABLE` (main-conf.c:2419): `--tcp-mss [N|BOOL]`; значение берётся из следующего слова, если оно
-    // целое или логическое (см. [`preprocess_args`]); `--tcpmss` синоним.
+    // целое или логическое (см. [`preprocess_args`]); синоним C `--tcpmss` даёт тот же ключ `EQUALS`, что `tcp-mss`.
     #[arg(
         long = "tcp-mss",
         num_args = 0..=1,
@@ -295,10 +313,10 @@ pub struct Cli {
         help = "Add the TCP timestamp option with this 32-bit value (default 0x12345678)"
     )]
     pub tcp_tsecho: Vec<String>,
-    // main-conf.c:2556: `source-mac` - синоним `adapter-mac`.
+    // main-conf.c:2556-2557: `spoof-mac`, `source-mac`, `src-mac` - синонимы `adapter-mac`.
     #[arg(
         long = "adapter-mac",
-        alias = "source-mac",
+        aliases = ["spoof-mac", "source-mac", "src-mac"],
         value_name = "MAC",
         help = "Source MAC address (alias: --source-mac)"
     )]
@@ -310,13 +328,24 @@ pub struct Cli {
         help = "Router (next hop) IPv4 address to resolve with ARP, or IPv6 address to resolve with NDP (single address; default: route gateway)"
     )]
     pub router_ip: Option<String>,
-    // main-conf.c:2587-2600: `--router-mac` ставит MAC шлюза и IPv4, и IPv6.
+    // main-conf.c:2587-2600: `--router-mac` (синонимы C `router`, `dest-mac`, `destination-mac`, `dst-mac`,
+    // `target-mac`) ставит MAC шлюза и IPv4, и IPv6.
     #[arg(
         long = "router-mac",
+        aliases = ["router", "dest-mac", "destination-mac", "dst-mac", "target-mac"],
         value_name = "MAC",
         help = "Router (next hop) MAC address for IPv4 and IPv6: skips ARP and NDP (ignored by --offline, which uses 66-55-44-33-22-11)"
     )]
     pub router_mac: Option<String>,
+    // main-conf.c:2602-2612: `router-mac-ipv4` / `router-ipv4` (синоним C, тоже MAC): только MAC шлюза IPv4, как ключ
+    // файла и `--router-mac-ipv4[i]`.
+    #[arg(
+        long = "router-mac-ipv4",
+        alias = "router-ipv4",
+        value_name = "MAC",
+        help = "Router (next hop) MAC address for IPv4 only: skips ARP (alias: --router-ipv4)"
+    )]
+    pub router_mac_ipv4: Option<String>,
     // main-conf.c:2614-2624: `router-mac-ipv6` / `router-ipv6` (синоним C, тоже MAC): только MAC шлюза IPv6.
     #[arg(
         long = "router-mac-ipv6",
@@ -325,24 +354,28 @@ pub struct Cli {
         help = "Router (next hop) MAC address for IPv6 only: skips NDP (alias: --router-ipv6)"
     )]
     pub router_mac_ipv6: Option<String>,
-    // Одиночный порт или диапазон степени двойки (main-conf.c:2523).
+    // Одиночный порт или диапазон степени двойки (main-conf.c:2523-2524, синонимы C `adapter-port`, `src-port`;
+    // `sourceport` с :2979 даёт тот же ключ `EQUALS`, что `source-port`).
     #[arg(
         long = "source-port",
-        alias = "adapter-port",
+        aliases = ["adapter-port", "src-port"],
         value_name = "PORT",
         help = "Source port, or a range whose size is a power of two (default: one port 40000 + time % 20000)"
     )]
     pub source_port: Option<String>,
+    // main-conf.c:2474: синонимы C `adapter`, `if`.
     #[arg(
         short = 'e',
         long = "interface",
-        alias = "adapter",
+        aliases = ["adapter", "if"],
         value_name = "IFACE",
         help = "Network interface (alias: --adapter): its name; on Windows \\Device\\NPF_{GUID} or the adapter name (default: the interface of the route to the targets)"
     )]
     pub interface: Option<String>,
+    // main-conf.c:2384: синонимы C `notransmit`, `nosend`, `dry-run`.
     #[arg(
         long,
+        aliases = ["notransmit", "nosend", "dry-run"],
         help = "Do not transmit: detect read-only and print the [+] lines (fake router MAC 66-55-44-33-22-11)"
     )]
     pub offline: bool,
@@ -353,8 +386,10 @@ pub struct Cli {
         help = "Scan the range again and again (seed + 1 each pass) until Ctrl-C; no paused.conf is written"
     )]
     pub infinite: bool,
+    // main-conf.c:2876: синоним C `trace-packet`.
     #[arg(
         long = "packet-trace",
+        alias = "trace-packet",
         requires = "offline",
         help = "With --offline: print one SENT line per SYN (values not given are detected read-only)"
     )]
@@ -413,7 +448,7 @@ pub struct Cli {
         default_missing_value = "",
         action = clap::ArgAction::Append,
         value_name = "BOOL",
-        help = "Report banners of UDP replies (dns-ver, ntp, nbtstat, snmp, isakmp, coap, memcached, zeroaccess and raw); TCP banners arrive in the next sub-stage, so TCP ports are refused (alias: --banner)"
+        help = "Report banners: UDP replies (dns-ver, ntp, nbtstat, snmp, isakmp, coap, memcached, zeroaccess and raw) and TCP connections through a user-mode TCP stack (http, ftp, smtp, pop3, imap4, ssh, telnet, vnc, rdp, memcached, minecraft; alias: --banner)"
     )]
     pub banners: Vec<String>,
     // `nobanners`/`nobanner` (`F_BOOL`, `src/main-conf.c:1546-1554`, :2379): `is_banners = !parseBoolean(value)`.
@@ -440,12 +475,12 @@ pub struct Cli {
     )]
     pub rawudp: Vec<String>,
     // `capture` и `nocapture`/`no-capture` (`src/main-conf.c:1132-1180`, :2402-2403): значение следующим словом или
-    // после `=`. В 4a только разбор и `--echo`: их читают TCP-баннеры.
+    // после `=`. В 4b действует только `html` (`banner1->is_capture_html`); остальные читают баннеры TLS (4c).
     #[arg(
         long = "capture",
         value_name = "TYPE",
         action = clap::ArgAction::Append,
-        help = "TCP banner capture: cert (default on), servername, html, heartbleed or ticketbleed; parsed and echoed, used once TCP banners arrive"
+        help = "TCP banner capture: cert (default on), servername, html, heartbleed or ticketbleed; html adds the whole page to HTTP banners, the others act with TLS banners (not in this version)"
     )]
     pub capture: Vec<String>,
     #[arg(
@@ -464,6 +499,88 @@ pub struct Cli {
         help = "Accepted for masscan compatibility; like masscan it has no effect"
     )]
     pub hello_timeout: Vec<String>,
+    // `hello` (`src/main-conf.c:1181-1210`, таблица :2387): каждое вхождение ставит свой флаг, неизвестное
+    // значение отказывает с текстом C на разборе конфигурации.
+    #[arg(
+        long = "hello",
+        value_name = "TYPE",
+        action = clap::ArgAction::Append,
+        help = "Send this hello on every TCP port (except 65535): ssl, smbv1 or http; repeatable"
+    )]
+    pub hello: Vec<String>,
+    // `hello-string[PORT]`, `hello-file[PORT]` (`hello-filename`) и любое написание `http-header`/`http-field`
+    // (`src/main-conf.c:1207-1286`, `:1335-1408`): [`preprocess_args`] переписывает их до `EQUALS` в скрытые
+    // опции `--rmasscan-…=набранное-имя=значение`, потому что индекс и форма заголовка читаются из набранного
+    // имени (справка C2, C3), а clap такого имени не выражает.
+    #[arg(long = "rmasscan-hello-string", hide = true, action = clap::ArgAction::Append)]
+    hello_string_kv: Vec<String>,
+    #[arg(long = "rmasscan-hello-file", hide = true, action = clap::ArgAction::Append)]
+    hello_file_kv: Vec<String>,
+    #[arg(long = "rmasscan-http-header", hide = true, action = clap::ArgAction::Append)]
+    http_header_kv: Vec<String>,
+    // `connection-timeout` и синоним `tcp-timeout` старого стиля (`src/main-conf.c:2765-2767`): жизнь
+    // соединения баннеров в секундах, 0 это умолчание C 30; в paused.conf не пишется.
+    #[arg(
+        long = "connection-timeout",
+        alias = "tcp-timeout",
+        value_name = "SECONDS",
+        action = clap::ArgAction::Append,
+        help = "Lifetime of a TCP banner connection in seconds (default 30; alias: --tcp-timeout)"
+    )]
+    pub connection_timeout: Vec<String>,
+    // `http-*` (`src/main-conf.c:1300-1505`, таблица :2391-2398): одиночные держат последнее значение, cookie
+    // копятся (не больше 16). Синоним C `http-useragent` даёт тот же ключ `EQUALS`, что `http-user-agent`,
+    // поэтому синонимом clap не объявлен.
+    #[arg(
+        long = "http-method",
+        value_name = "METHOD",
+        action = clap::ArgAction::Append,
+        help = "Method of the HTTP banner request (default GET)"
+    )]
+    pub http_method: Vec<String>,
+    #[arg(
+        long = "http-url",
+        alias = "http-uri",
+        value_name = "URL",
+        action = clap::ArgAction::Append,
+        help = "URL of the HTTP banner request (default /; alias: --http-uri)"
+    )]
+    pub http_url: Vec<String>,
+    #[arg(
+        long = "http-version",
+        value_name = "VERSION",
+        action = clap::ArgAction::Append,
+        help = "Version of the HTTP banner request (default HTTP/1.0)"
+    )]
+    pub http_version: Vec<String>,
+    #[arg(
+        long = "http-host",
+        value_name = "HOST",
+        action = clap::ArgAction::Append,
+        help = "Host field of the HTTP banner request (none by default)"
+    )]
+    pub http_host: Vec<String>,
+    #[arg(
+        long = "http-user-agent",
+        value_name = "AGENT",
+        action = clap::ArgAction::Append,
+        help = "User-Agent field of the HTTP banner request"
+    )]
+    pub http_user_agent: Vec<String>,
+    #[arg(
+        long = "http-payload",
+        value_name = "PAYLOAD",
+        action = clap::ArgAction::Append,
+        help = "Body of the HTTP banner request (also sets Content-Length)"
+    )]
+    pub http_payload: Vec<String>,
+    #[arg(
+        long = "http-cookie",
+        value_name = "COOKIE",
+        action = clap::ArgAction::Append,
+        help = "Add a Cookie field to the HTTP banner request (repeatable, at most 16; a header NAME:VALUE or [NAME] is set with --http-header)"
+    )]
+    pub http_cookie: Vec<String>,
     // Каждое вхождение проверяется (Р6), побеждает последнее (Р17).
     #[arg(
         long = "output-format",
@@ -619,11 +736,12 @@ pub struct Cli {
     /// Ключи `имя[i]=значение` массива адаптеров и позиции clap.
     #[arg(skip)]
     nic_pos: Vec<(usize, String)>,
-    /// Опции баннеров (`--banners`, `--nobanners`, `--rawudp`, `--capture`, `--nocapture`, `--hello-timeout`) по
-    /// порядку argv: позиция clap, ключ ядра и значение. Они меняют одни и те же флаги (`--rawudp --nobanners`), поэтому
-    /// применяются одной последовательностью, а не «последним вхождением» каждой.
+    /// Опции баннеров (`--banners`, `--nobanners`, `--rawudp`, `--capture`, `--nocapture`, `--hello-timeout`,
+    /// `--hello*`, `--connection-timeout`, `--http-*`) по порядку argv: позиция clap и шаг. Они меняют одни и те
+    /// же флаги и списки (`--rawudp --nobanners`), поэтому применяются одной последовательностью, а не
+    /// «последним вхождением» каждой.
     #[arg(skip)]
-    banner_steps: Vec<(usize, &'static str, String)>,
+    banner_steps: Vec<(usize, BannerStep)>,
     /// Позиция clap последнего появления каждой группы опций вывода (`format`, `filename`, `append`, `flush`,
     /// `style`, `show`).
     #[arg(skip)]
@@ -631,6 +749,19 @@ pub struct Cli {
     /// Разобранная конфигурация с `--resume`: файл читается один раз на `Cli`.
     #[arg(skip)]
     resolved: std::sync::OnceLock<Result<FullConf, String>>,
+    /// Строки stderr, которые C печатает по ходу разбора argv и продолжает ([`preprocess_args_with_notes`]).
+    #[arg(skip)]
+    notes: Vec<String>,
+}
+
+/// Один шаг опций баннеров в порядке argv: обычный ключ ядра или опция, чей смысл читается из набранного
+/// имени (`hello-string[PORT]`, `hello-file[PORT]`, `http-header` с правилом `name += 11`, справка C2, C3).
+#[derive(Debug, Clone)]
+enum BannerStep {
+    Kv(&'static str, String),
+    HelloString(String, String),
+    HelloFile(String, String),
+    HttpHeader(String, String),
 }
 
 /// Опция, меняющая порты или тип скана (`masscan_set_parameter` зовётся по ходу `argv`).
@@ -655,7 +786,7 @@ fn port_default(udp: bool, sctp: bool) -> u32 {
 
 /// Идентификаторы clap опций, которые кладутся в `ScanConfig` позиционно (ключи правее `--resume` переопределяют
 /// файл, ключи левее переопределяются им, `masscan_set_parameter` вызывается в порядке argv).
-const POSITIONAL_KEYS: [&str; 28] = [
+const POSITIONAL_KEYS: [&str; 29] = [
     "pcap",
     "nmap_payloads",
     "pcap_payloads",
@@ -674,6 +805,7 @@ const POSITIONAL_KEYS: [&str; 28] = [
     "adapter_mac",
     "router_ip",
     "router_mac",
+    "router_mac_ipv4",
     "router_mac_ipv6",
     "source_port",
     "interface",
@@ -686,22 +818,33 @@ const POSITIONAL_KEYS: [&str; 28] = [
     "tcp_tsecho",
 ];
 
-/// Опции баннеров: идентификатор clap и ключ `masscan_set_parameter` (`src/main-conf.c:2377-2403`).
-const BANNER_KEYS: [(&str, &str); 6] = [
+/// Опции баннеров: идентификатор clap и ключ `masscan_set_parameter` (`src/main-conf.c:2377-2403`,
+/// `connection-timeout` старого стиля `:2765-2767`).
+const BANNER_KEYS: [(&str, &str); 15] = [
     ("banners", "banners"),
     ("nobanners", "nobanners"),
     ("rawudp", "rawudp"),
     ("capture", "capture"),
     ("nocapture", "nocapture"),
     ("hello_timeout", "hello-timeout"),
+    ("hello", "hello"),
+    ("connection_timeout", "connection-timeout"),
+    ("http_method", "http-method"),
+    ("http_url", "http-url"),
+    ("http_version", "http-version"),
+    ("http_host", "http-host"),
+    ("http_user_agent", "http-user-agent"),
+    ("http_payload", "http-payload"),
+    ("http_cookie", "http-cookie"),
 ];
 
 /// Одиночные опции адаптера, которые идут по порядку `argv` вместе с `--adapter[i]` и т.п.
-const NIC_PLAIN: [&str; 7] = [
+const NIC_PLAIN: [&str; 8] = [
     "adapter_ip",
     "adapter_mac",
     "router_ip",
     "router_mac",
+    "router_mac_ipv4",
     "router_mac_ipv6",
     "source_port",
     "interface",
@@ -749,7 +892,8 @@ fn refuse_json_status(argv: &[String]) -> Result<(), ParseError> {
             continue;
         };
         let name = rest.split(['=', ':']).next().unwrap_or(rest);
-        if name.eq_ignore_ascii_case("json-status") || name.eq_ignore_ascii_case("status-json") {
+        // Имя по `EQUALS` (`src/main-conf.c:833-849`), как у опций таблицы clap.
+        if matches!(normalize_key(name).as_str(), "jsonstatus" | "statusjson") {
             return Err(ParseError::Masscan(format!(
                 "[-] FAIL: {name} not supported, use --status-ndjson\n    hint: new-line delimited JSON status is what we use"
             )));
@@ -758,7 +902,8 @@ fn refuse_json_status(argv: &[String]) -> Result<(), ParseError> {
     Ok(())
 }
 
-/// Ошибка разбора: clap печатает свою (`e.exit()`, код clap), текст masscan печатается в stderr как есть, exit 1.
+/// Ошибка разбора: текст clap печатает `clap::Error::print` (справка и версия в stdout) с кодом [`clap_exit_code`], текст
+/// masscan печатается в stderr как есть, exit 1.
 #[derive(Debug)]
 pub enum ParseError {
     Clap(clap::Error),
@@ -820,6 +965,13 @@ fn dash_o_format(arg: &str) -> Result<&'static str, String> {
 
 // Причуды masscan, которые clap не выражает.
 //
+// 0. Имя `--опции` сравнивается как `EQUALS` C ([`equals_option`]) и переписывается в длинное имя clap раньше всех
+//    остальных правил, поэтому они видят только каноническое имя. Значения не переписываются: слово, которое правило
+//    ниже забирает как значение (`it.next()`), уже не попадает в цикл; значение после `=` или `:` остаётся как есть;
+//    отдельное слово, которое начинается с `--`, clap значением не берёт (ни у одной опции нет `allow_hyphen_values`,
+//    тест `no_option_takes_hyphen_values`; значение семи `--http-*` свободного текста, [`HTTP_FREE_TEXT`], и
+//    типизированных опций баннеров забирается здесь), а другие слова [`equals_option`] не трогает. Голое `--` clap
+//    понимает как конец опций: оно и всё правее идут в clap как есть, это цели. Короткие опции не трогаются.
 // 1. `-sL` (nmap-стиль) - это один флаг, а
 //    clap прочёл бы его как `-s L`. Заменяется на `--list`.
 // 2. `-o<буква> FILE` (main-conf.c:3401–3459): буква слитно с `-o`, файл следующим argv (`-` значит stdout, иное
@@ -833,9 +985,50 @@ where
     I: IntoIterator<Item = S>,
     S: Into<String>,
 {
+    preprocess_args_with_notes(args).map(|(argv, _)| argv)
+}
+
+/// [`preprocess_args`] и строки, которые C печатает в stderr по ходу разбора argv и продолжает: сегодня это
+/// `"%.*s: name too long"` набранного имени длиннее 63 байт (`src/main-conf.c:3305-3308`, [`banner_typed_option`]).
+/// [`Cli::try_parse_masscan`] хранит их, а [`crate::run`] печатает первыми.
+fn preprocess_args_with_notes<I, S>(args: I) -> Result<(Vec<String>, Vec<String>), String>
+where
+    I: IntoIterator<Item = S>,
+    S: Into<String>,
+{
+    let mut notes = Vec::new();
     let mut it = args.into_iter().map(Into::into).peekable();
     let mut out: Vec<String> = it.next().into_iter().collect();
-    while let Some(a) = it.next() {
+    while let Some(raw) = it.next() {
+        if raw == "--" {
+            out.push(raw);
+            out.extend(it.by_ref());
+            break;
+        }
+        // `--hello-string[P]`, `--hello-file[P]` и любое написание `--http-header`/`--http-field` раньше
+        // `EQUALS`: индекс и форма заголовка читаются из набранного имени (справка C2, C3).
+        if let Some(step) = banner_typed_option(&raw) {
+            let step = step?;
+            notes.extend(step.too_long);
+            let value = match step.inline {
+                Some(v) => v,
+                None => it
+                    .next()
+                    .ok_or_else(|| format!("{}: empty parameter", step.typed))?,
+            };
+            out.push(format!("--{}={}={value}", step.hidden, step.typed));
+            continue;
+        }
+        let a = equals_option(&raw)?.unwrap_or(raw);
+        // Свободный текст семи `--http-*` (`src/main-conf.c:3286-3294`: `value = argv[++i]`): следующее слово это
+        // значение, с чего бы оно ни начиналось, как у типизированных опций баннеров выше. Слово с `-` clap принял бы за
+        // опцию, поэтому оно уходит формой `--имя=значение`, которую clap читает как есть (финальное ревью, M2).
+        if HTTP_FREE_TEXT.contains(&a.as_str())
+            && let Some(v) = it.next_if(|v| v.starts_with('-'))
+        {
+            out.push(format!("{a}={v}"));
+            continue;
+        }
         if let Some((name, inline)) = numable_split(&a) {
             // main-conf.c:3236-3260 (`F_NUMABLE`): `--name=v`, `--name:v` или следующее слово, если оно целое или
             // логическое; иначе `--name` один значит «включить». `--noreset` и `--tcp-sackok` сюда не входят: в C
@@ -878,50 +1071,109 @@ where
                 .ok_or_else(|| "missing output filename".to_string())?;
             out.push(format!("--output-format={format}"));
             out.push(format!("--output-filename={file}"));
-        } else if let Some(canon) = equals_banner_option(&a) {
-            out.push(canon);
         } else {
             out.push(a);
         }
     }
-    Ok(out)
+    Ok((out, notes))
 }
 
-/// Опции баннеров подэтапа 4a (`config_parameters[]`, `src/main-conf.c:2377-2403`; `banner-types` и три синонима,
-/// `:2683-2697`): имя после `normalize_key` и имя clap.
-const EQUALS_OPTIONS: [(&str, &str); 12] = [
-    ("banners", "banners"),
-    ("banner", "banner"),
-    ("nobanners", "nobanners"),
-    ("nobanner", "nobanner"),
-    ("rawudp", "rawudp"),
-    ("capture", "capture"),
-    ("nocapture", "nocapture"),
-    ("hellotimeout", "hello-timeout"),
-    ("bannertypes", "banner-types"),
-    ("bannertype", "banner-types"),
-    ("bannerapps", "banner-types"),
-    ("bannerapp", "banner-types"),
+/// Длинные имена clap опций `--http-*` со свободным текстом (`src/main-conf.c:1300-1505`): C берёт следующее слово
+/// значением всегда (`:3286-3294`), и [`preprocess_args`] тоже, даже если оно начинается с `-`.
+const HTTP_FREE_TEXT: [&str; 7] = [
+    "--http-method",
+    "--http-url",
+    "--http-version",
+    "--http-host",
+    "--http-user-agent",
+    "--http-payload",
+    "--http-cookie",
 ];
 
-/// Р17: имя опции баннеров сравнивается как `EQUALS` C (`src/main-conf.c:833-849`: регистр и `-`, `.`, `_` не важны,
-/// `--No-Banners`, `--raw_udp`) и переписывается в имя clap; значение после `=`, иначе после `:`, остаётся
-/// (`masscan_command_line`, :3279-3289). `None` для всех остальных аргументов: прочие опции clap сверяет точно.
-fn equals_banner_option(a: &str) -> Option<String> {
-    let rest = a.strip_prefix("--")?;
+/// Таблица `EQUALS` (`src/main-conf.c:833-849`): ключ [`normalize_key`] каждого длинного имени и синонима clap (вместе
+/// с `--help` и `--version`) и длинное имя его опции. Внутренние опции `--rmasscan-…`, которые пишет сам
+/// [`preprocess_args`], в неё не входят: скрытая опция, которую пользователь набирать не должен, обязана начинаться с
+/// `rmasscan-`. Совпадение двух имён после нормализации одно, `nocapture`/`no-capture`, и это одна опция (как у C,
+/// `:2403`); тест `equals_table_has_one_option_per_key` держит это для всей таблицы.
+struct EqualsTable(HashMap<String, String>);
+
+impl EqualsTable {
+    fn long_of(&self, key: &str) -> Option<&str> {
+        self.0.get(key).map(String::as_str)
+    }
+}
+
+/// [`EqualsTable`] из `Cli::command()`, строится один раз на процесс.
+fn equals_table() -> &'static EqualsTable {
+    static TABLE: std::sync::OnceLock<EqualsTable> = std::sync::OnceLock::new();
+    TABLE.get_or_init(|| {
+        let mut cmd = Cli::command();
+        // `--help` и `--version` clap добавляет при сборке команды (C: `EQUALS("help", …)`, :3225).
+        cmd.build();
+        let mut by_key = HashMap::new();
+        for arg in cmd.get_arguments() {
+            let Some(long) = arg.get_long() else { continue };
+            if long.starts_with("rmasscan-") {
+                continue;
+            }
+            for name in std::iter::once(long).chain(arg.get_all_aliases().unwrap_or_default()) {
+                by_key.insert(normalize_key(name), long.to_string());
+            }
+        }
+        EqualsTable(by_key)
+    })
+}
+
+/// Имя с индексным смыслом: индекс `[i]` читает его собственный разбор. Сегодня это ключи массива адаптеров
+/// ([`NIC_KEYS`], `src/main-conf.c:882-890`).
+fn has_index_meaning(key: &str) -> bool {
+    NIC_KEYS.contains(&key)
+}
+
+/// Р17: имя `--опции` сравнивается как `EQUALS` C (`src/main-conf.c:833-849`: регистр и `-`, `.`, `_` не важны) и
+/// переписывается в длинное имя clap. Значение идёт после первого `=`, иначе после первого `:` (`masscan_command_line`,
+/// :3279-3289) и остаётся как есть, `:` становится `=`. Закрытый суффикс `[…]` у имени без индексного смысла
+/// отбрасывается, как у C (`EQUALS` истинно на `[`, :840-841); имя с индексным смыслом остаётся своему разбору
+/// ([`indexed_nic_key`]). Индекс от 65536 это `bad index` C у любого имени ([`check_c_index`], :2437-2441). Незакрытая
+/// `[` это ошибка у любого имени (Р17, «непарный индекс»; у C индекс читает `parseInt`, `ARRAY` :881-890). `None`: не
+/// `--опция`, ключ адаптера с индексом или имени нет в таблице (тогда его отклонит clap, как C отклоняет неизвестное
+/// имя, :3036).
+fn equals_option(a: &str) -> Result<Option<String>, String> {
+    let Some(rest) = a.strip_prefix("--") else {
+        return Ok(None);
+    };
     let (name, value) = match rest.find('=').or_else(|| rest.find(':')) {
         Some(i) => (&rest[..i], Some(&rest[i + 1..])),
         None => (rest, None),
     };
-    if name.contains('[') {
-        return None;
-    }
     let key = normalize_key(name);
-    let (_, canon) = EQUALS_OPTIONS.iter().find(|(k, _)| *k == key)?;
-    Some(match value {
-        Some(v) => format!("--{canon}={v}"),
-        None => format!("--{canon}"),
-    })
+    if let Some(open) = name.find('[') {
+        check_c_index(name)?;
+        if !name[open..].contains(']') {
+            return Err(format!("--{name}: unclosed '[' in the option name"));
+        }
+        if has_index_meaning(&key) {
+            return Ok(None);
+        }
+    }
+    let Some(long) = equals_table().long_of(&key) else {
+        return Ok(None);
+    };
+    Ok(Some(match value {
+        Some(v) => format!("--{long}={v}"),
+        None => format!("--{long}"),
+    }))
+}
+
+/// Код выхода ошибки clap: справка и версия 0, любая ошибка разбора 1, как `exit(1)` C на неизвестное имя
+/// (`src/main-conf.c:3036`), а не 2 clap. C печатает справку и версию с кодом 1 (:3225-3227, :3010-3012); здесь
+/// `--help` и `--version` это успех.
+pub fn clap_exit_code(kind: clap::error::ErrorKind) -> u8 {
+    use clap::error::ErrorKind;
+    match kind {
+        ErrorKind::DisplayHelp | ErrorKind::DisplayVersion => 0,
+        _ => 1,
+    }
 }
 
 /// Ключи, которые C хранит в `nic[i]` (`masscan_set_parameter`, main-conf.c:2470-2641), в нормализованном виде.
@@ -956,7 +1208,7 @@ const NIC_KEYS: [&str; 27] = [
 ];
 
 /// `--имя[i]`, `--имя[i]=v` или `--имя[i]:v` для ключа массива адаптеров: имя с индексом и встроенное значение.
-/// Другие ключи с `[` остаются clap (он их отклонит); `None`, если аргумент не такой.
+/// Скобку другого ключа уже отбросил [`equals_option`], незакрытую он отклонил; `None`, если аргумент не такой.
 fn indexed_nic_key(a: &str) -> Option<Result<(&str, Option<&str>), String>> {
     let rest = a.strip_prefix("--")?;
     let open = rest.find('[')?;
@@ -971,6 +1223,72 @@ fn indexed_nic_key(a: &str) -> Option<Result<(&str, Option<&str>), String>> {
         Some(i) => (&rest[..i], Some(&rest[i + 1..])),
         None => (rest, None),
     }))
+}
+
+/// Результат [`banner_typed_option`]: скрытая опция, набранное имя (как его держит `name2[64]` C) и встроенное
+/// значение.
+struct TypedBannerOption {
+    hidden: &'static str,
+    typed: String,
+    inline: Option<String>,
+    /// `"%.*s: name too long"` (`src/main-conf.c:3305-3308`), если набранное имя длиннее 63 байт.
+    too_long: Option<String>,
+}
+
+/// Длина `char name2[64]` C без NUL (`src/main-conf.c:3281`, `:3305-3308`).
+const C_NAME_MAX: usize = 63;
+
+/// `--hello-string`, `--hello-file` (`hello-filename`) и любое написание `--http-header`/`--http-field` по
+/// `EQUALS`, до [`equals_option`]: набранное имя целиком (со скобками) и встроенное значение для скрытой опции
+/// `--rmasscan-…`. Разделитель значения тот же, что у всякого имени ([`equals_option`]): первое `=`, иначе первое
+/// `:` (`masscan_command_line`, :3279-3289), поэтому двоеточие внутри скобок режет набранное имя, как у C. Имя
+/// длиннее 63 байт C обрезает до 63 и печатает `"%.*s: name too long"` с полным именем (`:3305-3308`), и дальше всё
+/// (индекс, форма заголовка, имя заголовка) читается из обрезанного; здесь так же, только граница отступает до
+/// начала знака UTF-8, если 63-й байт внутри него (значения rmasscan это текст). Индекс от 65536 в обрезанном имени
+/// это `bad index` C (`masscan_set_parameter`, :2437-2441); незакрытая `[` в набранном имени отказывает как у
+/// всякого имени (Р17, `bad index` раньше незакрытой); обрезка, которая отрезала `]`, это не незакрытая скобка.
+/// `None`, если аргумент не такой.
+fn banner_typed_option(a: &str) -> Option<Result<TypedBannerOption, String>> {
+    let rest = a.strip_prefix("--")?;
+    let base_end = rest.find(['[', '=', ':']).unwrap_or(rest.len());
+    let hidden = match normalize_key(&rest[..base_end]).as_str() {
+        "hellostring" => "rmasscan-hello-string",
+        "hellofile" | "hellofilename" => "rmasscan-hello-file",
+        "httpheader" | "httpfield" => "rmasscan-http-header",
+        _ => return None,
+    };
+    let split = || -> Result<TypedBannerOption, String> {
+        let (full, inline) = match rest.find('=').or_else(|| rest.find(':')) {
+            Some(i) => (&rest[..i], Some(&rest[i + 1..])),
+            None => (rest, None),
+        };
+        let mut cut = full.len().min(C_NAME_MAX);
+        while !full.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        let mut typed = full[..cut].to_string();
+        check_c_index(&typed)?;
+        if let Some(open) = full.find('[')
+            && !full[open..].contains(']')
+        {
+            return Err(format!("--{full}: unclosed '[' in the option name"));
+        }
+        // Скобка набранного имени закрыта; если обрезка отрезала её `]`, она закрывается снова в конце обрезанного
+        // имени: строгий разбор индекса и скобочной формы (Р17) тогда читает ровно байты, которые читает C, то есть
+        // уцелевшие цифры индекса (`parseInt` до конца `name2`) и имя заголовка (конечная пунктуация снимается).
+        if let Some(open) = typed.find('[')
+            && !typed[open..].contains(']')
+        {
+            typed.push(']');
+        }
+        Ok(TypedBannerOption {
+            hidden,
+            typed,
+            inline: inline.map(std::string::ToString::to_string),
+            too_long: (full.len() > C_NAME_MAX).then(|| format!("{full}: name too long")),
+        })
+    };
+    Some(split())
 }
 
 /// `SET_topports` (main-conf.c:2107-2139): пусто значит 20, логическое значение включает (`1`, `true`, `on`) или
@@ -995,19 +1313,14 @@ fn top_ports_count(v: &str) -> Result<u32, String> {
 /// Опции с необязательным числовым или логическим значением (`F_NUMABLE`, main-conf.c:2419-2421).
 const NUMABLE: [&str; 4] = ["tcp-mss", "tcp-wscale", "tcp-tsecho", "top-ports"];
 
-/// `--имя`, `--имя=v` или `--имя:v` для имён из [`NUMABLE`]: имя и встроенное значение.
+/// `--имя` или `--имя=v` для имён из [`NUMABLE`]: имя и встроенное значение. Имя уже каноническое: синонимы C
+/// `tcpmss` (main-conf.c:2419, тот же ключ `normalize_key`, что у `tcp-mss`) и `top-port` (:2423, синоним clap) и любое
+/// написание переписал [`equals_option`], `:` тоже.
 fn numable_split(a: &str) -> Option<(&'static str, Option<&str>)> {
     let rest = a.strip_prefix("--")?;
     let (name, inline) = match rest.find(['=', ':']) {
         Some(i) => (&rest[..i], Some(&rest[i + 1..])),
         None => (rest, None),
-    };
-    // main-conf.c:2419: `tcpmss` синоним `tcp-mss`.
-    let name = match name {
-        "tcpmss" => "tcp-mss",
-        // main-conf.c:2423: `top-port` синоним `top-ports`.
-        "top-port" => "top-ports",
-        n => n,
     };
     NUMABLE.iter().find(|n| **n == name).map(|n| (*n, inline))
 }
@@ -1145,12 +1458,13 @@ impl Cli {
         I: IntoIterator<Item = S>,
         S: Into<String>,
     {
-        let argv = preprocess_args(args).map_err(ParseError::Masscan)?;
+        let (argv, notes) = preprocess_args_with_notes(args).map_err(ParseError::Masscan)?;
         refuse_json_status(&argv)?;
         let m = Cli::command()
             .try_get_matches_from(argv)
             .map_err(from_clap)?;
         let mut cli = Cli::from_arg_matches(&m).map_err(ParseError::Clap)?;
+        cli.notes = notes;
         // `src/main-conf.c:2688-2696`: неизвестное имя это выход с кодом 1 прямо при разборе.
         for name in &cli.banner_types {
             banner_app(name).map_err(ParseError::Masscan)?;
@@ -1197,11 +1511,31 @@ impl Cli {
         cli.port_events.sort_by_key(|(pos, _)| *pos);
         for (id, key) in BANNER_KEYS {
             if let (Some(values), Some(indices)) = (m.get_many::<String>(id), m.indices_of(id)) {
-                cli.banner_steps
-                    .extend(indices.zip(values).map(|(pos, v)| (pos, key, v.clone())));
+                cli.banner_steps.extend(
+                    indices
+                        .zip(values)
+                        .map(|(pos, v)| (pos, BannerStep::Kv(key, v.clone()))),
+                );
             }
         }
-        cli.banner_steps.sort_by_key(|(pos, _, _)| *pos);
+        // Скрытые опции с набранным именем (`preprocess_args` пишет `имя=значение` одним словом).
+        for (id, make) in [
+            (
+                "hello_string_kv",
+                BannerStep::HelloString as fn(String, String) -> BannerStep,
+            ),
+            ("hello_file_kv", BannerStep::HelloFile),
+            ("http_header_kv", BannerStep::HttpHeader),
+        ] {
+            if let (Some(values), Some(indices)) = (m.get_many::<String>(id), m.indices_of(id)) {
+                cli.banner_steps
+                    .extend(indices.zip(values).map(|(pos, kv)| {
+                        let (name, value) = kv.split_once('=').unwrap_or((kv, ""));
+                        (pos, make(name.to_string(), value.to_string()))
+                    }));
+            }
+        }
+        cli.banner_steps.sort_by_key(|(pos, _)| *pos);
         let last = |id: &str| m.indices_of(id).and_then(Iterator::max);
         cli.key_pos = POSITIONAL_KEYS
             .iter()
@@ -1221,6 +1555,12 @@ impl Cli {
             .collect();
         cli.output_options().map_err(ParseError::Masscan)?;
         Ok(cli)
+    }
+
+    /// Строки stderr разбора argv, которые C печатает и продолжает (`name too long`, `src/main-conf.c:3305-3308`),
+    /// по порядку argv; [`crate::run`] печатает их первыми.
+    pub fn parse_notes(&self) -> &[String] {
+        &self.notes
     }
 
     /// Задана ли хоть одна опция вывода или статуса (Р19: они допустимы только со сканом и `--readscan`).
@@ -1345,7 +1685,7 @@ impl Cli {
             if let Some(mk) = self.markers.get(seg) {
                 full.output.touched.clear();
                 full.port_default = self.port_default_at(mk.pos);
-                apply_conf_key(mk.kind, &mk.path, &mut full, &mut loader, 0)?;
+                apply_conf_key(mk.kind, &mk.path, &mut full, &mut loader, 0, None)?;
                 for group in std::mem::take(&mut full.output.touched) {
                     full.output.file_pos.insert(group, mk.pos);
                 }
@@ -1573,10 +1913,24 @@ impl Cli {
         if take("badsum") && self.badsum {
             cfg.badsum = true;
         }
-        // Опции баннеров (`src/main-conf.c:1106-1180`, :1288-1298, :1546-1554) по порядку argv внутри сегмента.
-        for (pos, key, value) in &self.banner_steps {
-            if self.segment_of(*pos) == seg {
-                apply_core_kv(cfg, key, value).map_err(|e| e.to_string())?;
+        // Опции баннеров (`src/main-conf.c:1106-1505`, :1546-1554, :2765-2767) по порядку argv внутри сегмента.
+        for (pos, step) in &self.banner_steps {
+            if self.segment_of(*pos) != seg {
+                continue;
+            }
+            match step {
+                BannerStep::Kv(key, value) => {
+                    apply_core_kv(cfg, key, value).map_err(|e| e.to_string())?;
+                }
+                // Набранное имя уже обрезано до 63 байт, как `name2[64]` C ([`banner_typed_option`]).
+                BannerStep::HelloString(name, value) | BannerStep::HttpHeader(name, value) => {
+                    if !apply_core_kv(cfg, name, value).map_err(|e| e.to_string())? {
+                        return Err(format!("unknown banner option {name:?}"));
+                    }
+                }
+                BannerStep::HelloFile(name, file) => {
+                    crate::banner_settings::apply_hello_file(cfg, name, file)?;
+                }
             }
         }
         for (id, key, values) in [
@@ -1658,6 +2012,14 @@ impl Cli {
                 set_nic0(cfg, |n| {
                     (n.router_mac_ipv4, n.router_mac_ipv6) = (Some(mac), Some(mac));
                 });
+            }
+            "router_mac_ipv4" => {
+                let Some(m) = &self.router_mac_ipv4 else {
+                    return Ok(());
+                };
+                // Ключ C `router-mac-ipv4` (main-conf.c:2602-2612): MAC шлюза IPv4 в `nics[0]`, IPv6 не трогается.
+                parse_mac(m).map_err(|e| e.to_string())?;
+                apply_core_kv(cfg, "router-mac-ipv4", m).map_err(|e| e.to_string())?;
             }
             "router_mac_ipv6" => {
                 let Some(m) = &self.router_mac_ipv6 else {
@@ -2201,6 +2563,9 @@ mod tests {
             "--status-json",
             "--json-status=1",
             "--status-json:x",
+            // Имя по `EQUALS` (`src/main-conf.c:833-849`), как у прочих опций.
+            "--Json_Status",
+            "--STATUS.JSON=1",
         ] {
             let bare = n.trim_start_matches("--").split(['=', ':']).next().unwrap();
             assert_eq!(
@@ -3048,8 +3413,11 @@ adapter-ip = 198.18.0.9\noutput-filename = base.xml\n",
             one(&["-c", f, "--adapter[1]", "cli"]).as_deref(),
             Some("cli")
         );
-        // Не ключ адаптера со скобкой это ошибка clap, а не молчаливое игнорирование.
-        assert!(parse(&["--rate[1]", "5"]).is_err());
+        // Закрытый `[…]` у ключа не адаптера отбрасывается, как у `EQUALS` C (`src/main-conf.c:840-841`, Р17).
+        assert_eq!(
+            parse(&["--rate[1]", "5"]).unwrap().rate.as_deref(),
+            Some("5")
+        );
     }
 
     /// Порты после разбора `argv`, отсортированные, как их видит `--echo`.
@@ -3151,5 +3519,1055 @@ adapter-ip = 198.18.0.9\noutput-filename = base.xml\n",
                 "--list"
             ]
         );
+    }
+
+    /// `preprocess_args` с именем программы впереди.
+    fn pre(a: &[&str]) -> Vec<String> {
+        preprocess_args(std::iter::once("rmasscan").chain(a.iter().copied())).unwrap()
+    }
+
+    /// Каждое длинное имя и синоним clap (с `--help` и `--version`, кроме внутренних `--rmasscan-…`) и id его
+    /// аргумента, собранные отдельно от [`equals_table`].
+    fn clap_long_names() -> Vec<(String, String)> {
+        let mut cmd = Cli::command();
+        cmd.build();
+        let mut names = Vec::new();
+        for arg in cmd.get_arguments() {
+            let Some(long) = arg.get_long() else { continue };
+            if long.starts_with("rmasscan-") {
+                // Внутренние опции, которые пишет сам `preprocess_args`, скрыты из справки.
+                assert!(arg.is_hide_set(), "{long}");
+                continue;
+            }
+            let id = arg.get_id().as_str().to_string();
+            for name in std::iter::once(long).chain(arg.get_all_aliases().unwrap_or_default()) {
+                names.push((name.to_string(), id.clone()));
+            }
+        }
+        names
+    }
+
+    /// Р17, справка C1: ключ `normalize_key` каждого имени и синонима clap ведёт ровно к одной опции. Совпадают после
+    /// нормализации только `nocapture` и его синоним `no-capture` (`src/main-conf.c:2403`), это одна опция.
+    #[test]
+    fn equals_table_has_one_option_per_key() {
+        let names = clap_long_names();
+        assert!(names.len() > 100, "{}", names.len());
+        let long_to_id: HashMap<String, String> = names.iter().cloned().collect();
+        let mut groups: HashMap<String, Vec<(String, String)>> = HashMap::new();
+        for (name, id) in &names {
+            groups
+                .entry(normalize_key(name))
+                .or_default()
+                .push((name.clone(), id.clone()));
+        }
+        for (key, group) in &groups {
+            let id = &group[0].1;
+            assert!(group.iter().all(|(_, i)| i == id), "{key}: {group:?}");
+            let long = equals_table().long_of(key);
+            assert_eq!(long.map(|l| &long_to_id[l]), Some(id), "{key}");
+        }
+        assert_eq!(equals_table().0.len(), groups.len());
+        let mut pairs: Vec<Vec<&str>> = groups
+            .values()
+            .filter(|g| g.len() > 1)
+            .map(|g| {
+                let mut n: Vec<&str> = g.iter().map(|(n, _)| n.as_str()).collect();
+                n.sort_unstable();
+                n
+            })
+            .collect();
+        pairs.sort();
+        assert_eq!(pairs, [["no-capture", "nocapture"]]);
+        for name in [
+            "help",
+            "version",
+            "banner-app",
+            "top-port",
+            "rotate-size",
+            "source-ip",
+        ] {
+            assert!(
+                equals_table().long_of(&normalize_key(name)).is_some(),
+                "{name}"
+            );
+        }
+        assert_eq!(equals_table().long_of("rmasscannic"), None);
+        assert_eq!(equals_table().long_of("rmasscanscan"), None);
+    }
+
+    /// Р17 (`EQUALS`, `src/main-conf.c:833-849`): каждое длинное имя и синоним clap, набранные заглавными с `_` вместо
+    /// `-`, разбираются как само имя: голым, со значением после `=` и со значением следующим словом. clap узнаёт итог
+    /// как ту же опцию (любая ошибка, кроме «неизвестный аргумент», значит, что имя узнано).
+    #[test]
+    fn equals_rewrites_every_long_option() {
+        use clap::error::ErrorKind;
+        use clap::parser::ValueSource;
+        for (name, id) in clap_long_names() {
+            let shout = format!("--{}", name.to_uppercase().replace('-', "_"));
+            let plain = format!("--{name}");
+            for (typed, canon) in [
+                (vec![shout.clone()], vec![plain.clone()]),
+                (vec![format!("{shout}=1")], vec![format!("{plain}=1")]),
+                (
+                    vec![shout.clone(), "1".into()],
+                    vec![plain.clone(), "1".into()],
+                ),
+            ] {
+                let typed: Vec<&str> = typed.iter().map(String::as_str).collect();
+                let canon: Vec<&str> = canon.iter().map(String::as_str).collect();
+                let got = pre(&typed);
+                assert_eq!(got, pre(&canon), "{typed:?}");
+                match Cli::command().try_get_matches_from(&got) {
+                    Ok(m) => assert_eq!(
+                        m.value_source(&id),
+                        Some(ValueSource::CommandLine),
+                        "{typed:?}"
+                    ),
+                    Err(e) => assert_ne!(e.kind(), ErrorKind::UnknownArgument, "{typed:?}: {e}"),
+                }
+            }
+        }
+    }
+
+    /// Значение после первого `=`, иначе после первого `:` (`masscan_command_line`, `src/main-conf.c:3279-3289`); `:` у
+    /// любой опции значит `=`, а `:` и `=` внутри значения остаются.
+    #[test]
+    fn equals_keeps_value_after_eq_and_colon() {
+        assert_eq!(pre(&["--Rate=100"]), ["rmasscan", "--rate=100"]);
+        assert_eq!(pre(&["--RATE:100"]), ["rmasscan", "--rate=100"]);
+        assert_eq!(pre(&["--rate:100"]), ["rmasscan", "--rate=100"]);
+        assert_eq!(pre(&["--rate="]), ["rmasscan", "--rate="]);
+        assert_eq!(
+            pre(&["--Adapter_IP=fe80::1"]),
+            ["rmasscan", "--adapter-ip=fe80::1"]
+        );
+        assert_eq!(
+            pre(&["--router.mac:00:11:22:33:44:55"]),
+            ["rmasscan", "--router-mac=00:11:22:33:44:55"]
+        );
+        assert_eq!(
+            pre(&["--Stylesheet:http://x/a"]),
+            ["rmasscan", "--stylesheet=http://x/a"]
+        );
+        assert_eq!(
+            pre(&["--Stylesheet=http://x/a:b"]),
+            ["rmasscan", "--stylesheet=http://x/a:b"]
+        );
+        // `=` раньше `:`: имя `Exclude:a` неизвестно (у C тоже), clap его отклоняет.
+        assert_eq!(pre(&["--Exclude:a=b"]), ["rmasscan", "--Exclude:a=b"]);
+        assert!(parse(&["--Exclude:a=b"]).is_err());
+        let cli = parse(&["--Rate:250", "--Seed=7", "--Source_IP:fe80::1", "10.0.0.1"]).unwrap();
+        assert_eq!(cli.rate.as_deref(), Some("250"));
+        assert_eq!(cli.seed, Some(7));
+        assert_eq!(cli.adapter_ip.as_deref(), Some("fe80::1"));
+        assert_eq!(cli.targets, ["10.0.0.1"]);
+    }
+
+    /// Ключ адаптера с индексом (`nic[i]`, `src/main-conf.c:882-890`) `EQUALS` не трогает: индекс разбирает
+    /// [`indexed_nic_key`], в любом написании имени. Без индекса это одиночная опция clap.
+    #[test]
+    fn equals_leaves_array_names_to_indexed_parsers() {
+        assert_eq!(
+            pre(&["--Adapter-Ip[1]", "10.0.0.1"]),
+            ["rmasscan", "--rmasscan-nic=Adapter-Ip[1]=10.0.0.1"]
+        );
+        assert_eq!(
+            pre(&["--SOURCE_IP[1]=10.0.0.1"]),
+            ["rmasscan", "--rmasscan-nic=SOURCE_IP[1]=10.0.0.1"]
+        );
+        assert_eq!(
+            pre(&["--Adapter-Ip", "10.0.0.1"]),
+            ["rmasscan", "--adapter-ip", "10.0.0.1"]
+        );
+        let cfg = parse(&["--Adapter-Ip[1]", "198.18.0.2", "--ADAPTER[1]", "veth1"])
+            .unwrap()
+            .to_config()
+            .unwrap();
+        assert_eq!(cfg.nics[1].adapter_ip, Some((0xc612_0002, 0xc612_0002)));
+        assert_eq!(cfg.nics[1].adapter_name.as_deref(), Some("veth1"));
+    }
+
+    /// `EQUALS` C истинно, когда имя таблицы кончилось там, где у набранного имени `[` (`src/main-conf.c:840-841`):
+    /// закрытый суффикс `[…]` у опции без индексного смысла отбрасывается, по всей таблице clap.
+    #[test]
+    fn equals_array_suffix_ignored_like_c() {
+        for (name, _) in clap_long_names() {
+            if has_index_meaning(&normalize_key(&name)) {
+                continue;
+            }
+            let suffixed = format!("--{name}[0]");
+            let plain = format!("--{name}");
+            assert_eq!(
+                pre(&[&format!("{suffixed}=v")]),
+                pre(&[&format!("{plain}=v")]),
+                "{name}"
+            );
+            assert_eq!(pre(&[&suffixed, "v"]), pre(&[&plain, "v"]), "{name}");
+            // Что внутри скобок и после них, C не смотрит.
+            let shout = format!("--{}[7]x", name.to_uppercase());
+            assert_eq!(pre(&[&shout, "v"]), pre(&[&plain, "v"]), "{name}");
+        }
+        let cli = parse(&["--banner-types[0]", "dns-ver", "--readscan", "f"]).unwrap();
+        assert_eq!(cli.banner_types, ["dns-ver"]);
+        assert_eq!(
+            parse(&["--rate[7]", "100"]).unwrap().rate.as_deref(),
+            Some("100")
+        );
+    }
+
+    /// Р17 («непарный индекс»): незакрытая `[` в имени это код 1 у любой опции, в том числе у ключей адаптера и у
+    /// неизвестных имён. C сравнивает имя до `[` и читает индекс `parseInt` (`ARRAY`, `src/main-conf.c:881-890`).
+    #[test]
+    fn unpaired_index_fails() {
+        for (bad, name) in [
+            (&["--rate[", "100"][..], "--rate["),
+            (&["--Adapter-Ip[1", "10.0.0.1"][..], "--Adapter-Ip[1"),
+            (&["--adapter-ip[1=10.0.0.1"][..], "--adapter-ip[1"),
+            (&["--banners["][..], "--banners["),
+            (&["--bogus[x"][..], "--bogus[x"),
+        ] {
+            assert_eq!(
+                masscan_err(&[bad, &["10.0.0.0/30", "-p80"][..]].concat()),
+                format!("{name}: unclosed '[' in the option name"),
+                "{bad:?}"
+            );
+        }
+    }
+
+    /// `EQUALS` стоит раньше `F_NUMABLE` (`src/main-conf.c:3228`, `is_numable` :3041-3056 тоже сравнивает по `EQUALS`):
+    /// следующее целое или логическое слово забирается при любом написании имени.
+    #[test]
+    fn equals_then_numable() {
+        assert_eq!(pre(&["--TCP-MSS", "1400"]), ["rmasscan", "--tcp-mss=1400"]);
+        assert_eq!(pre(&["--TCP-MSS", "1400"]), pre(&["--tcp-mss", "1400"]));
+        assert_eq!(pre(&["--TcpMss", "off"]), ["rmasscan", "--tcp-mss=off"]);
+        assert_eq!(
+            pre(&["--Top_Ports", "100"]),
+            ["rmasscan", "--top-ports=100"]
+        );
+        assert_eq!(pre(&["--TOP-PORT", "5"]), ["rmasscan", "--top-ports=5"]);
+        assert_eq!(pre(&["--top-port:5"]), ["rmasscan", "--top-ports=5"]);
+        assert_eq!(
+            pre(&["--Tcp.WScale", "x"]),
+            ["rmasscan", "--tcp-wscale=", "x"]
+        );
+        let cfg = parse(&["10.0.0.1", "--TCP-MSS", "1400", "-p80"])
+            .unwrap()
+            .to_config()
+            .unwrap();
+        assert_eq!(cfg.tcp_opts.mss, Some(1400));
+    }
+
+    /// Ошибки clap это код 1, как `exit(1)` C на неизвестное имя (`src/main-conf.c:3036`), а не 2 clap; текст clap.
+    /// Справка и версия это 0 (C печатает справку с кодом 1, `:3225-3227`).
+    #[test]
+    fn clap_errors_exit_1() {
+        use clap::error::ErrorKind;
+        for (argv, text) in [
+            (&["--bogus"][..], "unexpected argument '--bogus'"),
+            (
+                &["10.0.0.0/30", "--rate"][..],
+                "a value is required for '--rate <PPS>'",
+            ),
+            (&["--seed", "x"][..], "invalid value 'x' for '--seed <N>'"),
+        ] {
+            match parse(argv) {
+                Err(ParseError::Clap(e)) => {
+                    assert_eq!(clap_exit_code(e.kind()), 1, "{argv:?}");
+                    assert!(e.to_string().contains(text), "{argv:?}: {e}");
+                }
+                other => panic!("{argv:?}: {other:?}"),
+            }
+        }
+        for (argv, kind) in [
+            ("--help", ErrorKind::DisplayHelp),
+            ("--HELP", ErrorKind::DisplayHelp),
+            ("-h", ErrorKind::DisplayHelp),
+            ("--version", ErrorKind::DisplayVersion),
+            ("-V", ErrorKind::DisplayVersion),
+        ] {
+            match parse(&[argv]) {
+                Err(ParseError::Clap(e)) => {
+                    assert_eq!(e.kind(), kind, "{argv}");
+                    assert_eq!(clap_exit_code(e.kind()), 0, "{argv}");
+                }
+                other => panic!("{argv}: {other:?}"),
+            }
+        }
+    }
+
+    /// `masscan_set_parameter` (`src/main-conf.c:2437-2441`): индекс от 65536 это `"<имя>: bad index"` и код 1 у любого
+    /// ключа, раньше сравнения имени, в том числе там, где закрытый суффикс иначе отбрасывается. Индекс читает `ARRAY`
+    /// (:881-890): цифры сразу за `[`, по модулю 2^32; без цифр это 0. Так же в файле конфигурации.
+    #[test]
+    fn bad_index_fails_like_c() {
+        for (bad, name) in [
+            (&["--rate[70000]", "9"][..], "rate[70000]"),
+            (&["--rate[65536]=9"][..], "rate[65536]"),
+            (
+                &["--Banner-Types[99999]", "dns-ver"][..],
+                "Banner-Types[99999]",
+            ),
+            (
+                &["--adapter-ip[70000]", "10.0.0.1"][..],
+                "adapter-ip[70000]",
+            ),
+            (&["--bogus[70000]"][..], "bogus[70000]"),
+            // C печатает `bad index` и у незакрытой скобки: проверка индекса идёт первой.
+            (&["--rate[70000", "9"][..], "rate[70000"),
+        ] {
+            assert_eq!(
+                masscan_err(&[bad, &["10.0.0.0/30"][..]].concat()),
+                format!("{name}: bad index"),
+                "{bad:?}"
+            );
+        }
+        for ok in [
+            "--rate[65535]",
+            "--rate[4294967296]",
+            "--rate[x]",
+            "--rate[-1]",
+        ] {
+            assert_eq!(
+                parse(&[ok, "9"]).unwrap().rate.as_deref(),
+                Some("9"),
+                "{ok}"
+            );
+        }
+        let dir = crate::scratch::Scratch::new();
+        let f = dir.write("idx.conf", b"rate[70000] = 5\n");
+        let e = parse(&["-c", f.to_str().unwrap()])
+            .unwrap()
+            .to_config()
+            .unwrap_err();
+        assert_eq!(e, "rate[70000]: bad index");
+    }
+
+    /// Голое `--` clap понимает как конец опций, поэтому слова правее него идут в clap как есть: их не переписывает и
+    /// не отклоняет ни `EQUALS`, ни другие правила `preprocess_args`. `--`, которое правило забрало значением, концом
+    /// опций не считается (C тоже берёт его значением, `src/main-conf.c:3293`).
+    #[test]
+    fn words_after_double_dash_reach_clap_untouched() {
+        assert_eq!(
+            pre(&[
+                "--Rate",
+                "5",
+                "--",
+                "--Rate",
+                "--rate[",
+                "-sL",
+                "--x[70000]"
+            ]),
+            [
+                "rmasscan",
+                "--rate",
+                "5",
+                "--",
+                "--Rate",
+                "--rate[",
+                "-sL",
+                "--x[70000]"
+            ]
+        );
+        assert_eq!(parse(&["--", "--Rate"]).unwrap().targets, ["--Rate"]);
+        assert_eq!(
+            pre(&["--adapter-ip[1]", "--", "--Rate", "5"]),
+            ["rmasscan", "--rmasscan-nic=adapter-ip[1]=--", "--rate", "5"]
+        );
+    }
+
+    /// Правило 0 `preprocess_args`: значение, которое берёт clap, не переписывается. После `=` или `:` оно идёт как есть,
+    /// даже если похоже на опцию с `[`, `=` и `:`; слово, которое забрало правило `preprocess_args`, тоже; отдельное
+    /// слово с `--` clap значением не берёт, переписано оно или нет.
+    #[test]
+    fn clap_bound_values_are_never_rewritten() {
+        assert_eq!(
+            pre(&["--exclude=--Rate[1]:x=y"]),
+            ["rmasscan", "--exclude=--Rate[1]:x=y"]
+        );
+        assert_eq!(
+            parse(&["--exclude=--Rate[1]:x=y"]).unwrap().exclude,
+            ["--Rate[1]:x=y"]
+        );
+        assert_eq!(
+            parse(&["--Exclude:--Rate[1"]).unwrap().exclude,
+            ["--Rate[1"]
+        );
+        assert_eq!(
+            parse(&["--Stylesheet=--Rate:1["]).unwrap().stylesheet,
+            ["--Rate:1["]
+        );
+        assert_eq!(
+            pre(&["--adapter-ip[1]", "--Rate[1"]),
+            ["rmasscan", "--rmasscan-nic=adapter-ip[1]=--Rate[1"]
+        );
+        for argv in [
+            &["--exclude", "--Rate", "5"][..],
+            &["-p", "--Rate", "5"][..],
+        ] {
+            match parse(argv) {
+                Err(ParseError::Clap(e)) => assert!(
+                    e.to_string().contains("a value is required for"),
+                    "{argv:?}: {e}"
+                ),
+                other => panic!("{argv:?}: {other:?}"),
+            }
+        }
+    }
+
+    /// Правило 0 держится на том, что clap не берёт отдельное слово с `--` значением опции. Задача 13
+    /// (`--hello-string`, `--http-*`) обязана сохранить это или научить `preprocess_args` пропускать значение опции,
+    /// которое переписывать нельзя.
+    #[test]
+    fn no_option_takes_hyphen_values() {
+        let mut cmd = Cli::command();
+        cmd.build();
+        for arg in cmd.get_arguments() {
+            let id = arg.get_id();
+            assert!(!arg.is_allow_hyphen_values_set(), "{id}");
+            assert!(!arg.is_trailing_var_arg_set(), "{id}");
+            assert!(!arg.is_last_set(), "{id}");
+        }
+    }
+
+    /// Синонимы C (`config_parameters[]`, `src/main-conf.c:2369-2427`, и цепочка `masscan_set_parameter`,
+    /// :2470-3037) у опций, которые есть в rmasscan, ведут к той же опции, что у C. Каждое имя ключа адаптера
+    /// ([`NIC_KEYS`]) работает и без индекса, как у C (индекс 0).
+    #[test]
+    fn c_aliases_reach_the_same_option() {
+        let long_to_id: HashMap<String, String> = clap_long_names().into_iter().collect();
+        let id_of = |name: &str| {
+            equals_table()
+                .long_of(&normalize_key(name))
+                .map(|l| long_to_id[l].clone())
+        };
+        for (alias, id) in [
+            ("max-rate", "rate"),
+            ("shards", "shard"),
+            ("retry", "retries"),
+            ("max-retries", "retries"),
+            ("max-retry", "retries"),
+            ("notransmit", "offline"),
+            ("nosend", "offline"),
+            ("dry-run", "offline"),
+            ("port", "ports"),
+            ("dst-port", "ports"),
+            ("dest-port", "ports"),
+            ("destination-port", "ports"),
+            ("target-port", "ports"),
+            ("ranges", "range"),
+            ("ip", "range"),
+            ("ipv4", "range"),
+            ("dst-ip", "range"),
+            ("dest-ip", "range"),
+            ("destination-ip", "range"),
+            ("target-ip", "range"),
+            ("exclude-range", "exclude"),
+            ("exclude-ranges", "exclude"),
+            ("exclude-ip", "exclude"),
+            ("exclude-ipv4", "exclude"),
+            ("trace-packet", "packet_trace"),
+            ("if", "interface"),
+            ("source-address", "adapter_ip"),
+            ("spoof-ip", "adapter_ip"),
+            ("spoof-address", "adapter_ip"),
+            ("src-ip", "adapter_ip"),
+            ("src-port", "source_port"),
+            ("sourceport", "source_port"),
+            ("spoof-mac", "adapter_mac"),
+            ("src-mac", "adapter_mac"),
+            ("router", "router_mac"),
+            ("dest-mac", "router_mac"),
+            ("destination-mac", "router_mac"),
+            ("dst-mac", "router_mac"),
+            ("target-mac", "router_mac"),
+            ("router-mac-ipv4", "router_mac_ipv4"),
+            ("router-ipv4", "router_mac_ipv4"),
+            ("tcpmss", "tcp_mss"),
+            ("top-port", "top_ports"),
+        ] {
+            assert_eq!(id_of(alias).as_deref(), Some(id), "{alias}");
+        }
+        for key in NIC_KEYS {
+            assert!(equals_table().long_of(key).is_some(), "{key}");
+        }
+        let cfg = |a: &[&str]| parse(a).unwrap().to_config().unwrap();
+        assert_eq!(
+            cfg(&["--spoof-ip", "198.18.0.9"]).adapter_ip,
+            Some(0xc612_0009)
+        );
+        assert_eq!(
+            cfg(&["--If", "veth9"]).adapter_name.as_deref(),
+            Some("veth9")
+        );
+        assert_eq!(
+            cfg(&["--src-port", "40001"]).source_port,
+            Some((40001, 40001))
+        );
+        assert_eq!(
+            cfg(&["--SRC_MAC", "02-00-00-00-00-01"]).adapter_mac,
+            Some([2, 0, 0, 0, 0, 1])
+        );
+        assert_eq!(
+            cfg(&["--router", "02-00-00-00-00-04"]).router_mac,
+            Some([2, 0, 0, 0, 0, 4])
+        );
+        // `--router-mac-ipv4` без индекса это то же, что `--router-mac-ipv4[0]`: только MAC шлюза IPv4.
+        for argv in [
+            &["--router-mac-ipv4", "02-00-00-00-00-05"][..],
+            &["--Router-IPv4=02-00-00-00-00-05"][..],
+            &["--router-mac-ipv4[0]", "02-00-00-00-00-05"][..],
+        ] {
+            let c = cfg(argv);
+            assert_eq!(c.router_mac, Some([2, 0, 0, 0, 0, 5]), "{argv:?}");
+            assert_eq!(
+                (c.nics[0].router_mac_ipv4, c.nics[0].router_mac_ipv6),
+                (Some([2, 0, 0, 0, 0, 5]), None),
+                "{argv:?}"
+            );
+        }
+        assert!(
+            parse(&["--router-mac-ipv4", "nope"])
+                .unwrap()
+                .to_config()
+                .is_err()
+        );
+        let cli = parse(&[
+            "--max-rate",
+            "50",
+            "--Dry-Run",
+            "--IP",
+            "10.0.0.1",
+            "--Max_Retries",
+            "2",
+        ])
+        .unwrap();
+        assert_eq!(cli.rate.as_deref(), Some("50"));
+        assert!(cli.offline);
+        assert_eq!(cli.range, ["10.0.0.1"]);
+        assert_eq!(cli.retries, Some(2));
+    }
+
+    // Задача 13: `--hello*`, `--connection-timeout`, `--http-*` (справка C1-C4).
+
+    fn banner_cfg(a: &[&str]) -> ScanConfig {
+        parse(a).unwrap().to_config().unwrap()
+    }
+
+    fn banner_err(a: &[&str]) -> String {
+        match parse(a) {
+            Err(ParseError::Masscan(t)) => t,
+            Ok(cli) => cli.to_config().unwrap_err(),
+            Err(e) => panic!("{a:?}: {e:?}"),
+        }
+    }
+
+    /// `--hello-string` без `[P]` C читает как порт 0 (`ARRAY`, `src/main-conf.c:881-890`); здесь это отказ
+    /// (Р17).
+    #[test]
+    fn hello_string_without_index_fails() {
+        for a in [
+            &["--hello-string", "QUJD"][..],
+            &["--hello-string=QUJD"][..],
+            &["--HELLO_STRING:QUJD"][..],
+        ] {
+            assert!(parse(a).unwrap().to_config().is_err(), "{a:?}");
+        }
+    }
+
+    /// Незакрытая `[` у `--hello-string`/`--hello-file`/`--http-header`: тот же отказ Р17, что у любой опции.
+    #[test]
+    fn hello_string_unpaired_index_fails() {
+        for (a, name) in [
+            (&["--hello-string[80", "QUJD"][..], "--hello-string[80"),
+            (&["--hello-string[80=QUJD"][..], "--hello-string[80"),
+            (&["--hello-file[80", "f"][..], "--hello-file[80"),
+            (&["--http-header[X", "v"][..], "--http-header[X"),
+        ] {
+            assert_eq!(
+                masscan_err(a),
+                format!("{name}: unclosed '[' in the option name"),
+                "{a:?}"
+            );
+        }
+    }
+
+    /// Индекс не десятичный: C `ARRAY` взял бы ведущие цифры или 0, здесь отказ (Р17).
+    #[test]
+    fn hello_string_non_decimal_index_fails() {
+        for a in [
+            &["--hello-string[x]", "QUJD"][..],
+            &["--hello-string[8x]", "QUJD"][..],
+            &["--hello-string[]", "QUJD"][..],
+            &["--hello-string[-1]", "QUJD"][..],
+            &["--hello-string[0x50]", "QUJD"][..],
+            &["--hello-file[8.0]", "f"][..],
+        ] {
+            assert!(parse(a).unwrap().to_config().is_err(), "{a:?}");
+        }
+        // Ведущие нули десятичны, хвост после `]` C не смотрит.
+        let cfg = banner_cfg(&["--hello-string[00080]junk", "QUJD"]);
+        assert_eq!(cfg.hello_strings, [(80, "QUJD".to_string())]);
+    }
+
+    /// Индекс от 65536 это `bad index` C и код 1 (`src/main-conf.c:2437-2441`, `:1276-1278`), ещё на разборе.
+    #[test]
+    fn hello_string_index_65536_fails() {
+        for (a, name) in [
+            (
+                &["--hello-string[65536]", "QUJD"][..],
+                "hello-string[65536]",
+            ),
+            (&["--hello-string[70000]=QUJD"][..], "hello-string[70000]"),
+            (&["--hello-file[65536]", "f"][..], "hello-file[65536]"),
+        ] {
+            assert_eq!(masscan_err(a), format!("{name}: bad index"), "{a:?}");
+        }
+        let cfg = banner_cfg(&["--hello-string[65535]", "QUJD"]);
+        assert_eq!(cfg.hello_strings, [(65535, "QUJD".to_string())]);
+    }
+
+    /// Неверный base64 по определению справки C2 отказывает: пробел, `=` в середине, `QUJD=`, один хвостовой
+    /// знак, байт вне алфавита (E1.6: C на части из них зависает).
+    #[test]
+    fn hello_string_invalid_base64_fails() {
+        for bad in ["QU JD", "QU=JD", "QUJD=", "Q", "QUJD*", "QUJD\t"] {
+            let a = [format!("--hello-string[80]={bad}")];
+            assert!(
+                parse(&[a[0].as_str()]).unwrap().to_config().is_err(),
+                "{bad:?}"
+            );
+        }
+        for bad in ["", "QQ==", "QUE=", "QUJD", "QUE"] {
+            let a = [format!("--hello-string[80]={bad}")];
+            assert!(
+                parse(&[a[0].as_str()]).unwrap().to_config().is_ok(),
+                "{bad:?}"
+            );
+        }
+    }
+
+    /// Эхо `hello-string[%u] = %s` от новой записи к старой (`src/main-conf.c:1264-1268`: список в начало),
+    /// хранится порядок argv.
+    #[test]
+    fn hello_string_echo_newest_first() {
+        // Разделитель `:` с набивкой `=` в значении C не разбирает (`strchr('=')` первый), поэтому третье
+        // значение отдельным словом.
+        let cfg = banner_cfg(&[
+            "--hello-string[80]",
+            "QUJD",
+            "--hello-string[443]=aGVsbG8=",
+            "--Hello.String[80]",
+            "RA==",
+        ]);
+        assert_eq!(
+            cfg.hello_strings,
+            [
+                (80, "QUJD".to_string()),
+                (443, "aGVsbG8=".to_string()),
+                (80, "RA==".to_string()),
+            ]
+        );
+        let mut s = String::new();
+        rmasscan_core::config::echo(&cfg, false, &mut s);
+        let lines: Vec<&str> = s
+            .lines()
+            .filter(|l| l.starts_with("hello-string"))
+            .collect();
+        assert_eq!(
+            lines,
+            [
+                "hello-string[80] = RA==",
+                "hello-string[443] = aGVsbG8=",
+                "hello-string[80] = QUJD",
+            ]
+        );
+    }
+
+    /// `--hello-file[P]` (`hello-filename`, `src/main-conf.c:1212-1258`): байты файла кодируются и дальше это
+    /// `hello-string[P]`; сам ключ в эхо не пишется.
+    #[test]
+    fn hello_file_becomes_hello_string() {
+        let dir = crate::scratch::Scratch::new();
+        let f = dir.write("hello.bin", b"\x00hello\xff");
+        let name = format!("--hello-filename[8080]={}", f.display());
+        let cfg = banner_cfg(&[name.as_str()]);
+        assert_eq!(cfg.hello_strings, [(8080, "AGhlbGxv/w==".to_string())]);
+        let mut s = String::new();
+        rmasscan_core::config::echo(&cfg, false, &mut s);
+        assert!(s.contains("hello-string[8080] = AGhlbGxv/w==\n"), "{s}");
+        assert!(!s.contains("hello-file"), "{s}");
+        assert_eq!(
+            crate::banner_settings::tcp_banner_settings(&cfg)
+                .unwrap()
+                .hello_strings,
+            [(8080, b"\x00hello\xff".to_vec())]
+        );
+        // Отдельное слово и написание `EQUALS` дают то же.
+        let cfg = banner_cfg(&["--Hello_File[80]", f.to_str().unwrap()]);
+        assert_eq!(cfg.hello_strings, [(80, "AGhlbGxv/w==".to_string())]);
+    }
+
+    /// Файл длиннее 12285 байт C молча обрезал бы (`src/main-conf.c:1237-1246`); здесь отказ (E1.14).
+    #[test]
+    fn hello_file_over_12285_fails() {
+        let dir = crate::scratch::Scratch::new();
+        let max = dir.write("max.bin", &[b'x'; 12285]);
+        let cfg = banner_cfg(&["--hello-file[80]", max.to_str().unwrap()]);
+        assert_eq!(cfg.hello_strings.len(), 1);
+        let over = dir.write("over.bin", &[b'x'; 12286]);
+        assert!(
+            parse(&["--hello-file[80]", over.to_str().unwrap()])
+                .unwrap()
+                .to_config()
+                .is_err()
+        );
+    }
+
+    /// Пустой файл hello: текст C `[FAILED] could not read hello file` (`src/main-conf.c:1240-1244`); каталог у C
+    /// открывается, но `fread` даёт 0 байт, поэтому тот же текст, а не ошибка открытия.
+    #[test]
+    fn hello_file_empty_fails_with_c_text() {
+        let dir = crate::scratch::Scratch::new();
+        let f = dir.write("empty.bin", b"");
+        assert_eq!(
+            banner_err(&["--hello-file[80]", f.to_str().unwrap()]),
+            "[FAILED] could not read hello file"
+        );
+        assert_eq!(
+            banner_err(&["--hello-file[80]", dir.dir().to_str().unwrap()]),
+            "[FAILED] could not read hello file"
+        );
+    }
+
+    /// Форма `--http-header` выбирается по `name += 11` от набранного имени (`src/main-conf.c:1361`, справка
+    /// C3): `HTTP_HEADER[X]` скобочная, `httpheader[X]` (11-й знак не `[`) требует двоеточие в значении.
+    #[test]
+    fn http_header_form_by_typed_name_like_c() {
+        let cfg = banner_cfg(&["--HTTP_HEADER[X]", "v"]);
+        assert_eq!(cfg.http.headers, [("X".to_string(), "v".to_string())]);
+        let cfg = banner_cfg(&["--httpheader[X]", "a:b"]);
+        assert_eq!(cfg.http.headers, [("a".to_string(), "b".to_string())]);
+        // Скобочная форма снимает пунктуацию по краям; двоеточная режет пробелы у имени и значения.
+        let cfg = banner_cfg(&["--http-header[X-Lab]", " v ", "--http-header", "Y :  w"]);
+        assert_eq!(
+            cfg.http.headers,
+            [
+                ("X-Lab".to_string(), " v ".to_string()),
+                ("Y".to_string(), "w".to_string()),
+            ]
+        );
+        // Двоеточие разделителя — первое в токене, как у C и у всякого имени: внутри скобок оно режет набранное
+        // имя, и остаток это незакрытая `[` (Р17).
+        assert!(parse(&["--http-header[A:B]:v"]).is_err());
+    }
+
+    /// Набранное в argv имя короче 11 знаков: `name += 11` уходит за NUL в байты `name2[64]`, оставшиеся от прошлых
+    /// опций (E1.7, только argv), здесь отказ. В файле конфигурации то же написание разбирается как у C
+    /// (`http_header_short_spelling_in_config_file_like_c`).
+    #[test]
+    fn http_header_short_spelling_fails() {
+        for a in [
+            &["--http-field", "X:v"][..],
+            &["--httpheader", "X:v"][..],
+            &["--http.field=X:v"][..],
+        ] {
+            assert!(parse(a).unwrap().to_config().is_err(), "{a:?}");
+        }
+    }
+
+    /// Ни скобок, ни двоеточия: две строки C (`src/main-conf.c:1388-1390`).
+    #[test]
+    fn http_header_neither_form_fails_with_hint() {
+        assert_eq!(
+            banner_err(&["--http-header", "NoColonHere"]),
+            "[-] --http-header needs both a name and value\n    hint: \"--http-header Name:value\""
+        );
+    }
+
+    /// 17-й заголовок и 17-я cookie отказывают (brief; C лишнее молча отбрасывал, справка C3).
+    #[test]
+    fn http_header_17th_fails() {
+        let mut a: Vec<String> = Vec::new();
+        for i in 0..16 {
+            a.push(format!("--http-header=X{i}:v"));
+        }
+        let refs: Vec<&str> = a.iter().map(String::as_str).collect();
+        assert_eq!(banner_cfg(&refs).http.headers.len(), 16);
+        a.push("--http-header=X16:v".to_string());
+        let refs: Vec<&str> = a.iter().map(String::as_str).collect();
+        assert!(parse(&refs).unwrap().to_config().is_err());
+        let mut a: Vec<String> = (0..17).map(|_| "--http-cookie=a=b".to_string()).collect();
+        let refs: Vec<&str> = a.iter().map(String::as_str).collect();
+        assert!(parse(&refs).unwrap().to_config().is_err());
+        a.truncate(16);
+        let refs: Vec<&str> = a.iter().map(String::as_str).collect();
+        assert_eq!(banner_cfg(&refs).http.cookies.len(), 16);
+    }
+
+    /// Любое другое значение `--http-*`, включая CRLF, как у C (`src/main-conf.c:1300-1505`): хранится как
+    /// дано и попадает в запрос задачи 10 без нормализации.
+    #[test]
+    fn http_values_with_crlf_like_c() {
+        let cfg = banner_cfg(&[
+            "--http-host=a\r\nX: b",
+            "--http-header=Y:c\nd",
+            "--http-method=",
+            "--http-payload=p\r\nq",
+        ]);
+        assert_eq!(cfg.http.host.as_deref(), Some("a\r\nX: b"));
+        assert_eq!(cfg.http.method.as_deref(), Some(""));
+        assert_eq!(cfg.http.payload.as_deref(), Some("p\r\nq"));
+        let req = crate::banner_settings::tcp_banner_settings(&cfg)
+            .unwrap()
+            .http_request;
+        assert!(
+            req.windows(13).any(|w| w == b"Host: a\r\nX: b"),
+            "{:?}",
+            String::from_utf8_lossy(&req)
+        );
+        assert!(req.ends_with(b"p\r\nq"));
+    }
+
+    /// Финальное ревью, M2: значение семи `--http-*` со свободным текстом может начинаться с `-`, как у C (`value =
+    /// argv[++i]`, `src/main-conf.c:3286-3294`): тело multipart `--http-payload --boundary`, `--http-cookie -a=1`,
+    /// любое написание имени и синонимы. Вывод `--echo` этих argv закреплён бинарём C `8e6b3b0`, собранным вне
+    /// репозитория (тест `echo_of_http_values_starting_with_a_dash_like_c` в `lib.rs`).
+    #[test]
+    fn http_free_text_values_may_start_with_a_dash_like_c() {
+        let cfg = banner_cfg(&[
+            "--http-method",
+            "-X",
+            "--HTTP_URI",
+            "--x",
+            "--http-version",
+            "-1",
+            "--http-host",
+            "-h",
+            "--http-useragent",
+            "-ua",
+            "--http-payload",
+            "--boundary--\r\n",
+            "--http-cookie",
+            "-a=1",
+            "--http-cookie",
+            "--",
+        ]);
+        let h = &cfg.http;
+        assert_eq!(h.method.as_deref(), Some("-X"));
+        assert_eq!(h.url.as_deref(), Some("--x"));
+        assert_eq!(h.version.as_deref(), Some("-1"));
+        assert_eq!(h.host.as_deref(), Some("-h"));
+        assert_eq!(h.user_agent.as_deref(), Some("-ua"));
+        assert_eq!(h.payload.as_deref(), Some("--boundary--\r\n"));
+        // `--` после опции это её значение (у C тоже), а не конец опций.
+        assert_eq!(h.cookies, ["-a=1", "--"]);
+        // Слово без `-` идёт прежним путём, `=` и `:` тоже; опция последним словом это по-прежнему ошибка clap (Р17).
+        let cfg = banner_cfg(&["--http-payload", "x", "--http-host=--y", "--http-method:-Z"]);
+        assert_eq!(
+            (
+                cfg.http.payload.as_deref(),
+                cfg.http.host.as_deref(),
+                cfg.http.method.as_deref()
+            ),
+            (Some("x"), Some("--y"), Some("-Z"))
+        );
+        assert!(matches!(
+            parse(&["10.0.0.0/30", "-p80", "--http-payload"]),
+            Err(ParseError::Clap(_))
+        ));
+        // Другие опции чужое слово с `-` значением по-прежнему не берут.
+        assert!(parse(&["10.0.0.0/30", "--rate", "-5"]).is_err());
+    }
+
+    /// Те же случаи через файл `-c`: ключи файла подчиняются тем же правилам, включая набранное имя
+    /// `http-header` и файл `--hello-file`.
+    #[test]
+    fn banner_options_in_config_file() {
+        let dir = crate::scratch::Scratch::new();
+        let hello = dir.write("hello.bin", b"hi");
+        let text = format!(
+            "hello = ssl\nhello-string[80] = QUJD\nhello-file[81] = {}\nconnection-timeout = 6\n\
+             HTTP_HEADER[X] = v\nhttpheader[Y] = a:b\nhttp-method = POST\nhttp-cookie = a=b\ncapture = html\n",
+            hello.display()
+        );
+        let f = dir.write("banner.conf", text.as_bytes());
+        let cfg = banner_cfg(&["-c", f.to_str().unwrap()]);
+        assert!(cfg.hello_ssl);
+        assert_eq!(
+            cfg.hello_strings,
+            [(80, "QUJD".to_string()), (81, "aGk=".to_string())]
+        );
+        assert_eq!(cfg.connection_timeout, 6);
+        assert_eq!(
+            cfg.http.headers,
+            [
+                ("X".to_string(), "v".to_string()),
+                ("a".to_string(), "b".to_string()),
+            ]
+        );
+        assert_eq!(cfg.http.method.as_deref(), Some("POST"));
+        assert_eq!(cfg.http.cookies, ["a=b"]);
+        assert!(cfg.capture.html);
+        for (name, text) in [
+            ("bad-hello.conf", "hello = tls\n"),
+            ("bad-b64.conf", "hello-string[80] = Q\n"),
+            ("no-index.conf", "hello-string = QUJD\n"),
+            ("no-form.conf", "http-header = NoColon\n"),
+            ("unclosed.conf", "http-header[X = v\n"),
+            ("big-index.conf", "hello-string[65536] = QUJD\n"),
+        ] {
+            let f = dir.write(name, text.as_bytes());
+            assert!(
+                parse(&["-c", f.to_str().unwrap()])
+                    .unwrap()
+                    .to_config()
+                    .is_err(),
+                "{name}"
+            );
+        }
+    }
+    /// I1 ревью задач 11-13: короткое написание `http-header` в файле `-c` идёт по буферу строки C
+    /// (`src/main-conf.c:3902-3920`, `name += 11` `:1361`), как у C; в argv оно отказывает (E1.7). Ожидания это
+    /// вывод `masscan --echo -c FILE` сборки C 8e6b3b0 (без скана). Каждый файл, в том числе вложенный `conf` и второй
+    /// `-c`, это свой буфер: байт 11, которого не писала ни одна строка файла, у C неопределённый байт стека (эта
+    /// сборка переносит его даже из прошлого файла `-c`), здесь он не `[`.
+    #[test]
+    fn http_header_short_spelling_in_config_file_like_c() {
+        let dir = crate::scratch::Scratch::new();
+        let headers = |files: &[(&str, &str)]| {
+            let mut a = Vec::new();
+            for (name, text) in files {
+                a.push("-c".to_string());
+                a.push(dir.write(name, text.as_bytes()).display().to_string());
+            }
+            let refs: Vec<&str> = a.iter().map(String::as_str).collect();
+            parse(&refs)
+                .unwrap()
+                .to_config()
+                .map(|cfg| cfg.http.headers)
+        };
+        let h = |n: &str, v: &str| (n.to_string(), v.to_string());
+        assert_eq!(
+            headers(&[("a.conf", "http-field = X:v\n")]),
+            Ok(vec![h("X", "v")])
+        );
+        assert_eq!(
+            headers(&[("b.conf", "httpheader = X:v\n")]),
+            Ok(vec![h("X", "v")])
+        );
+        assert_eq!(
+            headers(&[("c.conf", "http-field=X:v\n")]),
+            Ok(vec![h("X", "v")])
+        );
+        assert_eq!(
+            headers(&[("h.conf", "httpfield=a[X]\n")]),
+            Ok(vec![h("X", "a[X]")])
+        );
+        assert_eq!(
+            headers(&[("p.conf", "http-field=[Y]\nhttpfield=")]),
+            Ok(vec![h("Y", "[Y]"), h("Y", "")])
+        );
+        let both = Err(
+            "[-] --http-header needs both a name and value\n    hint: \"--http-header Name:value\""
+                .to_string(),
+        );
+        assert_eq!(headers(&[("k.conf", "http-field =[X]v\n")]), both);
+        assert_eq!(headers(&[("q.conf", "httpfield=")]), both);
+        // Второй `-c` и вложенный `conf` начинают с чистого буфера.
+        assert_eq!(
+            headers(&[("y.conf", "http-field=[Y]\n"), ("q.conf", "httpfield=")]),
+            both
+        );
+        let inner = dir.write("inner.conf", b"httpfield=");
+        let outer = format!("http-field=[Y]\nconf = {}\n", inner.display());
+        assert_eq!(headers(&[("outer.conf", outer.as_str())]), both);
+        // В argv короткое написание по-прежнему отказ (E1.7: `name2[64]` хранит байты прошлых опций).
+        assert!(
+            parse(&["--http-field", "X:v"])
+                .unwrap()
+                .to_config()
+                .is_err()
+        );
+    }
+
+    /// M1 ревью задач 11-13: набранное имя длиннее 63 байт C обрезает до 63 (`char name2[64]`) и печатает
+    /// `"%.*s: name too long"` с полным именем (`src/main-conf.c:3305-3308`), всё дальше читается из обрезанного.
+    /// Вывод сборки C 8e6b3b0 (`--echo`, без скана): stderr
+    /// `http-header[X-Very-Long-Header-Name-That-Goes-Beyond-Sixty-Three-Characters-Total]: name too long`, stdout
+    /// `http-header = X-Very-Long-Header-Name-That-Goes-Beyond-Sixty-Thre:v`, код 0 (и с `=v`, `:v`);
+    /// `--hello-string[` и 47 нулей и `80]` (63 байта) это порт 80 без строки; с 48 нулями (64 байта) строка и порт
+    /// 80; с 50 нулями (66 байт) строка и порт 0.
+    #[test]
+    fn typed_banner_name_over_63_bytes_is_truncated_like_c() {
+        const LONG: &str =
+            "http-header[X-Very-Long-Header-Name-That-Goes-Beyond-Sixty-Three-Characters-Total]";
+        let note = format!("{LONG}: name too long");
+        for a in [
+            vec![format!("--{LONG}"), "v".to_string()],
+            vec![format!("--{LONG}=v")],
+            vec![format!("--{LONG}:v")],
+        ] {
+            let refs: Vec<&str> = a.iter().map(String::as_str).collect();
+            let cli = parse(&refs).unwrap();
+            assert_eq!(cli.parse_notes(), std::slice::from_ref(&note), "{a:?}");
+            assert_eq!(
+                cli.to_config().unwrap().http.headers,
+                [(
+                    "X-Very-Long-Header-Name-That-Goes-Beyond-Sixty-Thre".to_string(),
+                    "v".to_string()
+                )]
+            );
+        }
+        let at63 = format!("--hello-string[{}80]", "0".repeat(47));
+        assert_eq!(at63.len() - 2, 63);
+        let cli = parse(&[at63.as_str(), "QUJD"]).unwrap();
+        assert!(cli.parse_notes().is_empty());
+        assert_eq!(
+            cli.to_config().unwrap().hello_strings,
+            [(80, "QUJD".to_string())]
+        );
+        // 64 байта: обрезка отрезает только `]`, порт 80; 66 байт: от индекса остаются нули, порт 0.
+        for (zeros, port) in [(48, 80), (50, 0)] {
+            let long = format!("--hello-string[{}80]", "0".repeat(zeros));
+            let cli = parse(&[long.as_str(), "QUJD"]).unwrap();
+            assert_eq!(
+                cli.parse_notes(),
+                [format!("{}: name too long", &long[2..])]
+            );
+            assert_eq!(
+                cli.to_config().unwrap().hello_strings,
+                [(port, "QUJD".to_string())]
+            );
+        }
+        // Незакрытая `[` в набранном имени отказывает и у длинного имени, текстом с полным именем.
+        let open = format!("--http-header[{}", "x".repeat(70));
+        assert_eq!(
+            masscan_err(&[open.as_str(), "v"]),
+            format!("{open}: unclosed '[' in the option name")
+        );
+        // Граница 63 байт внутри знака UTF-8 отступает к его началу.
+        let utf8 = format!("--http-header[{}\u{e9}x]", "a".repeat(50));
+        let cli = parse(&[utf8.as_str(), "v"]).unwrap();
+        assert_eq!(cli.to_config().unwrap().http.headers[0].0, "a".repeat(50));
+    }
+
+    /// M2 ревью задач 11-13: нечитаемый `--hello-file` это две строки C, вторая с текстом `strerror` без хвоста
+    /// ` (os error N)` (`src/main-conf.c:1232-1233`). Текст тот, что печатает C на каждой ОС: ENOENT у glibc и macOS,
+    /// а в Windows `fopen` переводит ERROR_FILE_NOT_FOUND и ERROR_PATH_NOT_FOUND в тот же ENOENT, и `strerror` CRT
+    /// даёт тот же текст (не "The system cannot find the file specified." std; приёмка 4b на госте).
+    #[test]
+    fn hello_file_open_failure_prints_c_strerror() {
+        let dir = crate::scratch::Scratch::new();
+        let missing = dir.path("missing.bin");
+        let in_missing_dir = dir.path("missing-dir").join("hello.bin");
+        for path in [missing, in_missing_dir] {
+            let m = path.to_str().unwrap();
+            assert_eq!(
+                banner_err(&["--hello-file[80]", m]),
+                format!("[-] [FAILED] --hello-file\n[-] {m}: No such file or directory")
+            );
+        }
     }
 }

@@ -1,0 +1,6 @@
+tcp-banner-input v1
+port 21
+capture none
+segment 3232302d610d
+segment 0a32323020620d0a35
+segment 3330206e6f0d0a

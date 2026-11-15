@@ -1,0 +1,26 @@
+{
+  "tag": "t04_banners_noreset",
+  "plan_ports": "80,3389",
+  "rawudp": false,
+  "steps": [
+    {
+      "name": "list",
+      "who": "rmasscan",
+      "out": "list"
+    },
+    {
+      "name": "oracle-list",
+      "who": "oracle",
+      "out": "list"
+    }
+  ],
+  "tcp": {
+    "source": "198.18.0.9",
+    "neighbour_entry": true,
+    "banners": true,
+    "noreset": true,
+    "connection_timeout": 8,
+    "wait": 14,
+    "heartbeat": true
+  }
+}

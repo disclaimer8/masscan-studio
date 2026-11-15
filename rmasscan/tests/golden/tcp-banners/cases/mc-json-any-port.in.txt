@@ -1,0 +1,4 @@
+tcp-banner-input v1
+port 8080
+capture none
+segment 726573756c743d7b226f6b223a747275657d

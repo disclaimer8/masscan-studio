@@ -1,0 +1,28 @@
+tcp-oracle v1 port=5900 capture=none segments=2 bytes=27
+run whole calls=1
+app_proto 33
+action send flags=0 12 "RFB 003.003\x0a"
+action close
+action close
+record 33 12 =stream
+record 34 35 "Security types:\x0a  invalidERROR: bad"
+end
+run bytewise calls=27
+app_proto 33
+action send flags=0 12 "RFB 003.003\x0a"
+action close
+action close
+action close
+action close
+record 1 11 =stream
+record 34 35 "Security types:\x0a  invalidERROR: bad"
+record 33 12 =stream
+end
+run given calls=2
+app_proto 33
+action send flags=0 12 "RFB 003.003\x0a"
+action close
+action close
+record 33 12 =stream
+record 34 35 "Security types:\x0a  invalidERROR: bad"
+end

@@ -1,0 +1,12 @@
+tcp-oracle v1 port=5900 capture=none segments=1 bytes=12
+run whole calls=1
+app_proto 33
+action send flags=0 12 "RFB 003.007\x0a"
+record 33 12 =stream
+end
+run bytewise calls=12
+app_proto 33
+action send flags=0 12 "RFB 003.007\x0a"
+record 1 11 =stream
+record 33 12 =stream
+end

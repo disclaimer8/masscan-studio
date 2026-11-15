@@ -1,0 +1,4 @@
+tcp-banner-input v1
+port 2525
+capture none
+segment 353231206e6f206d61696c20686572650d0a323231206279650d0a

@@ -1,0 +1,6 @@
+[+] interface = veth-a (detected: route to 198.18.0.2)
+[+] source-mac = 02-aa-00-00-00-01 (detected)
+[+] source-ip = 198.18.0.1 (detected)
+[+] router-ip = 198.18.0.2 (interface default gateway)
+out: could not open file for writing
+/nonexistent-rmasscan-dir/x: No such file or directory (os error 2)

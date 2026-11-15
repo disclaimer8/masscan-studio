@@ -57,7 +57,10 @@
 //!   itself depends on the split, after the parser's close, no comparison is made). A delivery that stops short is
 //!   compared on the ACKed prefix, and three segments at the stack's ACK point that ACK all the scanner sent and
 //!   still move nothing are an `invariant` finding (C ACKs in-order data always, `src/stack-tcp-core.c:1917-1949`),
-//!   unless C itself drops data: the scanner sent a FIN, the connection is gone, or the whole stream closes. The
+//!   unless C itself drops data: the scanner sent a FIN, the connection is gone, the whole stream closes, or the
+//!   scanner still holds data of its own it has not sent (C stays in `ESTABLISHED_SEND` until its queue is empty and
+//!   drops data there, `:2053-2076`; a replay of the delivery with one more tick shows the queue's head; counted as
+//!   `delivered.stalled_on_own_queue`). The
 //!   stack's contract is checked on every call: segments only to the input's connections, only C's flags (RST, ACK,
 //!   FIN-ACK, PSH-ACK, FIN-PSH-ACK), at most `tcb->mss` 1400 bytes (`src/stack-tcp-core.c:1031`), the template window;
 //!   banner sets non-empty, records of a connection of the input, TCP, with the creating SYN-ACK's TTL; no more live
@@ -1941,15 +1944,16 @@ fn deliver(f: &mut Feeder<'_>, rng: &mut Rng) -> Delivery {
     f.segment(0, (isn, our_isn, SYN_ACK, ttl), Vec::new());
     let start = isn.wrapping_add(1);
     let at_of = |s: &Seen| s.their_ack.map(|a| a.wrapping_sub(start) as usize);
-    let (mut stalled, mut jumps, mut accepted, mut strict) = (0u32, 0u32, false, 0u32);
+    let (mut stalled, mut jumps) = (0u32, 0u32);
+    let mut stall = Stall::default();
     let cap = 256 + 4 * (len / bound.div_ceil(2) + 1);
     for _ in 0..cap {
         if f.problem.is_some() {
-            return done(f, false, strict);
+            return done(f, false, stall);
         }
         let s = f.seen[0];
         let Some(at) = at_of(&s) else {
-            return done(f, false, strict);
+            return done(f, false, stall);
         };
         if at >= len {
             if rng.below(2) == 0 {
@@ -1961,7 +1965,7 @@ fn deliver(f: &mut Feeder<'_>, rng: &mut Rng) -> Delivery {
                     Vec::new(),
                 );
             }
-            return done(f, true, 0);
+            return done(f, true, Stall::default());
         }
         let off = match rng.below(10) {
             0 => at.saturating_sub(1 + rng.below(2 * bound)),
@@ -1974,7 +1978,7 @@ fn deliver(f: &mut Feeder<'_>, rng: &mut Rng) -> Delivery {
         } else {
             PSH_ACK
         };
-        let ack = if accepted && rng.below(8) == 0 {
+        let ack = if stall.progressed && rng.below(8) == 0 {
             s.our_isn
         } else {
             s.our_next
@@ -1992,17 +1996,23 @@ fn deliver(f: &mut Feeder<'_>, rng: &mut Rng) -> Delivery {
         if at_of(&f.seen[0]) == Some(at) {
             stalled += 1;
             // The next byte, with the number the scanner's data is ACKed up to: the stack must take it (the ACK step
-            // of the frame comes before the data step, so even a scanner sending leaves its state).
-            strict += u32::from(off == at && ack == s.our_next);
+            // of the frame comes before the data step, so a scanner whose sent data is all ACKed and whose queue is
+            // empty leaves its sending state), unless it still holds data it has not sent (`STALL_LIMIT`).
+            if off == at && ack == s.our_next {
+                stall.strict += 1;
+                stall.sent = s.our_next;
+            }
         } else {
-            accepted = true;
             stalled = 0;
-            strict = 0;
+            stall = Stall {
+                progressed: true,
+                ..Stall::default()
+            };
         }
         // Not before the server's first byte got in: a tick then would send the hello (`App_SendNext`, where the
         // server's bytes are ACKed but not parsed, `src/stack-tcp-app.c:90-99`); ten jumps of at most 2.5 s stay
         // inside the 30 s life.
-        if accepted && stalled >= 3 && jumps < 10 {
+        if stall.progressed && stalled >= 3 && jumps < 10 {
             now += 2 * SEC + rng.below(500_000) as u64;
             f.tick(now);
             jumps += 1;
@@ -2010,18 +2020,28 @@ fn deliver(f: &mut Feeder<'_>, rng: &mut Rng) -> Delivery {
         }
     }
     let complete = at_of(&f.seen[0]).is_some_and(|at| at >= len);
-    done(f, complete, strict)
+    done(f, complete, stall)
 }
 
+/// The stall of a delivery since its last progress.
+#[derive(Debug, Clone, Copy, Default)]
+struct Stall {
+    /// Segments at the stack's ACK point, ACKing all the scanner sent, that moved nothing.
+    strict: u32,
+    /// What the scanner had sent (the end of its furthest segment) at the last of them.
+    sent: u32,
+    /// The stack took some of the server's bytes before (the parser had them: `App_ReceiveNext`, so no hello follows,
+    /// `src/stack-tcp-app.c:100-105`, and while the stall lasts nothing joins the scanner's queue).
+    progressed: bool,
+}
 /// How far a delivery got.
 struct Delivery {
     /// Bytes of the stream the stack ACKed (`None`: no connection ever answered).
     at: Option<usize>,
     complete: bool,
-    /// Segments at the stack's ACK point, ACKing all the scanner sent, that moved nothing since the last progress.
-    strict_stalls: u32,
+    stall: Stall,
 }
-fn done(f: &Feeder<'_>, complete: bool, strict_stalls: u32) -> Delivery {
+fn done(f: &Feeder<'_>, complete: bool, stall: Stall) -> Delivery {
     let len = f.plan.streams[0].len();
     let start = f.seen[0].isn.wrapping_add(1);
     Delivery {
@@ -2029,14 +2049,72 @@ fn done(f: &Feeder<'_>, complete: bool, strict_stalls: u32) -> Delivery {
             .their_ack
             .map(|a| (a.wrapping_sub(start) as usize).min(len)),
         complete,
-        strict_stalls,
+        stall,
     }
 }
 
-/// Stalled segments at the ACK point, with every byte of the scanner ACKed, after which in-order data still is not
-/// taken: C ACKs an in-order segment in `ESTABLISHED` always (`src/stack-tcp-core.c:1917-1949`; `ESTABLISHED_SEND`,
-/// where DATA is ignored, ends with the ACK step of the same frame), so the stall is the stack's.
+/// Stalled segments at the ACK point, with every byte the scanner sent ACKed, after which in-order data still is not
+/// taken: C ACKs an in-order segment in `ESTABLISHED` always (`src/stack-tcp-core.c:1917-1949`), so the stall is the
+/// stack's, unless it is in `ESTABLISHED_SEND`, which ignores DATA (`:2071-2076`) and which the ACK step of the same
+/// frame leaves only when the queue is empty (`:2053-2066`): its queue still holds data it has not sent (only the head
+/// goes out at once, `:1405-1412`, the rest one segment per timeout as the head is ACKed, `_tcb_seg_resend`,
+/// `:1290-1312`). [`holds_unsent`] tells.
 const STALL_LIMIT: u32 = 3;
+/// How long after the delivery's last event [`holds_unsent`] ticks: past every deadline the stack can have set then
+/// (2 s from its last timeout, 5 s in `TIME_WAIT`).
+const PROBE_AFTER: u64 = 6 * SEC;
+
+/// Whether the scanner of a stalled delivery still holds data of its own it had not sent at the last stall (from
+/// `sent` on): the delivery's `events` replayed on a new table of the plan whose connections outlive any tick (a
+/// table keeps a connection to its lifetime RST, which comes only on a tick, so the replay is the same run up to
+/// here: a connection alive at the end met no tick past its life), then one tick [`PROBE_AFTER`] later. On it C's
+/// timeout in `ESTABLISHED_SEND` sends the head of the queue (`_tcb_seg_resend`, `src/stack-tcp-core.c:1290-1312`)
+/// and in `ESTABLISHED_RECV`, after the server's first bytes, nothing (`App_ReceiveNext`, `src/stack-tcp-app.c:
+/// 137-146`): a data segment of connection 0 at or past `sent` is data the scanner held unsent.
+fn holds_unsent(t: &Target, plan: &StackPlan, events: &[StackEvent], sent: u32) -> bool {
+    let mut st = (t.stack)(settings(plan.capture_html), u32::MAX).new_table(TableParams {
+        seed: plan.table_seed,
+        capacity: plan.capacity,
+        banner_byte_budget: plan.budget,
+    });
+    let mut last = T0;
+    for e in events {
+        let mut out = StackOutput::default();
+        match e {
+            StackEvent::Tick { now } => {
+                last = *now;
+                st.on_tick(*now, &mut out);
+            }
+            StackEvent::Segment {
+                now,
+                conn,
+                seq,
+                ack,
+                flags,
+                ttl,
+                payload,
+            } => {
+                last = *now;
+                let seg = SegmentIn {
+                    key: plan.keys[*conn],
+                    seq: *seq,
+                    ack: *ack,
+                    flags: *flags,
+                    ttl: *ttl,
+                    payload,
+                };
+                st.on_segment(*now, &seg, &mut out);
+            }
+            // A delivery ends before `finish`.
+            StackEvent::Finish { .. } => return false,
+        }
+    }
+    let mut out = StackOutput::default();
+    st.on_tick(last + PROBE_AFTER, &mut out);
+    out.segments.iter().any(|s| {
+        s.key == plan.keys[0] && !s.payload.is_empty() && (s.seq.wrapping_sub(sent) as i32) >= 0
+    })
+}
 
 /// How a delivery input ended: compared with the framework on the whole stream, or stopped short (compared on the
 /// ACKed prefix; a stall on in-order data is a finding before it gets here), or not compared because the parser closes
@@ -2059,6 +2137,8 @@ struct Checked {
     max_record: usize,
     connections: u64,
     delivered: Option<Delivered>,
+    /// A delivery stalled where the scanner still held data it had not sent ([`holds_unsent`]).
+    own_queue: bool,
     events: Vec<StackEvent>,
     /// What the 100 ms budget is held against: a parser input's run on the whole stream, a stack input's whole run.
     timed: Duration,
@@ -2271,6 +2351,7 @@ fn check_stack(t: &Target, plan: &StackPlan) -> Checked {
             c.max_record = d.max_record;
             c.connections = d.created;
             c.delivered = d.delivered;
+            c.own_queue = d.own_queue;
         }
     }
     c
@@ -2283,6 +2364,7 @@ struct Driven {
     data_segments: u64,
     created: u64,
     delivered: Option<Delivered>,
+    own_queue: bool,
 }
 fn drive(t: &Target, plan: &StackPlan, log: &RefCell<Vec<StackEvent>>) -> Driven {
     let s = settings(plan.capture_html);
@@ -2309,6 +2391,7 @@ fn drive(t: &Target, plan: &StackPlan, log: &RefCell<Vec<StackEvent>>) -> Driven
         chaos(&mut f, &mut rng);
         None
     };
+    let delivered_events = log.borrow().len();
     // Before `finish` ends every connection: whether the stack still held this one, and whether it closed it.
     let (live, fin) = (f.st.stats().tcbs_live > 0, f.seen[0].fin);
     for _ in 0..FINISH_ROUNDS {
@@ -2323,6 +2406,7 @@ fn drive(t: &Target, plan: &StackPlan, log: &RefCell<Vec<StackEvent>>) -> Driven
         ));
     }
     let mut delivered = None;
+    let mut own_queue = false;
     if let Some(d) = delivery
         && f.problem.is_none()
     {
@@ -2330,16 +2414,27 @@ fn drive(t: &Target, plan: &StackPlan, log: &RefCell<Vec<StackEvent>>) -> Driven
         let whole = (t.stream)(&s, plan.keys[0].remote_port, None, &whole_of(stream));
         let closes = |r: &StreamResult| r.actions.contains(&StreamAction::Close);
         let at = d.at.unwrap_or(0);
-        // The C stack takes no data where it drops it itself: after its own FIN (it closed), or once the
-        // connection is gone; where the whole stream closes the split decides what the parser still gets. Anything
-        // else that stalls on in-order data is the stack's.
-        if !d.complete && d.strict_stalls >= STALL_LIMIT && live && !fin && !closes(&whole) {
-            f.fail(format!(
-                "the stack stopped taking in-order data at byte {at} of {}: {} segments at its ACK point, each ACKing \
-                 all the scanner sent, moved nothing",
-                stream.len(),
-                d.strict_stalls
-            ));
+        // The C stack takes no data where it drops it itself: after its own FIN (it closed), once the connection is
+        // gone, or while it still holds data of its own it has not sent (`ESTABLISHED_SEND`, `STALL_LIMIT`); where
+        // the whole stream closes the split decides what the parser still gets. Anything else that stalls on
+        // in-order data is the stack's.
+        if !d.complete && d.stall.strict >= STALL_LIMIT && live && !fin && !closes(&whole) {
+            own_queue = d.stall.progressed
+                && holds_unsent(t, plan, &log.borrow()[..delivered_events], d.stall.sent);
+            if !own_queue {
+                // Before the stack took a byte the probe does not run (a queued hello could have come mid-stall).
+                let probed = if d.stall.progressed {
+                    ", and a timeout shows no unsent data of its own"
+                } else {
+                    ""
+                };
+                f.fail(format!(
+                    "the stack stopped taking in-order data at byte {at} of {}: {} segments at its ACK point, each \
+                     ACKing all the scanner sent, moved nothing{probed}",
+                    stream.len(),
+                    d.stall.strict
+                ));
+            }
         }
         // On the part of the stream the stack ACKed, its records equal the framework's (on all of it when complete).
         let prefix = (t.stream)(&s, plan.keys[0].remote_port, None, &whole_of(&stream[..at]));
@@ -2399,6 +2494,7 @@ fn drive(t: &Target, plan: &StackPlan, log: &RefCell<Vec<StackEvent>>) -> Driven
         data_segments: f.data_segments,
         created: f.st.stats().tcbs_created,
         delivered,
+        own_queue,
     }
 }
 
@@ -2432,6 +2528,9 @@ pub struct TcpStats {
     pub delivered_compared: u64,
     pub delivered_incomplete: u64,
     pub delivered_closed: u64,
+    /// Incomplete deliveries that stalled where the scanner still held data it had not sent (C drops data in
+    /// `ESTABLISHED_SEND`, `src/stack-tcp-core.c:2071-2076`): not findings.
+    pub delivered_own_queue: u64,
     pub max_ns: u64,
     pub total_ns: u128,
     /// The slowest run of a parser input on its split.
@@ -2526,6 +2625,7 @@ pub fn fuzz_tcp_with(
             Some(Delivered::Closed) => st.delivered_closed += 1,
             None => {}
         }
+        st.delivered_own_queue += u64::from(c.own_queue);
         st.max_stream = st.max_stream.max(match &i {
             TcpInput::Stream(s) => s.stream.len(),
             TcpInput::Stack(p) => p.streams.iter().map(Vec::len).max().unwrap_or(0),
@@ -2632,7 +2732,7 @@ pub fn tcp_report(seed: u64, limit: &str, corpus: &[TcpSeed], o: &TcpOutcome) ->
             "max_stream_bytes": s.max_stream, "max_segments": s.max_segments, "max_record_bytes": s.max_record,
             "connections": s.connections,
             "delivered": {"compared": s.delivered_compared, "incomplete": s.delivered_incomplete,
-                "closed": s.delivered_closed},
+                "closed": s.delivered_closed, "stalled_on_own_queue": s.delivered_own_queue},
             "max_us": s.max_ns / 1000,
             "max_split_us": s.max_split_ns / 1000,
             "mean_ns": if o.inputs == 0 { 0 } else { s.total_ns / u128::from(o.inputs) },
@@ -3321,7 +3421,7 @@ mod tests {
         assert!(tcp_summary(3, &o).ends_with(": FINDINGS"));
         let p = fuzz_tcp("ftp", 3, &c, |n, _| n >= 300).unwrap();
         assert_eq!(p.sha256, o.sha256, "the same inputs");
-        assert!(p.clean(), "{:#?}", p.findings);
+        assert_no_findings(&p);
 
         let fake = Target {
             stack: counting_stack,
@@ -3357,7 +3457,7 @@ mod tests {
         );
         let p = fuzz_tcp("stack", 4, &c, |n, _| n >= 200).unwrap();
         assert_eq!(p.sha256, o.sha256);
-        assert!(p.clean(), "{:#?}", p.findings);
+        assert_no_findings(&p);
         assert!(p.stats.delivered_compared > 20, "{:?}", p.stats);
     }
 
@@ -3509,6 +3609,34 @@ mod tests {
     fn panicking_stack(s: TcpBannerSettings, t: u32) -> Arc<dyn TcpStackFactory> {
         Arc::new(FaultyFactory(tcp_stack_factory(s, t), false))
     }
+    /// A stack that never shows the data its timer sends (the queue behind the head stays with it): the data
+    /// segments of every tick are dropped on the way out.
+    struct Hoard(Box<dyn TcpStack>);
+    impl TcpStack for Hoard {
+        fn on_tick(&mut self, now: u64, out: &mut StackOutput) {
+            self.0.on_tick(now, out);
+            out.segments.retain(|s| s.payload.is_empty());
+        }
+        fn on_segment(&mut self, now: u64, seg: &SegmentIn<'_>, out: &mut StackOutput) -> bool {
+            self.0.on_segment(now, seg, out)
+        }
+        fn finish(&mut self, max: usize, out: &mut StackOutput) -> bool {
+            self.0.finish(max, out)
+        }
+        fn stats(&self) -> StackStats {
+            self.0.stats()
+        }
+    }
+    #[derive(Debug)]
+    struct HoardFactory(Arc<dyn TcpStackFactory>);
+    impl TcpStackFactory for HoardFactory {
+        fn new_table(&self, p: TableParams) -> Box<dyn TcpStack> {
+            Box::new(Hoard(self.0.new_table(p)))
+        }
+    }
+    fn hoarding_stack(s: TcpBannerSettings, t: u32) -> Arc<dyn TcpStackFactory> {
+        Arc::new(HoardFactory(tcp_stack_factory(s, t)))
+    }
     fn bad_telnet(_: &TcpBannerSettings, _: u16, _: Option<u16>, _: &[&[u8]]) -> StreamResult {
         StreamResult {
             app_proto: Some(app_id::TELNET),
@@ -3546,8 +3674,78 @@ mod tests {
         );
         let p = fuzz_tcp("stack", 11, &c, |n, _| n >= 3000).unwrap();
         assert_eq!(p.sha256, o.sha256);
-        assert!(p.clean(), "{:#?}", p.findings);
+        assert_no_findings(&p);
         assert!(p.stats.delivered_incomplete > 0, "{:?}", p.stats);
+    }
+
+    /// A run of the product with the real resident-set probe has no finding of any kind. Its verdict is CLEAN where
+    /// the probe reads the resident set (`/proc` on Linux, `ps` on macOS); on Windows (neither) a run past the
+    /// warm-up is "memory not measured", a state of its own (exit 2), not a finding (4b acceptance, guest gate).
+    fn assert_no_findings(o: &TcpOutcome) {
+        assert_eq!(
+            (o.crashes, o.slow, o.invariant_failures, o.split_mismatches),
+            (0, 0, 0, 0),
+            "{:#?}",
+            o.findings
+        );
+        assert!(o.findings.is_empty(), "{:#?}", o.findings);
+        let want = if memory_measured(o.inputs, &o.rss) {
+            Verdict::Clean
+        } else {
+            Verdict::MemoryNotMeasured
+        };
+        assert_eq!(o.verdict(), want, "rss {:?}", o.rss);
+    }
+
+    /// A delivery that stalls because the scanner still holds data of its own it has not sent is C's rule, not a
+    /// finding (4b acceptance, `stack` seed 413): each SSH packet of the stream queues the parser's KEX blob, C sends
+    /// the head at once and the rest one segment per timeout as the head is ACKed (`src/stack-tcp-core.c:1405-1412`,
+    /// `:1290-1312`), and in `ESTABLISHED_SEND` drops the server's data (`:2053-2076`). The stall is counted. A stack
+    /// that keeps its queued data and never sends it stalls the same way and is a finding.
+    #[test]
+    fn a_stall_on_the_scanners_own_unsent_data_is_c_and_a_hoarded_queue_is_a_finding() {
+        let mut stream = b"SSH-2.0-x\r\n".to_vec();
+        for _ in 0..20 {
+            stream.extend_from_slice(b"\x00\x00\x00\x08\x04\x14abcde");
+        }
+        let plan = StackPlan {
+            delivery: true,
+            lifetime: 0,
+            capacity: 1,
+            budget: DELIVERY_BUDGET,
+            table_seed: 7,
+            script: 2,
+            events: 0,
+            max_segment: 1460,
+            capture_html: false,
+            keys: vec![stack_key(0, 22, false)],
+            streams: vec![stream],
+        };
+        let c = check_stack(&Target::PRODUCT, &plan);
+        assert!(c.problem.is_none() && c.own_queue, "{:?}", c.problem);
+        assert_eq!(c.delivered, Some(Delivered::Incomplete));
+        let h = check_stack(
+            &Target {
+                stack: hoarding_stack,
+                ..Target::PRODUCT
+            },
+            &plan,
+        );
+        let (kind, what) = h.problem.expect("a hoarding stack is a finding");
+        assert_eq!(kind, "invariant");
+        assert!(
+            what.starts_with("the stack stopped taking in-order data")
+                && what.ends_with("moved nothing, and a timeout shows no unsent data of its own"),
+            "{what}"
+        );
+        assert!(!h.own_queue);
+        // The report counts such stalls.
+        let mut o = TcpOutcome::default();
+        o.stats.delivered_own_queue = 3;
+        assert_eq!(
+            tcp_report(1, "1 input", &tcp_corpus(), &o)["stats"]["delivered"]["stalled_on_own_queue"],
+            3
+        );
     }
 
     /// M1 to M4 of the review: a finding carries its input index; a stack crash keeps its events; a malformed reply of

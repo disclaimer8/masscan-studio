@@ -394,10 +394,22 @@ fn drain(c: &mut std::net::TcpStream, buf: &mut [u8], patience: Duration) -> Got
 /// Keep a connection open without reading: until the scanner ends it (its RST, or its FIN when nothing is left
 /// unread), the stop request or `patience`. The caller then closes it with the scanner's bytes unread, so the kernel
 /// resets it and no socket stays on its 4-tuple for the next step.
+///
+/// The scanners end a held connection with their lifetime RST, behind the hello a `Peek` step left unread. A peek
+/// does not see that RST on Linux or macOS: both keep received bytes readable after a reset (Linux `tcp_recvmsg`
+/// serves the receive queue before the socket's error; macOS likewise), so the peek keeps returning the hello. The
+/// reset socket has no peer any more (Linux: state `CLOSE`, `getpeername` gives `ENOTCONN`; macOS `EINVAL`), which
+/// is what ends the hold there; on Windows the lost peer or the peek's error (`WSAECONNRESET`) ends it. A FIN
+/// behind the unread hello stays invisible: seeing it needs `POLLRDHUP`, `FIONREAD` or `TCP_INFO` (no std API, and
+/// `unsafe` is forbidden), or reading the hello, which would make the close at the stop request a FIN instead of a
+/// RST and leave the socket on the 4-tuple (FIN_WAIT, the scanner's source answers nothing).
 fn hold(c: &mut std::net::TcpStream, patience: Duration) {
     let mut one = [0u8; 1];
     let until = std::time::Instant::now() + patience;
     while std::time::Instant::now() < until && !lab_io::stop_requested() {
+        if c.peer_addr().is_err() {
+            return;
+        }
         match c.peek(&mut one) {
             Ok(0) => return,
             Ok(_) => std::thread::sleep(Duration::from_millis(100)),
@@ -1797,21 +1809,23 @@ mod tests {
 
     #[test]
     fn a_held_scenario_answers_and_then_waits_for_the_scanner_to_end_it() {
-        use std::io::{Read, Write};
-        // 198.18.0.4:80, HTTP/1.1 without close: the response, then nothing until the scanner resets (here: the
-        // client closes with the response unread, which resets on Linux; macOS sends a FIN there, which a held
-        // script cannot see behind the unread hello, so it holds until its patience: not waited for off Linux).
+        use std::io::Write;
+        // 198.18.0.4:80, HTTP/1.1 without close: the response, then nothing until the scanner resets. The client ends
+        // the connection as the live scanners do, with a RST: it closes with the response unread (peeked), which
+        // resets on Linux, macOS and Windows (RFC 1122 4.2.2.13). Before 4b acceptance it read the response, so its
+        // close was a FIN, which the script cannot see behind the unread hello (`hold`): it waited its patience.
         let (mut c, server) = scripted(80, 4);
         c.write_all(b"GET / HTTP/1.0\r\n\r\n").unwrap();
         let mut buf = [0u8; 256];
-        let n = c.read(&mut buf).unwrap();
+        let n = c.peek(&mut buf).unwrap();
         assert!(buf[..n].starts_with(b"HTTP/1.1 200 OK\r\n"));
-        c.set_read_timeout(Some(Duration::from_millis(300)))
-            .unwrap();
-        assert!(c.read(&mut buf).is_err(), "nothing more while held");
+        std::thread::sleep(Duration::from_millis(300));
+        assert_eq!(c.peek(&mut buf).unwrap(), n, "nothing more while held");
         let t = std::time::Instant::now();
         drop(c);
-        if cfg!(target_os = "linux") {
+        // The hold ends on the RST although the hello is unread (no peer any more). On Windows the end is not timed:
+        // its reset of a close with unread bytes is not checked on this stand.
+        if cfg!(any(target_os = "linux", target_os = "macos")) {
             server.join().unwrap().unwrap();
             assert!(t.elapsed() < Duration::from_secs(5), "{:?}", t.elapsed());
         }

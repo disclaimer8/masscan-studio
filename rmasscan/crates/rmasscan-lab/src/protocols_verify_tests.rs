@@ -1503,11 +1503,11 @@ fn the_scanner_sides_frames_of_the_stand_are_named_and_counted_in_the_notes() {
     );
     // each stateless RST is matched to its probe, a TCP one
     assert_eq!(v.stateless_rsts.len(), 4);
-    assert!(
-        v.stateless_rsts
+    assert!(v.stateless_rsts.iter().all(|x| {
+        v.probes
             .iter()
-            .all(|i| v.probes[*i].proto == Proto::Tcp)
-    );
+            .any(|p| p.proto == Proto::Tcp && conn_key(p) == x.key)
+    }));
     // an ARP scan: no class at all
     let c = case("p04_arp_scan").unwrap();
     let (fr, _) = wire(&c, T0, &plan_stream(&c).unwrap());
@@ -1830,6 +1830,7 @@ fn p05_own_rsts() -> Vec<Vec<u8>> {
         .collect()
 }
 const EXACT_RST: &str = "the scanner's stateless RST (R8";
+const RST_SUMS: &str = "the scanner's stateless RSTs carry";
 const ARP_ANSWERS: &str = "the scanner answers the peer's who-has for its address";
 const BOUND: &str = "the named scanner-side frames stay within their bounds";
 
@@ -1894,7 +1895,95 @@ fn both_scanners_send_exactly_one_stateless_rst_per_reply_in_cs_form() {
                 "{step} {what}: {b:#?}"
             );
         }
+        // the form, but a wrong TCP or IPv4 header checksum: the peer drops it, the sums' check alone (I2; on the
+        // oracle's step INVALID, E1.10)
+        for (what, edit) in [("TCP", 34 + 16), ("IPv4 header", 24)] {
+            let mut sim = Sim::new("p05_mixed_protos");
+            let s = sim.step_mut(step);
+            let i = s.frames.iter().position(|(_, f)| *f == own[0]).unwrap();
+            s.frames[i].1[edit] ^= 0xff;
+            let (v, b) = judge_one(&sim);
+            assert_eq!(v, want, "{step} {what}: {b:#?}");
+            assert_eq!(b.len(), 1, "{step} {what}: {b:#?}");
+            assert!(
+                has(&b, want, &format!("{step}: {RST_SUMS}"))
+                    && b[0].contains(&format!("carries a wrong {what} checksum")),
+                "{step} {what}: {b:#?}"
+            );
+        }
+        // before the reply it resets (M2): between the probe and its SYN-ACK
+        let mut sim = Sim::new("p05_mixed_protos");
+        let s = sim.step_mut(step);
+        let i = s.frames.iter().position(|(_, f)| *f == own[0]).unwrap();
+        let (t, f) = s.frames.remove(i);
+        s.frames = at(&s.frames, t - 0.0009, f);
+        let (v, b) = judge_one(&sim);
+        assert_eq!(v, want, "{step}: {b:#?}");
+        assert_eq!(b.len(), 1, "{step}: {b:#?}");
+        assert!(
+            has(&b, want, &format!("{step}: {EXACT_RST}"))
+                && b[0].contains("comes before the reply it resets"),
+            "{step}: {b:#?}"
+        );
     }
+}
+
+#[test]
+fn a_closed_tcp_ports_rst_is_owed_its_stateless_rst_too() {
+    // M3: no case of the window probes a closed TCP port, so this one does (T:80 open, T:81 closed): both scanners
+    // reset the stand's RST of 81 as well (src/main.c:1048-1101, TCP_IS_SYNACK || TCP_IS_RST), the IPv6 window's twin
+    let base = case("p05_mixed_protos").unwrap();
+    let c = CaseSpec {
+        flags: &["-pT:80,81"],
+        plan_ports: "T:80,81",
+        ..base
+    };
+    let probes = plan_stream(&c).unwrap();
+    assert!(probes.iter().any(|p| ports(p).1 == 81));
+    let (fr, _) = wire(&c, T0, &probes);
+    let v = view(&fr, &stand(), false);
+    assert!(
+        v.scanner_unexplained.is_empty(),
+        "{:?}",
+        v.scanner_unexplained
+    );
+    let closed = v
+        .replies
+        .iter()
+        .filter(|r| r.proto == Proto::Tcp && r.st == St::Closed)
+        .count();
+    assert!(closed > 0, "the stand's RST of 81");
+    let replies = distinct_tcp_replies(&v);
+    assert_eq!(replies.len(), probes.len(), "SYN-ACKs and RSTs alike");
+    assert_eq!(v.stateless_rsts.len(), probes.len());
+    let bounds = scanner_bounds(&v, Who::Rmasscan);
+    assert!(
+        bounds
+            .iter()
+            .any(|(k, n, max)| *k == "stateless_rst" && *n == probes.len() && *max == probes.len()),
+        "{bounds:?}"
+    );
+    assert!(bounds.iter().all(|(_, n, max)| n <= max), "{bounds:?}");
+    assert!(av::stateless_rst_problems(true, &replies, &v.stateless_rsts).is_empty());
+    // without the closed port's RST: that reply is owed one
+    let rst81: Vec<&av::OwnRst> = v
+        .stateless_rsts
+        .iter()
+        .filter(|x| x.key.contains(":81 "))
+        .collect();
+    assert!(!rst81.is_empty());
+    let kept: Vec<av::OwnRst> = v
+        .stateless_rsts
+        .iter()
+        .filter(|x| !x.key.contains(":81 "))
+        .cloned()
+        .collect();
+    let p = av::stateless_rst_problems(true, &replies, &kept);
+    assert_eq!(p.len(), rst81.len(), "{p:?}");
+    assert!(
+        p.iter()
+            .all(|x| x.contains(":81 ") && x.contains("0 stateless RSTs, want 1"))
+    );
 }
 
 #[test]
@@ -1907,14 +1996,16 @@ fn both_scanners_answer_the_peers_who_has_for_their_address_once_in_cs_form() {
     let os = os_reply(&st);
     // the time of the step's second probe: inside the scan
     let during = |s: &StepSim| s.frames.iter().find(|(_, f)| *f == s.probes[1]).unwrap().0 + 0.0001;
-    let after = |s: &StepSim| {
+    let last = |s: &StepSim| {
         s.frames
             .iter()
             .find(|(_, f)| *f == *s.probes.last().unwrap())
             .unwrap()
             .0
-            + 1.5
     };
+    // --wait 3: both scanners receive until 2 s after the last probe at least, a reply is owed until 1.9 s after it
+    let late = |s: &StepSim| last(s) + 1.5;
+    let after = |s: &StepSim| last(s) + 2.5;
     let with = |step: &str, when: &dyn Fn(&StepSim) -> f64, answers: &[(f64, &Vec<u8>)]| {
         let mut sim = Sim::new("p05_mixed_protos");
         let s = sim.step_mut(step);
@@ -1960,7 +2051,17 @@ fn both_scanners_answer_the_peers_who_has_for_their_address_once_in_cs_form() {
                 .any(|x| x.contains(ARP_ANSWERS) && x.contains("not in C's form")),
             "{step}: {b:#?}"
         );
-        // after the scan may have ended (1.5 s after the last probe, --wait 3): not owed, at most one
+        // late in the wait (1.5 s after the last probe): still owed (I1)
+        let (v, b) = with(step, &late, &[(0.00005, &ans)]);
+        assert_eq!(v, PASS, "{step}: {b:#?}");
+        let (v, b) = with(step, &late, &[]);
+        assert_eq!(v, want, "{step}: {b:#?}");
+        assert!(
+            has(&b, want, &format!("{step}: {ARP_ANSWERS}"))
+                && b[0].contains("(while the scanner runs: exactly one): 0 replies"),
+            "{step}: {b:#?}"
+        );
+        // after the scan may have ended (2.5 s after the last probe, --wait 3): not owed, at most one
         let (v, b) = with(step, &after, &[]);
         assert_eq!(v, PASS, "{step}: {b:#?}");
         let (v, b) = with(step, &after, &[(0.00005, &ans)]);

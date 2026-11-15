@@ -258,7 +258,9 @@ pub(crate) fn product_rst(plan: &ReadyPlan, syn: &[u8]) -> Vec<u8> {
     TcpFrameBuilder::from_plan(plan).build(&seg)
 }
 
-/// A TCP frame answering `syn` (peer to scanner, or the scanner kernel back to the peer with `back`).
+/// A TCP frame answering `syn` (peer to scanner, or the scanner kernel back to the peer with `back`: the reset of the
+/// peer's SYN-ACK, whose sequence number is the SYN-ACK's acknowledgment, the SYN's + 1, RFC 793, as the live Linux
+/// captures show).
 pub(crate) fn tcp_answer(syn: &[u8], flags: u8, peer_mac: [u8; 6], back: bool) -> Vec<u8> {
     let o = 14 + usize::from(syn[14] & 15) * 4;
     let seq = u32::from_be_bytes(syn[o + 4..o + 8].try_into().unwrap());
@@ -270,7 +272,7 @@ pub(crate) fn tcp_answer(syn: &[u8], flags: u8, peer_mac: [u8; 6], back: bool) -
         b[30..34].copy_from_slice(&syn[30..34]);
         b[34..36].copy_from_slice(&syn[o..o + 2]);
         b[36..38].copy_from_slice(&syn[o + 2..o + 4]);
-        b[38..42].copy_from_slice(&0x5000_0001u32.to_be_bytes());
+        b[38..42].copy_from_slice(&seq.wrapping_add(1).to_be_bytes());
     } else {
         b[0..6].copy_from_slice(&syn[6..12]);
         b[6..12].copy_from_slice(&peer_mac);
@@ -345,7 +347,7 @@ impl Sim {
         let c = case(plan, tag);
         let st = stand(plan);
         let windows = plan == Plan::Windows;
-        let mac_stand = matches!(plan, Plan::Macos | Plan::MacosRoot);
+        let linux = plan == Plan::Linux;
         let mut det = c.printed.clone();
         let mut fr: Frames = vec![(T0, marker(&st, START_PAYLOAD))];
         if windows {
@@ -433,8 +435,9 @@ impl Sim {
                     ));
                     if open {
                         lines.push(discovered_line(ip, port));
-                        if !mac_stand {
-                            // The scanner's own kernel resets the half-open connection (counted, allowed).
+                        if linux {
+                            // The scanner's own kernel resets the half-open connection (counted, one per SYN-ACK
+                            // frame); the Windows and macOS stands' OS resets nothing (every committed run).
                             fr.push((t + 0.0007, tcp_answer(s, 0x04, st.peer_mac, true)));
                         }
                     }
@@ -1136,7 +1139,7 @@ fn a_discovered_line_without_a_synack_is_fail() {
     sim.det.finished.as_mut().unwrap().open += 1;
     let r = judge(&sim);
     assert_verdict(&r, FAIL);
-    assert_eq!(check(&r, "SYN-ACK")["result"], FAIL);
+    assert_eq!(check(&r, "the ports the peer SYN-ACKed")["result"], FAIL);
 }
 
 #[test]
@@ -1147,7 +1150,7 @@ fn a_synack_without_a_discovered_line_is_fail() {
     sim.det.finished.as_mut().unwrap().open -= 1;
     let r = judge(&sim);
     assert_verdict(&r, FAIL);
-    assert_eq!(check(&r, "SYN-ACK")["result"], FAIL);
+    assert_eq!(check(&r, "the ports the peer SYN-ACKed")["result"], FAIL);
 }
 
 #[test]
@@ -1952,7 +1955,12 @@ fn case_table_holds_the_briefs_cases() {
             Plan::Windows,
             "w03_adapter_friendly",
             Scan,
-            format!("198.18.0.2 -p80,443,8000-8007,8099 --adapter Ethernet 2 {c}"),
+            // Task 16 fix round 1: --wait 8, so that the n2 peer's who-has about 5 s after the SYNs is owed the
+            // scanner's ARP reply (WAIT_LONG)
+            format!(
+                "198.18.0.2 -p80,443,8000-8007,8099 --adapter Ethernet 2 {}",
+                c.replace("--wait 3", "--wait 8")
+            ),
         ),
         (
             Plan::Windows,
@@ -3152,20 +3160,42 @@ fn the_stateless_rst_form_is_the_syn_template_and_nothing_near_it() {
             s,
             &tcp_answer(s, 0x04, st.peer_mac, true)
         ));
-        // the fields C sets (the identification and the checksums) may be anything
+        // C's identification: ip_them ^ port_them ^ seqno of the RST (src/templ-pkt.c:432), here independently from
+        // the SYN's (the same formula with the cookie, :942): SYN id ^ low16(cookie) ^ low16(cookie + 1)
+        let cookie = u32::from_be_bytes(s[38..42].try_into().unwrap());
+        let id =
+            u16::from_be_bytes([s[18], s[19]]) ^ (cookie as u16) ^ (cookie.wrapping_add(1) as u16);
+        assert_eq!(rst[18..20], id.to_be_bytes(), "the product's id of SYN {i}");
+        // the product's sums are right; a wrong one keeps the form but is a problem of its own
+        assert_eq!(stateless_rst_sum_problem(&rst), None, "SYN {i}");
         let mut f = rst.clone();
-        f[18] ^= 0xff;
         f[24] ^= 0xff;
-        assert!(
-            is_stateless_rst(s, &f),
-            "IPv4 identification and header checksum"
+        assert!(is_stateless_rst(s, &f), "IPv4 header checksum");
+        assert_eq!(
+            stateless_rst_sum_problem(&f),
+            Some("a wrong IPv4 header checksum")
         );
-        assert!(
-            is_stateless_rst(s, &tcp_edit(&rst, 16, |t| t[0] ^= 0xff)),
-            "TCP checksum"
+        let f = tcp_edit(&rst, 16, |t| t[0] ^= 0xff);
+        assert!(is_stateless_rst(s, &f), "TCP checksum");
+        assert_eq!(stateless_rst_sum_problem(&f), Some("a wrong TCP checksum"));
+        let mut f = tcp_edit(&rst, 17, |t| t[0] ^= 1);
+        f[25] ^= 1;
+        assert_eq!(
+            stateless_rst_sum_problem(&f),
+            Some("a wrong IPv4 header checksum and a wrong TCP checksum")
         );
         // everything else is the SYN's or R8's
         let near: Vec<(&str, Vec<u8>)> = vec![
+            ("another IPv4 identification", {
+                let mut f = rst.clone();
+                f[19] ^= 1;
+                f
+            }),
+            ("the SYN's IPv4 identification", {
+                let mut f = rst.clone();
+                f[18..20].copy_from_slice(&s[18..20]);
+                f
+            }),
             (
                 "seq of the SYN",
                 tcp_edit(&rst, 4, |t| t[3] = t[3].wrapping_sub(1)),
@@ -3214,8 +3244,8 @@ fn the_stateless_rst_form_is_the_syn_template_and_nothing_near_it() {
 }
 
 /// Every TCP frame with RST of the scanner MAC in a committed live capture, with whether it carries the template of one
-/// of the capture's SYNs, and its window.
-fn live_resets(rel: &str) -> Vec<(bool, u16, bool)> {
+/// of the capture's SYNs (C's identification included), its window, whether it is IPv4, and whether its sums are right.
+fn live_resets(rel: &str) -> Vec<(bool, u16, bool, bool)> {
     let p = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../../docs/experiments")
         .join(rel);
@@ -3236,7 +3266,14 @@ fn live_resets(rel: &str) -> Vec<(bool, u16, bool)> {
         .collect();
     mine.iter()
         .filter_map(|f| flags(f).filter(|x| x.0 & 4 != 0).map(|x| (f, x)))
-        .map(|(f, (_, win, v4))| (syns.iter().any(|s| is_stateless_rst(s, f)), win, v4))
+        .map(|(f, (_, win, v4))| {
+            (
+                syns.iter().any(|s| is_stateless_rst(s, f)),
+                win,
+                v4,
+                stateless_rst_sum_problem(f).is_none(),
+            )
+        })
         .collect()
 }
 
@@ -3244,7 +3281,7 @@ fn live_resets(rel: &str) -> Vec<(bool, u16, bool)> {
 fn the_oracles_live_resets_are_the_syn_template_and_the_kernels_are_not() {
     // C's own RSTs (window 1200) and the scanner namespace kernel's (window 0) as two committed live windows caught
     // them: the mixed IPv4 + IPv6 scan of the IPv6 acceptance r3 (resets of SYN-ACKs and of closed ports' RSTs, both
-    // families) and the autodetect parity run.
+    // families) and the autodetect parity run. Every one of C's carries C's IPv4 identification and right sums.
     for rel in [
         "2026-11-12-rmasscan-ipv6-postmerge-raw/linux-ipv6-r3/runs/v02_mixed_v4_v6/oracle-list/peer.pcap",
         "2026-10-27-rmasscan-autodetect-acceptance-raw/linux-r1/runs/l11_parity/oracle.pcap",
@@ -3254,8 +3291,9 @@ fn the_oracles_live_resets_are_the_syn_template_and_the_kernels_are_not() {
         let k = r.iter().filter(|x| x.1 == 0).count();
         assert_eq!(c + k, r.len(), "{rel}: only windows 1200 and 0");
         assert!(c > 0 && k > 0, "{rel}: {c} of C, {k} of the kernel");
-        for (template, win, v4) in &r {
+        for (template, win, v4, sums) in &r {
             assert_eq!(*template, *win == 1200, "{rel}: window {win}, IPv4 {v4}");
+            assert!(*sums, "{rel}: window {win}, IPv4 {v4}");
         }
         if rel.contains("v02") {
             assert!(r.iter().any(|x| x.0 && !x.2), "{rel}: C's IPv6 RSTs");
@@ -3267,18 +3305,41 @@ fn the_oracles_live_resets_are_the_syn_template_and_the_kernels_are_not() {
 #[test]
 fn the_stateless_rst_count_is_exact_both_ways_and_none_without_it() {
     let k = |s: &str| s.to_owned();
-    let replies: BTreeSet<String> = [k("a"), k("b")].into();
-    assert!(stateless_rst_problems(true, &replies, &[k("b"), k("a")]).is_empty());
-    let p = stateless_rst_problems(true, &replies, &[k("a")]);
+    let rst = |t: f64, key: &str| OwnRst {
+        t,
+        key: key.into(),
+        frame: Vec::new(),
+    };
+    // the first copy of reply a at 1.0 s, of b at 2.0 s
+    let replies: BTreeMap<String, f64> = [(k("a"), 1.0), (k("b"), 2.0)].into();
+    assert!(stateless_rst_problems(true, &replies, &[rst(2.1, "b"), rst(1.1, "a")]).is_empty());
+    let p = stateless_rst_problems(true, &replies, &[rst(1.1, "a")]);
     assert_eq!(p, ["b: 0 stateless RSTs, want 1"]);
-    let p = stateless_rst_problems(true, &replies, &[k("a"), k("b"), k("a")]);
+    let p = stateless_rst_problems(
+        true,
+        &replies,
+        &[rst(1.1, "a"), rst(2.1, "b"), rst(1.2, "a")],
+    );
     assert_eq!(p, ["a: 2 stateless RSTs, want 1"]);
-    let p = stateless_rst_problems(true, &replies, &[k("c"), k("a"), k("b"), k("c")]);
+    let p = stateless_rst_problems(
+        true,
+        &replies,
+        &[rst(0.5, "c"), rst(1.1, "a"), rst(2.1, "b"), rst(3.0, "c")],
+    );
     assert_eq!(p, ["c: a stateless RST without a reply of the stand"]);
+    // the RST must follow the first copy of the reply it resets (both scanners reset from the receive loop); at the
+    // same instant is no proof of the contrary
+    let p = stateless_rst_problems(true, &replies, &[rst(0.9998, "a"), rst(2.0, "b")]);
+    assert_eq!(
+        p,
+        [
+            "a: the stateless RST at 0.999800 s comes before the reply it resets (first at 1.000000 s)"
+        ]
+    );
     // --banners or --noreset: none at all
     assert!(stateless_rst_problems(false, &replies, &[]).is_empty());
     assert_eq!(
-        stateless_rst_problems(false, &replies, &[k("a")]),
+        stateless_rst_problems(false, &replies, &[rst(1.1, "a")]),
         ["a: 1 stateless RSTs, want 0"]
     );
     let argv = |a: &[&str]| a.iter().map(|x| (*x).to_owned()).collect::<Vec<_>>();
@@ -3365,14 +3426,34 @@ fn the_scanner_answers_each_who_has_once_in_cs_form_while_it_runs() {
                 f[..6].fill(0xff);
                 f
             }),
+            ("from another Ethernet source", {
+                let mut f = ans.clone();
+                f[11] ^= 1;
+                f
+            }),
             ("a request", {
                 let mut f = ans.clone();
                 f[21] = 1;
                 f
             }),
+            ("another sender hardware address", {
+                let mut f = ans.clone();
+                f[27] ^= 1;
+                f
+            }),
             ("another sender address", {
                 let mut f = ans.clone();
                 f[31] ^= 1;
+                f
+            }),
+            ("another target hardware address", {
+                let mut f = ans.clone();
+                f[37] ^= 1;
+                f
+            }),
+            ("another target protocol address", {
+                let mut f = ans.clone();
+                f[41] ^= 1;
                 f
             }),
             ("non-zero padding", {
@@ -3389,33 +3470,53 @@ fn the_scanner_answers_each_who_has_once_in_cs_form_while_it_runs() {
     }
     let st = stand(Plan::Windows);
     let (req, ans) = (peer_who_has(&st), responder_reply(&st, &peer_who_has(&st)));
-    let argv: Vec<String> = ["198.18.0.2", "-p80", "--wait", "3"]
-        .map(str::to_owned)
-        .to_vec();
-    // the scanner runs from its first probe to 1 s after its last (its --wait is 3 s)
-    let owed = answering(Some((10.0, 11.0)), &argv);
-    assert_eq!(owed, Some((10.0, 12.0)));
+    let argv = |w: &str| -> Vec<String> {
+        ["198.18.0.2", "-p80", "--wait", w]
+            .map(str::to_owned)
+            .to_vec()
+    };
+    // both scanners receive until last probe + --wait - 1 s at least (C: time(0) granularity, src/main.c:1490),
+    // the reply must be queued and sent 0.1 s before that
+    let owed = answering(Some((10.0, 11.0)), &argv("3"));
+    assert_eq!(owed, Some((10.0, 12.9)));
     assert_eq!(
         answering(Some((10.0, 11.0)), &[]),
-        Some((10.0, 12.0)),
+        Some((10.0, 19.9)),
         "C's default --wait 10"
     );
     assert_eq!(
-        answering(Some((10.0, 11.0)), &["--wait".into(), "0".into()]),
-        Some((10.0, 11.0))
+        answering(Some((10.0, 11.0)), &argv("8")),
+        Some((10.0, 17.9))
     );
-    assert_eq!(answering(None, &argv), None);
+    assert_eq!(
+        answering(Some((10.0, 11.0)), &argv("2")),
+        Some((10.0, 11.9))
+    );
+    // --wait 1 or 0: C may stop receiving at once after the probes (M5), so only the probes themselves
+    for w in ["1", "0"] {
+        assert_eq!(
+            answering(Some((10.0, 11.0)), &argv(w)),
+            Some((10.0, 10.9)),
+            "{w}"
+        );
+    }
+    assert_eq!(answering(None, &argv("3")), None);
     let p = |q: &[(f64, &Vec<u8>)], a: &[(f64, &Vec<u8>)]| {
         let q: Vec<(f64, Vec<u8>)> = q.iter().map(|(t, f)| (*t, (*f).clone())).collect();
         let a: Vec<(f64, Vec<u8>)> = a.iter().map(|(t, f)| (*t, (*f).clone())).collect();
         scanner_arp_answer_problems(&q, &a, owed, st.scanner_mac, st.scanner_ip)
     };
-    // owed (during the scan): exactly one
-    assert!(p(&[(10.5, &req)], &[(10.5001, &ans)]).is_empty());
-    assert_eq!(p(&[(10.5, &req)], &[]).len(), 1);
-    assert!(p(&[(10.5, &req)], &[])[0].contains("0 replies"));
-    assert!(p(&[(10.5, &req)], &[(10.5001, &ans), (10.5002, &ans)])[0].contains("2 replies"));
-    // a reply answers the last request before it: one each for two requests, none for the second is missing
+    // owed (during the scan, and up to --wait - 1 s after it less the margin): exactly one
+    for t in [10.5, 12.5, 12.89] {
+        assert!(p(&[(t, &req)], &[(t + 0.0001, &ans)]).is_empty(), "{t}");
+        assert_eq!(p(&[(t, &req)], &[]).len(), 1, "{t}");
+        assert!(p(&[(t, &req)], &[])[0].contains("0 replies"), "{t}");
+        assert!(
+            p(&[(t, &req)], &[(t + 0.0001, &ans), (t + 0.0002, &ans)])[0].contains("2 replies"),
+            "{t}"
+        );
+    }
+    // a reply answers a request before it: one each for two requests, the second missing
     assert!(
         p(
             &[(10.5, &req), (11.5, &req)],
@@ -3427,12 +3528,36 @@ fn the_scanner_answers_each_who_has_once_in_cs_form_while_it_runs() {
         p(
             &[(10.5, &req), (11.5, &req)],
             &[(10.5001, &ans), (10.6, &ans)]
-        )
-        .len(),
-        2
+        ),
+        [
+            "the who-has at 10.500000 s (while the scanner runs: exactly one): 2 replies",
+            "the who-has at 11.500000 s (while the scanner runs: exactly one): 0 replies"
+        ]
     );
-    // not owed (before the scan or after it may have ended): at most one
-    for t in [9.0, 12.5] {
+    // M5: requests queued before the receive loop reads them are answered in one burst, first request first
+    assert!(
+        p(
+            &[(10.5, &req), (10.6, &req)],
+            &[(10.7, &ans), (10.7001, &ans)]
+        )
+        .is_empty()
+    );
+    // ... and a request before the scan (not owed: the scanner may not have opened its adapter yet) never takes the
+    // reply an owed request is waiting for
+    assert!(p(&[(9.0, &req), (10.5, &req)], &[(10.5001, &ans)]).is_empty());
+    assert!(
+        p(
+            &[(9.0, &req), (10.5, &req)],
+            &[(10.5001, &ans), (10.5002, &ans)]
+        )
+        .is_empty()
+    );
+    assert_eq!(
+        p(&[(10.5, &req), (10.6, &req)], &[(10.7, &ans)]),
+        ["the who-has at 10.600000 s (while the scanner runs: exactly one): 0 replies"]
+    );
+    // not owed (before the scan, or after it may have ended): at most one
+    for t in [9.0, 12.91, 13.5] {
         assert!(p(&[(t, &req)], &[]).is_empty(), "{t}");
         assert!(p(&[(t, &req)], &[(t + 0.0001, &ans)]).is_empty(), "{t}");
         assert_eq!(
@@ -3450,6 +3575,31 @@ fn the_scanner_answers_each_who_has_once_in_cs_form_while_it_runs() {
         e[0].contains("not in C's form") && e[1].contains("0 replies"),
         "{e:?}"
     );
+    // the OS's 42-byte replies (M1): one per request at most, each after a request, in the kernel's form
+    let os = os_reply(&st);
+    let o = |q: &[(f64, &Vec<u8>)], a: &[(f64, &Vec<u8>)]| {
+        let q: Vec<(f64, Vec<u8>)> = q.iter().map(|(t, f)| (*t, (*f).clone())).collect();
+        let a: Vec<(f64, Vec<u8>)> = a.iter().map(|(t, f)| (*t, (*f).clone())).collect();
+        os_arp_reply_problems(&q, &a, st.scanner_mac, st.scanner_ip)
+    };
+    assert!(o(&[(10.5, &req)], &[(10.5001, &os)]).is_empty());
+    assert!(o(&[(10.5, &req)], &[]).is_empty(), "the OS owes nothing");
+    assert_eq!(
+        o(&[(10.5, &req)], &[(10.5001, &os), (10.5002, &os)]),
+        ["the who-has at 10.500000 s: 2 42-byte replies (the OS answers once)"]
+    );
+    assert_eq!(
+        o(&[], &[(10.5001, &os)]),
+        ["a 42-byte ARP reply at 10.500100 s before any who-has of the peer for 198.18.0.1"]
+    );
+    let mut other = os.clone();
+    other[41] ^= 1;
+    assert_eq!(
+        o(&[(10.5, &req)], &[(10.5001, &other)]),
+        [
+            "the 42-byte ARP reply at 10.500100 s is no answer to a who-has before it (the last at 10.500000 s)"
+        ]
+    );
 }
 
 /// `sim`'s scanner frames that are the product's stateless RST of one of its SYNs, by index into `peer`.
@@ -3462,7 +3612,10 @@ fn stateless_at(sim: &Sim) -> Vec<usize> {
         .collect()
 }
 const RST_CHECK: &str = "the scanner's stateless RST (R8";
+const SUM_CHECK: &str = "the scanner's stateless RSTs carry";
+const KERNEL_CHECK: &str = "every other reset of the scanner MAC";
 const ARP_CHECK: &str = "the scanner answers the peer's who-has for its address";
+const OS_ARP_CHECK: &str = "OS ARP: every 42-byte ARP reply";
 
 #[test]
 fn a_run_with_its_stateless_rst_passes_without_it_or_with_one_more_fails() {
@@ -3500,15 +3653,52 @@ fn a_run_with_its_stateless_rst_passes_without_it_or_with_one_more_fails() {
             s(&check(&r, RST_CHECK)["detail"]).contains("2 stateless RSTs, want 1"),
             "{tag}"
         );
-        // in another form (window 1201): no stateless RST of its SYN, so that reply has none
+        // in another form (window 1201, or another IPv4 identification than C's): no stateless RST of its SYN, so
+        // that reply has none (and the frame is a reset of no kernel's form)
+        for edit in [15, 0] {
+            let mut sim = Sim::new(plan, tag);
+            let i = stateless_at(&sim)[0];
+            if edit == 15 {
+                sim.peer[i].1 = tcp_edit(&sim.peer[i].1, 15, |t| t[0] = 0xb1);
+            } else {
+                sim.peer[i].1[19] ^= 1;
+            }
+            let r = judge(&sim);
+            assert_verdict(&r, FAIL);
+            assert!(
+                s(&check(&r, RST_CHECK)["detail"]).contains("0 stateless RSTs, want 1"),
+                "{tag} {edit}"
+            );
+            assert_eq!(check(&r, KERNEL_CHECK)["result"], FAIL, "{tag} {edit}");
+        }
+        // the form, but a wrong TCP or IPv4 header checksum: the peer drops it, no reset on the wire (I2)
+        for (what, at) in [("TCP", 34 + 16), ("IPv4 header", 24)] {
+            let mut sim = Sim::new(plan, tag);
+            let i = stateless_at(&sim)[0];
+            sim.peer[i].1[at] ^= 0xff;
+            let r = judge(&sim);
+            assert_verdict(&r, FAIL);
+            assert_eq!(bad(&r).len(), 1, "{tag} {what}: {:#?}", bad(&r));
+            assert_eq!(check(&r, SUM_CHECK)["result"], FAIL, "{tag} {what}");
+            assert!(
+                s(&check(&r, SUM_CHECK)["detail"])
+                    .contains(&format!("carries a wrong {what} checksum")),
+                "{tag} {what}: {}",
+                check(&r, SUM_CHECK)
+            );
+        }
+        // before the reply it resets (M2): sent from the probe path, not for the reply
         let mut sim = Sim::new(plan, tag);
         let i = stateless_at(&sim)[0];
-        sim.peer[i].1 = tcp_edit(&sim.peer[i].1, 15, |t| t[0] = 0xb1);
+        let (t, f) = sim.peer.remove(i);
+        sim.insert(t - 0.0006, f);
         let r = judge(&sim);
         assert_verdict(&r, FAIL);
+        assert_eq!(bad(&r).len(), 1, "{tag}: {:#?}", bad(&r));
         assert!(
-            s(&check(&r, RST_CHECK)["detail"]).contains("0 stateless RSTs, want 1"),
-            "{tag}"
+            s(&check(&r, RST_CHECK)["detail"]).contains("comes before the reply it resets"),
+            "{tag}: {}",
+            check(&r, RST_CHECK)
         );
     }
     // the parity run's oracle wire is held to the same rule: a missing reset of C's is a broken stand (INVALID)
@@ -3526,6 +3716,23 @@ fn a_run_with_its_stateless_rst_passes_without_it_or_with_one_more_fails() {
     assert_verdict(&r, INVALID);
     assert_eq!(check(&r, "the oracle's stateless RST")["result"], INVALID);
     assert_eq!(bad(&r).len(), 1, "{:#?}", bad(&r));
+    // C's IPv4 header sum of a stack frame may be wrong (E1.10, an incremental update folded twice): a broken stand
+    // for the comparison, never C's FAIL
+    let mut sim = Sim::new(Plan::Linux, "l11_parity");
+    let o = sim.oracle.as_mut().unwrap();
+    let i = o
+        .pcap
+        .iter()
+        .position(|(_, f)| syns.iter().any(|s| is_stateless_rst(s, f)))
+        .unwrap();
+    o.pcap[i].1[24] ^= 0xff;
+    let r = judge(&sim);
+    assert_verdict(&r, INVALID);
+    assert_eq!(bad(&r).len(), 1, "{:#?}", bad(&r));
+    assert_eq!(
+        check(&r, "the oracle's stateless RSTs carry")["result"],
+        INVALID
+    );
 }
 
 #[test]
@@ -3543,38 +3750,57 @@ fn rmasscan_answers_the_windows_peers_who_has_during_the_scan_once_in_cs_form() 
         responder_reply(&st, &peer_who_has(&st)),
         os_reply(&st),
     );
-    let t = base.first_syn_time() + 0.0003;
-    let with = |answers: &[(f64, &Vec<u8>)]| {
-        let mut sim = Sim::new(Plan::Windows, "w01_auto");
-        sim.insert(t, req.clone());
-        sim.insert(t + 0.00002, os.clone());
-        for (dt, f) in answers {
-            sim.insert(t + dt, (*f).clone());
-        }
-        judge(&sim)
-    };
-    // present: PASS, the guest's reply stays os_arp
-    let r = with(&[(0.00005, &ans)]);
-    assert_verdict(&r, PASS);
-    assert_eq!(r["notes"]["os_arp"]["replies"], 2);
-    assert_eq!(r["notes"]["scanner_arp_replies"], 1);
-    assert_eq!(check(&r, ARP_CHECK)["detail"], "1 replies for 2 requests");
-    // missing, twice, or not in C's form: FAIL
-    let mut wrong = ans.clone();
-    wrong[..6].fill(0xff);
-    for (what, answers, detail) in [
-        ("missing", vec![], "0 replies"),
-        ("twice", vec![(0.00005, &ans), (0.00007, &ans)], "2 replies"),
-        ("not C's form", vec![(0.00005, &wrong)], "not in C's form"),
-    ] {
-        let r = with(&answers);
-        assert_verdict(&r, FAIL);
-        assert_eq!(check(&r, ARP_CHECK)["result"], FAIL, "{what}");
-        assert!(
-            s(&check(&r, ARP_CHECK)["detail"]).contains(detail),
-            "{what}: {}",
-            check(&r, ARP_CHECK)
+    // during the scan, and after it (1.5 s after the last SYN, --wait 3: owed until 1.9 s after it)
+    let last = base.peer[base.syn_index(base.syns.len() - 1)].0;
+    for t in [base.first_syn_time() + 0.0003, last + 1.5] {
+        let with = |answers: &[(f64, &Vec<u8>)]| {
+            let mut sim = Sim::new(Plan::Windows, "w01_auto");
+            sim.insert(t, req.clone());
+            sim.insert(t + 0.00002, os.clone());
+            for (dt, f) in answers {
+                sim.insert(t + dt, (*f).clone());
+            }
+            judge(&sim)
+        };
+        // present: PASS, the guest's reply stays os_arp
+        let r = with(&[(0.00005, &ans)]);
+        assert_verdict(&r, PASS);
+        assert_eq!(r["notes"]["os_arp"]["replies"], 2);
+        assert_eq!(r["notes"]["scanner_arp_replies"], 1);
+        assert_eq!(check(&r, ARP_CHECK)["detail"], "1 replies for 2 requests");
+        assert_eq!(
+            check(&r, OS_ARP_CHECK)["detail"],
+            "2 replies for 2 requests"
         );
+        // missing, or not in C's form: FAIL
+        let mut wrong = ans.clone();
+        wrong[..6].fill(0xff);
+        for (what, answers, detail) in [
+            ("missing", vec![], "0 replies"),
+            ("not C's form", vec![(0.00005, &wrong)], "not in C's form"),
+        ] {
+            let r = with(&answers);
+            assert_verdict(&r, FAIL);
+            assert_eq!(check(&r, ARP_CHECK)["result"], FAIL, "{what}");
+            assert!(
+                s(&check(&r, ARP_CHECK)["detail"]).contains(detail),
+                "{what}: {}",
+                check(&r, ARP_CHECK)
+            );
+        }
+        // twice: in the scanner's first second the second reply may be the burst answer to the generator's request
+        // before the scan (M5: queued before the receive loop ran); later no request is left to take it
+        let r = with(&[(0.00005, &ans), (0.00007, &ans)]);
+        if t < base.first_syn_time() + BURST_S {
+            assert_verdict(&r, PASS);
+        } else {
+            assert_verdict(&r, FAIL);
+            assert!(
+                s(&check(&r, ARP_CHECK)["detail"]).contains("2 replies"),
+                "{}",
+                check(&r, ARP_CHECK)
+            );
+        }
     }
     // a reply of rmasscan without a request of the peer before it
     let mut sim = Sim::new(Plan::Windows, "w01_auto");
@@ -3590,4 +3816,320 @@ fn rmasscan_answers_the_windows_peers_who_has_during_the_scan_once_in_cs_form() 
     let r = judge(&sim);
     assert_verdict(&r, FAIL);
     assert_eq!(check(&r, "no scanner frame")["result"], FAIL);
+}
+
+// ------------------------------------------------------------------ Task 16 fix round 1: every reset, every OS reply
+
+/// The scanner's frames with RST that are no stateless RST of its SYNs, by index into `peer`.
+fn kernel_resets_at(sim: &Sim) -> Vec<usize> {
+    sim.peer
+        .iter()
+        .enumerate()
+        .filter(|(_, (_, f))| {
+            f[6..12] == sim.st.scanner_mac
+                && is_reset(f)
+                && !sim.syns.iter().any(|s| is_stateless_rst(s, f))
+        })
+        .map(|(i, _)| i)
+        .collect()
+}
+
+#[test]
+fn every_other_reset_of_the_scanner_mac_is_the_linux_kernels_reset_of_a_syn_ack() {
+    for (plan, tag) in [
+        (Plan::Linux, "l01_auto"),
+        (Plan::Windows, "w01_auto"),
+        (Plan::Macos, "m02_user_explicit"),
+    ] {
+        // the generator: on Linux the kernel resets each SYN-ACK frame, the Windows and macOS OS resets none (as in
+        // every committed run)
+        let sim = Sim::new(plan, tag);
+        let open = sim
+            .syns
+            .iter()
+            .filter(|s| sim.st.open_ports.contains(&syn_dst(s).1))
+            .count();
+        assert!(open > 0, "{tag}");
+        let r = judge(&sim);
+        assert_verdict(&r, PASS);
+        let want = if plan == Plan::Linux { open } else { 0 };
+        assert_eq!(r["notes"]["rst_from_scanner"], want, "{tag}");
+        assert_eq!(kernel_resets_at(&sim).len(), want, "{tag}");
+        // the review's probe: one more reset per reply, in the kernel's form (window 0, no options): a reset of the
+        // scanner's own making (I3)
+        let mut sim = Sim::new(plan, tag);
+        for n in 0..sim.syns.len() {
+            let t = sim.peer[sim.syn_index(n)].0;
+            let f = tcp_answer(&sim.syns[n], 0x04, sim.st.peer_mac, true);
+            sim.insert(t + 0.00095, f);
+        }
+        let r = judge(&sim);
+        assert_verdict(&r, FAIL);
+        assert_eq!(bad(&r).len(), 1, "{tag}: {:#?}", bad(&r));
+        assert_eq!(check(&r, KERNEL_CHECK)["result"], FAIL, "{tag}");
+        assert!(
+            s(&check(&r, KERNEL_CHECK)["detail"])
+                .contains("resets no SYN-ACK frame of the peer the kernel's way"),
+            "{tag}: {}",
+            check(&r, KERNEL_CHECK)
+        );
+        // a kernel-form reset of one SYN-ACK of an open port, after it: the Linux kernel's own (on Linux it has its
+        // one already, so a second is too many), never the Windows or macOS OS's
+        let mut sim = Sim::new(plan, tag);
+        let n = (0..sim.syns.len())
+            .find(|n| sim.st.open_ports.contains(&syn_dst(&sim.syns[*n]).1))
+            .unwrap();
+        let t = sim.peer[sim.syn_index(n)].0;
+        let f = tcp_answer(&sim.syns[n], 0x04, sim.st.peer_mac, true);
+        sim.insert(t + 0.00095, f);
+        let r = judge(&sim);
+        assert_verdict(&r, FAIL);
+        assert_eq!(check(&r, KERNEL_CHECK)["result"], FAIL, "{tag}");
+        assert!(
+            s(&check(&r, KERNEL_CHECK)["detail"]).contains(&format!(
+                "({} per SYN-ACK frame on this stand)",
+                usize::from(plan == Plan::Linux)
+            )),
+            "{tag}: {}",
+            check(&r, KERNEL_CHECK)
+        );
+    }
+    // Linux: the kernel resets each SYN-ACK frame, a repeated one again; never an RST-ACK, never before the SYN-ACK
+    let base = Sim::new(Plan::Linux, "l01_auto");
+    let n = (0..base.syns.len())
+        .find(|n| base.st.open_ports.contains(&syn_dst(&base.syns[*n]).1))
+        .unwrap();
+    let t = base.peer[base.syn_index(n)].0;
+    let mut sim = Sim::new(Plan::Linux, "l01_auto");
+    let synack = tcp_answer(&sim.syns[n], 0x12, sim.st.peer_mac, false);
+    let reset = tcp_answer(&sim.syns[n], 0x04, sim.st.peer_mac, true);
+    sim.insert(t + 0.5, synack);
+    sim.insert(t + 0.5002, reset.clone());
+    let r = judge(&sim);
+    assert_verdict(&r, PASS);
+    assert_eq!(
+        check(&r, KERNEL_CHECK)["detail"],
+        "3 resets for 3 SYN-ACK frames (1 each at most)"
+    );
+    let mut sim = Sim::new(Plan::Linux, "l01_auto");
+    sim.insert(t + 0.5002, reset);
+    let r = judge(&sim);
+    assert_verdict(&r, FAIL);
+    assert_eq!(check(&r, KERNEL_CHECK)["result"], FAIL, "a second reset");
+    for what in ["RST-ACK", "before the SYN-ACK"] {
+        let mut sim = Sim::new(Plan::Linux, "l01_auto");
+        let i = kernel_resets_at(&sim)[0];
+        if what == "RST-ACK" {
+            sim.peer[i].1[47] = 0x14;
+        } else {
+            let (t, f) = sim.peer.remove(i);
+            sim.insert(t - 0.0004, f);
+        }
+        let r = judge(&sim);
+        assert_verdict(&r, FAIL);
+        assert_eq!(bad(&r).len(), 1, "{what}: {:#?}", bad(&r));
+        assert_eq!(check(&r, KERNEL_CHECK)["result"], FAIL, "{what}");
+    }
+    // the parity run's oracle capture: the same rule, a broken stand (INVALID); a second kernel-form reset of one
+    // SYN-ACK frame (every port of l11 is open)
+    let mut sim = Sim::new(Plan::Linux, "l11_parity");
+    let syn = sim.syns[0].clone();
+    let peer_mac = sim.st.peer_mac;
+    let o = sim.oracle.as_mut().unwrap();
+    let t = o.pcap.iter().find(|(_, f)| *f == syn).unwrap().0;
+    o.pcap
+        .push((t + 0.00095, tcp_answer(&syn, 0x04, peer_mac, true)));
+    o.pcap.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let r = judge(&sim);
+    assert_verdict(&r, INVALID);
+    assert_eq!(bad(&r).len(), 1, "{:#?}", bad(&r));
+    assert_eq!(check(&r, "the oracle's other resets")["result"], INVALID);
+}
+
+#[test]
+fn every_42_byte_arp_reply_of_the_scanner_mac_answers_a_who_has_of_the_peer_once() {
+    // the review's probe: five unsolicited 42-byte replies during the scan, no request (M1); a scanner's unpadded
+    // answer looks the same
+    for (plan, tag) in [
+        (Plan::Linux, "l01_auto"),
+        (Plan::Windows, "w01_auto"),
+        (Plan::Macos, "m02_user_explicit"),
+    ] {
+        let mut sim = Sim::new(plan, tag);
+        let (t, os) = (sim.first_syn_time(), os_reply(&sim.st));
+        for k in 0..5 {
+            sim.insert(t + 0.0001 + 0.001 * f64::from(k), os.clone());
+        }
+        let r = judge(&sim);
+        assert_verdict(&r, FAIL);
+        assert_eq!(bad(&r).len(), 1, "{tag}: {:#?}", bad(&r));
+        assert_eq!(check(&r, OS_ARP_CHECK)["result"], FAIL, "{tag}");
+    }
+    // Windows: the guest answers the generator's request once (os_arp 1 of 1); a second 42-byte reply is too many
+    let sim = Sim::new(Plan::Windows, "w01_auto");
+    let r = judge(&sim);
+    assert_eq!(
+        check(&r, OS_ARP_CHECK)["detail"],
+        "1 replies for 1 requests"
+    );
+    let mut sim = Sim::new(Plan::Windows, "w01_auto");
+    let os = os_reply(&sim.st);
+    sim.insert(T0 + 0.2002, os);
+    let r = judge(&sim);
+    assert_verdict(&r, FAIL);
+    assert!(
+        s(&check(&r, OS_ARP_CHECK)["detail"]).contains("2 42-byte replies"),
+        "{}",
+        check(&r, OS_ARP_CHECK)
+    );
+}
+
+#[test]
+fn the_n2_peers_who_has_5_s_after_the_scan_is_owed_with_w03s_wait_8_and_not_with_wait_3() {
+    // windows-r3 w01_auto, live: the peer's who-has 4.96 s after the last SYN, the guest's 42-byte reply 0.18 ms
+    // later, the end markers about 12 s after that
+    let st = stand(Plan::Windows);
+    let (req, ans, os) = (
+        peer_who_has(&st),
+        responder_reply(&st, &peer_who_has(&st)),
+        os_reply(&st),
+    );
+    let argv = |tag: &str| case_spec(Plan::Windows, tag).unwrap().argv();
+    assert!(argv("w03_adapter_friendly").ends_with(&["--wait".to_owned(), "8".to_owned()]));
+    assert!(argv("w01_auto").ends_with(&["--wait".to_owned(), "3".to_owned()]));
+    for (tag, owed) in [("w03_adapter_friendly", true), ("w01_auto", false)] {
+        let with = |answers: &[&Vec<u8>]| {
+            let mut sim = Sim::new(Plan::Windows, tag);
+            let last = sim.peer[sim.syn_index(sim.syns.len() - 1)].0;
+            for (t, f) in sim.peer.iter_mut() {
+                if is_marker(f, END_PAYLOAD) {
+                    *t += 16.0;
+                }
+            }
+            let t = last + 4.96;
+            sim.insert(t, req.clone());
+            sim.insert(t + 0.00018, os.clone());
+            for (k, f) in answers.iter().enumerate() {
+                sim.insert(t + 0.0002 + 0.00001 * k as f64, (*f).clone());
+            }
+            judge(&sim)
+        };
+        // rmasscan answers while it still receives: PASS on both
+        let r = with(&[&ans]);
+        assert_verdict(&r, PASS);
+        assert_eq!(check(&r, ARP_CHECK)["detail"], "1 replies for 2 requests");
+        // without its reply: owed with --wait 8 (until last + 6.9 s), not with --wait 3 (until last + 1.9 s)
+        let r = with(&[]);
+        if owed {
+            assert_verdict(&r, FAIL);
+            assert!(
+                s(&check(&r, ARP_CHECK)["detail"])
+                    .contains("(while the scanner runs: exactly one): 0 replies"),
+                "{tag}: {}",
+                check(&r, ARP_CHECK)
+            );
+        } else {
+            assert_verdict(&r, PASS);
+            assert_eq!(check(&r, ARP_CHECK)["detail"], "0 replies for 2 requests");
+        }
+        // twice: FAIL on both (the generator's request before the scan is long gone)
+        let r = with(&[&ans, &ans]);
+        assert_verdict(&r, FAIL);
+        assert!(
+            s(&check(&r, ARP_CHECK)["detail"]).contains("2 replies"),
+            "{tag}"
+        );
+    }
+}
+
+/// One case of the committed C ARP reply goldens (`tests/golden/arp-replies`, Task 14a): the scanner's MAC, its source
+/// range, each input frame and C's reply to it.
+type ArpGolden = ([u8; 6], (u32, u32), Vec<(Vec<u8>, Option<Vec<u8>>)>);
+fn arp_golden(case: &str) -> ArpGolden {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/golden/arp-replies/cases");
+    let text = |ext: &str| fs::read_to_string(dir.join(format!("{case}.{ext}"))).unwrap();
+    let hex = |h: &str| -> Vec<u8> {
+        if h == "-" {
+            return Vec::new();
+        }
+        (0..h.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&h[i..i + 2], 16).unwrap())
+            .collect()
+    };
+    let (mut mac, mut range, mut frames) = ([0u8; 6], (0, 0), Vec::new());
+    for l in text("in.txt").lines() {
+        if let Some(rest) = l.strip_prefix("me ") {
+            for kv in rest.split(' ') {
+                match kv.split_once('=').unwrap() {
+                    ("mac", m) => mac = parse_mac(m).unwrap(),
+                    ("first", h) => range.0 = u32::from_str_radix(h, 16).unwrap(),
+                    ("last", h) => range.1 = u32::from_str_radix(h, 16).unwrap(),
+                    other => panic!("{other:?}"),
+                }
+            }
+        } else if let Some(h) = l.strip_prefix("frame ") {
+            frames.push((hex(h), None));
+        }
+    }
+    let out = text("out");
+    let mut lines = out.lines();
+    assert!(lines.next().unwrap().starts_with("arp-reply-oracle v1 "));
+    for (i, l) in lines.enumerate() {
+        let w: Vec<&str> = l.split(' ').collect();
+        assert_eq!((w[0], w[1]), ("frame", i.to_string().as_str()), "{case}");
+        if w[2] == "reply" {
+            assert_eq!(w[3], "len=60", "{case}");
+            frames[i].1 = Some(hex(w[4]));
+        }
+    }
+    (mac, range, frames)
+}
+
+#[test]
+fn cs_committed_arp_replies_are_cs_form_and_c_answers_every_request_the_verifiers_owe_a_reply() {
+    // M4: c_form_arp_reply and peer_request_for against C's own replies (masscan 8e6b3b0, Task 14a's oracle), not the
+    // product's responder
+    let (mut checked, mut owed) = (0, 0);
+    for case in [
+        "plain",
+        "range",
+        "truncated",
+        "encapsulated",
+        "header-quirks",
+        "oversize",
+        "unspecified-source",
+    ] {
+        let (mac, (first, last), frames) = arp_golden(case);
+        for (i, (f, reply)) in frames.iter().enumerate() {
+            let Some(target) = f.get(38..42) else {
+                assert!(reply.is_none() || f.len() >= 42, "{case} {i}");
+                continue;
+            };
+            let ip = Ipv4Addr::new(target[0], target[1], target[2], target[3]);
+            let src: [u8; 6] = f[6..12].try_into().unwrap();
+            let ours = (first..=last).contains(&u32::from(ip));
+            // every request the verifiers recognise for our address C answers (on any stand frame: <= 1514 bytes)
+            if peer_request_for(f, src, ip) && ours && f.len() <= 1514 {
+                owed += 1;
+                assert!(reply.is_some(), "{case} {i}: C answers it");
+            }
+            // and each such reply of C is in C's form for its request
+            if let (Some(a), true) = (reply, peer_request_for(f, src, ip)) {
+                checked += 1;
+                assert!(c_form_arp_reply(f, a, mac, ip), "{case} {i}");
+                assert!(!kernel_arp_reply(f, a, mac, ip), "{case} {i}");
+                // a field off is no longer C's form
+                for at in [0, 6, 21, 22, 28, 32, 38, 59] {
+                    let mut x = a.clone();
+                    x[at] ^= 1;
+                    assert!(!c_form_arp_reply(f, &x, mac, ip), "{case} {i} byte {at}");
+                }
+            }
+        }
+    }
+    assert!(
+        checked >= 10 && owed >= 10,
+        "{checked} replies, {owed} requests"
+    );
 }

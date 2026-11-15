@@ -871,8 +871,8 @@ pub struct WireView {
     pub peer_requests: Vec<(f64, Vec<u8>)>,
     /// The scanner MAC's ARP replies that are not its kernel's: the scanner's own, judged against `peer_requests`.
     pub scanner_arp_replies: Vec<(f64, Vec<u8>)>,
-    /// The probe each stateless RST of the scanner resets the reply of (R8), by index into `probes`.
-    pub stateless_rsts: Vec<usize>,
+    /// Each stateless RST of the scanner (R8), with the connection of the probe whose reply it resets.
+    pub stateless_rsts: Vec<av::OwnRst>,
     /// Frames of the peer MAC that answer nothing the scan sent.
     pub peer_unexpected: Vec<String>,
     /// Probes or replies outside the witness window (last start marker .. first end marker).
@@ -976,14 +976,21 @@ pub fn scanner_bounds(v: &WireView, who: Who) -> [(&'static str, usize, usize); 
 fn conn_key(p: &Probe) -> String {
     format!("{}:{} (scanner port {})", p.ip, p.port, p.sport())
 }
-/// The distinct TCP replies of the stand (SYN-ACK or RST, not an ICMP error), by [`conn_key`]: each is owed one
-/// stateless RST.
-fn distinct_tcp_replies(v: &WireView) -> BTreeSet<String> {
-    v.replies
+/// The distinct TCP replies of the stand (SYN-ACK or RST, not an ICMP error), by [`conn_key`], each with the time of
+/// its first copy: each is owed one stateless RST, after that copy.
+fn distinct_tcp_replies(v: &WireView) -> BTreeMap<String, f64> {
+    let mut out: BTreeMap<String, f64> = BTreeMap::new();
+    for r in v
+        .replies
         .iter()
         .filter(|r| r.proto == Proto::Tcp && !r.via_icmp)
-        .filter_map(|r| v.probes.get(r.probe).map(conn_key))
-        .collect()
+    {
+        if let Some(k) = v.probes.get(r.probe).map(conn_key) {
+            let first = out.entry(k).or_insert(r.t);
+            *first = first.min(r.t);
+        }
+    }
+    out
 }
 /// The probe whose SYN template a stateless RST `f` carries ([`av::is_stateless_rst`]).
 fn stateless_probe(f: &[u8], probes: &[Probe]) -> Option<usize> {
@@ -995,16 +1002,11 @@ fn stateless_probe(f: &[u8], probes: &[Probe]) -> Option<usize> {
 /// ([`pair_verify::own_frame_checks`]): the stateless RST (R8) of every distinct TCP reply and the ARP replies to the
 /// peer's who-has for the scanner's address (Task 14a). The stand (`st`) gives the scanner's MAC and address.
 pub(crate) fn own_frame_checks<V>(r: &mut Run, s: &Side<V>, v: &WireView, st: &Stand) {
-    let rsts: Vec<String> = v
-        .stateless_rsts
-        .iter()
-        .filter_map(|i| v.probes.get(*i).map(conn_key))
-        .collect();
     pair_verify::own_frame_checks(
         r,
         s,
         &distinct_tcp_replies(v),
-        &rsts,
+        &v.stateless_rsts,
         &v.peer_requests,
         &v.scanner_arp_replies,
         v.probes
@@ -1167,7 +1169,12 @@ pub fn view(fr: &Frames, st: &Stand, arp: bool) -> WireView {
         match scanner_frame(f, st, arp, &v) {
             Ok(key) => {
                 if key == SCANNER_CLASSES[4].0 {
-                    v.stateless_rsts.extend(stateless_probe(f, &v.probes));
+                    let probe = stateless_probe(f, &v.probes).and_then(|i| v.probes.get(i));
+                    v.stateless_rsts.extend(probe.map(|p| av::OwnRst {
+                        t,
+                        key: conn_key(p),
+                        frame: f.clone(),
+                    }));
                 } else if key == SCANNER_CLASSES[5].0 {
                     v.scanner_arp_replies.push((t, f.clone()));
                 }

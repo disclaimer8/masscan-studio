@@ -790,8 +790,8 @@ pub struct WireView {
     pub peer_requests: Vec<(f64, Vec<u8>)>,
     /// The scanner MAC's ARP replies that are not its kernel's: the scanner's own, judged against `peer_requests`.
     pub scanner_arp_replies: Vec<(f64, Vec<u8>)>,
-    /// The probe each stateless RST of the scanner resets the reply of (R8), by index into `probes`.
-    pub stateless_rsts: Vec<usize>,
+    /// Each stateless RST of the scanner (R8), with the connection of the probe whose reply it resets.
+    pub stateless_rsts: Vec<av::OwnRst>,
     /// Frames of the scanner MAC that are no probe and belong to one of [`SCANNER_CLASSES`], by its key.
     pub scanner_named: BTreeMap<&'static str, usize>,
     /// Every other frame of the scanner MAC that is no probe and no [`STAND_NOISE`]: described.
@@ -889,12 +889,17 @@ pub fn scanner_bounds(v: &WireView, who: Who, c: &CaseSpec) -> [(&'static str, u
 fn conn_key(p: &Probe) -> String {
     format!("{}:{} (scanner port {})", show_ip(p.ip), p.port, p.sport)
 }
-/// The distinct replies of the stand (SYN-ACK or RST), by [`conn_key`]: each is owed one stateless RST.
-fn distinct_replies(v: &WireView) -> BTreeSet<String> {
-    v.replies
-        .iter()
-        .filter_map(|r| v.probes.get(r.probe).map(conn_key))
-        .collect()
+/// The distinct replies of the stand (SYN-ACK or RST), by [`conn_key`], each with the time of its first copy: each is
+/// owed one stateless RST, after that copy.
+fn distinct_replies(v: &WireView) -> BTreeMap<String, f64> {
+    let mut out: BTreeMap<String, f64> = BTreeMap::new();
+    for r in &v.replies {
+        if let Some(k) = v.probes.get(r.probe).map(conn_key) {
+            let first = out.entry(k).or_insert(r.t);
+            *first = first.min(r.t);
+        }
+    }
+    out
 }
 /// The probe whose SYN template a stateless RST `f` carries ([`av::is_stateless_rst`]).
 fn stateless_probe(f: &[u8], probes: &[Probe]) -> Option<usize> {
@@ -1088,7 +1093,12 @@ pub fn view(fr: &Frames, st: &Stand) -> WireView {
         match scanner_frame(f, st, &v) {
             Mine::Class(k) => {
                 if k == SCANNER_CLASSES[4].0 {
-                    v.stateless_rsts.extend(stateless_probe(f, &v.probes));
+                    let probe = stateless_probe(f, &v.probes).and_then(|i| v.probes.get(i));
+                    v.stateless_rsts.extend(probe.map(|p| av::OwnRst {
+                        t,
+                        key: conn_key(p),
+                        frame: f.clone(),
+                    }));
                 } else if k == SCANNER_CLASSES[5].0 {
                     v.scanner_arp_replies.push((t, f.clone()));
                 }
@@ -1635,16 +1645,11 @@ fn scanner_frames(r: &mut Run, s: &Side<WireView>, v: &WireView, c: &CaseSpec) {
         "the named scanner-side frames stay within their bounds (who-has and NS: the resolver's request count when the step resolves that next hop, else 0; the kernel's RST: one per SYN-ACK frame; NA: per peer NS one of the kernel, plus one of rmasscan's responder; the stateless RST: one per distinct reply of the stand, SYN-ACK or RST; ARP replies of the scanner and of its kernel: one each per who-has of the peer)",
         &scanner_bounds(v, s.spec.who, c),
     );
-    let rsts: Vec<String> = v
-        .stateless_rsts
-        .iter()
-        .filter_map(|i| v.probes.get(*i).map(conn_key))
-        .collect();
     pair_verify::own_frame_checks(
         r,
         s,
         &distinct_replies(v),
-        &rsts,
+        &v.stateless_rsts,
         &v.peer_requests,
         &v.scanner_arp_replies,
         v.probes

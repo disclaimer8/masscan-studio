@@ -1498,6 +1498,24 @@ fn both_scanners_reset_each_first_reply_statelessly_in_cs_form() {
                 && b[0].contains("is no stateless RST of a probe"),
             "{step}: {b:#?}"
         );
+        // the IPv6 stateless RST of the closed port with a wrong TCP checksum (RFC 8200 pseudo-header): the sums'
+        // check alone (I2)
+        let mut sim = Sim::new("v01_ndp_and_tcp6_syn");
+        let s = sim.step_mut(step);
+        let (_, j) = closed(s);
+        assert_eq!(s.frames[j].1[12..14], [0x86, 0xdd]);
+        s.frames[j].1[54 + 16] ^= 0xff;
+        let (v, b) = judge_one(&sim);
+        assert_eq!(v, want, "{step}: {b:#?}");
+        assert_eq!(b.len(), 1, "{step}: {b:#?}");
+        assert!(
+            has(
+                &b,
+                want,
+                &format!("{step}: the scanner's stateless RSTs carry")
+            ) && b[0].contains("carries a wrong TCP checksum"),
+            "{step}: {b:#?}"
+        );
     }
 }
 

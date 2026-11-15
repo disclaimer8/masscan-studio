@@ -25,11 +25,7 @@ use crate::{
 };
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value, json};
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    fs,
-    path::Path,
-};
+use std::{collections::BTreeMap, fs, path::Path};
 
 // ------------------------------------------------------------------ what a plan defines
 
@@ -1186,16 +1182,19 @@ pub(crate) fn scanner_frame_checks<V>(
 }
 /// The scanner's own frames that the stand's replies and requests make it send, both scanners alike, each exact (FAIL
 /// on rmasscan's step, INVALID on the oracle's): the stateless RST (R8) of every distinct TCP reply (`replies`, by C's
-/// dedup key) against the key of each stateless RST on the wire (`rsts`), none with `--banners` or `--noreset`
-/// ([`av::stateless_rst_problems`]); and the scanner's ARP replies (`answers`) to the peer's who-has for its address
-/// (`requests`, [`av::scanner_arp_answer_problems`]), owed while the scanner certainly runs (`probes`: its first and
-/// last probe, [`av::answering`]). The stand (`st`) gives the scanner's MAC and IPv4 address.
+/// dedup key, with the time of its first copy) against every stateless RST on the wire (`rsts`), after the reply it
+/// resets, none with `--banners` or `--noreset` ([`av::stateless_rst_problems`]), each with valid sums
+/// ([`av::stateless_rst_sum_problems`]: rmasscan computes them in full, C's IPv4 header sum is wrong for about 1e-5 of
+/// its stack frames, E1.10, so that is INVALID on the oracle's step, never its FAIL); and the scanner's ARP replies
+/// (`answers`) to the peer's who-has for its address (`requests`, [`av::scanner_arp_answer_problems`]), owed while the
+/// scanner certainly runs (`probes`: its first and last probe, [`av::answering`]). The stand (`st`) gives the
+/// scanner's MAC and IPv4 address.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn own_frame_checks<V>(
     r: &mut Run,
     s: &Side<V>,
-    replies: &BTreeSet<String>,
-    rsts: &[String],
+    replies: &BTreeMap<String, f64>,
+    rsts: &[av::OwnRst],
     requests: &[(f64, Vec<u8>)],
     answers: &[(f64, Vec<u8>)],
     probes: Option<(f64, f64)>,
@@ -1206,10 +1205,22 @@ pub(crate) fn own_frame_checks<V>(
     cap(
         r,
         s,
-        "the scanner's stateless RST (R8, C src/main.c:1094-1100): exactly one per distinct TCP reply of the stand (SYN-ACK or RST, C's dedup key), in the SYN template's form (seq the reply's acknowledgment, ack 0, flags 0x04, window 1200, the SYN's options), none with --banners or --noreset",
+        "the scanner's stateless RST (R8, C src/main.c:1094-1100): exactly one per distinct TCP reply of the stand (SYN-ACK or RST, C's dedup key), after the reply it resets, in the SYN template's form (seq the reply's acknowledgment, ack 0, flags 0x04, window 1200, the SYN's options, C's IPv4 identification), none with --banners or --noreset",
         p.is_empty(),
         if p.is_empty() {
             format!("{} RSTs for {} replies", rsts.len(), replies.len())
+        } else {
+            first4(&p)
+        },
+    );
+    let p = av::stateless_rst_sum_problems(rsts);
+    cap(
+        r,
+        s,
+        "the scanner's stateless RSTs carry a valid TCP checksum and, over IPv4, a valid header checksum (src/templ-pkt.c:466-473, :503-508, :604-606; a frame with a wrong sum resets nothing; E1.10: C's incremental IPv4 header sum may be wrong, INVALID on the oracle's step)",
+        p.is_empty(),
+        if p.is_empty() {
+            format!("{} RSTs", rsts.len())
         } else {
             first4(&p)
         },
@@ -1224,7 +1235,7 @@ pub(crate) fn own_frame_checks<V>(
     cap(
         r,
         s,
-        "the scanner answers the peer's who-has for its address in C's form (60 bytes to the requester, src/stack-arpv4.c:282-363): exactly once for a request between its first probe and 1 s after its last, at most once for any other, never without a request",
+        "the scanner answers the peer's who-has for its address in C's form (60 bytes to the requester, src/stack-arpv4.c:282-363): exactly once for a request between its first probe and --wait - 1 s after its last (less 0.1 s), at most once for any other, never without a request",
         p.is_empty(),
         if p.is_empty() {
             format!("{} replies for {} requests", answers.len(), requests.len())

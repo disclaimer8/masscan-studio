@@ -467,8 +467,9 @@ LLMNR, NBNS (кроме собственных кадров стенда) и ICM
 
 ## 14. CI
 
-PR подэтапа ещё не открыт (push не разрешён этой задаче). Шлюз — CI `rmasscan`, `language-guard` и Studio на PR; clippy Windows
-и macOS — GitHub CI. Локально пройдены clippy на Mac, хосте стенда и госте Windows.
+Шлюз слияния — CI `rmasscan`, `language-guard` и Studio на PR подэтапа; clippy и тесты Windows и macOS — GitHub CI (он же
+подтверждает исправления 1905c282 и 6b8d880f для хоста стенда и гостя, раздел 15). Локально пройдены clippy на Mac, хосте
+стенда и госте Windows.
 
 ## 15. Коммиты после приёмки
 
@@ -510,5 +511,5 @@ cli `hello_file_open_failure_prints_c_strerror` (текст ОС Windows вме�
 
 **Шлюзы Mac на F** (чистая целевая папка): `cargo fmt --all --check` 0; `cargo clippy --workspace --all-targets --locked -- -D warnings` 0 предупреждений;
 `cargo test --workspace --locked` **2768 passed, 0 failed, 23 ignored** (60 строк результатов); Studio `cargo check --locked` 0 и `cargo xtask test` **484 passed,
-0 failed, 2 ignored**; `scripts/language-guard.sh` PASS (20139 файлов). Privacy-scan новых файлов: 0 попаданий (`minipc`, `home-pc`, имя пользователя, имя хоста);
+0 failed, 2 ignored**; `scripts/language-guard.sh` PASS (20139 файлов). Privacy-scan новых файлов: 0 попаданий (имена хостов стенда и VM, имя пользователя, имя хоста);
 `/Users/` и `192.168.` нет.

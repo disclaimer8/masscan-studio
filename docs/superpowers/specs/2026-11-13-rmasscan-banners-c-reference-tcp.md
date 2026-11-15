@@ -257,7 +257,7 @@ pattern (`{` 0x7B and 0xFF here; Inferred, pin with the oracle). No two patterns
 | 25565 | Minecraft handshake + status request, 19 bytes (`src/proto-mc.c:13-29, :102`) | sent |
 | 443, 465, 990-995, 2083, 2087, 2096, 8443, 9050, 8140, 8531, 49955, 636, 637, 3269, 11712, 5061, 322, 2376 | TLS ClientHello, `SF__close`, `next` = TLS 1.2 reconnect | **not sent (4c)** |
 | 139, 445 | SMB negotiate | **not sent (4d)** |
-| ~50 NPSL ports (1098, 1099, 6000-6019, 88, 9001, 27017, 49153, 104, ..., 548) | nmap-service-probes hellos | **never sent (Р3)** |
+| 66 NPSL ports, 15 streams (`:548-610` ✓): JavaRMI 1098, 1099; X11Probe 6000-6019; Kerberos 88; mongodb 9001, 27017, 49153; dicom 104, 2345, 2761, 2762, 4242, 11112; LDAPSearchReq 256, 257, 389, 390, 1702, 3268, 3892, 11711; SIPOptions 406, 5060, 8081, 31337; RTSPRequest 554, 8554; RPCCheck 111, 2049; DNSVersionBindReqTCP 53, 135, 50000-50002; docker 2375, 2379, 2380; redis-server 6379; NotesRPC 130, 427, 1352, 1972, 7171, 8728, 22001; ms-sql-s 1433; afp 548 | nmap-service-probes hellos (`:327-489`; the 16th, GenericLines, is bound to no port) | **never sent (Р3)** |
 | every other port | none (NULL stream) | none |
 
 `--hello http` / `--hello ssl` point `payloads.tcp[i]` for `i < 65535` (port 65535 excluded, E3.6) at the HTTP / TLS

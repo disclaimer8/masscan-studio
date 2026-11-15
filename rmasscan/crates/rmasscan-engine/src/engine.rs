@@ -664,9 +664,12 @@ struct Shared {
     stack_stats: Vec<Mutex<StackStats>>,
     /// Кадры стека и RST без состояния, которые отправил TX (все адаптеры).
     stack_frames_sent: AtomicU64,
-    /// Кадры стека и RST, которые не встали в `stack_out`, не построились, не отправились или остались в очереди к
-    /// концу скана ([`StackSummary::frames_dropped`]).
+    /// Кадры стека и RST, которые не встали в `stack_out`, не построились или не отправились
+    /// ([`StackSummary::frames_dropped`]).
     stack_frames_dropped: AtomicU64,
+    /// Кадры стека и RST, которые конец скана оставил неотправленными: остаток `stack_out` и сегменты сброса таблицы
+    /// ([`StackSummary::frames_left_unsent`]).
+    stack_frames_left_unsent: AtomicU64,
     /// Живые соединения, брошенные несбросленными, когда `finish` ответил «ещё есть» без продвижения
     /// ([`StackSummary::flush_abandoned`]).
     stack_flush_abandoned: AtomicU64,
@@ -806,15 +809,16 @@ impl Shared {
 
     /// Вызывается ровно один раз: потоком, вышедшим последним.
     fn finalize(&self) {
-        // Кадры стека, которые TX уже не отправил (RX кончился, Stop, отказ), не теряются молча: C бросает их в
-        // очереди. Все потоки вышли, новых кадров нет, и к `Finished` счётчик окончательный.
+        // Кадры стека, которые TX уже не отправил (RX кончился, Stop, отказ), не теряются молча, но и не выброшены:
+        // C бросает их в очереди (TX выходит по `is_rx_done`, `src/main.c:470-497`; очередь не досылается,
+        // `src/main.c:1119`). Все потоки вышли, новых кадров нет, и к `Finished` счётчик окончательный.
         if self.stack_tx {
             let unsent: usize = self
                 .stack_out
                 .iter()
                 .map(|q| lock(q).drain(..).count())
                 .sum();
-            self.stack_frames_dropped
+            self.stack_frames_left_unsent
                 .fetch_add(unsent as u64, Ordering::Relaxed);
         }
         let fail = lock(&self.fail).clone();
@@ -1308,8 +1312,8 @@ impl RxStack {
 
     /// Сброс таблицы в конце RX (`tcpcon_destroy_table`, `src/main.c:1111-1113`, `src/stack-tcp-core.c:933-961`):
     /// порциями по [`FLUSH_CONNECTIONS`], наборы баннеров ждут места в очереди, пока не пришёл Stop. Кадров сброс не
-    /// шлёт: сегменты, если таблица их всё же выдала, считаются выброшенными. `false`: Stop прервал сброс и часть
-    /// баннеров не доставлена.
+    /// шлёт: сегменты, если таблица их всё же выдала, конец скана оставляет неотправленными
+    /// ([`StackSummary::frames_left_unsent`]). `false`: Stop прервал сброс и часть баннеров не доставлена.
     fn flush(&mut self, shared: &Shared) -> bool {
         let keep_going = || shared.halted() < STOP;
         loop {
@@ -1319,7 +1323,7 @@ impl RxStack {
             self.out.segments.clear();
             if stray > 0 {
                 shared
-                    .stack_frames_dropped
+                    .stack_frames_left_unsent
                     .fetch_add(stray, Ordering::Relaxed);
             }
             let produced = !self.out.banners.is_empty();
@@ -1751,6 +1755,7 @@ impl Engine {
                 .collect(),
             stack_frames_sent: AtomicU64::new(0),
             stack_frames_dropped: AtomicU64::new(0),
+            stack_frames_left_unsent: AtomicU64::new(0),
             stack_flush_abandoned: AtomicU64::new(0),
         });
 
@@ -1983,6 +1988,7 @@ impl EngineHandle {
         let mut s = StackSummary {
             frames_sent: self.shared.stack_frames_sent.load(Ordering::Relaxed),
             frames_dropped: self.shared.stack_frames_dropped.load(Ordering::Relaxed),
+            frames_left_unsent: self.shared.stack_frames_left_unsent.load(Ordering::Relaxed),
             flush_abandoned: self.shared.stack_flush_abandoned.load(Ordering::Relaxed),
             ..StackSummary::default()
         };

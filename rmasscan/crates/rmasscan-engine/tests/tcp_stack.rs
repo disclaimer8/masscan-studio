@@ -69,6 +69,9 @@ struct Script {
     lifetime_micros: Option<u64>,
     /// `finish` отвечает «ещё есть», ничего не выдавая и не уничтожая (нарушение контракта).
     stall_finish: bool,
+    /// Сколько сегментов `finish` выдаёт на каждое уничтоженное соединение (таблица `rmasscan-proto` не выдаёт ни
+    /// одного, `tcpcon_destroy_table` C кадров не шлёт).
+    finish_segments: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -232,6 +235,16 @@ impl TcpStack for Scripted {
         let gone: Vec<Conn> = self.conns.drain(..n).collect();
         for c in &gone {
             out.banners.push(self.records(c));
+            for _ in 0..self.script.finish_segments {
+                out.segments.push(SegmentOut {
+                    key: c.key,
+                    seq: 1,
+                    ack: 1,
+                    flags: ACK,
+                    payload: Vec::new(),
+                    window: None,
+                });
+            }
         }
         lk(&self.log).flushed_by_finish += n;
         self.sync_live();
@@ -1714,7 +1727,8 @@ impl Clock for GateClock {
 /// Конец RX прерывает сон throttle в linger: TX с очередью кадров стека стоит внутри сна throttle, окно ожидания RX
 /// кончается (часы продвинул тест), сон возвращается, и TX не шлёт больше ни одного кадра, а сразу уходит. Без
 /// проверки `rx_end` в условии отмены throttle после сна отдавал бы пачку, и после конца RX уходил бы ещё кадр
-/// (`Finished` опаздывал бы на сон throttle, до ~1 с на малом `--rate`). Остаток очереди идёт в `frames_dropped`.
+/// (`Finished` опаздывал бы на сон throttle, до ~1 с на малом `--rate`). Остаток очереди идёт в `frames_left_unsent`,
+/// не в `frames_dropped`.
 /// Часы тестовые, ожидания ограничены: конец RX виден по остановке тиков таблицы стека.
 #[test]
 fn linger_ends_with_rx_inside_a_throttle_sleep() {
@@ -1774,7 +1788,9 @@ fn linger_ends_with_rx_inside_a_throttle_sleep() {
     let outcome = h.join().unwrap();
     assert_eq!(outcome.reason, Reason::Completed);
     assert_eq!(fake.sent_count(), sent_before, "frame sent after RX ended");
-    assert_eq!(summary.frames_sent + summary.frames_dropped, 50);
+    assert_eq!(summary.frames_dropped, 0, "nothing was dropped mid-scan");
+    assert_eq!(summary.frames_sent + summary.frames_left_unsent, 50);
+    assert!(summary.frames_left_unsent > 0, "{summary:?}");
     assert_eq!(outcome.progress.sent, 1);
     assert_eq!(replies_of(&outputs).len(), 1);
 }
@@ -2017,7 +2033,8 @@ fn no_new_frames_without_options() {
 }
 
 /// Кадры, которые TX уже не отправит (здесь Stop посреди очереди после зонда), не теряются молча: к `Finished` они в
-/// `frames_dropped`, и каждый кадр стека посчитан ровно в одном из двух счётчиков (C бросает их в очереди).
+/// `frames_left_unsent`, а не в `frames_dropped` (выброса не было), и каждый кадр стека посчитан ровно в одном счётчике
+/// (C бросает их в очереди: TX выходит по `is_rx_done`, `src/main.c:470-497`, очередь не досылается, `:1119`).
 #[test]
 fn stack_frames_left_unsent_are_counted() {
     let plan = plan_v4("10.0.0.1", "80", 60);
@@ -2049,5 +2066,44 @@ fn stack_frames_left_unsent_are_counted() {
     let outcome = h.join().unwrap();
     assert_eq!(outcome.reason, Reason::Stopped);
     assert_eq!(fake.sent_count(), 6);
-    assert_eq!((summary.frames_sent, summary.frames_dropped), (5, 45));
+    assert_eq!(
+        (
+            summary.frames_sent,
+            summary.frames_dropped,
+            summary.frames_left_unsent
+        ),
+        (5, 0, 45)
+    );
+}
+
+/// Сегменты, которые таблица всё же выдала при сбросе в конце, не отправляются (`tcpcon_destroy_table` кадров не шлёт,
+/// `src/stack-tcp-core.c:933-961`) и считаются оставленными концом скана, а не выброшенными: строка итога CLI
+/// «stack frames dropped» их не называет.
+#[test]
+fn end_of_scan_flush_segments_are_left_unsent_not_dropped() {
+    let plan = plan_v4("10.0.0.0/29", "80", 1);
+    let f = ScriptedFactory::new(Script {
+        create: true,
+        finish_segments: 2,
+        ..Script::default()
+    });
+    let clock = ManualClock::new();
+    let fake = FakeAdapter::new().with_clock(clock.clone());
+    fake.set_responder(tcp_server(|s| vec![synack(s)]));
+    let h = start_manual(&plan, &fake, &clock, stack_options(&f));
+    let outputs = drain_outputs(&h, Duration::ZERO);
+    let summary = h.stack_stats();
+    let outcome = h.join().unwrap();
+    assert_eq!(outcome.reason, Reason::Completed);
+    assert_eq!(replies_of(&outputs).len(), 8);
+    assert_eq!(lk(&f.log(0)).flushed_by_finish, 8);
+    assert_eq!(fake.sent_count(), 8, "only the probes left");
+    assert_eq!(
+        (
+            summary.frames_sent,
+            summary.frames_dropped,
+            summary.frames_left_unsent
+        ),
+        (0, 0, 16)
+    );
 }

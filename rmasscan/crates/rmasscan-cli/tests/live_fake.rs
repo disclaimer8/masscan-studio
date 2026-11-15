@@ -58,9 +58,14 @@ const OPEN: [(Ipv4Addr, u16); 2] = [(T1, 80), (T2, 81)];
 const OPEN_UDP: [Ipv4Addr; 1] = [T1];
 /// Хосты, у которых порт SCTP 2905 отвечает INIT-ACK; остальные порты отвечают ABORT.
 const OPEN_SCTP: [Ipv4Addr; 1] = [T2];
-/// `--wait 1` идёт по `ManualClock` (около 20 пустых `recv` по 50 мс, миллисекунды реального времени); при `--wait 0`
-/// RX engine выходит в той же итерации, где увидел конец TX, и ответы фиктивной сети, ещё лежащие в очереди, теряются.
-const LIVE: [&str; 4] = ["198.51.100.1-198.51.100.2", "-p80,81", "--wait", "1"];
+/// `--wait` идёт по `ManualClock` (пустой `recv` это 50 мс; 10 с это около 200 `recv`, миллисекунды реального
+/// времени); при `--wait 0` RX engine выходит в той же итерации, где увидел конец TX, и ответы фиктивной сети, ещё
+/// лежащие в очереди, теряются. Окно `--wait 10`, а не 1 (ревью задачи 14, I3): тесты на этих аргументах закрепляют
+/// RST без состояния на каждый ответ (Р8), а RST последнего ответа уходит из очереди TX уже в окне ожидания. Часы
+/// двигает опрос приёма (50 мс на пустой `recv` за ~100 мкс реального времени), поэтому под нагрузкой окно в 1 с
+/// кончалось, пока TX стоял, и RST оставался в очереди (конец скана, как C). 10 с дают TX запас втрое больше худшего
+/// ухода часов на нагрузочном прогоне ревью (3,8 с).
+const LIVE: [&str; 4] = ["198.51.100.1-198.51.100.2", "-p80,81", "--wait", "10"];
 
 fn route(gateway: Option<Ipv4Addr>) -> Route {
     Route {
@@ -191,6 +196,10 @@ struct FakeBackend {
     tcp_peer: Option<Arc<Mutex<TcpPeer>>>,
     /// Сценарий отправки адаптера скана (`FakeAdapter::script_tx`), по шагу на кадр.
     scan_tx_script: Vec<TxStep>,
+    /// Пачка SYN-ACK (ревью задачи 14, M1): адаптер скана молчит, пока не уйдёт столько SYN, и с последним отвечает
+    /// SYN-ACK на все разом. Тогда же часы перестают идти от снов (`ManualClock::set_hold`), и их двигает только пустой
+    /// `recv` приёма: вся пачка разбирается до первого шага часов, внутри окна `--wait`, при любой загрузке машины.
+    synack_burst: Option<usize>,
     /// Каждое чтение `unix_time()` прибавляет секунду: время записи не может совпасть случайно.
     tick_time: bool,
     ticks: AtomicU64,
@@ -301,6 +310,7 @@ impl FakeBackend {
             udp_banners: false,
             tcp_peer: None,
             scan_tx_script: Vec::new(),
+            synack_burst: None,
             tick_time: false,
             ticks: AtomicU64::new(0),
         }
@@ -442,6 +452,8 @@ impl Backend for FakeBackend {
         let inject_noise = self.inject_noise;
         let udp_banners = self.udp_banners;
         let (tcp_peer, peer_clock) = (self.tcp_peer.clone(), self.clock.clone());
+        let burst = self.synack_burst.filter(|_| !opened.is_empty());
+        let (burst_clock, mut burst_syns) = (self.clock.clone(), Vec::<Vec<u8>>::new());
         // Сценарий действует на адаптер скана (не на ARP-адаптер, открытый первым).
         let scenario = self.press_in_tx.filter(|_| !opened.is_empty());
         let held: Arc<Mutex<Option<Vec<u8>>>> = Arc::new(Mutex::new(None));
@@ -461,6 +473,17 @@ impl Backend for FakeBackend {
             {
                 *held_r.lock().unwrap() = reply_to_syn(f, 0x12);
                 return vec![];
+            }
+            if let Some(n) = burst.filter(|_| is_syn(f)) {
+                burst_syns.push(f.to_vec());
+                if burst_syns.len() < n {
+                    return vec![];
+                }
+                burst_clock.set_hold(true);
+                return burst_syns
+                    .drain(..)
+                    .filter_map(|syn| reply_to_syn(&syn, 0x12))
+                    .collect();
             }
             if let Some(replies) = udp_banners.then(|| banner_reply(f)).flatten() {
                 return replies;
@@ -653,16 +676,18 @@ fn syns(frames: &[Vec<u8>]) -> Vec<Vec<u8>> {
 }
 
 /// Р8 (`src/main.c:1094-1100`, справка A7): без `--banners` и `--noreset` кадры адаптера скана это SYN и ровно один RST
-/// без состояния на каждый свежий ответ (SYN-ACK или RST): тот же адрес и порт, seq = ack ответа (seq SYN + 1), ack 0,
-/// флаги `0x04`, без нагрузки, после своего SYN; повтор ответа (повтор зонда, `--retries`) глушит дедуп. Фиктивная
-/// сеть отвечает на каждый SYN, поэтому RST получает каждый (адрес, порт, seq) зондов. Возвращает SYN по порядку.
+/// без состояния на каждый свежий ответ (SYN-ACK или RST): тот же адрес и порт назначения, тот же адрес и порт
+/// источника, что у его SYN (C берёт их из ответа, `ip_me`/`port_me`), seq = ack ответа (seq SYN + 1), ack 0, флаги
+/// `0x04`, без нагрузки, после своего SYN; повтор ответа (повтор зонда, `--retries`) глушит дедуп. Фиктивная сеть
+/// отвечает на каждый SYN, поэтому RST получает каждый (адрес, порт, источник, seq) зондов. Возвращает SYN по порядку.
 fn syns_and_one_rst_per_reply(frames: &[Vec<u8>]) -> Vec<Vec<u8>> {
     let (mut probes, mut want, mut got) = (Vec::new(), BTreeSet::new(), Vec::new());
     for f in frames {
         let s = parse_ours(f, 0).unwrap_or_else(|| panic!("not TCP over IPv4: {f:?}"));
+        let from = tcp4_src(f);
         if is_syn(f) {
             probes.push(f.clone());
-            want.insert((s.to, s.seq.wrapping_add(1)));
+            want.insert((s.to, from, s.seq.wrapping_add(1)));
             continue;
         }
         assert_eq!(
@@ -671,15 +696,24 @@ fn syns_and_one_rst_per_reply(frames: &[Vec<u8>]) -> Vec<Vec<u8>> {
             "only SYNs and stateless RSTs: {s:?}"
         );
         assert!(
-            want.contains(&(s.to, s.seq)),
-            "an RST follows its SYN: {s:?}"
+            want.contains(&(s.to, from, s.seq)),
+            "an RST follows its SYN, from the SYN's source address and port: {s:?} from {from:?}"
         );
-        got.push((s.to, s.seq));
+        got.push((s.to, from, s.seq));
     }
     let set: BTreeSet<_> = got.iter().copied().collect();
     assert_eq!(set.len(), got.len(), "one RST per reply: {got:?}");
     assert_eq!(set, want, "every answered probe gets its RST");
     probes
+}
+
+/// Адрес и порт источника нашего кадра TCP поверх IPv4.
+fn tcp4_src(f: &[u8]) -> (Ipv4Addr, u16) {
+    let tcp = 14 + usize::from(f[14] & 0x0f) * 4;
+    (
+        Ipv4Addr::new(f[26], f[27], f[28], f[29]),
+        u16::from_be_bytes([f[tcp], f[tcp + 1]]),
+    )
 }
 
 fn syn_dst(f: &[u8]) -> (Ipv4Addr, u16) {
@@ -965,7 +999,7 @@ fn resume_file_continues_the_scan_from_its_index() {
     let dir = Scratch::new();
     let file = dir.write(
         "paused.conf",
-        b"\n# resume information\nresume-index = 1\nseed = 7\nrate = 100\nwait = 1\n\
+        b"\n# resume information\nresume-index = 1\nseed = 7\nrate = 100\nwait = 10\n\
 nocapture = servername\nnocapture = servername\n\n\n\
 # TARGET SELECTION (IP, PORTS, EXCLUDES)\nports = 80,81\nrange = 198.51.100.1-198.51.100.2\n",
     );
@@ -3466,7 +3500,7 @@ fn conf_file_and_includefile_drive_a_live_scan() {
     let dir = Scratch::new();
     let conf = dir.write(
         "scan.conf",
-        b"# live scan from a file\nseed = 7\nports = 80\nrange = 198.51.100.1\nwait = 1\npcap-filename = from-conf.pcap\n",
+        b"# live scan from a file\nseed = 7\nports = 80\nrange = 198.51.100.1\nwait = 10\npcap-filename = from-conf.pcap\n",
     );
     let inc = dir.write("more.txt", b"198.51.100.2 # second target\n");
     let (c, i) = (conf.to_str().unwrap(), inc.to_str().unwrap());
@@ -3748,11 +3782,12 @@ fn offline_packet_trace_prints_the_c_icmp_sent_line() {
     );
 }
 
+/// `--wait 10` по той же причине, что у [`LIVE`].
 const TWO_NICS: [&str; 13] = [
     "198.51.100.1-198.51.100.2",
     "-p80,81",
     "--wait",
-    "1",
+    "10",
     "--seed",
     "7",
     "--adapter[0]",
@@ -4394,6 +4429,14 @@ fn is_tcp4(f: &[u8]) -> bool {
     f.get(12..14) == Some(&[0x08, 0x00][..]) && f.get(23) == Some(&6)
 }
 
+// Сценарии стека на `FakeAdapter` (ревью задачи 14, I3). Часы `ManualClock` двигает опрос приёма: пустой `recv` это
+// 50 мс часов за ~100 мкс реального времени, а TX опрашивает свою очередь по реальному времени. Под нагрузкой TX стоит,
+// пока часы уходят на секунды, поэтому всё, что зависит от задержки TX в часах движка, меняется: hello (+2 с) уходит
+// раньше, чем сервер ответил на наш ACK; неподтверждённый сегмент успевает повториться на тике +2 с; кадр не успевает
+// уйти до конца короткого `--wait`. Правило сценариев: окно `--wait 20` (меньше тика жизни +32 с), сервер, который
+// говорит первым, говорит вместе с SYN-ACK (`on_syn`), повтор сегмента допускается, а номера, байты и флаги
+// проверяются точно. Сетку тиков точно закрепляют тесты таблицы `rmasscan-proto` (`tcp/stack.rs`).
+
 /// Один сегмент пира; номера ведёт [`TcpPeer`].
 #[derive(Clone, Debug)]
 enum PeerAct {
@@ -4713,6 +4756,12 @@ fn tcp_banners_no_longer_refused() {
 /// Р8 (`src/main.c:1094-1100`, справка A7): без `--banners` за каждым свежим ответом SYN-ACK и RST идёт один RST без
 /// состояния (seq = ack ответа, ack 0, флаги `0x04`); `--noreset` его снимает; с `--banners` его нет и без
 /// `--noreset` (C: `tcpcon != NULL`), вместо него стек отвечает на SYN-ACK своим ACK.
+///
+/// Ревью задачи 14, I3: часы `ManualClock` двигает опрос приёма по реальному времени, поэтому под нагрузкой они
+/// уходят вперёд, пока TX стоит. Окно `--wait 10` ([`LIVE`], вместо 1) оставляет TX время отправить каждый RST; ветка
+/// `--banners` не считает кадры (hello порта 80 и его повторы уходят, если часы ушли за 2 с) и берёт
+/// `--connection-timeout 3600`, чтобы RST по сроку жизни не появился при любом уходе часов: проверяются пустые ACK
+/// стека и отсутствие любого RST.
 #[test]
 fn stateless_rst_by_default_off_with_noreset_and_banners() {
     let scan = |extra: &[&str]| {
@@ -4755,25 +4804,35 @@ fn stateless_rst_by_default_off_with_noreset_and_banners() {
     }
     let off = scan(&["--noreset", "--noreset=false"]);
     assert_eq!(off.len(), 8, "--noreset=false keeps the RSTs");
+    let life = ["--connection-timeout", "3600"];
     for extra in [&["--banners"][..], &["--banners", "--noreset"]] {
-        let frames = scan(extra);
-        assert!(
-            frames.iter().all(|f| rst_of(f).1 & TCP_RST == 0),
-            "{extra:?}: no stateless RST with --banners"
-        );
-        let acks: Vec<_> = frames
+        let frames = scan(&with(extra, &life));
+        let ours: Vec<_> = frames
             .iter()
             .filter(|f| !is_syn(f))
-            .map(|f| rst_of(f))
+            .map(|f| parse_ours(f, 0).unwrap())
             .collect();
-        assert_eq!(
-            acks.len(),
-            2,
-            "{extra:?}: the stack ACKs each SYN-ACK: {acks:?}"
-        );
         assert!(
-            acks.iter().all(|a| a.1 == TCP_ACK && a.3 == PEER_ISN + 1),
-            "{acks:?}"
+            ours.iter().all(|s| s.flags & TCP_RST == 0),
+            "{extra:?}: no RST with --banners: {ours:?}"
+        );
+        let mut acks: Vec<_> = ours
+            .iter()
+            .filter(|s| s.payload.is_empty())
+            .map(|s| (s.to, s.flags, s.ack))
+            .collect();
+        acks.sort_unstable();
+        let want: Vec<_> = OPEN.iter().map(|&to| (to, TCP_ACK, PEER_ISN + 1)).collect();
+        assert_eq!(
+            acks, want,
+            "{extra:?}: the stack ACKs each SYN-ACK once, nothing else is empty: {ours:?}"
+        );
+        // Сегменты с данными это только hello открытого порта 80 (байты C) и его повторы; у 81 hello нет.
+        assert!(
+            ours.iter()
+                .filter(|s| !s.payload.is_empty())
+                .all(|s| s.to == (T1, 80) && s.payload == c_hello(80)),
+            "{extra:?}: {ours:?}"
         );
     }
 }
@@ -4781,6 +4840,11 @@ fn stateless_rst_by_default_off_with_noreset_and_banners() {
 /// Сценарий HTTP: SYN-ACK, через 2 с по `ManualClock` уходит hello порта 80 (`GET` 99 байт, `src/stack-tcp-app.c:76`,
 /// байты `banner1_create` C), ответ с `Server` и `<title>` и FIN; `-oL` даёт `open`, затем `http.server`, `title` и
 /// `http` в порядке banout C с байтами `banner1_parse` C на этом потоке (эталон `http-gws`).
+///
+/// Ревью задачи 14, I3: момент отправки hello проверяется только снизу (не раньше 2 с от SYN). Сверху его держит TX,
+/// которого под нагрузкой можно не дождаться, пока опрос приёма двигает часы; сетку тиков точно закрепляет
+/// `hello_two_seconds_after_synack_when_server_silent` (`rmasscan-proto`). Повтор hello (TX опоздал на 2 с) допустим:
+/// проверяется первый сегмент с данными.
 #[test]
 fn live_fake_http_banner_end_to_end() {
     let (stream, whole) = c_case("http-gws");
@@ -4804,7 +4868,7 @@ fn live_fake_http_banner_end_to_end() {
             "-p80",
             "--banners",
             "--wait",
-            "5",
+            "20",
             "-oL",
             "-",
         ],
@@ -4838,8 +4902,8 @@ fn live_fake_http_banner_end_to_end() {
     assert!(hello.payload.starts_with(b"GET / HTTP/1.0\r\n"));
     let delay = hello.at - syn_at(&sent, to);
     assert!(
-        (2_000_000..2_500_000).contains(&delay),
-        "the hello leaves 2 s after the SYN-ACK: {delay} us"
+        delay >= 2_000_000,
+        "the hello leaves no earlier than 2 s after the SYN-ACK: {delay} us"
     );
     // ACK на SYN-ACK до hello; FIN нашей стороны после FIN сервера (CLOSE_WAIT -> LAST_ACK).
     assert_eq!((ours[0].flags, ours[0].ack), (TCP_ACK, PEER_ISN + 1));
@@ -4850,6 +4914,9 @@ fn live_fake_http_banner_end_to_end() {
 /// Сервер говорит первым (`App_ReceiveHello` + `RECV_PAYLOAD`, справка B5): hello порта (здесь `--hello http`, иначе
 /// у 22 его нет) не уходит никогда; ответ парсера SSH (`SSH-2.0-OPENSSH_7.9`, эталон `ssh2`) уходит, запись `ssh` это
 /// весь поток. Контроль: молчащий сервер на том же порту получает hello через 2 с.
+///
+/// Сервер шлёт приветствие вместе с SYN-ACK (`on_syn`): если бы он ждал нашего ACK, то TX, опоздавший под нагрузкой на
+/// 2 с часов, отдал бы ACK уже после тика hello. Каждый наш сегмент с данными это ответ парсера (повтор допустим).
 #[test]
 fn live_fake_ssh_server_first() {
     let (stream, whole) = c_case("ssh2");
@@ -4857,12 +4924,12 @@ fn live_fake_ssh_server_first() {
         whole,
         "run whole calls=1\napp_proto 3\naction send flags=0 21 \"SSH-2.0-OPENSSH_7.9\\x0d\\x0a\"\nrecord 3 21 =stream\nend"
     );
-    let run = |on_connect: Vec<PeerAct>| {
+    let run = |on_syn: Vec<PeerAct>| {
         let mut b = FakeBackend::new();
         b.tcp_peer = Some(TcpPeer::new(vec![(
             22,
             PeerScript {
-                on_connect,
+                on_syn,
                 ..PeerScript::default()
             },
         )]));
@@ -4875,7 +4942,7 @@ fn live_fake_ssh_server_first() {
                 "--hello",
                 "http",
                 "--wait",
-                "5",
+                "20",
                 "-oL",
                 "-",
             ],
@@ -4894,7 +4961,13 @@ fn live_fake_ssh_server_first() {
         .filter(|s| !s.payload.is_empty())
         .map(|s| s.payload.as_slice())
         .collect();
-    assert_eq!(sends, [b"SSH-2.0-OPENSSH_7.9\r\n".as_slice()], "no hello");
+    assert!(!sends.is_empty(), "the parser's reply leaves: {ours:?}");
+    assert!(
+        sends
+            .iter()
+            .all(|p| *p == b"SSH-2.0-OPENSSH_7.9\r\n".as_slice()),
+        "no hello, only the parser's reply: {sends:?}"
+    );
     assert_eq!(
         list_banners(&out, 22, T1),
         ["ssh SSH-2.0-OpenSSH_9.6\\x0d\\x0a"]
@@ -4931,7 +5004,7 @@ fn live_fake_parser_close_sends_our_fin() {
             "-p143",
             "--banners",
             "--wait",
-            "5",
+            "20",
             "-oL",
             "-",
         ],
@@ -4960,7 +5033,9 @@ fn live_fake_parser_close_sends_our_fin() {
 }
 
 /// RST сервера посреди ответа (справка A4: RST уничтожает блок): накопленное сбрасывается как у C на этом потоке
-/// (эталон `http-incomplete-header`: `http.server` и неполный заголовок), после RST мы ничего не шлём.
+/// (эталон `http-incomplete-header`: `http.server` и неполный заголовок), после RST мы ничего не шлём: последний наш
+/// кадр это ACK данных сервера, выданный до разбора RST. Повтор hello (TX опоздал на 2 с) встаёт в очередь раньше этого
+/// ACK: данные сервера подтверждают hello, и после них повторять нечего.
 #[test]
 fn live_fake_peer_rst_mid_reply_flushes() {
     let (stream, whole) = c_case("http-incomplete-header");
@@ -4983,7 +5058,7 @@ fn live_fake_peer_rst_mid_reply_flushes() {
             "-p80",
             "--banners",
             "--wait",
-            "5",
+            "20",
             "-oL",
             "-",
         ],
@@ -4998,13 +5073,26 @@ fn live_fake_peer_rst_mid_reply_flushes() {
         ["http.server gws".to_string(), format!("http {header}")]
     );
     let ours = after_syn(&b.peer_sent(), (T1, 80));
-    let flags: Vec<u8> = ours.iter().map(|s| s.flags).collect();
-    // ACK на SYN-ACK, hello, ACK данных сервера; после RST ни кадра, своего RST и FIN нет.
-    assert_eq!(flags.len(), 3, "{ours:?}");
-    assert_eq!(ours[1].payload, c_hello(80));
-    assert_eq!(ours[2].ack, PEER_ISN + 1 + stream.len() as u32);
+    // ACK на SYN-ACK, hello (и, может быть, его повтор), ACK данных сервера; после RST ни кадра, своего RST и FIN нет.
+    assert_eq!(
+        (ours[0].flags, ours[0].ack),
+        (TCP_ACK, PEER_ISN + 1),
+        "{ours:?}"
+    );
+    let last = ours.last().unwrap();
+    assert_eq!(
+        (last.flags, last.ack, last.payload.len()),
+        (TCP_ACK, PEER_ISN + 1 + stream.len() as u32, 0),
+        "the ACK of the server's data is our last frame: {ours:?}"
+    );
+    let middle = &ours[1..ours.len() - 1];
+    assert!(!middle.is_empty(), "{ours:?}");
     assert!(
-        flags.iter().all(|f| f & (TCP_RST | TCP_FIN) == 0),
+        middle.iter().all(|s| s.payload == c_hello(80)),
+        "only the hello in between: {ours:?}"
+    );
+    assert!(
+        ours.iter().all(|s| s.flags & (TCP_RST | TCP_FIN) == 0),
         "{ours:?}"
     );
 }
@@ -5012,6 +5100,12 @@ fn live_fake_peer_rst_mid_reply_flushes() {
 /// Срок жизни (`src/stack-tcp-core.c:1970-1980`, Р6): с `--connection-timeout 6` молчащее после приветствия соединение
 /// получает наш RST на тике +8 с (сетка 2 с от SYN-ACK, `created + 6 < tick`), seq наш следующий номер, ack их
 /// следующий; накопленный баннер (`unknown`, порт без парсера) сбрасывается. `--noreset` этот RST не снимает (Р8).
+///
+/// Ревью задачи 14, I3: момент RST проверяется только снизу (не раньше +8 с от SYN): тик +8 с, а не +6 и не +10, точно
+/// закрепляет `lifetime_rst_on_tick_after_timeout_with_late_processing` (`rmasscan-proto`), а отправку под нагрузкой
+/// держит TX, пока опрос приёма двигает часы. `--wait 30` (вместо 12) оставляет TX запас часов, чтобы RST ушёл до конца
+/// приёма. Сервер здоровается вместе с SYN-ACK (`on_syn`), так что ack нашего RST не зависит от того, когда TX отдал
+/// наш ACK.
 #[test]
 fn live_fake_lifetime_rst_at_timeout() {
     for noreset in [false, true] {
@@ -5019,7 +5113,7 @@ fn live_fake_lifetime_rst_at_timeout() {
         b.tcp_peer = Some(TcpPeer::new(vec![(
             9999,
             PeerScript {
-                on_connect: vec![PeerAct::Data(b"hello".to_vec())],
+                on_syn: vec![PeerAct::Data(b"hello".to_vec())],
                 ..PeerScript::default()
             },
         )]));
@@ -5030,7 +5124,7 @@ fn live_fake_lifetime_rst_at_timeout() {
             "--connection-timeout",
             "6",
             "--wait",
-            "12",
+            "30",
             "-oL",
             "-",
         ];
@@ -5053,16 +5147,16 @@ fn live_fake_lifetime_rst_at_timeout() {
         );
         let delay = rst[0].at - syn.at;
         assert!(
-            (8_000_000..8_500_000).contains(&delay),
-            "noreset {noreset}: lifetime RST at +8 s, got {delay} us"
+            delay >= 8_000_000,
+            "noreset {noreset}: lifetime RST no earlier than +8 s, got {delay} us"
         );
         assert_eq!(*ours.last().unwrap(), *rst[0], "nothing after the RST");
         assert_eq!(list_banners(&out, 9999, T1), ["unknown hello"]);
     }
 }
 
-/// Review Focus 1, Р6: сервер HTTP/1.1 держит соединение (`--wait 3` короче жизни 30 с); баннеры сбрасываются в конце
-/// окна ожидания без FIN и RST (`tcpcon_destroy_table`, `src/stack-tcp-core.c:933-961`), как у C на этом потоке
+/// Review Focus 1, Р6: сервер HTTP/1.1 держит соединение (`--wait 20` короче тика жизни +32 с); баннеры сбрасываются в
+/// конце окна ожидания без FIN и RST (`tcpcon_destroy_table`, `src/stack-tcp-core.c:933-961`), как у C на этом потоке
 /// (эталон `http-status`), и итог `Completed`.
 #[test]
 fn live_fake_keepalive_flushed_at_end_of_wait() {
@@ -5086,7 +5180,7 @@ fn live_fake_keepalive_flushed_at_end_of_wait() {
             "-p80",
             "--banners",
             "--wait",
-            "3",
+            "20",
             "-oL",
             "-",
         ],
@@ -5312,14 +5406,17 @@ fn connection_banner_sink_error_stops_the_scan_and_fails() {
 
 /// Итог счётчиков стека через цикл событий (решение 20): адаптер не принял ACK стека на SYN-ACK (кадр не повторяется,
 /// `src/stack-queue.c:74`, и считается в `frames_dropped`), и после строки статуса, до `[+] finished`, идёт ровно одна
-/// строка итога. Без потерь строк итога нет.
+/// строка итога. Без потерь строк итога нет, сколько бы кадров ни осталось в очереди к концу `--wait` (ревью задачи 14,
+/// I2: они в `frames_left_unsent`, который итог не печатает; под нагрузкой hello через 2 с мог встать в очередь в
+/// последний момент окна).
 #[test]
 fn stack_summary_printed_after_the_event_loop() {
     let run = |script: Vec<TxStep>| {
         let mut b = FakeBackend::new();
         b.tcp_peer = Some(TcpPeer::new(vec![(80, PeerScript::default())]));
         b.scan_tx_script = script;
-        let (r, _, log) = cli(&b, &["198.51.100.1", "-p80", "--banners", "--wait", "1"]);
+        // `--wait 10`: ACK стека, который адаптер отказывает, должен успеть уйти до конца приёма и под нагрузкой.
+        let (r, _, log) = cli(&b, &["198.51.100.1", "-p80", "--banners", "--wait", "10"]);
         r.unwrap();
         log
     };
@@ -5335,4 +5432,58 @@ fn stack_summary_printed_after_the_event_loop() {
     );
     let log = run(Vec::new());
     assert!(!log.contains("[-] banners:"), "{log}");
+}
+
+/// Ревью задачи 14, M1 и I2: ёмкость таблицы, которую CLI отдаёт движку, это `table_capacity` по `--rate` и
+/// `--connection-timeout` (`--rate 220 --connection-timeout 1`: `220 × (1 + 4)` = 1100, а не пол 1024), и строка «table
+/// full» итога приходит через цикл событий. 1150 целей молчат до последнего SYN, затем SYN-ACK приходят пачкой: 1100
+/// получают соединение, 50 только запись `open`. ACK стека 1100 соединений за `--wait 1` при `--rate 220` уйти не
+/// успевают; остаток очереди в конце скана C бросает молча, и строки «stack frames dropped» нет.
+#[test]
+fn stack_summary_table_full_through_the_event_loop() {
+    const TARGETS: usize = 1150;
+    let mut b = FakeBackend::new();
+    b.synack_burst = Some(TARGETS);
+    let (r, _, log) = cli(
+        &b,
+        &[
+            "198.18.0.0-198.18.4.125",
+            "-p80",
+            "--banners",
+            "--rate",
+            "220",
+            "--connection-timeout",
+            "1",
+            "--wait",
+            "1",
+        ],
+    );
+    r.unwrap();
+    assert!(
+        log.contains("finished: Completed, sent 1150, replies 1150, open 1150"),
+        "{log}"
+    );
+    let line = "[-] banners: 50 SYN-ACKs got no connection (table full, 1100 entries)\n";
+    assert_eq!(log.matches("[-] banners:").count(), 1, "{log}");
+    let at = log.find(line).unwrap_or_else(|| panic!("{log}"));
+    let fin = log.find("[+] finished: Completed").unwrap();
+    assert_eq!(at + line.len(), fin, "right before [+] finished: {log}");
+    let frames = b.opened()[1].adapter.sent_frames();
+    let syns = frames.iter().filter(|f| is_syn(f)).count();
+    assert_eq!(syns, TARGETS);
+    let acks: Vec<Sent> = frames
+        .iter()
+        .filter(|f| !is_syn(f))
+        .map(|f| parse_ours(f, 0).unwrap())
+        .collect();
+    assert!(
+        acks.iter()
+            .all(|s| s.flags == TCP_ACK && s.payload.is_empty()),
+        "only the stack's ACKs: {acks:?}"
+    );
+    assert!(
+        acks.len() < 1100,
+        "the end of --wait left stack frames in the queue: {} ACKs sent",
+        acks.len()
+    );
 }

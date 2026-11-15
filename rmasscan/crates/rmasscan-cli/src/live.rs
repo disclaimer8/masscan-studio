@@ -30,8 +30,8 @@
 //! соединений (`Output::ConnectionBanner`) цикл событий пишет в [`Sink::report_connection_banner`], время ставит
 //! приёмник в момент обработки, а после цикла печатает итог счётчиков стека ([`stack_summary`]). Без `--banners` и
 //! `--noreset` движок шлёт RST без состояния на каждый свежий SYN-ACK и RST-ответ (Р8, `src/main.c:1094-1100`). Если
-//! адрес источника выбран автоопределением, скан с `--banners` печатает одно предупреждение Р9: ядро ОС сбросит
-//! соединения стека.
+//! адрес источника выбран автоопределением, скан с `--banners` и хотя бы одним портом TCP печатает одно предупреждение
+//! Р9: ядро ОС сбросит соединения стека (скан только UDP с `--banners` печатает то же, что в 4a).
 
 #![forbid(unsafe_code)]
 
@@ -53,6 +53,7 @@ use rmasscan_core::probe::{
 };
 use rmasscan_core::ranges6::format_ipv6_c;
 use rmasscan_core::receive::PortStatus;
+use rmasscan_core::targets::TEMPL_TCP_LAST;
 use rmasscan_core::throttle::Clock;
 use rmasscan_engine::{
     AdapterPair, BannerOptions, Engine, EngineOptions, Event, Outcome, Output, Progress, Reason,
@@ -66,6 +67,7 @@ use rmasscan_net::{
     RouteTable, Targets, Targets6, detect, detect_mixed, detect_offline, detect_v6,
     detect_v6_offline, iflist_text, probe_targets, probe_targets_v6,
 };
+use rmasscan_proto::TcpBannerSettings;
 
 use crate::args::SeedPolicy;
 use crate::banner_settings::tcp_banner_settings;
@@ -228,6 +230,16 @@ fn has_ipv4(eff: &EffectiveConfig) -> bool {
 /// Есть цели IPv6 (C `massip_has_ipv6_targets`).
 fn has_ipv6(eff: &EffectiveConfig) -> bool {
     eff.massip().has_ipv6_targets()
+}
+
+/// В скане есть хотя бы один порт TCP (`0..=TEMPL_TCP_LAST` общего пространства портов, `Templ_TCP_last`,
+/// `src/massip-port.h:13`).
+fn has_tcp_port(eff: &EffectiveConfig) -> bool {
+    eff.massip()
+        .ports()
+        .as_slice()
+        .iter()
+        .any(|r| r.begin <= TEMPL_TCP_LAST)
 }
 
 /// Адрес IPv6 в `[+]`: `ipv6address_fmt` в скобках, как `source-ip = [%s]` C (`main-initadapter.c:229`).
@@ -893,6 +905,21 @@ pub fn table_capacity(rate: f64, connection_timeout_secs: u32) -> usize {
     (want as usize).max(1024)
 }
 
+/// Стек TCP движка при `--banners` (как `tcpcon` C при `is_banners`, `src/main.c:605-660`): фабрика `rmasscan-proto`
+/// с `--connection-timeout`, ёмкость [`table_capacity`] по `--rate` и бюджет [`BANNER_BYTE_BUDGET`]. Ровно эти
+/// параметры CLI отдаёт движку; из этой же ёмкости считаются очередь результатов и строка «table full» итога.
+fn tcp_stack_options(
+    settings: TcpBannerSettings,
+    rate: f64,
+    connection_timeout_secs: u32,
+) -> TcpStackOptions {
+    TcpStackOptions {
+        factory: rmasscan_proto::tcp_stack_factory(settings, connection_timeout_secs),
+        table_capacity: table_capacity(rate, connection_timeout_secs),
+        banner_byte_budget: BANNER_BYTE_BUDGET,
+    }
+}
+
 /// Сколько записей баннеров даёт одно соединение не больше: одна запись на тип приложения (banout, справка B3), больше
 /// всех у HTTP: `http`, `http.server`, `title` и `html` (`src/proto-http.c:487-691`).
 const RECORDS_PER_CONNECTION: usize = 4;
@@ -919,7 +946,9 @@ fn table_entries(capacity: usize, adapters: usize) -> usize {
 }
 
 /// Итог счётчиков стека TCP в stderr после цикла событий (решение 20; Р5, Р7): строка на счётчик, только ненулевые.
-/// `table_entries` это записи всех таблиц, `budget_mib` бюджет байтов баннеров в МиБ.
+/// `table_entries` это записи всех таблиц, `budget_mib` бюджет байтов баннеров в МиБ. Строка кадров называет только
+/// `frames_dropped` (очередь полна, кадр не построился, адаптер не принял); кадры, которые конец скана оставил
+/// неотправленными (`frames_left_unsent`), не печатаются: C бросает их молча (`src/main.c:470-497`, `:1119`).
 pub fn stack_summary(s: &StackSummary, table_entries: usize, budget_mib: usize) -> String {
     let mut out = String::new();
     if s.stack.table_full > 0 {
@@ -1086,7 +1115,9 @@ pub fn run_live_conf(
     cli_plan(&p.eff, &p.bindings(), &p.ipv6_bindings(), &p.payloads)?;
     print_detection(&p, log)?;
     // Р9: сразу за строками адаптеров, до ARP; одна строка на скан, ошибки записи stderr не важны (`BestEffort`).
+    // Только при порте TCP: баннерам UDP ядро не мешает, и скан только UDP печатает то же, что в 4a (ревью задачи 14).
     if cfg.banners
+        && has_tcp_port(&p.eff)
         && let Some(w) = banners_warning(&os_owned_sources(&p))
     {
         let _ = log.write_all(w.as_bytes());
@@ -1227,18 +1258,15 @@ pub fn run_live_conf(
     // Стек TCP при `--banners` (C создаёт `tcpcon` при `is_banners`, в том числе у скана только UDP, `src/main.c:605-660`):
     // таблица `max(1024, rate × (жизнь + 4))` (Р5, D7), бюджет 512 МиБ (решение 8) и очередь результатов под всплеск
     // сброса соединений. Фабрика `rmasscan-proto` приходит через движок, который от неё не зависит (Р11).
-    let table_cap = table_capacity(p.eff.max_rate(), cfg.connection_timeout);
-    let entries = table_entries(table_cap, plan.nics().len());
+    let mut entries = 0;
     if let Some(settings) = banner_settings {
-        options.tcp_stack = Some(TcpStackOptions {
-            factory: rmasscan_proto::tcp_stack_factory(settings, cfg.connection_timeout),
-            table_capacity: table_cap,
-            banner_byte_budget: BANNER_BYTE_BUDGET,
-        });
+        let stack = tcp_stack_options(settings, p.eff.max_rate(), cfg.connection_timeout);
+        entries = table_entries(stack.table_capacity, plan.nics().len());
         (options.result_capacity, options.result_byte_capacity) = banner_queue(
             (options.result_capacity, options.result_byte_capacity),
-            table_cap,
+            stack.table_capacity,
         );
+        options.tcp_stack = Some(stack);
     }
     // Р8 (`src/main.c:1094-1100`: `tcpcon == NULL && !is_noreset`): RST без состояния на каждый свежий SYN-ACK и
     // RST-ответ, если нет ни `--banners`, ни `--noreset`. `EngineOptions::new` его не включает (Р11, так у Studio).
@@ -1400,7 +1428,10 @@ pub fn run_live_conf(
             Err(TryRecvError::Empty) => {}
         }
     }
-    // Счётчики стека окончательны после `Finished` и читаются до `join` (`EngineHandle::stack_stats`).
+    // Счётчики стека читаются до `join` (`EngineHandle::stack_stats`). Окончательны они только после `Finished`: цикл
+    // выше дочитывает до него на всех путях, кроме ошибки приёмника (`handle.stop(); break`). Там слепок берётся до
+    // конца RX и до `finalize`: в нём таблицы с последнего шага прогресса и кадры, посчитанные к этому моменту, а
+    // поздние счёты (сброс таблицы, остаток очереди) в итог не попадают; скан всё равно кончается отказом.
     let stack = handle.stack_stats();
     // `join` и `sink.finish()` идут всегда, до любого `?`: ошибка engine не оставляет файл
     // вывода без подвала.
@@ -1662,7 +1693,8 @@ mod tests {
     fn stack_summary_only_when_nonzero() {
         let zero = StackSummary::default();
         assert_eq!(stack_summary(&zero, 3400, 512), "");
-        // Созданные и живые соединения, отправленные кадры и `flush_abandoned` итог не печатает.
+        // Созданные и живые соединения, отправленные кадры, кадры, оставленные концом скана (ревью задачи 14, I2), и
+        // `flush_abandoned` итог не печатает.
         let quiet = StackSummary {
             stack: StackStats {
                 tcbs_created: 9,
@@ -1670,6 +1702,7 @@ mod tests {
                 ..StackStats::default()
             },
             frames_sent: 40,
+            frames_left_unsent: 880,
             flush_abandoned: 5,
             ..StackSummary::default()
         };
@@ -1694,6 +1727,7 @@ mod tests {
             },
             frames_sent: 3,
             frames_dropped: 12,
+            frames_left_unsent: 7,
             flush_abandoned: 0,
         };
         assert_eq!(
@@ -1721,6 +1755,18 @@ mod tests {
             stack_summary(&bytes, 1024, 64),
             "[-] banners: 3 banner bytes dropped (memory budget 64 MiB)\n"
         );
+    }
+
+    /// Ревью задачи 14, M1: в движок уходит ровно ёмкость [`table_capacity`] по `--rate` и `--connection-timeout` и
+    /// бюджет 512 МиБ (решение 8). Через цикл событий ту же ёмкость закрепляет
+    /// `stack_summary_table_full_through_the_event_loop` (`tests/live_fake.rs`).
+    #[test]
+    fn tcp_stack_options_pass_capacity_and_budget() {
+        for (rate, timeout, cap) in [(100.0, 0, 3400), (100.0, 6, 1024), (220.0, 1, 1100)] {
+            let o = tcp_stack_options(TcpBannerSettings::default(), rate, timeout);
+            assert_eq!(o.table_capacity, cap, "rate {rate}, timeout {timeout}");
+            assert_eq!(o.banner_byte_budget, 536_870_912, "512 MiB");
+        }
     }
 
     /// Ёмкость в строке «table full» это сумма таблиц RX-потоков: движок даёт каждому адаптеру

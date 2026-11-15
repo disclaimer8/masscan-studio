@@ -134,13 +134,16 @@ pub struct TcpStackOptions {
 }
 
 /// Счётчики стека скана ([`crate::EngineHandle::stack_stats`]): сумма таблиц всех RX-потоков и кадры стека (с
-/// `EngineOptions::stateless_rst` и без стека это RST без состояния). Кадр выброшен, если очередь кадров адаптера полна
-/// (`STACK_OUT_CAP`, RX не ждёт, Р7), если построитель его не строит (длиннее буфера C или IPv6 без `source_ipv6`,
-/// `TcpFrameBuilder::build`), если его выдал сброс таблицы в конце (`tcpcon_destroy_table` кадров не шлёт,
-/// `src/stack-tcp-core.c:933-961`), если адаптер его не принял (ошибка, `Uncertain`, `WouldBlockUnsent`: кадр не
-/// повторяется, C результат не смотрит, `src/stack-queue.c:74`) или если он остался в очереди, когда TX кончил (RX
-/// кончился, Stop, отказ; C его теряет молча). Отправленные кадры считает TX; к `Finished` каждый сегмент, выданный
-/// таблицей, и каждый RST посчитан ровно в одном из двух счётчиков.
+/// `EngineOptions::stateless_rst` и без стека это RST без состояния). Отправленные кадры считает TX (`frames_sent`).
+/// Выброшенные посреди скана (`frames_dropped`) ровно трёх причин: очередь кадров адаптера полна (`STACK_OUT_CAP`, RX
+/// не ждёт, Р7), построитель кадр не строит (длиннее буфера C или IPv6 без `source_ipv6`, `TcpFrameBuilder::build`) или
+/// адаптер его не принял (ошибка, `Uncertain`, `WouldBlockUnsent`: кадр не повторяется, C результат не смотрит,
+/// `src/stack-queue.c:74`).
+/// `frames_left_unsent`: кадры, которые конец скана оставил неотправленными, как C: остаток очереди, когда TX кончил
+/// (RX кончился, Stop, отказ; TX C выходит по `is_rx_done` без последнего сброса, `src/main.c:470-497`, а очередь
+/// никто не досылает, `src/main.c:1119`), и сегменты, которые таблица всё же выдала при сбросе в конце
+/// (`tcpcon_destroy_table` кадров не шлёт, `src/stack-tcp-core.c:933-961`). К `Finished` каждый сегмент, выданный
+/// таблицей, и каждый RST посчитан ровно в одном из трёх счётчиков кадров.
 /// `flush_abandoned`: живые соединения, чьи баннеры не сброшены в конце скана, потому что таблица на `finish` ответила
 /// «ещё есть» и не продвинулась (нарушение контракта `finish`; итог при этом `Completed`, баннеры не теряются молча).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -148,6 +151,7 @@ pub struct StackSummary {
     pub stack: StackStats,
     pub frames_sent: u64,
     pub frames_dropped: u64,
+    pub frames_left_unsent: u64,
     pub flush_abandoned: u64,
 }
 

@@ -356,16 +356,22 @@ fn is_syn4(f: &[u8]) -> bool {
     f.get(12..14) == Some(&[0x08, 0x00][..]) && f.get(47) == Some(&0x02)
 }
 
-/// Кадр TCP нашего адаптера: семья, MAC назначения, адрес и порт назначения, seq, ack, флаги.
-type TcpOut = (bool, [u8; 6], Vec<u8>, u16, u32, u32, u8);
+/// Кадр TCP нашего адаптера: семья, MAC назначения, адрес и порт источника, адрес и порт назначения, seq, ack, флаги.
+type TcpOut = (bool, [u8; 6], Vec<u8>, u16, Vec<u8>, u16, u32, u32, u8);
 
 fn tcp_out(f: &[u8]) -> TcpOut {
     let v6 = f[12..14] == [0x86, 0xdd];
-    let (dst, tcp) = if v6 { (38..54, 54) } else { (30..34, 34) };
+    let (src, dst, tcp) = if v6 {
+        (22..38, 38..54, 54)
+    } else {
+        (26..30, 30..34, 34)
+    };
     let be32 = |i: usize| u32::from_be_bytes(f[i..i + 4].try_into().unwrap());
     (
         v6,
         f[0..6].try_into().unwrap(),
+        f[src].to_vec(),
+        u16::from_be_bytes([f[tcp], f[tcp + 1]]),
         f[dst].to_vec(),
         u16::from_be_bytes([f[tcp + 2], f[tcp + 3]]),
         be32(tcp + 4),
@@ -375,19 +381,20 @@ fn tcp_out(f: &[u8]) -> TcpOut {
 }
 
 /// Р8 (`src/main.c:1094-1100`, справка A7): кадры адаптера скана это SYN (IPv4 и IPv6) и ровно один RST без состояния
-/// на каждый ответ, той же семьи, на тот же MAC, адрес и порт, что его SYN: seq = ack ответа (seq SYN + 1), ack 0,
-/// флаги `0x04`, после своего SYN. Фиктивная сеть отвечает на каждый SYN. Возвращает SYN по порядку.
+/// на каждый ответ, той же семьи, на тот же MAC, адрес и порт назначения и с тех же адреса и порта источника, что его
+/// SYN (C берёт их из ответа): seq = ack ответа (seq SYN + 1), ack 0, флаги `0x04`, после своего SYN. Фиктивная сеть
+/// отвечает на каждый SYN. Возвращает SYN по порядку.
 fn syns_and_one_rst_per_reply(frames: &[Vec<u8>]) -> Vec<Vec<u8>> {
     let (mut syns, mut want, mut got) = (Vec::new(), Vec::new(), Vec::new());
     for f in frames {
-        let (v6, mac, dst, port, seq, ack, flags) = tcp_out(f);
+        let (v6, mac, src, sport, dst, port, seq, ack, flags) = tcp_out(f);
         if flags == 0x02 {
             syns.push(f.clone());
-            want.push((v6, mac, dst, port, seq.wrapping_add(1)));
+            want.push((v6, mac, src, sport, dst, port, seq.wrapping_add(1)));
             continue;
         }
         assert_eq!((flags, ack), (0x04, 0), "only SYNs and stateless RSTs");
-        let rst = (v6, mac, dst, port, seq);
+        let rst = (v6, mac, src, sport, dst, port, seq);
         assert!(want.contains(&rst), "an RST follows its SYN: {rst:?}");
         got.push(rst);
     }
@@ -426,7 +433,9 @@ fn plus_lines(log: &str) -> Vec<String> {
         .collect()
 }
 
-const LIVE6: [&str; 4] = ["2001:db8:9::1-2001:db8:9::2", "-p80,443", "--wait", "1"];
+/// `--wait 10`, а не 1 (ревью задачи 14, I3): RST без состояния последнего ответа уходит из очереди TX в окне ожидания,
+/// а часы `ManualClock` двигает опрос приёма; под нагрузкой окно в 1 с кончалось, пока TX стоял.
+const LIVE6: [&str; 4] = ["2001:db8:9::1-2001:db8:9::2", "-p80,443", "--wait", "10"];
 
 /// R11: следующий хоп IPv6 это шлюз маршрута ОС (`fe80::1`), его MAC резолвит один NS (86 байт, solicited-node) с
 /// короткоживущего адаптера фазы NDP, закрытого до адаптера скана; затем SYN поверх IPv6 на этот MAC с источника,
@@ -522,7 +531,7 @@ fn router_mac_ipv6_bypasses_ndp_and_never_becomes_the_ipv4_router_mac() {
             "2001:db8:9::1",
             "-p80",
             "--wait",
-            "1",
+            "10",
             "--router-mac-ipv6",
             mac,
         ],
@@ -967,7 +976,9 @@ fn http6_peer(
 }
 
 /// Баннеры по IPv6 (Р16, справка A10): тот же сценарий HTTP, что по IPv4 (эталон C `http-gws`: `http.server`, `title`,
-/// `http` в порядке banout), hello порта 80 через 2 с, наш FIN после FIN сервера; записи с адресом IPv6.
+/// `http` в порядке banout), hello порта 80 через 2 с, наш FIN после FIN сервера; записи с адресом IPv6. Окно
+/// `--wait 20` и допуск повтора hello по правилу сценариев `live_fake.rs` (ревью задачи 14, I3): часы движка двигает
+/// опрос приёма, и под нагрузкой TX может опоздать с hello на тик повтора.
 #[test]
 fn live_fake_ipv6_banner() {
     let golden = |rel: &str| {
@@ -1006,7 +1017,7 @@ fn live_fake_ipv6_banner() {
             "-p80",
             "--banners",
             "--wait",
-            "5",
+            "20",
             "-oL",
             "-",
         ],
@@ -1036,14 +1047,20 @@ fn live_fake_ipv6_banner() {
         .map(|s| &s.3)
         .filter(|p| !p.is_empty())
         .collect();
-    assert_eq!(data, [&hello], "exactly the C hello of port 80");
+    assert!(!data.is_empty(), "{seen:?}");
+    assert!(
+        data.iter().all(|p| **p == hello),
+        "only the C hello of port 80 (a retransmission allowed): {seen:?}"
+    );
     assert!(seen.iter().any(|s| s.0 & 0x01 != 0), "our FIN: {seen:?}");
     assert!(seen.iter().all(|s| s.0 & 0x04 == 0), "{seen:?}");
 }
 
-/// Р9 (решение D19): одна строка на скан на любой ОС, если `--banners` и хотя бы один адрес источника выбран
-/// автоопределением, с этими адресами через ` and ` (IPv6 в скобках, как в `[+] source-ip`); с заданными
-/// `--adapter-ip` (обе семьи) строки нет, без `--banners` тоже.
+/// Р9 (решение D19): одна строка на скан на любой ОС, если `--banners`, хотя бы один порт TCP и хотя бы один адрес
+/// источника выбран автоопределением, с этими адресами через ` and ` (IPv6 в скобках, как в `[+] source-ip`); с
+/// заданными `--adapter-ip` (обе семьи) строки нет, без `--banners` тоже. Скан только UDP с `--banners` или
+/// `--rawudp` (ревью задачи 14, решение по замечанию 1): ядро баннерам UDP не мешает, строки нет, и stderr тот же, что
+/// у 4a, то есть строки `[…]` те же, что у того же скана без баннеров; с портом TCP рядом с UDP строка есть.
 #[test]
 fn banners_warning_once_for_os_owned_source() {
     let warning = |ips: &str| {
@@ -1103,6 +1120,24 @@ fn banners_warning_once_for_os_owned_source() {
         let log = run(args);
         assert!(!log.contains("[-] warning"), "{args:?}: {log}");
     }
+    // Строки `[+]`/`[-]` stderr (строка статуса стёрта `\r`, поэтому режем и по нему).
+    let bracketed = |log: &str| -> Vec<String> {
+        log.split(['\r', '\n'])
+            .filter(|l| l.starts_with('['))
+            .map(str::to_string)
+            .collect()
+    };
+    let udp = ["198.51.100.1", "-pU:53", "--wait", "1"];
+    let plain = bracketed(&run(&udp));
+    for flag in ["--banners", "--rawudp"] {
+        let log = run(&with(&udp, &[flag]));
+        assert!(!log.contains("[-] warning"), "{flag}: {log}");
+        assert!(!log.contains("[-] banners:"), "{flag}: {log}");
+        assert_eq!(bracketed(&log), plain, "{flag}: stderr as in 4a: {log}");
+    }
+    let log = run(&["198.51.100.1", "-pU:53,T:80", "--wait", "1", "--banners"]);
+    assert_eq!(log.matches("[-] warning: --banners").count(), 1, "{log}");
+    assert!(log.contains(&warning("192.0.2.5")), "{log}");
 }
 
 fn with<'a>(base: &[&'a str], extra: &[&'a str]) -> Vec<&'a str> {

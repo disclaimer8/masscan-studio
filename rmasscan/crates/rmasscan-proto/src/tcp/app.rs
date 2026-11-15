@@ -64,6 +64,10 @@ impl ByteBudget {
 pub(crate) enum SessionAction {
     Send(Vec<u8>),
     SendCopy(Vec<u8>),
+    /// `TCP__static` неизменного блоба процесса (KEX SSH, `src/proto-ssh.c:10-41`, `:147`): у C в очереди указатель на
+    /// статическую память (`src/stack-tcp-core.c:1381-1385`), здесь общий буфер без копии на соединение; байты на
+    /// проводе те же, что у [`SessionAction::Send`].
+    SendShared(Arc<[u8]>),
     Close,
 }
 
@@ -144,7 +148,10 @@ impl AppLayer<'_> {
     }
 
     /// `App_SendFirst` (`src/stack-tcp-app.c:154-195`): hello, если он не пустой, и `App_SendNext`. Подмены TLS и
-    /// heartbleed (`:157-171`) и `SF__close` (`:191-192`) это 4c: в 4b их потоков нет.
+    /// heartbleed (`:157-171`) и `SF__close` (`:191-192`) это 4c. Поток с `SF__close` у C бывает и в 4b: `--hello-string`
+    /// на порту TLS (или при `--hello ssl`) копирует поток `banner_ssl` с флагом и `next` (`src/stack-tcp-core.c:595-616`),
+    /// и C шлёт FIN за hello и переподключается с TLS 1.2 (`:56-62`); здесь только hello, отличие 4b названо в README и
+    /// справке B6.
     fn send_first(&mut self, ctl: &mut TcbCtl<'_>) {
         if let Some(hello) = self.session.hello()
             && !hello.is_empty()
@@ -187,6 +194,9 @@ impl App for AppLayer<'_> {
                         }
                         SessionAction::SendCopy(bytes) => {
                             ctl.send_copy(&bytes);
+                        }
+                        SessionAction::SendShared(buf) => {
+                            ctl.send_shared(&buf);
                         }
                         SessionAction::Close => ctl.close(),
                     }

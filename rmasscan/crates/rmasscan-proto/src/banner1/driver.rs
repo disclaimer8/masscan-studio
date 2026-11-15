@@ -50,6 +50,7 @@ pub fn banner_stream(
             .into_iter()
             .map(|a| match a {
                 SessionAction::Send(b) | SessionAction::SendCopy(b) => StreamAction::Send(b),
+                SessionAction::SendShared(b) => StreamAction::Send(b.to_vec()),
                 SessionAction::Close => StreamAction::Close,
             })
             .collect(),

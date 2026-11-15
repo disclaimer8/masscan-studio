@@ -101,6 +101,12 @@ impl ParseCx<'_> {
         self.acts.push(SessionAction::Send(bytes.to_vec()));
     }
 
+    /// `tcpapi_send(socket, bytes, length, TCP__static)` неизменного блоба процесса: в очередь встаёт общий буфер, не
+    /// копия (у C указатель на статическую память, `src/stack-tcp-core.c:1381-1385`).
+    pub(crate) fn send_shared(&mut self, buf: &Arc<[u8]>) {
+        self.acts.push(SessionAction::SendShared(Arc::clone(buf)));
+    }
+
     /// `tcpapi_send(socket, bytes, length, TCP__copy)` (`src/proto-tcp-telnet.c:248`).
     pub(crate) fn send_copy(&mut self, bytes: &[u8]) {
         self.acts.push(SessionAction::SendCopy(bytes.to_vec()));
@@ -136,7 +142,7 @@ impl Parser for Unported {
     }
 }
 
-/// Парсер приложения. Задачи 9-12 заменяют свою строку.
+/// Парсер приложения: одиннадцать перенесённых, SSL3 и SMB это [`Unported`] (справка B6).
 pub(crate) fn parser_for(p: AppProto) -> Box<dyn Parser> {
     match p {
         AppProto::Ftp => Box::<Ftp>::default(),
@@ -862,6 +868,33 @@ mod tests {
         let split = banner_stream(&s, 25565, None, &[&stream[..70_000], &stream[70_000..]]);
         assert_eq!(whole, split);
         assert_eq!(whole.app_proto, None);
+    }
+
+    /// Финальное ревью, M1: KEX SSH (1248 байт) встаёт в очередь общим буфером процесса, как у C `TCP__static` на
+    /// статический массив (`src/proto-ssh.c:147`), а не копией на каждый 7-байтовый пакет каждого соединения; байты
+    /// те же, что прежде (драйвер отдаёт их как посылку).
+    #[test]
+    fn ssh_kex_blob_is_one_buffer_for_every_session() {
+        let cfg = BannerConfig::new(&TcpBannerSettings::default());
+        let stream: &[u8] = b"SSH-2.0-x\n\0\0\0\x08\x04\x14abcde\0\0\0\x08\x04\x15abcde";
+        let mut blobs = Vec::new();
+        for _ in 0..2 {
+            let (_, _, acts) = feed(&cfg, 22, None, &[stream]);
+            assert_eq!(acts.len(), 3, "{acts:?}");
+            assert_eq!(
+                acts[0],
+                SessionAction::Send(b"SSH-2.0-OPENSSH_7.9\r\n".to_vec())
+            );
+            for a in &acts[1..] {
+                let SessionAction::SendShared(b) = a else {
+                    panic!("KEX not shared: {a:?}")
+                };
+                assert!(Arc::ptr_eq(b, super::super::ssh::kex()));
+                assert_eq!(b.len(), 1248);
+                blobs.push(Arc::clone(b));
+            }
+        }
+        assert!(blobs.windows(2).all(|w| Arc::ptr_eq(&w[0], &w[1])));
     }
 
     /// M3, M4 ревью задачи 8: автомат классификатора собран при сборке конфигурации скана (тот же, что один на

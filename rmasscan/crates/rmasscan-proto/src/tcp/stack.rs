@@ -857,6 +857,38 @@ mod tests {
         assert_eq!(Arc::strong_count(&shared), 1 + 1 + 9);
     }
 
+    /// Финальное ревью, M1: посылка общего буфера (KEX SSH) встаёт в очередь каждого соединения без копии, а на провод
+    /// уходят те же байты, что у копии.
+    #[test]
+    fn a_shared_send_queues_the_one_buffer_on_every_connection() {
+        let blob: Arc<[u8]> = (0..1248u32).map(|i| (i % 253) as u8).collect();
+        let script = Script::null().reply(0, vec![SessionAction::SendShared(Arc::clone(&blob))]);
+        let copied = Script::null().reply(0, vec![SessionAction::Send(blob.to_vec())]);
+        let (mut st, mut st2) = (stack(&script), stack(&copied));
+        for n in 1..=3 {
+            synack(&mut st, T0, key(n));
+            synack(&mut st2, T0, key(n));
+            let (_, out) = send(&mut st, T0 + SEC, key(n), PSHACK, R, S, b"x");
+            let (_, out2) = send(&mut st2, T0 + SEC, key(n), PSHACK, R, S, b"x");
+            assert_eq!(
+                out.segments, out2.segments,
+                "conn {n}: the frames of a copy"
+            );
+            let data: Vec<&[u8]> = out
+                .segments
+                .iter()
+                .filter(|s| !s.payload.is_empty())
+                .map(|s| &s.payload[..])
+                .collect();
+            assert_eq!(data, [&blob[..]], "conn {n}");
+            let tcb = st.table.tcb(&key(n)).expect("live");
+            assert_eq!(tcb.queue_buffers().len(), 1);
+            assert!(tcb.queue_buffers().iter().all(|b| Arc::ptr_eq(b, &blob)));
+        }
+        // Ссылки: тест, сценарий, его копия у стека, три сессии и три сегмента в очередях; ни одной копии байтов.
+        assert_eq!(Arc::strong_count(&blob), 1 + 1 + 1 + 3 + 3);
+    }
+
     /// Отличие от C (README): FIN в TIME_WAIT ставит таймер +5 с (`src/stack-tcp-core.c:2249-2253`), но не дальше тика
     /// `created + жизнь + 2 с`, где сетка даёт RST по сроку жизни. FIN на +20,5 с: TIME_WAIT кончается тихо на +25,5 с,
     /// как у C; FIN на +29,5 с: RST на +32 с, у C на +34,5 с (и FIN со следующим номером чаще раза в 5 с держит блок у C

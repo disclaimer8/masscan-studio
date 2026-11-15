@@ -1,5 +1,7 @@
 //! SSH: `src/proto-ssh.c:52-178`, masscan 8e6b3b0, AGPL-3.0. Сырые байты, fallthrough KEX и ранний
 //! переход к следующей длине сохранены; ERROR берёт ровно один следующий байт (E2.4).
+use std::sync::{Arc, OnceLock};
+
 use super::session::{ParseCx, Parser, c_isprint};
 use crate::app_id;
 
@@ -49,7 +51,9 @@ impl Parser for Ssh {
                 // `src/proto-ssh.c:126-149`: любой message code падает в KEX; этот байт посчитан дважды.
                 11 => {
                     self.left = self.left.wrapping_sub(2);
-                    cx.send(KEX);
+                    // Один буфер на процесс (C: `TCP__static` на статический массив, `src/proto-ssh.c:147`), а не
+                    // 1248 байт копии на каждый пакет каждого соединения (финальное ревью, M1).
+                    cx.send_shared(kex());
                     self.state = 20;
                 }
                 20 => {
@@ -66,6 +70,12 @@ impl Parser for Ssh {
     fn probe(&self) -> u32 {
         u32::from(self.state)
     }
+}
+
+/// [`KEX`] как общий буфер процесса: каждое соединение ставит в очередь его, а не копию.
+pub(crate) fn kex() -> &'static Arc<[u8]> {
+    static SHARED: OnceLock<Arc<[u8]>> = OnceLock::new();
+    SHARED.get_or_init(|| Arc::from(&KEX[..]))
 }
 
 // `src/proto-ssh.c:10-41`: masscan-authored fixed KEXINIT + KEXDH_INIT, captured independently from C.

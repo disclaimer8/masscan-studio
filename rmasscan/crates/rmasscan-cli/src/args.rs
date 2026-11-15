@@ -48,7 +48,7 @@ const REDIS_REFUSAL: &str =
     version,
     about = "Rust port of masscan: TCP SYN scan with adapter and gateway auto-detection, masscan output formats, --readscan, --offline, -sL, --echo and --iflist",
     disable_help_subcommand = true,
-    after_help = "Examples:\n  sudo rmasscan 198.51.100.0/24 -p80,443\n  rmasscan --offline 198.51.100.0/24 -p80 --seed 1\n  rmasscan --iflist\n  rmasscan -sL 10.0.0.0/24 -p80,443 --seed 1\n  rmasscan --echo 10.0.0.0/24 -p80 --seed 1\n  rmasscan --offline --packet-trace 10.0.0.0/30 -p80 --seed 1 \\\n    --adapter-ip 10.255.0.1 --adapter-mac 00-11-22-33-44-55 --source-port 40000-40003\n  sudo rmasscan 198.51.100.0/24 -p80 -oB scan.bin\n  rmasscan -p80 --readscan scan.bin -oJ scan.json\n  sudo rmasscan 198.51.100.0/24 --banners -p80 -oB tcp.bin\n  sudo rmasscan 198.51.100.0/24 -pU:53,123,161 --banners -oB udp.bin\n\nOutput (scan and --readscan only): -oL list, -oJ json, -oD ndjson, -oG grepable, -oX xml, -oB binary,\n-oH hostonly, -oU unicornscan, each followed by FILE (- is stdout); --output-format certs\n--output-filename FILE prints banners as PEM certificates on stdout. With a file format stdout is silent\nunless --interactive is given. --banners adds banner records: UDP replies, and TCP connections through a\nuser-mode TCP stack (give --adapter-ip an address the OS does not own, or the kernel resets them).\n\nWithout an operation flag rmasscan scans: it picks the interface that routes to the targets, its first IPv4\naddress and MAC, resolves the next hop with ARP (unless --router-mac is given) and needs root/Administrator\nonly to open the adapter. IPv6 targets (TCP only) take the source address and next hop of the IPv6 route,\nresolved with an NDP neighbor solicitation (unless --router-mac-ipv6 is given). Detection, --offline and\n--iflist only read the OS and never transmit.\nOperations: -sL, --echo, --echo-all, --offline [--packet-trace], --iflist, --readscan (mutually exclusive).\n--seed is required (and must be non-zero) for -sL, --echo and --offline; a live scan without --seed uses\nOS entropy and prints it. [+] lines go to stderr. Any other masscan option is an error."
+    after_help = "Examples:\n  sudo rmasscan 198.51.100.0/24 -p80,443\n  rmasscan --offline 198.51.100.0/24 -p80 --seed 1\n  rmasscan --iflist\n  rmasscan -sL 10.0.0.0/24 -p80,443 --seed 1\n  rmasscan --echo 10.0.0.0/24 -p80 --seed 1\n  rmasscan --offline --packet-trace 10.0.0.0/30 -p80 --seed 1 \\\n    --adapter-ip 10.255.0.1 --adapter-mac 00-11-22-33-44-55 --source-port 40000-40003\n  sudo rmasscan 198.51.100.0/24 -p80 -oB scan.bin\n  rmasscan -p80 --readscan scan.bin -oJ scan.json\n  sudo rmasscan 198.51.100.0/24 --banners -p80 -oB tcp.bin\n  sudo rmasscan 198.51.100.0/24 -pU:53,123,161 --banners -oB udp.bin\n\nOutput (scan and --readscan only): -oL list, -oJ json, -oD ndjson, -oG grepable, -oX xml, -oB binary,\n-oH hostonly, -oU unicornscan, each followed by FILE (- is stdout); --output-format certs\n--output-filename FILE prints banners as PEM certificates on stdout. With a file format stdout is silent\nunless --interactive is given. --banners adds banner records: UDP replies, and TCP connections through a\nuser-mode TCP stack (give --adapter-ip an address the OS does not own, or the kernel resets them).\nTCP banner options whose name carries a port or a field (not in the list above):\n  --hello-string[PORT] BASE64  the hello sent on TCP port PORT (base64)\n  --hello-file[PORT] FILE      the same from a file (alias: --hello-filename[PORT])\n  --http-header NAME:VALUE     a field of the HTTP banner request, also --http-header[NAME] VALUE (at most 16)\n\nWithout an operation flag rmasscan scans: it picks the interface that routes to the targets, its first IPv4\naddress and MAC, resolves the next hop with ARP (unless --router-mac is given) and needs root/Administrator\nonly to open the adapter. IPv6 targets (TCP only) take the source address and next hop of the IPv6 route,\nresolved with an NDP neighbor solicitation (unless --router-mac-ipv6 is given). Detection, --offline and\n--iflist only read the OS and never transmit.\nOperations: -sL, --echo, --echo-all, --offline [--packet-trace], --iflist, --readscan (mutually exclusive).\n--seed is required (and must be non-zero) for -sL, --echo and --offline; a live scan without --seed uses\nOS entropy and prints it. [+] lines go to stderr. Any other masscan option is an error."
 )]
 pub struct Cli {
     // Цели: IP, CIDR, `a.b.c.d-e.f.g.h`, списки через запятую.
@@ -969,8 +969,9 @@ fn dash_o_format(arg: &str) -> Result<&'static str, String> {
 //    остальных правил, поэтому они видят только каноническое имя. Значения не переписываются: слово, которое правило
 //    ниже забирает как значение (`it.next()`), уже не попадает в цикл; значение после `=` или `:` остаётся как есть;
 //    отдельное слово, которое начинается с `--`, clap значением не берёт (ни у одной опции нет `allow_hyphen_values`,
-//    тест `no_option_takes_hyphen_values`), а другие слова [`equals_option`] не трогает. Голое `--` clap понимает как
-//    конец опций: оно и всё правее идут в clap как есть, это цели. Короткие опции не трогаются.
+//    тест `no_option_takes_hyphen_values`; значение семи `--http-*` свободного текста, [`HTTP_FREE_TEXT`], и
+//    типизированных опций баннеров забирается здесь), а другие слова [`equals_option`] не трогает. Голое `--` clap
+//    понимает как конец опций: оно и всё правее идут в clap как есть, это цели. Короткие опции не трогаются.
 // 1. `-sL` (nmap-стиль) - это один флаг, а
 //    clap прочёл бы его как `-s L`. Заменяется на `--list`.
 // 2. `-o<буква> FILE` (main-conf.c:3401–3459): буква слитно с `-o`, файл следующим argv (`-` значит stdout, иное
@@ -1019,6 +1020,15 @@ where
             continue;
         }
         let a = equals_option(&raw)?.unwrap_or(raw);
+        // Свободный текст семи `--http-*` (`src/main-conf.c:3286-3294`: `value = argv[++i]`): следующее слово это
+        // значение, с чего бы оно ни начиналось, как у типизированных опций баннеров выше. Слово с `-` clap принял бы за
+        // опцию, поэтому оно уходит формой `--имя=значение`, которую clap читает как есть (финальное ревью, M2).
+        if HTTP_FREE_TEXT.contains(&a.as_str())
+            && let Some(v) = it.next_if(|v| v.starts_with('-'))
+        {
+            out.push(format!("{a}={v}"));
+            continue;
+        }
         if let Some((name, inline)) = numable_split(&a) {
             // main-conf.c:3236-3260 (`F_NUMABLE`): `--name=v`, `--name:v` или следующее слово, если оно целое или
             // логическое; иначе `--name` один значит «включить». `--noreset` и `--tcp-sackok` сюда не входят: в C
@@ -1067,6 +1077,18 @@ where
     }
     Ok((out, notes))
 }
+
+/// Длинные имена clap опций `--http-*` со свободным текстом (`src/main-conf.c:1300-1505`): C берёт следующее слово
+/// значением всегда (`:3286-3294`), и [`preprocess_args`] тоже, даже если оно начинается с `-`.
+const HTTP_FREE_TEXT: [&str; 7] = [
+    "--http-method",
+    "--http-url",
+    "--http-version",
+    "--http-host",
+    "--http-user-agent",
+    "--http-payload",
+    "--http-cookie",
+];
 
 /// Таблица `EQUALS` (`src/main-conf.c:833-849`): ключ [`normalize_key`] каждого длинного имени и синонима clap (вместе
 /// с `--help` и `--version`) и длинное имя его опции. Внутренние опции `--rmasscan-…`, которые пишет сам
@@ -4306,6 +4328,57 @@ adapter-ip = 198.18.0.9\noutput-filename = base.xml\n",
             String::from_utf8_lossy(&req)
         );
         assert!(req.ends_with(b"p\r\nq"));
+    }
+
+    /// Финальное ревью, M2: значение семи `--http-*` со свободным текстом может начинаться с `-`, как у C (`value =
+    /// argv[++i]`, `src/main-conf.c:3286-3294`): тело multipart `--http-payload --boundary`, `--http-cookie -a=1`,
+    /// любое написание имени и синонимы. Вывод `--echo` этих argv закреплён бинарём C `8e6b3b0`, собранным вне
+    /// репозитория (тест `echo_of_http_values_starting_with_a_dash_like_c` в `lib.rs`).
+    #[test]
+    fn http_free_text_values_may_start_with_a_dash_like_c() {
+        let cfg = banner_cfg(&[
+            "--http-method",
+            "-X",
+            "--HTTP_URI",
+            "--x",
+            "--http-version",
+            "-1",
+            "--http-host",
+            "-h",
+            "--http-useragent",
+            "-ua",
+            "--http-payload",
+            "--boundary--\r\n",
+            "--http-cookie",
+            "-a=1",
+            "--http-cookie",
+            "--",
+        ]);
+        let h = &cfg.http;
+        assert_eq!(h.method.as_deref(), Some("-X"));
+        assert_eq!(h.url.as_deref(), Some("--x"));
+        assert_eq!(h.version.as_deref(), Some("-1"));
+        assert_eq!(h.host.as_deref(), Some("-h"));
+        assert_eq!(h.user_agent.as_deref(), Some("-ua"));
+        assert_eq!(h.payload.as_deref(), Some("--boundary--\r\n"));
+        // `--` после опции это её значение (у C тоже), а не конец опций.
+        assert_eq!(h.cookies, ["-a=1", "--"]);
+        // Слово без `-` идёт прежним путём, `=` и `:` тоже; опция последним словом это по-прежнему ошибка clap (Р17).
+        let cfg = banner_cfg(&["--http-payload", "x", "--http-host=--y", "--http-method:-Z"]);
+        assert_eq!(
+            (
+                cfg.http.payload.as_deref(),
+                cfg.http.host.as_deref(),
+                cfg.http.method.as_deref()
+            ),
+            (Some("x"), Some("--y"), Some("-Z"))
+        );
+        assert!(matches!(
+            parse(&["10.0.0.0/30", "-p80", "--http-payload"]),
+            Err(ParseError::Clap(_))
+        ));
+        // Другие опции чужое слово с `-` значением по-прежнему не берут.
+        assert!(parse(&["10.0.0.0/30", "--rate", "-5"]).is_err());
     }
 
     /// Те же случаи через файл `-c`: ключи файла подчиняются тем же правилам, включая набранное имя

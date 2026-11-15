@@ -293,6 +293,14 @@ ever: later server bytes are ACKed and never parsed (Р1, reproduce).
   `src/proto-smtp.c:147`, `src/proto-pop3.c:129`): the rest of that segment is parsed as a new greeting. 4b does not
   follow C there: every byte after the go-ahead line, in the rest of that segment and in every later one, is one
   `unknown` record, app_proto 9, in any split (E2.8).
+- `--hello-string[PORT]` / `--hello-file[PORT]` on one of the 23 TLS ports (B4), or on any port under `--hello ssl`:
+  C copies the port's current stream and replaces only `hello` and `hello_length` (`src/stack-tcp-core.c:595-616`), so
+  the copy keeps `banner_ssl`'s `flags = SF__close` and `next = &banner_ssl_12` (`src/proto-ssl.c:1442-1451`). On the
+  SYN-ACK `App_Connect` calls `tcpapi_reconnect(socket, stream->next, ...)` (`src/stack-tcp-app.c:56-62`): a second
+  connection from the next source port with the TLS 1.2 hello; and `App_SendFirst` queues a FIN right after the custom
+  hello (`:187-192`, it leaves a tick later). rmasscan 4b sends the custom hello only: no FIN after it (the connection
+  stays open until the server closes, the lifetime RST or the end of `--wait`) and no reconnection. Both parts belong
+  to 4c (the port model, Р10, and TLS); README names the difference (`--hello-string` option, "Не перенесено").
 
 ## C. Options
 
@@ -469,7 +477,7 @@ call, expressed so a streaming parser can do it.
 | --- | --- | --- | --- |
 | E2.1 | classifier (`src/proto-banner1.c:165-184`) | a match in segment k >= 2 leaves segments 1..k-1 in HEUR: an extra `unknown` record | no `unknown` record from pre-match bytes; they are replayed and dropped |
 | E2.2 | classifier | after a rejected SSL3 match, a later segment can still match `{"` or IAC | the first match decides; a rejected first match makes the rest of the stream `unknown` |
-| E2.3 | HTTP (`src/proto-http.c:520-545, :678`) | a status line failing after a segment end keeps the earlier segment's bytes in `http` | bytes of the status line are held back until state 7 or failure; failure drops them |
+| E2.3 | HTTP (`src/proto-http.c:520-545, :678`) | a status line failing after a segment end keeps the earlier segment's bytes in `http` | the whole raw header (status line and fields, without the LF of the blank line) is held back in a deferred record until the blank line or the session's flush, then committed after the `Server` values, as C orders the records on the unsplit stream (`:554-559`, B3; `banner1/http.rs`); it takes the shared budget and the 65 536-byte record limit meanwhile, losing only from its end; a failing status line drops it |
 | E2.4 | SSH (`src/proto-ssh.c:84, :92-96, :172-173`), Telnet (`src/proto-tcp-telnet.c:123, :180, :212`) | after the stop byte: one more byte of that segment, then the first byte of every later segment | exactly one byte after the stop byte, then nothing |
 | E2.5 | RDP (`src/proto-tcp-rdp.c:223-283`) | UNKNOWN appends the whole current segment (from its offset 0) | on entering UNKNOWN with at least one more byte, append every byte the RDP parser has seen since its start, and all later bytes |
 | E2.6 | memcached (`src/proto-memcached.c:129-137`) | a keyword split across segments is lost (matcher reset in state 0) | the matcher continues across segments (C state 1) |
@@ -491,8 +499,8 @@ the classifier's HEUR replay is a call of its own, `src/proto-banner1.c:165-182`
 3. Port only picks the hello: `"220-"` SMTP on 25 is parsed as FTP (sends `AUTH TLS`), `"220 "` SMTP on 2525 is FTP.
 4. IMAP always `"* OK"` (two closes; `"* ok "` gives `"* o"`); SSH dumps every byte and re-sends the KEX blob per packet; HTTP `Server` values concatenated;
    VNC selects None; RDP labels code 5 `NLA-unsupported`; memcached never closes; telnet stops at IAC IAC.
-5. `--hello-string` first-given wins per port; `--hello` echo prints one value; `--hello-string` on a TLS port keeps
-   `SF__close` and `next` (4c).
+5. `--hello-string` first-given wins per port; `--hello` echo prints one value. Not kept (a named 4b difference, B6):
+   `--hello-string` on a TLS port.
 6. `--hello http|ssl` skip port 65535; window 1200 and template options on every stack frame; stateless RST answers
    RST replies too.
 

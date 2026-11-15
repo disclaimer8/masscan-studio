@@ -610,6 +610,45 @@ mod tests {
         );
     }
 
+    /// Финальное ревью, M2: `--echo` сборки C 8e6b3b0 (вне репозитория, без скана) с этими argv печатает те же строки
+    /// `http-*` и выходит с кодом 0; весь её stdout равен выводу rmasscan.
+    #[test]
+    fn echo_of_http_values_starting_with_a_dash_like_c() {
+        let out = echo_of(&[
+            "--http-method",
+            "-X",
+            "--HTTP_URI",
+            "--x",
+            "--http-version",
+            "-1",
+            "--http-host",
+            "-h",
+            "--http-useragent",
+            "-ua",
+            "--http-payload",
+            "--boundary--",
+            "--http-cookie",
+            "-a=1",
+            "--http-cookie",
+            "--",
+        ]);
+        let http: Vec<&str> = out.lines().filter(|l| l.starts_with("http")).collect();
+        assert_eq!(
+            http,
+            [
+                "http-cookie = -a=1",
+                "http-cookie = --",
+                "http-method = -X",
+                "http-version = -1",
+                "http-url = --x",
+                "http-user-agent = -ua",
+                "http-host = -h",
+                "http-payload = --boundary--",
+            ],
+            "{out}"
+        );
+    }
+
     fn scan_config(extra: &[&str]) -> ScanConfig {
         let base = ["rmasscan", "10.0.0.0/30", "-pU:53"];
         Cli::try_parse_masscan([&base[..], extra].concat())
@@ -833,6 +872,15 @@ mod tests {
             .map(ToString::to_string)
             .unwrap_or_default();
         assert!(help.contains("--output-format certs"), "{help}");
+        // Финальное ревью, M1: опции, которые clap не перечисляет (имя несёт порт или поле), названы в справке.
+        for opt in [
+            "--hello-string[PORT] BASE64",
+            "--hello-file[PORT] FILE",
+            "--http-header NAME:VALUE",
+            "--http-header[NAME] VALUE",
+        ] {
+            assert!(help.contains(opt), "{opt}: {help}");
+        }
     }
 
     /// Р19: флаги вывода и статуса вне живого скана и `--readscan` отклоняются до любого вывода и любого файла.

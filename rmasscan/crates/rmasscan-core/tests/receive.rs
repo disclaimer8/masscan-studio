@@ -2641,3 +2641,82 @@ mod ipv6_deep_generators {
         assert!(nreach.options * 2 >= nreach.total, "{nreach:?}");
     }
 }
+
+// ---------- ARP responder for our IPv4 source addresses (banners 4b, task 14a) ----------
+
+mod arp_responder {
+    use super::*;
+    use rmasscan_core::probe::NicBinding;
+    use rmasscan_core::receive::arp_reply_for;
+
+    const ROUTER: u32 = 0x0a00_0001;
+    const ROUTER_MAC: [u8; 6] = [0x02, 0xaa, 0xbb, 0xcc, 0xdd, 0x01];
+
+    fn plan_range(link: LinkType, last: u32) -> ReadyPlan {
+        let plan = plan_for(link);
+        let mut nic = NicBinding::from(plan.binding().clone());
+        nic.source_ipv4_last = last;
+        ReadyPlan::new_cli(plan.effective().clone(), vec![nic]).unwrap()
+    }
+
+    /// Запрос шлюза «кто имеет `tpa`» (C отвечает на `tpa` из диапазона источника, `src/main.c:829`, `:878-887`).
+    fn who_has(tpa: u32) -> [u8; ARP_FRAME_LEN] {
+        encode_request(ROUTER_MAC, ROUTER, tpa)
+    }
+
+    #[test]
+    fn answers_a_request_for_the_source_address_with_the_adapter_mac() {
+        let plan = plan_for(LinkType::Ethernet);
+        let r = arp_reply_for(&who_has(IP_ME), LinkType::Ethernet, &plan).expect("reply");
+        assert_eq!(r, encode_reply(MAC_ME, IP_ME, ROUTER_MAC, ROUTER));
+        assert_eq!(
+            arp_reply_for(&who_has(IP_ME + 1), LinkType::Ethernet, &plan),
+            None
+        );
+        assert_eq!(
+            arp_reply_for(&who_has(IP_THEM), LinkType::Ethernet, &plan),
+            None
+        );
+        // Ответ ARP (opcode 2) ответчик не трогает: это путь ARP-скана.
+        let reply = encode_reply(ROUTER_MAC, ROUTER, MAC_ME, IP_ME);
+        assert_eq!(arp_reply_for(&reply, LinkType::Ethernet, &plan), None);
+    }
+
+    /// `is_my_ip` это диапазон `--adapter-ip A-B` (`src/stack-src.c:8-13`): каждый адрес диапазона отвечает собой.
+    #[test]
+    fn answers_for_every_address_of_an_adapter_ip_range() {
+        let plan = plan_range(LinkType::Ethernet, IP_ME + 3);
+        for ip in IP_ME..=IP_ME + 3 {
+            let r = arp_reply_for(&who_has(ip), LinkType::Ethernet, &plan).expect("reply");
+            assert_eq!(r, encode_reply(MAC_ME, ip, ROUTER_MAC, ROUTER));
+        }
+        assert_eq!(
+            arp_reply_for(&who_has(IP_ME - 1), LinkType::Ethernet, &plan),
+            None
+        );
+        assert_eq!(
+            arp_reply_for(&who_has(IP_ME + 4), LinkType::Ethernet, &plan),
+            None
+        );
+    }
+
+    /// ARP бывает только в Ethernet: у Null и Raw `preprocess_frame` его не ищет (`src/proto-preprocess.c:508-541`).
+    #[test]
+    fn no_reply_on_null_or_raw_links() {
+        for link in [LinkType::Null, LinkType::Raw] {
+            let plan = plan_for(link);
+            assert_eq!(arp_reply_for(&who_has(IP_ME), link, &plan), None);
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(2048))]
+
+        #[test]
+        fn arp_reply_for_never_panics(f in proptest::collection::vec(any::<u8>(), 0..1600)) {
+            for link in [LinkType::Ethernet, LinkType::Null, LinkType::Raw] {
+                let _ = arp_reply_for(&f, link, &plan_for(link));
+            }
+        }
+    }
+}

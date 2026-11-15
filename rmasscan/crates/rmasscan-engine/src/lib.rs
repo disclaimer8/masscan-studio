@@ -34,9 +34,9 @@ pub use banners::{
 };
 pub use checkpoint::{CHECKPOINT_FORMAT_VERSION, Checkpoint, CheckpointError};
 pub use engine::{
-    CancelHandle, DEFAULT_RESULT_BYTE_CAPACITY, DEFAULT_TX_STALL_TIMEOUT, DedupCache, Engine,
-    EngineError, EngineHandle, EngineOptions, MAX_DEDUP_ENTRIES, MAX_IO_TIMEOUT, MAX_TX_BATCH,
-    PcapSink, STACK_OUT_CAP, StartError,
+    ArpSummary, CancelHandle, DEFAULT_RESULT_BYTE_CAPACITY, DEFAULT_TX_STALL_TIMEOUT, DedupCache,
+    Engine, EngineError, EngineHandle, EngineOptions, MAX_DEDUP_ENTRIES, MAX_IO_TIMEOUT,
+    MAX_TX_BATCH, PcapSink, STACK_OUT_CAP, StartError,
 };
 pub use events::{Event, FailReason, Outcome, Progress, Reason};
 pub use identity::{ENGINE_ALGORITHM_VERSION, job_digest};

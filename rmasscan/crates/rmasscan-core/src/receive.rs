@@ -36,7 +36,7 @@
 //!   старого скана с тем же seed попадал бы в результаты. Порт намеренно
 //!   ужесточает это (ревью 2A, P2).
 
-use crate::arp::{ArpOp, decode};
+use crate::arp::{ARP_FRAME_LEN, ArpOp, answer_request, decode};
 use crate::checksum::{
     checksum_ipv4, checksum_ipv6, fold, ip_header_checksum, sctp_crc32c, udp_ipv4_checksum_ok,
     word_sum,
@@ -273,6 +273,24 @@ pub fn ndp_reply_for(
     let nic = plan.nics().first()?;
     let my_ip = nic.source_ipv6?;
     answer_neighbor_solicitation(frame, nic.binding.source_mac, my_ip)
+}
+
+/// Ответ на входящий ARP-запрос к адресу источника IPv4 адаптера `nic[0]` (`main.c:829`, `:878-887`,
+/// `stack_arp_incoming_request`, `stack-arpv4.c:282-363`): готовый кадр ответа ARP (60 байт) или `None`. Адрес наш,
+/// если он в диапазоне источника (`is_my_ip`, как у ответа ARP-скана), ответ идёт от MAC адаптера; разбор запроса и
+/// раскладка ответа как у C ([`crate::arp::answer_request`], эталоны `tests/golden/arp-replies`). `None` для не
+/// Ethernet (у Null и Raw C ARP не разбирает). Кадр не парсится как зонд и в результаты не попадает.
+pub fn arp_reply_for(
+    frame: &[u8],
+    link: LinkType,
+    plan: &ReadyPlan,
+) -> Option<[u8; ARP_FRAME_LEN]> {
+    if link != LinkType::Ethernet {
+        return None;
+    }
+    let last = plan.nics().first()?.source_ipv4_last;
+    let b = plan.binding();
+    answer_request(frame, b.source_mac, b.source_ipv4, last)
 }
 
 /// Находит заголовок IPv6 (`parse_ethertype` `0x86dd`, proto-preprocess.c:505; Null :522-531; Raw :534-538).

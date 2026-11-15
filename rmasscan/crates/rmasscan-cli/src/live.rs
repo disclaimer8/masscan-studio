@@ -1271,6 +1271,10 @@ pub fn run_live_conf(
     // Р8 (`src/main.c:1094-1100`: `tcpcon == NULL && !is_noreset`): RST без состояния на каждый свежий SYN-ACK и
     // RST-ответ, если нет ни `--banners`, ни `--noreset`. `EngineOptions::new` его не включает (Р11, так у Studio).
     options.stateless_rst = !cfg.banners && !cfg.noreset;
+    // Ответ на ARP-запросы к адресам источника IPv4 (`src/main.c:878-887`, `stack_arp_incoming_request`,
+    // `src/stack-arpv4.c:282`): у C он есть в каждом скане без переключателя, иначе адрес `--adapter-ip`, которым ОС
+    // не владеет, шлюз не найдёт. `EngineOptions::new` его не включает (Р11, так у Studio).
+    options.arp_responder = true;
     // Решение 4: те же часы, что у резолвера; в `OsBackend` это `SystemClock`, то есть поведение `Engine::start`.
     let started = clock.now_micros();
     // Конец передачи для строки статуса: `min_k effective_end(k)`, то есть эффективный конец самого медленного адаптера. При усечённом `resume-count`

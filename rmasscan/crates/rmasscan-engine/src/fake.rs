@@ -233,6 +233,11 @@ impl FakeAdapter {
     }
 
     /// Один и тот же кадр `n` раз (дубли).
+    /// Сколько шагов приёма (кадров, сбоев, серий таймаутов) ещё ждут `Rx::recv`.
+    pub fn rx_pending(&self) -> usize {
+        lock(&self.st).rx.len()
+    }
+
     pub fn push_frame_n(&self, frame: &[u8], n: usize) {
         let mut st = lock(&self.st);
         for _ in 0..n {

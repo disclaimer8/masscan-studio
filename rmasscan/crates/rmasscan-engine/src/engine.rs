@@ -8,8 +8,8 @@
 //!   и внутри каждого повтора/сна throttle (отрезки сна <= 50 мс).
 //! - RX выходит при `halt >= STOP`. При `PAUSE` и при естественном конце TX
 //!   он отрабатывает `wait` (по инжектированным часам) и выходит.
-//! - С ответом на NS (`source_ipv6`), стеком TCP или RST без состояния TX после
-//!   последнего зонда (и после Pause) живёт, пока не кончится RX, и отправляет
+//! - С ответом на NS (`source_ipv6`), ответчиком ARP ([`EngineOptions::arp_responder`]), стеком TCP или RST без
+//!   состояния TX после последнего зонда (и после Pause) живёт, пока не кончится RX, и отправляет
 //!   очередь своего адаптера (`src/main.c:470-494`); Stop и отказ его прерывают.
 //! - Каждый поток владеет своим handle адаптера и освобождает его до
 //!   публикации выхода. Поток, вышедший вторым, вычисляет единственный
@@ -38,11 +38,12 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
+use rmasscan_core::arp::ARP_FRAME_LEN;
 use rmasscan_core::banner::BannerRecord;
 use rmasscan_core::ndp::NDP_FRAME_LEN;
 use rmasscan_core::packet::LinkType;
 use rmasscan_core::probe::{NicBinding, PlanError, ProbeCursor, ReadyPlan};
-use rmasscan_core::receive::{PortStatus, Reply, ndp_reply_for, parse_reply};
+use rmasscan_core::receive::{PortStatus, Reply, arp_reply_for, ndp_reply_for, parse_reply};
 use rmasscan_core::stack::{StackOutput, StackStats, TableParams, TcpStack};
 use rmasscan_core::tcp_frame::{TcpFrameBuilder, stateless_rst, tcp_segment};
 use rmasscan_core::throttle::{Clock, SystemClock, Throttler};
@@ -143,6 +144,15 @@ pub struct EngineOptions {
     /// стеком TCP RST без состояния не шлётся (C: `tcpcon == NULL`). `false` (по умолчанию, так у Studio): кадры
     /// прежние.
     pub stateless_rst: bool,
+    /// Ответ на ARP-запросы к адресам источника IPv4 адаптера (`src/main.c:829`, `:878-887`,
+    /// `stack_arp_incoming_request`, `src/stack-arpv4.c:282-363`; CLI включает его в каждом живом скане, у C
+    /// переключателя нет). С `true` RX каждого адаптера Ethernet отвечает на запрос «кто имеет» адрес из диапазона
+    /// источника `nic[k]` кадром C ([`rmasscan_core::receive::arp_reply_for`]) через свою очередь (не больше 64
+    /// ответов, лишний выбрасывается и считается, RX не ждёт); TX отправляет её, как ответы на Neighbor Solicitation:
+    /// перед каждой пачкой зондов мимо throttle и после зондов до конца RX. Запрос, на который ушёл ответ, не результат
+    /// и не `Progress.discarded`; счётчики даёт [`EngineHandle::arp_stats`]. `false` (по умолчанию, так у Studio): кадры
+    /// и счётчики прежние.
+    pub arp_responder: bool,
 }
 
 impl EngineOptions {
@@ -160,8 +170,23 @@ impl EngineOptions {
             banners: None,
             tcp_stack: None,
             stateless_rst: false,
+            arp_responder: false,
         }
     }
+}
+
+/// Счётчики ответчика ARP ([`EngineOptions::arp_responder`]), сумма адаптеров. После `Finished` каждый запрос, на
+/// который построен ответ, посчитан ровно в одном поле.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ArpSummary {
+    /// Ответы, которые принял адаптер.
+    pub replies_sent: u64,
+    /// Ответы, которые не встали в очередь адаптера: в ней уже было 64 (RX не ждёт; C ждёт свободный буфер,
+    /// `src/stack-queue.c:8-21`).
+    pub queue_full: u64,
+    /// Ответы, взятые из очереди, но не отправленные: адаптер не принял (`WouldBlockUnsent`, `Uncertain`, ошибка;
+    /// ответ не повторяется, спросивший переспросит), либо Stop, отказ или конец скана застали их в очереди.
+    pub unsent: u64,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -644,6 +669,15 @@ struct Shared {
     ndp_out: Vec<Mutex<VecDeque<[u8; NDP_FRAME_LEN]>>>,
     /// `plan.nics()[k].source_ipv6.is_some()`: отвечает ли адаптер `k` на Neighbor Solicitation.
     ndp_enabled: Vec<bool>,
+    /// [`EngineOptions::arp_responder`].
+    arp_responder: bool,
+    /// Ответы ARP от RX к TX своего адаптера (`stack_transmit_packetbuffer`, как `ndp_out`); не больше
+    /// [`ARP_OUT_CAP`]. Без ответчика пусты и не читаются.
+    arp_out: Vec<Mutex<VecDeque<[u8; ARP_FRAME_LEN]>>>,
+    /// [`ArpSummary`].
+    arp_replies_sent: AtomicU64,
+    arp_queue_full: AtomicU64,
+    arp_unsent: AtomicU64,
     clock: Arc<dyn Clock + Send + Sync>,
     io_timeout: Duration,
     wait_micros: u64,
@@ -821,6 +855,11 @@ impl Shared {
             self.stack_frames_left_unsent
                 .fetch_add(unsent as u64, Ordering::Relaxed);
         }
+        // Ответы ARP, которые TX уже не отправил (Stop, отказ), не теряются из счёта.
+        if self.arp_responder {
+            let left: usize = self.arp_out.iter().map(|q| lock(q).drain(..).count()).sum();
+            self.arp_unsent.fetch_add(left as u64, Ordering::Relaxed);
+        }
         let fail = lock(&self.fail).clone();
         let tx_end = self.tx_end();
         let rx_end = self.rx_end();
@@ -907,6 +946,10 @@ const WOULD_BLOCK_BACKOFF_MICROS: u64 = 1_000;
 /// (лишний ответ отбрасывается, сосед переспросит).
 const NDP_OUT_CAP: usize = 64;
 
+/// Потолок очереди ответов ARP на адаптер, по тому же правилу, что [`NDP_OUT_CAP`] (лишний ответ считается в
+/// [`ArpSummary::queue_full`]).
+const ARP_OUT_CAP: usize = 64;
+
 /// Отправляет накопленные Neighbor Advertisement своего адаптера. Ответ необязательный: сосед переспросит, поэтому
 /// `WouldBlockUnsent`, `Uncertain` и ошибка адаптера скан не валят (ошибку отправки увидит следующий кадр
 /// скана) и кадр не повторяется.
@@ -914,19 +957,37 @@ const NDP_OUT_CAP: usize = 64;
 /// Работа ограничена: вызов берёт снимок очереди один раз (RX, который кладёт дальше, не удерживает TX) и перед
 /// каждой отправкой спрашивает `keep_going`. Иначе заполненная очередь (`NDP_OUT_CAP`) на блокирующемся адаптере
 /// (до `timeout` на кадр) держала бы TX-поток секунды и нарушала контракт Stop/Pause <= 1 с и окно `TxStalled`.
-/// Остаток снимка при остановке отбрасывается. C ограничивает это пачкой throttle (main.c:478-486).
-fn flush_ndp(
-    queue: &Mutex<VecDeque<[u8; NDP_FRAME_LEN]>>,
+/// Остаток снимка при остановке отбрасывается. C ограничивает это пачкой throttle (main.c:478-486). Так же
+/// отправляются ответы ARP ([`flush_arp`]). Возвращает `(принято адаптером, взято из очереди и не принято или
+/// отброшено остановкой)`.
+fn flush_replies<const N: usize>(
+    queue: &Mutex<VecDeque<[u8; N]>>,
     keep_going: &dyn Fn() -> bool,
     tx: &mut dyn Tx,
     timeout: Duration,
-) {
+) -> (u64, u64) {
     let batch = std::mem::take(&mut *lock(queue));
+    let taken = batch.len() as u64;
+    let mut sent = 0u64;
     for frame in batch {
         if !keep_going() {
-            return;
+            break;
         }
-        let _ = tx.send(&frame, timeout);
+        if let Ok(SendStatus::Sent) = tx.send(&frame, timeout) {
+            sent += 1;
+        }
+    }
+    (sent, taken - sent)
+}
+
+/// [`flush_replies`] очереди ответов ARP адаптера `idx` со счётом в [`ArpSummary`].
+fn flush_arp(shared: &Shared, idx: usize, keep_going: &dyn Fn() -> bool, tx: &mut dyn Tx) {
+    let (sent, unsent) = flush_replies(&shared.arp_out[idx], keep_going, tx, shared.io_timeout);
+    if sent > 0 {
+        shared.arp_replies_sent.fetch_add(sent, Ordering::Relaxed);
+    }
+    if unsent > 0 {
+        shared.arp_unsent.fetch_add(unsent, Ordering::Relaxed);
     }
 }
 
@@ -1030,16 +1091,21 @@ fn run_tx(
     // между кадрами в него не входит, потому что к нему окно уже закрыто.
     let mut stall_since: Option<u64> = None;
 
-    // Только адаптер с адресом IPv6 отвечает на NS; у остальных (весь IPv4) путь не меняется.
+    // Только адаптер с адресом IPv6 отвечает на NS; у остальных (весь IPv4) путь не меняется. Ответы ARP только с
+    // `arp_responder`.
     let ndp = shared.ndp_enabled[idx];
+    let arp = shared.arp_responder;
     let end = 'run: loop {
         if ndp {
-            flush_ndp(
+            let _ = flush_replies(
                 &shared.ndp_out[idx],
                 &|| shared.halted() == RUN,
                 &mut *tx,
                 shared.io_timeout,
             );
+        }
+        if arp {
+            flush_arp(&shared, idx, &|| shared.halted() == RUN, &mut *tx);
         }
         // Конец последовательности сильнее паузы: next_index == range это
         // завершение, а не checkpoint с пустым остатком.
@@ -1191,24 +1257,27 @@ fn run_tx(
     // закончил. NS соседа, пришедший теперь, тоже получает NA (иначе роутер не вернёт нам ответы на последние зонды);
     // кадры стека (ACK, приветствия, FIN, RST) и RST без состояния на ответы, пришедшие в окне, уходят под тем же
     // throttle, что и зонды. Linger шлёт и после Pause: RX принимает до конца окна ожидания (C сбрасывает очередь до
-    // `is_rx_done`); не шлёт только после Stop/Fail.
-    if ndp || shared.stack_tx {
+    // `is_rx_done`); не шлёт только после Stop/Fail. Запрос ARP к нашему адресу в окне тоже получает ответ.
+    if ndp || arp || shared.stack_tx {
         let keep_going = || shared.halted() < STOP;
         // Для сна throttle и пачки кадров стека: конец RX тоже прерывает их, иначе `Finished` опаздывает на сон
         // throttle при малом `--rate` или на `пачка × io_timeout` при забитом адаптере. Недосланное досчитает
-        // `finalize`. `flush_ndp` оставлен на `keep_going`: последний сброс NA после конца RX нужен.
+        // `finalize`. Сброс NA и ответов ARP оставлен на `keep_going`: последний сброс после конца RX нужен.
         // Модель этого цикла (когда спрашивается throttle) дублирует `model_tx` в `tests/tcp_stack.rs`: правя здесь,
         // правь и её.
         let keep_sending = || shared.halted() < STOP && shared.rx_end() == END_RUNNING;
         loop {
             let done = shared.rx_end() != END_RUNNING || shared.halted() >= STOP;
             if ndp {
-                flush_ndp(
+                let _ = flush_replies(
                     &shared.ndp_out[idx],
                     &keep_going,
                     &mut *tx,
                     shared.io_timeout,
                 );
+            }
+            if arp {
+                flush_arp(&shared, idx, &keep_going, &mut *tx);
             }
             if done {
                 break;
@@ -1225,7 +1294,8 @@ fn run_tx(
                     }
                     Err(_) => break,
                 }
-            } else if shared.stack_tx {
+            } else if shared.stack_tx || arp {
+                // Простой linger со стеком или ответчиком ARP часов движка не трогает (как выше).
                 std::thread::sleep(LINGER_POLL);
             } else {
                 clock.sleep_micros(WOULD_BLOCK_BACKOFF_MICROS);
@@ -1438,10 +1508,28 @@ fn run_rx(
                 } else {
                     None
                 };
+                // ARP-запрос к нашему адресу источника IPv4 (main.c:829, :878-887): так же, ответ идёт в TX.
+                let arp = if na.is_none() && shared.arp_responder {
+                    arp_reply_for(frame, link, &plan)
+                } else {
+                    None
+                };
                 if let Some(na) = na {
                     let mut q = lock(&shared.ndp_out[idx]);
                     if q.len() < NDP_OUT_CAP {
                         q.push_back(na);
+                    }
+                } else if let Some(reply) = arp {
+                    let queued = {
+                        let mut q = lock(&shared.arp_out[idx]);
+                        let room = q.len() < ARP_OUT_CAP;
+                        if room {
+                            q.push_back(reply);
+                        }
+                        room
+                    };
+                    if !queued {
+                        shared.arp_queue_full.fetch_add(1, Ordering::Relaxed);
                     }
                 } else {
                     let parsed = parse_reply(frame, link, &plan);
@@ -1741,6 +1829,11 @@ impl Engine {
                 .iter()
                 .map(|n| n.source_ipv6.is_some())
                 .collect(),
+            arp_responder: options.arp_responder,
+            arp_out: (0..count).map(|_| Mutex::new(VecDeque::new())).collect(),
+            arp_replies_sent: AtomicU64::new(0),
+            arp_queue_full: AtomicU64::new(0),
+            arp_unsent: AtomicU64::new(0),
             clock,
             io_timeout,
             wait_micros: u64::from(plan.effective().wait_secs()) * 1_000_000,
@@ -1996,6 +2089,16 @@ impl EngineHandle {
             s.add_table(&lock(t));
         }
         s
+    }
+
+    /// Счётчики ответчика ARP ([`EngineOptions::arp_responder`]), сумма адаптеров; окончательные после `Finished`.
+    /// Без ответчика нули.
+    pub fn arp_stats(&self) -> ArpSummary {
+        ArpSummary {
+            replies_sent: self.shared.arp_replies_sent.load(Ordering::Relaxed),
+            queue_full: self.shared.arp_queue_full.load(Ordering::Relaxed),
+            unsent: self.shared.arp_unsent.load(Ordering::Relaxed),
+        }
     }
 
     /// Блокируется до завершения запуска (вызовите `stop`/`pause`, если не
@@ -2711,7 +2814,7 @@ mod tests {
         (0..n).map(|i| [i as u8; NDP_FRAME_LEN]).collect()
     }
 
-    /// Один вызов `flush_ndp` берёт снимок очереди и не гонится за RX, который продолжает класть кадры: поздний
+    /// Один вызов `flush_replies` (NA) берёт снимок очереди и не гонится за RX, который продолжает класть кадры: поздний
     /// кадр ждёт следующего вызова (C ограничивает это окном throttle, main.c:478-486).
     #[test]
     fn flush_ndp_sends_only_the_snapshot_it_took() {
@@ -2721,7 +2824,7 @@ mod tests {
         let q2 = q.clone();
         fake.set_send_hook(move |_| lock(&q2).push_back([0xee; NDP_FRAME_LEN]));
         let mut io = fake.pair();
-        flush_ndp(&q, &|| true, &mut *io.tx, Duration::from_millis(50));
+        let _ = flush_replies(&q, &|| true, &mut *io.tx, Duration::from_millis(50));
         assert_eq!(fake.sent_count(), 5);
         assert_eq!(
             lock(&q).len(),
@@ -2742,7 +2845,7 @@ mod tests {
         let f2 = fake.clone();
         let t0 = clock.now_micros();
         // Stop приходит после второго кадра.
-        flush_ndp(
+        let _ = flush_replies(
             &q,
             &|| f2.sent_count() < 2,
             &mut *io.tx,
@@ -2866,6 +2969,322 @@ mod tests {
             encode_neighbor_advertisement(NDP_ME_MAC, NDP_ME, NDP_ROUTER_MAC, NDP_ROUTER_IP)
                 .to_vec()
         );
+    }
+
+    // ---- ARP: ответчик на запросы к адресам источника IPv4 (задача 14a) ----
+
+    /// Адрес источника и MAC плана `plan12` (`cli_plan`).
+    const ARP_ME: u32 = 0xc612_0063;
+    const ARP_ME_MAC: [u8; 6] = [0, 0x11, 0x22, 0x33, 0x44, 0x55];
+    const ARP_ROUTER: u32 = 0xc612_0001;
+    const ARP_ROUTER_MAC: [u8; 6] = [0x0a, 0xbb, 0xcc, 0xdd, 0xee, 0x01];
+
+    fn who_has(tpa: u32) -> Vec<u8> {
+        rmasscan_core::arp::encode_request(ARP_ROUTER_MAC, ARP_ROUTER, tpa).to_vec()
+    }
+
+    /// Ответ C на `who_has(ip)` (`stack_arp_incoming_request`, `src/stack-arpv4.c:331-356`).
+    fn arp_reply_to_router(ip: u32) -> Vec<u8> {
+        rmasscan_core::arp::encode_reply(ARP_ME_MAC, ip, ARP_ROUTER_MAC, ARP_ROUTER).to_vec()
+    }
+
+    fn arp_on() -> EngineOptions {
+        let mut o = EngineOptions::new([1; 16], [2; 16]);
+        o.arp_responder = true;
+        o
+    }
+
+    /// План `plan12` с диапазоном адресов источника `ARP_ME..=last` (`--adapter-ip A-B`).
+    fn arp_range_plan(last: u32) -> ReadyPlan {
+        let plan = plan12(0, Shard { one: 1, of: 1 }, 0);
+        let mut nic = plan.nics()[0].clone();
+        nic.source_ipv4_last = last;
+        ReadyPlan::new_cli(plan.effective().clone(), vec![nic]).unwrap()
+    }
+
+    struct ArpRun {
+        sent: Vec<Vec<u8>>,
+        outcome: Outcome,
+        arp: ArpSummary,
+    }
+
+    /// Прогон `plan` с кадрами приёма `rx` и опциями `options` на `fake` (уже настроенном тестом).
+    fn run_arp_on(
+        fake: FakeAdapter,
+        clock: Arc<ManualClock>,
+        plan: &ReadyPlan,
+        rx: Vec<Vec<u8>>,
+        options: EngineOptions,
+    ) -> ArpRun {
+        for f in rx {
+            fake.push_frame(f);
+        }
+        let c: Arc<dyn Clock + Send + Sync> = clock;
+        let h = Engine::start_cli_with_clock(plan.clone(), vec![fake.pair()], options, c, None)
+            .unwrap();
+        let t = Instant::now();
+        loop {
+            match h.recv_event_timeout(Duration::from_millis(50)) {
+                Ok(Event::Finished { .. }) | Err(TryRecvError::Disconnected) => break,
+                Ok(_) => {}
+                Err(TryRecvError::Empty) => assert!(t.elapsed() < Duration::from_secs(20)),
+            }
+        }
+        let arp = h.arp_stats();
+        let outcome = h.join().unwrap();
+        ArpRun {
+            sent: fake.sent_frames(),
+            outcome,
+            arp,
+        }
+    }
+
+    fn run_arp(plan: &ReadyPlan, rx: Vec<Vec<u8>>, options: EngineOptions) -> ArpRun {
+        let clock = ManualClock::new();
+        let fake = FakeAdapter::new().with_clock(clock.clone());
+        run_arp_on(fake, clock, plan, rx, options)
+    }
+
+    fn arp_frames(sent: &[Vec<u8>]) -> Vec<&Vec<u8>> {
+        sent.iter()
+            .filter(|f| f.get(12..14) == Some(&[0x08, 0x06][..]))
+            .collect()
+    }
+
+    /// `src/main.c:829`, `:878-887`: запрос «кто имеет» наш адрес источника получает ответ C (60 байт от MAC адаптера к
+    /// MAC спросившего); 12 SYN идут как прежде, а сам запрос не результат и не `discarded`.
+    #[test]
+    fn arp_request_for_the_source_address_gets_cs_reply() {
+        let r = run_arp(
+            &plan12(0, Shard { one: 1, of: 1 }, 0),
+            vec![who_has(ARP_ME)],
+            arp_on(),
+        );
+        assert_eq!(r.outcome.reason, Reason::Completed);
+        assert_eq!(arp_frames(&r.sent), vec![&arp_reply_to_router(ARP_ME)]);
+        assert_eq!(r.sent.len(), 13);
+        assert_eq!(r.sent.iter().filter(|f| f.len() == 58).count(), 12);
+        assert_eq!(
+            r.arp,
+            ArpSummary {
+                replies_sent: 1,
+                queue_full: 0,
+                unsent: 0
+            }
+        );
+        assert_eq!(r.outcome.progress.discarded, 0);
+        assert_eq!(r.outcome.progress.received, 0);
+    }
+
+    /// `--adapter-ip A-B` (`is_my_ip`, `src/stack-src.c:8-13`): каждый адрес диапазона отвечает собой, соседние нет.
+    #[test]
+    fn arp_requests_for_each_address_of_a_source_range_get_replies() {
+        let rx = vec![
+            who_has(ARP_ME - 1),
+            who_has(ARP_ME),
+            who_has(ARP_ME + 1),
+            who_has(ARP_ME + 2),
+            who_has(ARP_ME + 3),
+            who_has(ARP_ME + 4),
+        ];
+        let r = run_arp(&arp_range_plan(ARP_ME + 3), rx, arp_on());
+        let want: Vec<Vec<u8>> = (ARP_ME..=ARP_ME + 3).map(arp_reply_to_router).collect();
+        assert_eq!(arp_frames(&r.sent), want.iter().collect::<Vec<_>>());
+        assert_eq!(r.arp.replies_sent, 4);
+        assert_eq!(
+            r.outcome.progress.discarded, 2,
+            "the two foreign requests stay discarded"
+        );
+    }
+
+    /// Нет ответа на чужой адрес, на ответ ARP (opcode 2) вне ARP-скана, на обрезанный и битый кадр и на запрос с
+    /// тегом VLAN (C разбирает запрос с фиксированного смещения 14, `src/stack-arpv4.c:309`).
+    #[test]
+    fn arp_foreign_reply_malformed_and_tagged_frames_get_no_reply() {
+        let mut opcode2 = arp_reply_to_router(ARP_ROUTER);
+        opcode2[0..6].copy_from_slice(&ARP_ME_MAC);
+        opcode2[28..32].copy_from_slice(&ARP_ROUTER.to_be_bytes());
+        opcode2[32..38].copy_from_slice(&ARP_ME_MAC);
+        opcode2[38..42].copy_from_slice(&ARP_ME.to_be_bytes());
+        let mine = who_has(ARP_ME);
+        let mut tagged = mine[..12].to_vec();
+        tagged.extend_from_slice(&[0x81, 0x00, 0x00, 0x64]);
+        tagged.extend_from_slice(&mine[12..42]);
+        let mut bad_hw = mine.clone();
+        bad_hw[15] = 2;
+        let rx = vec![
+            who_has(ARP_ME + 1),
+            opcode2,
+            mine[..41].to_vec(),
+            mine[..14].to_vec(),
+            Vec::new(),
+            tagged,
+            bad_hw,
+        ];
+        let r = run_arp(&plan12(0, Shard { one: 1, of: 1 }, 0), rx, arp_on());
+        assert_eq!(r.outcome.reason, Reason::Completed);
+        assert!(arp_frames(&r.sent).is_empty(), "{:?}", arp_frames(&r.sent));
+        assert_eq!(r.sent.len(), 12);
+        assert_eq!(r.arp, ArpSummary::default());
+    }
+
+    /// Без опции (`EngineOptions::new`, так у Studio) кадры побайтно прежние: запрос к нашему адресу без ответа и,
+    /// как раньше, в `discarded`; TX после зондов не ждёт RX.
+    #[test]
+    fn arp_responder_off_sends_nothing() {
+        let r = run_arp(
+            &plan12(0, Shard { one: 1, of: 1 }, 0),
+            vec![who_has(ARP_ME)],
+            EngineOptions::new([1; 16], [2; 16]),
+        );
+        assert_eq!(r.sent.len(), 12);
+        assert!(arp_frames(&r.sent).is_empty());
+        assert_eq!(r.arp, ArpSummary::default());
+        assert_eq!(r.outcome.progress.discarded, 1);
+        assert!(!EngineOptions::new([0; 16], [0; 16]).arp_responder);
+    }
+
+    /// Адаптер, у которого запросы `rx` (и кадр не ARP в конце) приходят вместе с последним, 12-м SYN, а TX стоит в
+    /// хуке этой отправки, пока RX не снимет последний кадр: к следующей отправке TX все запросы уже разобраны, а сам
+    /// TX ни одного ответа ещё не забрал. Порядок от загрузки машины не зависит.
+    fn adapter_with_requests_at_the_last_syn(rx: Vec<Vec<u8>>) -> (FakeAdapter, Arc<ManualClock>) {
+        let clock = ManualClock::new();
+        let fake = FakeAdapter::new().with_clock(clock.clone());
+        let mut pending = Some(rx);
+        let mut seen = 0usize;
+        fake.set_responder(move |_| {
+            seen += 1;
+            match (seen, pending.take()) {
+                (12, Some(mut frames)) => {
+                    frames.push(vec![0; 60]);
+                    frames
+                }
+                (_, p) => {
+                    pending = p;
+                    Vec::new()
+                }
+            }
+        });
+        let f2 = fake.clone();
+        fake.set_send_hook(move |sent| {
+            if sent == 12 {
+                let deadline = Instant::now() + Duration::from_secs(10);
+                while f2.rx_pending() > 0 && Instant::now() < deadline {
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+            }
+        });
+        (fake, clock)
+    }
+
+    /// Очередь ответов ограничена (`ARP_OUT_CAP`): RX не ждёт TX, лишний ответ выбрасывается и считается в
+    /// `queue_full`.
+    #[test]
+    fn arp_queue_full_drops_and_counts() {
+        let rx = (0..ARP_OUT_CAP + 36).map(|_| who_has(ARP_ME)).collect();
+        let (fake, clock) = adapter_with_requests_at_the_last_syn(rx);
+        let r = run_arp_on(
+            fake,
+            clock,
+            &plan12(0, Shard { one: 1, of: 1 }, 0),
+            Vec::new(),
+            arp_on(),
+        );
+        assert_eq!(r.outcome.reason, Reason::Completed);
+        assert_eq!(
+            r.arp,
+            ArpSummary {
+                replies_sent: ARP_OUT_CAP as u64,
+                queue_full: 36,
+                unsent: 0
+            }
+        );
+        assert_eq!(arp_frames(&r.sent).len(), ARP_OUT_CAP);
+        assert_eq!(r.sent.len(), 12 + ARP_OUT_CAP);
+    }
+
+    /// Ответ, который адаптер не принял, не повторяется (как NA) и считается в `unsent`; скан не падает.
+    #[test]
+    fn arp_reply_the_adapter_refuses_is_counted_unsent() {
+        let (fake, clock) = adapter_with_requests_at_the_last_syn(vec![who_has(ARP_ME)]);
+        // 12 SYN уходят, следующая отправка (ответ ARP) не принята.
+        fake.script_tx(
+            std::iter::repeat_n(crate::fake::TxStep::Sent, 12)
+                .chain([crate::fake::TxStep::WouldBlockUnsent]),
+        );
+        let r = run_arp_on(
+            fake,
+            clock,
+            &plan12(0, Shard { one: 1, of: 1 }, 0),
+            Vec::new(),
+            arp_on(),
+        );
+        assert_eq!(r.outcome.reason, Reason::Completed);
+        assert_eq!(
+            r.arp,
+            ArpSummary {
+                replies_sent: 0,
+                queue_full: 0,
+                unsent: 1
+            }
+        );
+        assert_eq!(r.sent.len(), 12);
+        assert!(arp_frames(&r.sent).is_empty());
+    }
+
+    /// Запрос, пришедший после конца передачи, в окне `--wait`, тоже получает ответ (TX живёт до конца RX, как с NDP,
+    /// `src/main.c:470-494`), и скан кончается `Completed`.
+    #[test]
+    fn arp_request_arriving_after_tx_finished_still_gets_its_reply() {
+        let mut m = MassIp::new();
+        add_target_string(m.ipv4_mut(), "198.18.0.0/30").unwrap();
+        parse_ports(m.ports_mut(), "80,443,8080").unwrap();
+        let cfg = ScanConfig {
+            targets: m,
+            seed: SEED,
+            max_rate: 1_000_000.0,
+            wait_secs: 1000,
+            ..ScanConfig::default()
+        };
+        let eff = validate(&cfg, Operation::Scan).unwrap();
+        let nic = plan12(0, Shard { one: 1, of: 1 }, 0).nics()[0].clone();
+        let plan = ReadyPlan::new_cli(eff, vec![nic]).unwrap();
+        let clock = ManualClock::new();
+        clock.set_hold(true);
+        let fake = FakeAdapter::new().with_clock(clock.clone());
+        fake.push_rx(crate::fake::RxStep::Idle(2000));
+        let r = run_arp_on(fake, clock, &plan, vec![who_has(ARP_ME)], arp_on());
+        assert_eq!(r.outcome.reason, Reason::Completed);
+        assert_eq!(r.sent.len(), 13);
+        assert!(r.sent[..12].iter().all(|f| f.len() == 58), "SYNs first");
+        assert_eq!(r.sent[12], arp_reply_to_router(ARP_ME));
+        assert_eq!(r.arp.replies_sent, 1);
+    }
+
+    /// ARP-скан (`--arp`): запрос к нам получает ответ, ответ цели остаётся результатом (`src/main.c:878-905`).
+    #[test]
+    fn arp_scan_answers_requests_and_keeps_reporting_replies() {
+        let plan = cli_plan(&Spec {
+            targets: "198.18.0.0/30",
+            ports: "I:2",
+            retries: 0,
+            shard: Shard { one: 1, of: 1 },
+            resume_index: 0,
+            resume_count: None,
+            rate: 1_000_000.0,
+        });
+        assert!(plan.is_arp_scan());
+        let target = 0xc612_0002;
+        let answer =
+            rmasscan_core::arp::encode_reply([0x0a, 2, 2, 2, 2, 2], target, ARP_ME_MAC, ARP_ME);
+        let r = run_arp(&plan, vec![who_has(ARP_ME), answer.to_vec()], arp_on());
+        assert_eq!(r.outcome.reason, Reason::Completed);
+        assert_eq!(
+            r.outcome.progress.received, 1,
+            "the target's reply is a result"
+        );
+        assert_eq!(r.arp.replies_sent, 1);
+        assert!(r.sent.contains(&arp_reply_to_router(ARP_ME)));
     }
 }
 

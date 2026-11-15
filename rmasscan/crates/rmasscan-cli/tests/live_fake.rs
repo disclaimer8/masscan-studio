@@ -203,6 +203,17 @@ struct FakeBackend {
     /// Каждое чтение `unix_time()` прибавляет секунду: время записи не может совпасть случайно.
     tick_time: bool,
     ticks: AtomicU64,
+    /// Шлюз не знает MAC адреса источника (задача 14a): на первый SYN адаптера скана он присылает этот ARP-запрос
+    /// «кто имеет» и держит ответы на SYN, пока сканер не ответит ARP-ответом от этого адреса; ответ и всё, что было
+    /// удержано, идут в RX сразу за ним. `None`: шлюз адрес знает.
+    arp_gate: Option<ArpGate>,
+}
+
+/// Сценарий [`FakeBackend::arp_gate`]: запрос шлюза и адрес, ответа за который он ждёт.
+#[derive(Clone)]
+struct ArpGate {
+    request: Vec<u8>,
+    address: Ipv4Addr,
 }
 
 /// Сколько итераций цикла событий CLI переждать в сценарии `stall_tx_at`.
@@ -313,6 +324,7 @@ impl FakeBackend {
             synack_burst: None,
             tick_time: false,
             ticks: AtomicU64::new(0),
+            arp_gate: None,
         }
     }
 
@@ -453,6 +465,9 @@ impl Backend for FakeBackend {
         let udp_banners = self.udp_banners;
         let (tcp_peer, peer_clock) = (self.tcp_peer.clone(), self.clock.clone());
         let burst = self.synack_burst.filter(|_| !opened.is_empty());
+        // Шлюз, который ждёт нашего ARP-ответа (только адаптер скана): `asked` после его запроса, `held` удержанные ответы.
+        let gate = self.arp_gate.clone().filter(|_| !opened.is_empty());
+        let (mut gate_asked, mut gate_known, mut gate_held) = (false, false, Vec::<Vec<u8>>::new());
         let (burst_clock, mut burst_syns) = (self.clock.clone(), Vec::<Vec<u8>>::new());
         // Сценарий действует на адаптер скана (не на ARP-адаптер, открытый первым).
         let scenario = self.press_in_tx.filter(|_| !opened.is_empty());
@@ -490,6 +505,26 @@ impl Backend for FakeBackend {
             }
             if let Some(peer) = tcp_peer.as_ref().filter(|_| is_tcp4(f)) {
                 return peer.lock().unwrap().respond(f, peer_clock.now_micros());
+            }
+            if let Some(g) = gate.as_ref().filter(|_| !gate_known) {
+                if is_arp(f) {
+                    let ours = decode(f).is_ok_and(|p| {
+                        p.op == ArpOp::Reply
+                            && p.sender_ip == u32::from(g.address)
+                            && p.target_ip == u32::from(GW)
+                    });
+                    if ours {
+                        gate_known = true;
+                        return std::mem::take(&mut gate_held);
+                    }
+                    return vec![];
+                }
+                gate_held.extend(respond(f, &neighbors));
+                if is_syn(f) && !gate_asked {
+                    gate_asked = true;
+                    return vec![g.request.clone()];
+                }
+                return vec![];
             }
             let mut replies = respond(f, &neighbors);
             if inject_noise && is_syn(f) {
@@ -809,6 +844,98 @@ fn live_scan_detects_resolves_and_prints_discovered_lines() {
         .collect();
     assert_eq!(out, want);
     assert_eq!(out.len(), 2 * 80);
+}
+
+/// Кадр `index` эталона C `tests/golden/arp-replies/cases/<name>`: строка `frame` входа и ответ C (`reply len=60`) из
+/// `.out` (`None`, если C не ответил).
+fn arp_golden(name: &str, index: usize) -> (Vec<u8>, Option<Vec<u8>>) {
+    let read = |file: String| {
+        let path = format!(
+            "{}/../../tests/golden/arp-replies/cases/{file}",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}"))
+    };
+    let input = read(format!("{name}.in.txt"));
+    let frame = input
+        .lines()
+        .filter_map(|l| l.strip_prefix("frame "))
+        .nth(index)
+        .map(|h| if h == "-" { Vec::new() } else { unhex(h) })
+        .unwrap_or_else(|| panic!("{name}: no frame {index}"));
+    let output = read(format!("{name}.out"));
+    let line = output
+        .lines()
+        .find_map(|l| l.strip_prefix(&format!("frame {index} ")))
+        .unwrap_or_else(|| panic!("{name}.out: no frame {index}"))
+        .to_string();
+    let reply = (line != "none").then(|| {
+        unhex(
+            line.strip_prefix("reply len=60 ")
+                .unwrap_or_else(|| panic!("{name}.out: {line}")),
+        )
+    });
+    (frame, reply)
+}
+
+/// Задача 14a (`src/main.c:829`, `:878-887`, `stack_arp_incoming_request`, `src/stack-arpv4.c:282-363`): адрес
+/// `--adapter-ip`, которым ОС не владеет, шлюз сначала спрашивает ARP-ом. Запрос это кадр эталона C `plain` 0 (шлюз
+/// 192.0.2.1 спрашивает 192.0.2.250, MAC сканера `02-00-00-00-00-01`), ответ сканера побайтно ответ C из того же
+/// эталона, и только после него шлюз отдаёт SYN-ACK: скан находит оба открытых порта.
+#[test]
+fn live_fake_router_asks_who_has_the_adapter_ip_and_gets_cs_reply() {
+    let (request, c_reply) = arp_golden("plain", 0);
+    let c_reply = c_reply.expect("C answers plain frame 0");
+    let b = FakeBackend {
+        arp_gate: Some(ArpGate {
+            request,
+            address: Ipv4Addr::new(192, 0, 2, 250),
+        }),
+        ..FakeBackend::new()
+    };
+    let args = with(
+        &LIVE,
+        &[
+            "--adapter-ip",
+            "192.0.2.250",
+            "--adapter-mac",
+            "02-00-00-00-00-01",
+        ],
+    );
+    let (r, out, log) = cli(&b, &args);
+    r.unwrap();
+    let opened = b.opened();
+    let frames = opened[1].adapter.sent_frames();
+    let arps: Vec<usize> = (0..frames.len()).filter(|&i| is_arp(&frames[i])).collect();
+    assert_eq!(arps.len(), 1, "one ARP reply from the scan adapter");
+    assert_eq!(frames[arps[0]], c_reply, "the reply is C's, byte for byte");
+    // Шлюз держал ответы до нашего ARP-ответа: RST без состояния (Р8) на SYN-ACK и RST идут после него.
+    let non_syn: Vec<usize> = (0..frames.len())
+        .filter(|&i| !is_arp(&frames[i]) && !is_syn(&frames[i]))
+        .collect();
+    assert_eq!(non_syn.len(), 4, "one stateless RST per reply: {log}");
+    assert!(
+        non_syn.iter().all(|&i| i > arps[0]),
+        "replies only after our ARP reply"
+    );
+    let syns: Vec<Vec<u8>> = frames.iter().filter(|f| is_syn(f)).cloned().collect();
+    assert_eq!(syns.len(), 4);
+    assert!(syns.iter().all(|f| f[26..30] == [192, 0, 2, 250]));
+    let finished = plus_lines(&log)
+        .into_iter()
+        .find(|l| l.starts_with("[+] finished"))
+        .map(str::to_string);
+    assert_eq!(
+        finished.as_deref(),
+        Some("[+] finished: Completed, sent 4, replies 4, open 2"),
+        "{log}"
+    );
+    let want: BTreeSet<String> = OPEN
+        .iter()
+        .map(|&(ip, port)| discovered_line(ip, port))
+        .collect();
+    let got: BTreeSet<String> = out.split_inclusive('\n').map(str::to_string).collect();
+    assert_eq!(got, want, "{out}");
 }
 
 #[test]

@@ -204,8 +204,10 @@ struct FakeBackend {
     tick_time: bool,
     ticks: AtomicU64,
     /// Шлюз не знает MAC адреса источника (задача 14a): на первый SYN адаптера скана он присылает этот ARP-запрос
-    /// «кто имеет» и держит ответы на SYN, пока сканер не ответит ARP-ответом от этого адреса; ответ и всё, что было
-    /// удержано, идут в RX сразу за ним. `None`: шлюз адрес знает.
+    /// «кто имеет» (и за ним кадр не ARP, [`GATE_TRAILER`]) и держит ответы на SYN, пока сканер не ответит ARP-ответом
+    /// от этого адреса; ответ и всё, что было удержано, идут в RX сразу за ним. TX стоит в хуке первого SYN, пока RX не
+    /// снимет хвост, то есть пока запрос не разобран: ответ может уйти до второго SYN, если TX отправляет ответы посреди
+    /// зондов (ревью задачи 14a, I2). `None`: шлюз адрес знает.
     arp_gate: Option<ArpGate>,
 }
 
@@ -215,6 +217,9 @@ struct ArpGate {
     request: Vec<u8>,
     address: Ipv4Addr,
 }
+
+/// Кадр сразу за запросом шлюза [`ArpGate`]: не ARP и не ответ, приём его отбрасывает.
+const GATE_TRAILER: [u8; 60] = [0; 60];
 
 /// Сколько итераций цикла событий CLI переждать в сценарии `stall_tx_at`.
 const STALL_POLLS: usize = 40;
@@ -467,6 +472,7 @@ impl Backend for FakeBackend {
         let burst = self.synack_burst.filter(|_| !opened.is_empty());
         // Шлюз, который ждёт нашего ARP-ответа (только адаптер скана): `asked` после его запроса, `held` удержанные ответы.
         let gate = self.arp_gate.clone().filter(|_| !opened.is_empty());
+        let gated = gate.is_some();
         let (mut gate_asked, mut gate_known, mut gate_held) = (false, false, Vec::<Vec<u8>>::new());
         let (burst_clock, mut burst_syns) = (self.clock.clone(), Vec::<Vec<u8>>::new());
         // Сценарий действует на адаптер скана (не на ARP-адаптер, открытый первым).
@@ -522,7 +528,7 @@ impl Backend for FakeBackend {
                 gate_held.extend(respond(f, &neighbors));
                 if is_syn(f) && !gate_asked {
                     gate_asked = true;
-                    return vec![g.request.clone()];
+                    return vec![g.request.clone(), GATE_TRAILER.to_vec()];
                 }
                 return vec![];
             }
@@ -562,6 +568,18 @@ impl Backend for FakeBackend {
                 if let Some(frame) = held.lock().unwrap().take() {
                     handle.push_rx(RxStep::Idle(40));
                     handle.push_frame(frame);
+                }
+            });
+        }
+        if gated {
+            let handle = adapter.clone();
+            adapter.set_send_hook(move |_| {
+                if !sent_syn_number(&handle, 1) {
+                    return;
+                }
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+                while handle.rx_pending() > 0 && std::time::Instant::now() < deadline {
+                    std::thread::sleep(std::time::Duration::from_millis(1));
                 }
             });
         }
@@ -879,13 +897,21 @@ fn arp_golden(name: &str, index: usize) -> (Vec<u8>, Option<Vec<u8>>) {
 }
 
 /// Задача 14a (`src/main.c:829`, `:878-887`, `stack_arp_incoming_request`, `src/stack-arpv4.c:282-363`): адрес
-/// `--adapter-ip`, которым ОС не владеет, шлюз сначала спрашивает ARP-ом. Запрос это кадр эталона C `plain` 0 (шлюз
-/// 192.0.2.1 спрашивает 192.0.2.250, MAC сканера `02-00-00-00-00-01`), ответ сканера побайтно ответ C из того же
-/// эталона, и только после него шлюз отдаёт SYN-ACK: скан находит оба открытых порта.
+/// `--adapter-ip`, которым ОС не владеет, шлюз сначала спрашивает ARP-ом. Запрос это кадр эталона C `plain` 3 (шлюз
+/// 192.0.2.1 спрашивает 192.0.2.250, MAC сканера `02-00-00-00-00-01`; источник Ethernet `02-00-00-00-00-0b` не равен
+/// MAC отправителя из ARP `02-00-00-00-00-fe`, ревью задачи 14a, M2), ответ сканера побайтно ответ C из того же эталона
+/// (к MAC отправителя из ARP), и только после него шлюз отдаёт SYN-ACK: скан находит оба открытых порта. Ответ уходит
+/// посреди зондов, раньше последнего SYN (ревью задачи 14a, I2).
 #[test]
 fn live_fake_router_asks_who_has_the_adapter_ip_and_gets_cs_reply() {
-    let (request, c_reply) = arp_golden("plain", 0);
-    let c_reply = c_reply.expect("C answers plain frame 0");
+    let (request, c_reply) = arp_golden("plain", 3);
+    let c_reply = c_reply.expect("C answers plain frame 3");
+    assert_ne!(
+        request[6..12],
+        request[22..28],
+        "Ethernet source is not the ARP sender"
+    );
+    assert_eq!(c_reply[0..6], request[22..28], "C answers the ARP sender");
     let b = FakeBackend {
         arp_gate: Some(ArpGate {
             request,
@@ -909,6 +935,12 @@ fn live_fake_router_asks_who_has_the_adapter_ip_and_gets_cs_reply() {
     let arps: Vec<usize> = (0..frames.len()).filter(|&i| is_arp(&frames[i])).collect();
     assert_eq!(arps.len(), 1, "one ARP reply from the scan adapter");
     assert_eq!(frames[arps[0]], c_reply, "the reply is C's, byte for byte");
+    let last_syn = (0..frames.len()).rfind(|&i| is_syn(&frames[i])).unwrap();
+    assert!(
+        arps[0] < last_syn,
+        "the reply (frame {}) leaves while probes still go out (last SYN: frame {last_syn})",
+        arps[0]
+    );
     // Шлюз держал ответы до нашего ARP-ответа: RST без состояния (Р8) на SYN-ACK и RST идут после него.
     let non_syn: Vec<usize> = (0..frames.len())
         .filter(|&i| !is_arp(&frames[i]) && !is_syn(&frames[i]))

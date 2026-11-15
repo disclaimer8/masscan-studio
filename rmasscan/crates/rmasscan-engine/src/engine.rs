@@ -960,24 +960,37 @@ const ARP_OUT_CAP: usize = 64;
 /// Остаток снимка при остановке отбрасывается. C ограничивает это пачкой throttle (main.c:478-486). Так же
 /// отправляются ответы ARP ([`flush_arp`]). Возвращает `(принято адаптером, взято из очереди и не принято или
 /// отброшено остановкой)`.
+///
+/// Снимок это число кадров в очереди на входе: кадры снимаются с её головы по одному (блокировка держится только на
+/// снятие, отправка идёт без неё), очередь остаётся на месте со своей ёмкостью, и ответ на редкий запрос не стоит
+/// выделения памяти в RX (ревью задачи 14a, M5). Головой очереди владеет только этот TX-поток (RX кладёт в хвост,
+/// `finalize` читает после выхода потоков), поэтому первые `snapshot` кадров и есть снимок.
 fn flush_replies<const N: usize>(
     queue: &Mutex<VecDeque<[u8; N]>>,
     keep_going: &dyn Fn() -> bool,
     tx: &mut dyn Tx,
     timeout: Duration,
 ) -> (u64, u64) {
-    let batch = std::mem::take(&mut *lock(queue));
-    let taken = batch.len() as u64;
-    let mut sent = 0u64;
-    for frame in batch {
+    let snapshot = lock(queue).len();
+    let (mut taken, mut sent) = (0usize, 0u64);
+    while taken < snapshot {
         if !keep_going() {
+            // Остаток снимка отбрасывается; кадры, которые RX положил после входа, остаются в очереди.
+            let mut q = lock(queue);
+            let rest = (snapshot - taken).min(q.len());
+            q.drain(..rest);
+            taken += rest;
             break;
         }
+        let Some(frame) = lock(queue).pop_front() else {
+            break;
+        };
+        taken += 1;
         if let Ok(SendStatus::Sent) = tx.send(&frame, timeout) {
             sent += 1;
         }
     }
-    (sent, taken - sent)
+    (sent, taken as u64 - sent)
 }
 
 /// [`flush_replies`] очереди ответов ARP адаптера `idx` со счётом в [`ArpSummary`].
@@ -2863,6 +2876,45 @@ mod tests {
         );
     }
 
+    /// Ревью задачи 14a, M5: сброс не забирает буфер очереди (ни NA, ни ARP, у обоих [`flush_replies`]). После сброса
+    /// очередь пуста, но с прежней ёмкостью, и следующий ответ RX кладёт без выделения памяти; при остановке остаток
+    /// снимка отброшен, а кадр, положенный во время сброса, остаётся.
+    #[test]
+    fn flush_replies_keeps_the_queue_buffer() {
+        let fake = FakeAdapter::new().with_clock(ManualClock::new());
+        let mut io = fake.pair();
+        let q = Arc::new(Mutex::new(VecDeque::with_capacity(NDP_OUT_CAP)));
+        lock(&q).extend(na_frames(3));
+        let cap = lock(&q).capacity();
+        assert_eq!(
+            flush_replies(&q, &|| true, &mut *io.tx, Duration::from_millis(50)),
+            (3, 0)
+        );
+        assert_eq!(fake.sent_count(), 3);
+        assert!(lock(&q).is_empty());
+        assert_eq!(lock(&q).capacity(), cap, "the buffer stays with the queue");
+        lock(&q).push_back([0xaa; NDP_FRAME_LEN]);
+        assert_eq!(lock(&q).capacity(), cap, "the next reply reuses it");
+        // Остановка после первого кадра: два кадра снимка отброшены и посчитаны, поздний кадр RX ждёт.
+        let q = Arc::new(Mutex::new(na_frames(3)));
+        let (q2, f2) = (q.clone(), fake.clone());
+        fake.set_send_hook(move |_| lock(&q2).push_back([0xee; NDP_FRAME_LEN]));
+        let before = fake.sent_count();
+        assert_eq!(
+            flush_replies(
+                &q,
+                &|| f2.sent_count() == before,
+                &mut *io.tx,
+                Duration::from_millis(50)
+            ),
+            (1, 2)
+        );
+        assert_eq!(
+            lock(&q).iter().copied().collect::<Vec<_>>(),
+            vec![[0xee; NDP_FRAME_LEN]]
+        );
+    }
+
     /// Пауза с включённым NDP заканчивается чисто и приводит к `Paused`.
     #[test]
     fn pause_with_ndp_enabled_ends_cleanly() {
@@ -3077,6 +3129,8 @@ mod tests {
     }
 
     /// `--adapter-ip A-B` (`is_my_ip`, `src/stack-src.c:8-13`): каждый адрес диапазона отвечает собой, соседние нет.
+    /// Запросы приходят с последним SYN, и RX разбирает все до конца TX (ревью задачи 14a, I1: заранее положенные
+    /// кадры при `wait_secs: 0` RX дочитывал, только если обгонял 12 отправок).
     #[test]
     fn arp_requests_for_each_address_of_a_source_range_get_replies() {
         let rx = vec![
@@ -3087,18 +3141,30 @@ mod tests {
             who_has(ARP_ME + 3),
             who_has(ARP_ME + 4),
         ];
-        let r = run_arp(&arp_range_plan(ARP_ME + 3), rx, arp_on());
+        let r = run_arp_at_the_last_syn(&arp_range_plan(ARP_ME + 3), rx);
+        assert_eq!(r.outcome.reason, Reason::Completed);
         let want: Vec<Vec<u8>> = (ARP_ME..=ARP_ME + 3).map(arp_reply_to_router).collect();
         assert_eq!(arp_frames(&r.sent), want.iter().collect::<Vec<_>>());
-        assert_eq!(r.arp.replies_sent, 4);
+        assert_eq!(r.sent.len(), 12 + 4);
         assert_eq!(
-            r.outcome.progress.discarded, 2,
-            "the two foreign requests stay discarded"
+            r.arp,
+            ArpSummary {
+                replies_sent: 4,
+                queue_full: 0,
+                unsent: 0
+            }
+        );
+        assert_eq!(
+            r.outcome.progress.discarded,
+            2 + 1,
+            "the two foreign requests stay discarded, and so does the trailer"
         );
     }
 
     /// Нет ответа на чужой адрес, на ответ ARP (opcode 2) вне ARP-скана, на обрезанный и битый кадр и на запрос с
-    /// тегом VLAN (C разбирает запрос с фиксированного смещения 14, `src/stack-arpv4.c:309`).
+    /// тегом VLAN (C разбирает запрос с фиксированного смещения 14, `src/stack-arpv4.c:309`). Каждый из семи кадров
+    /// прочитан и отброшен (`discarded` 7 и кадр-хвост), так что «ответа нет» не значит «кадр не дошёл» (ревью задачи
+    /// 14a, I1).
     #[test]
     fn arp_foreign_reply_malformed_and_tagged_frames_get_no_reply() {
         let mut opcode2 = arp_reply_to_router(ARP_ROUTER);
@@ -3121,11 +3187,19 @@ mod tests {
             tagged,
             bad_hw,
         ];
-        let r = run_arp(&plan12(0, Shard { one: 1, of: 1 }, 0), rx, arp_on());
+        let frames = rx.len() as u64;
+        let r = run_arp_at_the_last_syn(&plan12(0, Shard { one: 1, of: 1 }, 0), rx);
         assert_eq!(r.outcome.reason, Reason::Completed);
         assert!(arp_frames(&r.sent).is_empty(), "{:?}", arp_frames(&r.sent));
         assert_eq!(r.sent.len(), 12);
         assert_eq!(r.arp, ArpSummary::default());
+        assert_eq!(frames, 7);
+        assert_eq!(
+            r.outcome.progress.discarded,
+            frames + 1,
+            "every frame was read and dropped, then the trailer"
+        );
+        assert_eq!(r.outcome.progress.received, 0);
     }
 
     /// Без опции (`EngineOptions::new`, так у Studio) кадры побайтно прежние: запрос к нашему адресу без ответа и,
@@ -3144,22 +3218,27 @@ mod tests {
         assert!(!EngineOptions::new([0; 16], [0; 16]).arp_responder);
     }
 
-    /// Адаптер, у которого запросы `rx` (и кадр не ARP в конце) приходят вместе с последним, 12-м SYN, а TX стоит в
-    /// хуке этой отправки, пока RX не снимет последний кадр: к следующей отправке TX все запросы уже разобраны, а сам
-    /// TX ни одного ответа ещё не забрал. Порядок от загрузки машины не зависит.
-    fn adapter_with_requests_at_the_last_syn(rx: Vec<Vec<u8>>) -> (FakeAdapter, Arc<ManualClock>) {
+    /// Адаптер, у которого кадры `rx` (и кадр не ARP в конце, [`TRAILER`]) приходят вместе с `at`-м отправленным
+    /// кадром, а TX стоит в хуке этой отправки, пока RX не снимет последний кадр: к следующей отправке TX все кадры
+    /// `rx` уже разобраны (RX разбирает по порядку, и разбор каждого кончился до снятия следующего), а сам TX ни одного
+    /// ответа ещё не забрал. Порядок от загрузки машины не зависит; с `wait_secs: 0` RX не выходит раньше, чем TX
+    /// покинет этот хук, поэтому ни один кадр не остаётся непрочитанным (ревью задачи 14a, I1).
+    fn adapter_with_requests_at_send(
+        at: usize,
+        rx: Vec<Vec<u8>>,
+    ) -> (FakeAdapter, Arc<ManualClock>) {
         let clock = ManualClock::new();
         let fake = FakeAdapter::new().with_clock(clock.clone());
         let mut pending = Some(rx);
         let mut seen = 0usize;
         fake.set_responder(move |_| {
             seen += 1;
-            match (seen, pending.take()) {
-                (12, Some(mut frames)) => {
-                    frames.push(vec![0; 60]);
+            match pending.take() {
+                Some(mut frames) if seen == at => {
+                    frames.push(TRAILER.to_vec());
                     frames
                 }
-                (_, p) => {
+                p => {
                     pending = p;
                     Vec::new()
                 }
@@ -3167,7 +3246,7 @@ mod tests {
         });
         let f2 = fake.clone();
         fake.set_send_hook(move |sent| {
-            if sent == 12 {
+            if sent == at {
                 let deadline = Instant::now() + Duration::from_secs(10);
                 while f2.rx_pending() > 0 && Instant::now() < deadline {
                     std::thread::sleep(Duration::from_millis(1));
@@ -3175,6 +3254,20 @@ mod tests {
             }
         });
         (fake, clock)
+    }
+
+    /// Последний кадр сценария [`adapter_with_requests_at_send`]: не ARP и не ответ, RX его отбрасывает (`discarded`).
+    const TRAILER: [u8; 60] = [0; 60];
+
+    /// Запросы приходят с последним, 12-м SYN плана `plan12`.
+    fn adapter_with_requests_at_the_last_syn(rx: Vec<Vec<u8>>) -> (FakeAdapter, Arc<ManualClock>) {
+        adapter_with_requests_at_send(12, rx)
+    }
+
+    /// Прогон плана из 12 зондов (`plan12` или [`arp_range_plan`]) с кадрами `rx`, пришедшими с последним SYN.
+    fn run_arp_at_the_last_syn(plan: &ReadyPlan, rx: Vec<Vec<u8>>) -> ArpRun {
+        let (fake, clock) = adapter_with_requests_at_the_last_syn(rx);
+        run_arp_on(fake, clock, plan, Vec::new(), arp_on())
     }
 
     /// Очередь ответов ограничена (`ARP_OUT_CAP`): RX не ждёт TX, лишний ответ выбрасывается и считается в
@@ -3277,14 +3370,46 @@ mod tests {
         let target = 0xc612_0002;
         let answer =
             rmasscan_core::arp::encode_reply([0x0a, 2, 2, 2, 2, 2], target, ARP_ME_MAC, ARP_ME);
-        let r = run_arp(&plan, vec![who_has(ARP_ME), answer.to_vec()], arp_on());
+        // Оба кадра приходят с последним из 4 зондов ARP, и RX разбирает их до конца TX (ревью задачи 14a, I1).
+        let (fake, clock) =
+            adapter_with_requests_at_send(4, vec![who_has(ARP_ME), answer.to_vec()]);
+        let r = run_arp_on(fake, clock, &plan, Vec::new(), arp_on());
         assert_eq!(r.outcome.reason, Reason::Completed);
+        assert_eq!(r.outcome.progress.sent, 4);
         assert_eq!(
             r.outcome.progress.received, 1,
             "the target's reply is a result"
         );
         assert_eq!(r.arp.replies_sent, 1);
-        assert!(r.sent.contains(&arp_reply_to_router(ARP_ME)));
+        assert_eq!(r.sent.len(), 4 + 1);
+        assert_eq!(r.sent[4], arp_reply_to_router(ARP_ME));
+    }
+
+    /// Ревью задачи 14a, I2: ответ уходит, пока идут зонды, а не только в окне ожидания после последнего (`src/main.c`
+    /// отправляет очередь стека в каждой пачке TX, `:289-299`, `:478-486`; иначе шлюз, спросивший наш адрес в начале
+    /// долгого скана, узнал бы его только после последнего зонда). Запрос приходит с первым SYN, TX стоит в хуке этой
+    /// отправки, пока RX его не разберёт; ответ должен уйти раньше последнего, 12-го SYN.
+    #[test]
+    fn arp_reply_leaves_during_the_probe_phase() {
+        let (fake, clock) = adapter_with_requests_at_send(1, vec![who_has(ARP_ME)]);
+        let r = run_arp_on(
+            fake,
+            clock,
+            &plan12(0, Shard { one: 1, of: 1 }, 0),
+            Vec::new(),
+            arp_on(),
+        );
+        assert_eq!(r.outcome.reason, Reason::Completed);
+        let reply = arp_reply_to_router(ARP_ME);
+        let at = r.sent.iter().position(|f| *f == reply).expect("the reply");
+        let last_syn = r.sent.iter().rposition(|f| f.len() == 58).expect("SYNs");
+        assert_eq!(r.sent.len(), 13);
+        assert_eq!(r.sent[0].len(), 58, "the SYN that brought the request");
+        assert!(
+            at < last_syn,
+            "the reply (frame {at}) leaves before the last SYN (frame {last_syn})"
+        );
+        assert_eq!(r.arp.replies_sent, 1);
     }
 }
 

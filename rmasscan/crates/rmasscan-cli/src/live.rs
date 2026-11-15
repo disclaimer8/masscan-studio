@@ -128,8 +128,9 @@ pub trait Backend: Wall {
 #[derive(Debug, Clone)]
 pub struct Prepared {
     pub eff: EffectiveConfig,
-    /// Интерфейс, MAC и часть IPv4 адаптера `nic[0]`. Без целей IPv4 часть IPv4 пустая: адрес `0.0.0.0`, MAC шлюза
-    /// нулевой; её не печатают и не резолвят (C `main-initadapter.c:122`).
+    /// Интерфейс, MAC и часть IPv4 адаптера `nic[0]`. Без целей IPv4 часть IPv4 не обнаруживается: адрес это заданный
+    /// `--adapter-ip` IPv4 или `0.0.0.0`, MAC шлюза нулевой; её не печатают и не резолвят (C `main-initadapter.c:122`,
+    /// `without_ipv4`).
     pub detected: Detected,
     /// Часть IPv6 адаптера `nic[0]`: только при целях IPv6.
     pub detected6: Option<DetectedV6>,
@@ -399,13 +400,19 @@ fn given_offline6(eff: &EffectiveConfig, ip: u128, mac: [u8; 6]) -> Result<Detec
     })
 }
 
-/// Обнаружение скана без целей IPv4: интерфейс и MAC из части IPv6, часть IPv4 пустая (`0.0.0.0`, MAC шлюза
-/// нулевой). Её не печатают и не резолвят (C `main-initadapter.c:122` пропускает IPv4 без целей IPv4).
-fn without_ipv4(d6: &DetectedV6) -> Detected {
+/// Обнаружение скана без целей IPv4: интерфейс и MAC из части IPv6, часть IPv4 не обнаруживается (MAC шлюза нулевой).
+/// Её не печатают и не резолвят (C `main-initadapter.c:122` пропускает IPv4 без целей IPv4). Адрес в ней это заданный
+/// `--adapter-ip` IPv4 `given`, который C так и держит в `src.ipv4` (`main-conf.c:2505-2506`) и за который отвечает на
+/// ARP (`main.c:829`, `:878-887`), иначе `0.0.0.0`, как у C (ревью задачи 14a, M1). Кадров IPv4 такой скан не шлёт,
+/// кроме ответов ARP; адрес ещё входит в «наши» адреса приёма и фильтра `--pcap` (`is_my_ip`, `main.c:829`), как у C.
+fn without_ipv4(d6: &DetectedV6, given: Option<Ipv4Addr>) -> Detected {
     Detected {
         iface: d6.iface.clone(),
         iface_source: d6.iface_source,
-        source_ipv4: (Ipv4Addr::UNSPECIFIED, Source::Detected),
+        source_ipv4: match given {
+            Some(ip) => (ip, Source::Given),
+            None => (Ipv4Addr::UNSPECIFIED, Source::Detected),
+        },
         source_mac: d6.source_mac,
         next_hop: NextHop::Mac([0; 6], Source::Detected),
     }
@@ -469,7 +476,7 @@ pub fn prepare(
             };
             match (eff.adapter_ip().filter(|_| has_ipv4(&eff)), &d6) {
                 (Some(ip), _) => (given_offline(&eff, ip, mac)?, d6),
-                (None, Some(v6)) => (without_ipv4(v6), d6),
+                (None, Some(v6)) => (without_ipv4(v6, eff.adapter_ip().map(Ipv4Addr::from)), d6),
                 (None, None) => return Err(refusal(DetectError::NoUnicastTargets)),
             }
         } else {
@@ -606,7 +613,7 @@ fn detect_nic(
                 detect_v6(t6, &ov, routes, ifaces)
             };
             let d6 = found.map_err(refusal)?;
-            Ok((without_ipv4(&d6), Some(d6)))
+            Ok((without_ipv4(&d6, ov.adapter_ip), Some(d6)))
         }
         (Some(t4), Some(t6)) => {
             let (d4, d6) = detect_mixed(t4, t6, &ov, routes, ifaces, offline).map_err(refusal)?;

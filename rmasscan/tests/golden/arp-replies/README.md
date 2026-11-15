@@ -80,8 +80,9 @@ requested address, the sender hardware address and the sender IP, zero padding.
   "sender MAC" is always the 6 bytes at offset 22 (`:81`), whatever the hardware length. 7/3, hardware type 2 and
   protocol type 0x86dd are not answered; a 6/255 request one byte short of its 544 bytes is not either.
 - `oversize`: a 1514-byte request is answered, a 1515-byte one is dropped before parsing (`src/main.c:799`).
-- `unspecified-source`: with the source range 0.0.0.0-0.0.0.0, which C keeps in a scan without IPv4 targets
-  (`src/main-initadapter.c:122-128`), a who-has 0.0.0.0 is answered with sender IP 0.0.0.0.
+- `unspecified-source`: with the source range 0.0.0.0-0.0.0.0, which C keeps in a scan without IPv4 targets and
+  without an IPv4 `--adapter-ip` (`src/main-initadapter.c:122-128` skips detection; a given address stays,
+  `src/main-conf.c:2505-2506`), a who-has 0.0.0.0 is answered with sender IP 0.0.0.0.
 
 Not in the goldens (R1 class а, unit test `target_address_past_the_frame_end_gets_no_reply`): with lengths 6/0 to 6/3
 C reads the target address past the verified bytes, and in a frame shorter than `38 + pl` bytes past the end of the

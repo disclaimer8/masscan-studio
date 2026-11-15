@@ -16,7 +16,7 @@ use rmasscan_cli::conf::{FullConf, format_paused_conf};
 use rmasscan_cli::live::Backend;
 use rmasscan_cli::output::{ServiceNames, Wall};
 use rmasscan_cli::status::normalize_stderr_line;
-use rmasscan_core::arp::{ArpOp, decode, encode_reply};
+use rmasscan_core::arp::{ArpOp, decode, encode_reply, encode_request};
 use rmasscan_core::config::{Operation, validate};
 use rmasscan_core::ndp::{
     decode_neighbor_advertisement, decode_neighbor_solicitation, encode_neighbor_advertisement,
@@ -129,6 +129,8 @@ struct FakeBackend {
     open6: Vec<(Ipv6Addr, u16)>,
     /// На первый SYN соседний роутер спрашивает наш адрес IPv6 (NS): ответ NA есть только у скана IPv6.
     ns_on_first_syn: bool,
+    /// На первый SYN поверх IPv6 шлюз присылает эти ARP-запросы (ревью задачи 14a, M1).
+    arp_on_first_syn6: Vec<Vec<u8>>,
     /// Ctrl-C во время NDP: уход Neighbor Solicitation считается одним нажатием (ответа нет).
     press_during_ndp: bool,
     presses: Arc<AtomicU32>,
@@ -199,6 +201,7 @@ impl FakeBackend {
             open4: vec![(Ipv4Addr::new(198, 51, 100, 1), 80)],
             open6: vec![(v6("2001:db8:9::1"), 80), (v6("2001:db8:9::2"), 443)],
             ns_on_first_syn: false,
+            arp_on_first_syn6: Vec::new(),
             press_during_ndp: false,
             presses: Arc::new(AtomicU32::new(0)),
             panic_on_open: false,
@@ -293,6 +296,7 @@ impl Backend for FakeBackend {
         let (http6, seen6) = (self.http6.clone(), self.seen6.clone());
         let mut http6_next = None::<u32>;
         let mut ask = self.ns_on_first_syn;
+        let mut ask_arp = self.arp_on_first_syn6.clone();
         let (presses, press_during_ndp) = (self.presses.clone(), self.press_during_ndp);
         adapter.set_responder(move |f| {
             tx.lock().unwrap().push(f.to_vec());
@@ -304,6 +308,9 @@ impl Backend for FakeBackend {
                 return http6_peer(f, body, &mut http6_next, &seen6);
             }
             let mut out = respond(f, &n4, &n6, &o4, &o6);
+            if is_syn6(f) {
+                out.append(&mut ask_arp);
+            }
             if ask && (is_syn6(f) || is_syn4(f)) {
                 ask = false;
                 out.push(
@@ -1138,6 +1145,69 @@ fn banners_warning_once_for_os_owned_source() {
     let log = run(&["198.51.100.1", "-pU:53,T:80", "--wait", "1", "--banners"]);
     assert_eq!(log.matches("[-] warning: --banners").count(), 1, "{log}");
     assert!(log.contains(&warning("192.0.2.5")), "{log}");
+}
+
+/// Ревью задачи 14a, M1: скан без целей IPv4 с заданным `--adapter-ip` IPv4. C держит этот адрес в `src.ipv4`
+/// (`src/main-conf.c:2505-2506`; `src/main-initadapter.c:122` пропускает только обнаружение IPv4) и отвечает на ARP за
+/// него (`is_my_ip`, `src/main.c:829`, `:878-887`), а не за `0.0.0.0`; rmasscan так же. Без ключа ответ за `0.0.0.0`,
+/// как у C (эталон `unspecified-source`). Диапазон `A-B`, который C тоже держит, отвечает за каждый свой адрес (до
+/// ревью такой скан отказывал: «does not start at the source address 0.0.0.0»). Строки `[+]`, SYN поверх IPv6 (у
+/// каждого скана по одному RST без состояния на ответ) и выдача у всех трёх сканов одни и те же.
+#[test]
+fn ipv6_only_scan_answers_arp_for_a_given_ipv4_adapter_ip() {
+    let ip = |d: u8| Ipv4Addr::new(192, 0, 2, d);
+    let asked = [Ipv4Addr::UNSPECIFIED, ip(250), ip(251), ip(252)];
+    let reply = |me: Ipv4Addr| encode_reply(MY_MAC, u32::from(me), GW_MAC, u32::from(GW)).to_vec();
+    let run = |extra: &[&str]| {
+        let b = FakeBackend {
+            arp_on_first_syn6: asked
+                .iter()
+                .map(|&a| encode_request(GW_MAC, u32::from(GW), u32::from(a)).to_vec())
+                .collect(),
+            ..FakeBackend::new()
+        };
+        let (r, out, log) = cli(&b, &with(&LIVE6, extra));
+        r.unwrap_or_else(|e| panic!("{extra:?}: {e}"));
+        let opened = b.opened.lock().unwrap();
+        assert_eq!(opened.len(), 2, "one NDP adapter, then one scan adapter");
+        let scan = &opened[1];
+        let (arps, tcp): (Vec<Vec<u8>>, Vec<Vec<u8>>) = scan
+            .adapter
+            .sent_frames()
+            .into_iter()
+            .partition(|f| f[12..14] == [0x08, 0x06]);
+        let mut lines: Vec<String> = out.lines().map(|l| l.trim_end().to_string()).collect();
+        lines.sort_unstable();
+        (
+            arps,
+            syns_and_one_rst_per_reply(&tcp),
+            plus_lines(&log),
+            lines,
+            scan.binding.source_ipv4,
+        )
+    };
+    let plain = run(&[]);
+    assert_eq!(
+        plain.0,
+        vec![reply(Ipv4Addr::UNSPECIFIED)],
+        "as C without --adapter-ip"
+    );
+    assert_eq!(plain.4, 0);
+    assert_eq!(plain.1.len(), 4);
+    let given = run(&["--adapter-ip", "192.0.2.250"]);
+    assert_eq!(
+        given.0,
+        vec![reply(ip(250))],
+        "the given address, not 0.0.0.0"
+    );
+    assert_eq!(given.4, u32::from(ip(250)));
+    let range = run(&["--adapter-ip", "192.0.2.250-192.0.2.251"]);
+    assert_eq!(range.0, vec![reply(ip(250)), reply(ip(251))]);
+    for (name, other) in [("given", &given), ("range", &range)] {
+        assert_eq!(other.1, plain.1, "{name}: the same IPv6 SYNs");
+        assert_eq!(other.2, plain.2, "{name}: the same [+] lines");
+        assert_eq!(other.3, plain.3, "{name}: the same results");
+    }
 }
 
 fn with<'a>(base: &[&'a str], extra: &[&'a str]) -> Vec<&'a str> {

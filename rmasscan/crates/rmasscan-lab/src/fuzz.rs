@@ -41,7 +41,7 @@
 //!   eight of any) plus, sometimes, a range repeated up to [`MAX_STREAM`] (the classifier window and R5's record limit
 //!   are 64 KiB), cut at [`MAX_STREAM`]; a random split into segments of 1 to [`MAX_SEGMENT`] bytes (one in eight byte
 //!   by byte). Both the whole stream (one segment) and the split go through the parser; besides a panic and the time
-//!   (both runs together, best of three), the result of the split must equal the whole stream's (R13, rmasscan gives
+//!   (of the whole-stream run, best of three; the split run is timed apart, `max_split_us`), the result of the split must equal the whole stream's (R13, rmasscan gives
 //!   C's whole-stream result in every split, `split_problem`): the application and the records exactly, the
 //!   parser's sends and closes in order exactly too, except Telnet's answers and Minecraft's closes, which follow the
 //!   parse calls as in C by design (C reference, after table E2); and every record is a known application with 1 to
@@ -54,7 +54,10 @@
 //!   speaks at once, in segments of the split, with duplicates, overlaps and segments from the future, each ACKing all
 //!   the scanner sent; when every server byte got ACKed and the framework closes nowhere on the whole stream, the
 //!   connection's records must equal the framework's on the whole stream (R13 through the stack; where C's stack
-//!   itself depends on the split, after the parser's close or with unacknowledged data, no comparison is made). The
+//!   itself depends on the split, after the parser's close, no comparison is made). A delivery that stops short is
+//!   compared on the ACKed prefix, and three segments at the stack's ACK point that ACK all the scanner sent and
+//!   still move nothing are an `invariant` finding (C ACKs in-order data always, `src/stack-tcp-core.c:1917-1949`),
+//!   unless C itself drops data: the scanner sent a FIN, the connection is gone, or the whole stream closes. The
 //!   stack's contract is checked on every call: segments only to the input's connections, only C's flags (RST, ACK,
 //!   FIN-ACK, PSH-ACK, FIN-PSH-ACK), at most `tcb->mss` 1400 bytes (`src/stack-tcp-core.c:1031`), the template window;
 //!   banner sets non-empty, records of a connection of the input, TCP, with the creating SYN-ACK's TTL; no more live
@@ -86,6 +89,7 @@ use rmasscan_proto::{
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
+    cell::RefCell,
     collections::BTreeMap,
     fs,
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
@@ -1637,6 +1641,8 @@ struct Seen {
     ttl: u8,
     our_next: u32,
     their_ack: Option<u32>,
+    /// The scanner sent a FIN (C closes: after its FIN is ACKed the stack ignores data).
+    fin: bool,
 }
 
 /// A table under a stack input: feeds events, records them and checks every output against the stack's contract.
@@ -1645,7 +1651,8 @@ struct Feeder<'p> {
     st: Box<dyn TcpStack>,
     now: u64,
     seen: Vec<Seen>,
-    events: Vec<StackEvent>,
+    /// Shared with the caller, who keeps them when the stack panics.
+    events: &'p RefCell<Vec<StackEvent>>,
     /// Every banner set with its connection.
     sets: Vec<(usize, Vec<Record>)>,
     problem: Option<(&'static str, String)>,
@@ -1660,9 +1667,9 @@ impl Feeder<'_> {
     }
     fn tick(&mut self, now: u64) {
         self.now = now;
+        self.events.borrow_mut().push(StackEvent::Tick { now });
         let mut out = StackOutput::default();
         self.st.on_tick(now, &mut out);
-        self.events.push(StackEvent::Tick { now });
         self.observe(out);
     }
     fn segment(
@@ -1671,6 +1678,16 @@ impl Feeder<'_> {
         (seq, ack, flags, ttl): (u32, u32, u8, u8),
         payload: Vec<u8>,
     ) -> bool {
+        // Recorded before the stack sees it: a crash keeps the segment that caused it.
+        self.events.borrow_mut().push(StackEvent::Segment {
+            now: self.now,
+            conn,
+            seq,
+            ack,
+            flags,
+            ttl,
+            payload: payload.clone(),
+        });
         let before = self.st.stats();
         let mut out = StackOutput::default();
         let seg = SegmentIn {
@@ -1691,20 +1708,12 @@ impl Feeder<'_> {
                 ttl,
                 our_next: ack,
                 their_ack: None,
+                fin: false,
             };
         }
         if after.table_full > before.table_full && (took || !out.segments.is_empty()) {
             self.fail("a full table took a SYN-ACK or answered it".into());
         }
-        self.events.push(StackEvent::Segment {
-            now: self.now,
-            conn,
-            seq,
-            ack,
-            flags,
-            ttl,
-            payload,
-        });
         self.observe(out);
         took
     }
@@ -1712,9 +1721,9 @@ impl Feeder<'_> {
     fn finish(&mut self, max: usize) -> bool {
         let live = self.st.stats().tcbs_live;
         let mut out = StackOutput::default();
+        self.events.borrow_mut().push(StackEvent::Finish { max });
         let more = self.st.finish(max, &mut out);
         let left = self.st.stats().tcbs_live;
-        self.events.push(StackEvent::Finish { max });
         if !out.segments.is_empty() {
             self.fail(format!("finish sent {} segments", out.segments.len()));
         }
@@ -1762,6 +1771,7 @@ impl Feeder<'_> {
             if seen.created && (end.wrapping_sub(seen.our_next) as i32) > 0 {
                 seen.our_next = end;
             }
+            seen.fin |= seen.created && s.flags & FIN != 0;
             if s.flags & ACK != 0 {
                 seen.their_ack = Some(s.ack);
             }
@@ -1910,9 +1920,8 @@ fn chaos(f: &mut Feeder<'_>, rng: &mut Rng) {
 /// Delivery: one connection's SYN-ACK, then its stream from the server at once (so no hello: `src/stack-tcp-app.c:
 /// 100-105`), in segments of at most `max_segment` bytes, mostly where the stack's last ACK points, sometimes behind it
 /// (a duplicate or an overlap) or ahead (dropped, `src/stack-tcp-core.c:1917-1949`), each ACKing everything the scanner
-/// sent (sometimes an old number); stalls get a 2-second tick (the scanner's queue moves on its timer). `true` when the
-/// stack ACKed every byte.
-fn deliver(f: &mut Feeder<'_>, rng: &mut Rng) -> bool {
+/// sent (sometimes an old number); stalls get a 2-second tick (the scanner's queue moves on its timer).
+fn deliver(f: &mut Feeder<'_>, rng: &mut Rng) -> Delivery {
     let plan = f.plan;
     let stream = &plan.streams[0];
     let len = stream.len();
@@ -1925,15 +1934,15 @@ fn deliver(f: &mut Feeder<'_>, rng: &mut Rng) -> bool {
     f.segment(0, (isn, our_isn, SYN_ACK, ttl), Vec::new());
     let start = isn.wrapping_add(1);
     let at_of = |s: &Seen| s.their_ack.map(|a| a.wrapping_sub(start) as usize);
-    let (mut stalled, mut jumps, mut accepted) = (0u32, 0u32, false);
+    let (mut stalled, mut jumps, mut accepted, mut strict) = (0u32, 0u32, false, 0u32);
     let cap = 256 + 4 * (len / bound.div_ceil(2) + 1);
     for _ in 0..cap {
         if f.problem.is_some() {
-            return false;
+            return done(f, false, strict);
         }
         let s = f.seen[0];
         let Some(at) = at_of(&s) else {
-            return false;
+            return done(f, false, strict);
         };
         if at >= len {
             if rng.below(2) == 0 {
@@ -1945,7 +1954,7 @@ fn deliver(f: &mut Feeder<'_>, rng: &mut Rng) -> bool {
                     Vec::new(),
                 );
             }
-            return true;
+            return done(f, true, 0);
         }
         let off = match rng.below(10) {
             0 => at.saturating_sub(1 + rng.below(2 * bound)),
@@ -1975,9 +1984,13 @@ fn deliver(f: &mut Feeder<'_>, rng: &mut Rng) -> bool {
         }
         if at_of(&f.seen[0]) == Some(at) {
             stalled += 1;
+            // The next byte, with the number the scanner's data is ACKed up to: the stack must take it (the ACK step
+            // of the frame comes before the data step, so even a scanner sending leaves its state).
+            strict += u32::from(off == at && ack == s.our_next);
         } else {
             accepted = true;
             stalled = 0;
+            strict = 0;
         }
         // Not before the server's first byte got in: a tick then would send the hello (`App_SendNext`, where the
         // server's bytes are ACKed but not parsed, `src/stack-tcp-app.c:90-99`); ten jumps of at most 2.5 s stay
@@ -1989,12 +2002,39 @@ fn deliver(f: &mut Feeder<'_>, rng: &mut Rng) -> bool {
             stalled = 0;
         }
     }
-    at_of(&f.seen[0]).is_some_and(|at| at >= len)
+    let complete = at_of(&f.seen[0]).is_some_and(|at| at >= len);
+    done(f, complete, strict)
 }
 
-/// How a delivery input ended: compared with the framework on the whole stream, or not compared because not every
-/// byte got ACKed, or because the parser closes (after its FIN C's stack stops reading: FIN_WAIT2 ignores data,
-/// `src/stack-tcp-core.c:2241-2263`, so the split decides what it still parses).
+/// How far a delivery got.
+struct Delivery {
+    /// Bytes of the stream the stack ACKed (`None`: no connection ever answered).
+    at: Option<usize>,
+    complete: bool,
+    /// Segments at the stack's ACK point, ACKing all the scanner sent, that moved nothing since the last progress.
+    strict_stalls: u32,
+}
+fn done(f: &Feeder<'_>, complete: bool, strict_stalls: u32) -> Delivery {
+    let len = f.plan.streams[0].len();
+    let start = f.seen[0].isn.wrapping_add(1);
+    Delivery {
+        at: f.seen[0]
+            .their_ack
+            .map(|a| (a.wrapping_sub(start) as usize).min(len)),
+        complete,
+        strict_stalls,
+    }
+}
+
+/// Stalled segments at the ACK point, with every byte of the scanner ACKed, after which in-order data still is not
+/// taken: C ACKs an in-order segment in `ESTABLISHED` always (`src/stack-tcp-core.c:1917-1949`; `ESTABLISHED_SEND`,
+/// where DATA is ignored, ends with the ACK step of the same frame), so the stall is the stack's.
+const STALL_LIMIT: u32 = 3;
+
+/// How a delivery input ended: compared with the framework on the whole stream, or stopped short (compared on the
+/// ACKed prefix; a stall on in-order data is a finding before it gets here), or not compared because the parser closes
+/// (after its FIN C's stack stops reading: FIN_WAIT2 ignores data, `src/stack-tcp-core.c:2241-2263`, so the split
+/// decides what it still parses).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Delivered {
     Compared,
@@ -2013,6 +2053,11 @@ struct Checked {
     connections: u64,
     delivered: Option<Delivered>,
     events: Vec<StackEvent>,
+    /// What the 100 ms budget is held against: a parser input's run on the whole stream, a stack input's whole run.
+    timed: Duration,
+    /// A parser input's run on its split (reported, not held against the budget: a 64 KiB stream in single bytes is
+    /// 65 000 calls).
+    split_timed: Duration,
 }
 
 /// A record that is not a known application with 1 to 65 536 bytes (`src/proto-banout.c` flushes only non-empty
@@ -2097,14 +2142,20 @@ fn check_stream(t: &Target, i: &StreamInput) -> Checked {
         segments: segs.len(),
         ..Checked::default()
     };
-    let whole = match run(&whole_of(&i.stream)) {
+    let started = Instant::now();
+    let whole = run(&whole_of(&i.stream));
+    c.timed = started.elapsed();
+    let whole = match whole {
         Ok(r) => r,
         Err(_) => {
             c.crash = Some(format!("the whole stream: {}", last_panic()));
             return c;
         }
     };
-    let split = match run(&segs) {
+    let started = Instant::now();
+    let split = run(&segs);
+    c.split_timed = started.elapsed();
+    let split = match split {
         Ok(r) => r,
         Err(_) => {
             c.crash = Some(format!("{} segments: {}", segs.len(), last_panic()));
@@ -2122,6 +2173,11 @@ fn check_stream(t: &Target, i: &StreamInput) -> Checked {
         .unwrap_or(0);
     if let Some(bad) = records_problem(&whole.records).or_else(|| records_problem(&split.records)) {
         c.problem = Some(("invariant", bad));
+    } else if whole.app_proto == Some(app_id::TELNET)
+        && let Err(e) = telnet_answers(&whole.actions)
+    {
+        // The parser's own reply on the whole stream is malformed: not a matter of the split.
+        c.problem = Some(("invariant", format!("the whole stream: {e}")));
     } else if let Some(diff) = split_problem(&whole, &split) {
         c.problem = Some(("split", format!("{} segments: {diff}", segs.len())));
     }
@@ -2195,7 +2251,10 @@ const FINISH_ROUNDS: usize = 10_000;
 
 fn check_stack(t: &Target, plan: &StackPlan) -> Checked {
     let mut c = Checked::default();
-    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drive(t, plan)));
+    let log = RefCell::new(Vec::new());
+    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drive(t, plan, &log)));
+    c.events = log.take();
+    c.segments = c.events.len();
     match r {
         Err(_) => c.crash = Some(last_panic()),
         Ok(d) => {
@@ -2205,8 +2264,6 @@ fn check_stack(t: &Target, plan: &StackPlan) -> Checked {
             c.max_record = d.max_record;
             c.connections = d.created;
             c.delivered = d.delivered;
-            c.segments = d.events.len();
-            c.events = d.events;
         }
     }
     c
@@ -2214,14 +2271,13 @@ fn check_stack(t: &Target, plan: &StackPlan) -> Checked {
 
 struct Driven {
     problem: Option<(&'static str, String)>,
-    events: Vec<StackEvent>,
     records: u64,
     max_record: usize,
     data_segments: u64,
     created: u64,
     delivered: Option<Delivered>,
 }
-fn drive(t: &Target, plan: &StackPlan) -> Driven {
+fn drive(t: &Target, plan: &StackPlan, log: &RefCell<Vec<StackEvent>>) -> Driven {
     let s = settings(plan.capture_html);
     let st = (t.stack)(s.clone(), plan.lifetime).new_table(TableParams {
         seed: plan.table_seed,
@@ -2233,19 +2289,21 @@ fn drive(t: &Target, plan: &StackPlan) -> Driven {
         st,
         now: T0,
         seen: vec![Seen::default(); plan.keys.len()],
-        events: Vec::new(),
+        events: log,
         sets: Vec::new(),
         problem: None,
         data_segments: 0,
         records: 0,
     };
     let mut rng = Rng::new(plan.script);
-    let acked = if plan.delivery {
-        deliver(&mut f, &mut rng)
+    let delivery = if plan.delivery {
+        Some(deliver(&mut f, &mut rng))
     } else {
         chaos(&mut f, &mut rng);
-        false
+        None
     };
+    // Before `finish` ends every connection: whether the stack still held this one, and whether it closed it.
+    let (live, fin) = (f.st.stats().tcbs_live > 0, f.seen[0].fin);
     for _ in 0..FINISH_ROUNDS {
         if f.problem.is_some() || !f.finish(rng.below(4)) {
             break;
@@ -2258,39 +2316,69 @@ fn drive(t: &Target, plan: &StackPlan) -> Driven {
         ));
     }
     let mut delivered = None;
-    if plan.delivery && f.problem.is_none() {
+    if let Some(d) = delivery
+        && f.problem.is_none()
+    {
         let stream = &plan.streams[0];
         let whole = (t.stream)(&s, plan.keys[0].remote_port, None, &whole_of(stream));
-        delivered = Some(if !acked {
-            Delivered::Incomplete
-        } else if whole.actions.contains(&StreamAction::Close) {
-            Delivered::Closed
-        } else {
-            let got: Vec<(u16, Vec<u8>)> = f
-                .sets
-                .iter()
-                .filter(|(c, _)| *c == 0)
-                .flat_map(|(_, r)| r.iter().cloned())
-                .collect();
-            if got != whole.records {
-                let segments = f
+        let closes = |r: &StreamResult| r.actions.contains(&StreamAction::Close);
+        let at = d.at.unwrap_or(0);
+        // The C stack takes no data where it drops it itself: after its own FIN (it closed), or once the
+        // connection is gone; where the whole stream closes the split decides what the parser still gets. Anything
+        // else that stalls on in-order data is the stack's.
+        if !d.complete && d.strict_stalls >= STALL_LIMIT && live && !fin && !closes(&whole) {
+            f.fail(format!(
+                "the stack stopped taking in-order data at byte {at} of {}: {} segments at its ACK point, each ACKing \
+                 all the scanner sent, moved nothing",
+                stream.len(),
+                d.strict_stalls
+            ));
+        }
+        // On the part of the stream the stack ACKed, its records equal the framework's (on all of it when complete).
+        let prefix = (t.stream)(&s, plan.keys[0].remote_port, None, &whole_of(&stream[..at]));
+        delivered = Some(
+            if closes(&whole) || (!d.complete && (fin || closes(&prefix))) {
+                if d.complete {
+                    Delivered::Closed
+                } else {
+                    Delivered::Incomplete
+                }
+            } else if d.at.is_none() {
+                Delivered::Incomplete
+            } else {
+                let got: Vec<(u16, Vec<u8>)> = f
+                    .sets
+                    .iter()
+                    .filter(|(c, _)| *c == 0)
+                    .flat_map(|(_, r)| r.iter().cloned())
+                    .collect();
+                let want = if d.complete { &whole } else { &prefix };
+                if f.problem.is_none() && got != want.records {
+                    let segments = f
                     .events
+                    .borrow()
                     .iter()
                     .filter(
                         |e| matches!(e, StackEvent::Segment { payload, .. } if !payload.is_empty()),
                     )
                     .count();
-                f.problem = Some((
-                    "split",
-                    format!(
-                        "the stack's records of a stream delivered in {segments} data segments against the whole \
-                         stream's: {}",
-                        records_diff(&got, &whole.records)
-                    ),
-                ));
-            }
-            Delivered::Compared
-        });
+                    f.problem = Some((
+                        "split",
+                        format!(
+                            "the stack's records of a stream delivered in {segments} data segments against the whole \
+                         stream's ({at} of {} bytes ACKed): {}",
+                            stream.len(),
+                            records_diff(&got, &want.records)
+                        ),
+                    ));
+                }
+                if d.complete {
+                    Delivered::Compared
+                } else {
+                    Delivered::Incomplete
+                }
+            },
+        );
     }
     Driven {
         max_record: f
@@ -2303,18 +2391,20 @@ fn drive(t: &Target, plan: &StackPlan) -> Driven {
         records: f.records,
         data_segments: f.data_segments,
         created: f.st.stats().tcbs_created,
-        events: f.events,
         delivered,
     }
 }
 
-fn check(t: &Target, i: &TcpInput) -> (Checked, Duration) {
-    let start = Instant::now();
-    let c = match i {
+fn check(t: &Target, i: &TcpInput) -> Checked {
+    match i {
         TcpInput::Stream(s) => check_stream(t, s),
-        TcpInput::Stack(p) => check_stack(t, p),
-    };
-    (c, start.elapsed())
+        TcpInput::Stack(p) => {
+            let start = Instant::now();
+            let mut c = check_stack(t, p);
+            c.timed = start.elapsed();
+            c
+        }
+    }
 }
 
 /// What a run of one family reached.
@@ -2337,10 +2427,14 @@ pub struct TcpStats {
     pub delivered_closed: u64,
     pub max_ns: u64,
     pub total_ns: u128,
+    /// The slowest run of a parser input on its split.
+    pub max_split_ns: u64,
 }
 /// A finding of `fuzz tcp`: the input, what happened and, for the stack, every event it fed.
 #[derive(Debug, Clone)]
 pub struct TcpFinding {
+    /// The input's place in the seed's stream (the first is 1): replay is the first `index` draws.
+    pub index: u64,
     pub kind: &'static str,
     pub input: TcpInput,
     pub what: String,
@@ -2409,7 +2503,9 @@ pub fn fuzz_tcp_with(
         let i = inputs.draw();
         i.hash_into(&mut hash);
         o.inputs += 1;
-        let (c, mut dt) = check(&target, &i);
+        let c = check(&target, &i);
+        let mut dt = c.timed;
+        let split_dt = c.split_timed;
         let st = &mut o.stats;
         st.with_records += u64::from(c.records > 0);
         st.records += c.records;
@@ -2448,7 +2544,7 @@ pub fn fuzz_tcp_with(
         if dt > SLOW {
             // A scheduler stall is not a slow input: the fastest of three timings decides.
             for _ in 0..2 {
-                dt = dt.min(check(&target, &i).1);
+                dt = dt.min(check(&target, &i).timed);
             }
             if dt > SLOW {
                 o.slow += 1;
@@ -2456,12 +2552,15 @@ pub fn fuzz_tcp_with(
             }
         }
         let ns = u64::try_from(dt.as_nanos()).unwrap_or(u64::MAX);
+        let split_ns = u64::try_from(split_dt.as_nanos()).unwrap_or(u64::MAX);
+        o.stats.max_split_ns = o.stats.max_split_ns.max(split_ns);
         o.stats.max_ns = o.stats.max_ns.max(ns);
         o.stats.total_ns += u128::from(ns);
         if let Some((kind, what)) = finding
             && o.findings.iter().filter(|f| f.kind == kind).count() < KEEP
         {
             o.findings.push(TcpFinding {
+                index: o.inputs,
                 kind,
                 input: i,
                 what,
@@ -2488,9 +2587,11 @@ fn plan_json(p: &StackPlan) -> Value {
 }
 fn tcp_finding_json(f: &TcpFinding) -> Value {
     match &f.input {
-        TcpInput::Stream(s) => json!({"kind": f.kind, "port": s.port, "force_app": s.force_app,
-            "capture_html": s.capture_html, "input": hex(&s.stream), "split": s.split, "what": f.what}),
-        TcpInput::Stack(p) => json!({"kind": f.kind, "plan": plan_json(p),
+        TcpInput::Stream(s) => {
+            json!({"kind": f.kind, "index": f.index, "port": s.port, "force_app": s.force_app,
+            "capture_html": s.capture_html, "input": hex(&s.stream), "split": s.split, "what": f.what})
+        }
+        TcpInput::Stack(p) => json!({"kind": f.kind, "index": f.index, "plan": plan_json(p),
             "events": f.events.iter().map(StackEvent::text).collect::<Vec<_>>(), "what": f.what}),
     }
 }
@@ -2526,6 +2627,7 @@ pub fn tcp_report(seed: u64, limit: &str, corpus: &[TcpSeed], o: &TcpOutcome) ->
             "delivered": {"compared": s.delivered_compared, "incomplete": s.delivered_incomplete,
                 "closed": s.delivered_closed},
             "max_us": s.max_ns / 1000,
+            "max_split_us": s.max_split_ns / 1000,
             "mean_ns": if o.inputs == 0 { 0 } else { s.total_ns / u128::from(o.inputs) },
         },
         "rss_kib": rss_json(&o.rss, o.inputs),
@@ -3325,6 +3427,148 @@ mod tests {
     }
     fn syn_stack(s: TcpBannerSettings, t: u32) -> Arc<dyn TcpStackFactory> {
         Arc::new(Syn(tcp_stack_factory(s, t)))
+    }
+
+    /// A stack that takes no in-order data of 1 or 2 bytes: no ACK, no parse (the reviewer's mutation of the Data step
+    /// of `tcp/stack.rs`), or panics on its third segment.
+    struct Faulty {
+        inner: Box<dyn TcpStack>,
+        small: bool,
+        calls: usize,
+    }
+    impl TcpStack for Faulty {
+        fn on_tick(&mut self, now: u64, out: &mut StackOutput) {
+            self.inner.on_tick(now, out);
+        }
+        fn on_segment(&mut self, now: u64, seg: &SegmentIn<'_>, out: &mut StackOutput) -> bool {
+            self.calls += 1;
+            assert!(self.small || self.calls < 3, "the third segment");
+            if self.small && (1..=2).contains(&seg.payload.len()) {
+                return false;
+            }
+            self.inner.on_segment(now, seg, out)
+        }
+        fn finish(&mut self, max: usize, out: &mut StackOutput) -> bool {
+            self.inner.finish(max, out)
+        }
+        fn stats(&self) -> StackStats {
+            self.inner.stats()
+        }
+    }
+    #[derive(Debug)]
+    struct FaultyFactory(Arc<dyn TcpStackFactory>, bool);
+    impl TcpStackFactory for FaultyFactory {
+        fn new_table(&self, p: TableParams) -> Box<dyn TcpStack> {
+            Box::new(Faulty {
+                inner: self.0.new_table(p),
+                small: self.1,
+                calls: 0,
+            })
+        }
+    }
+    fn small_dropping_stack(s: TcpBannerSettings, t: u32) -> Arc<dyn TcpStackFactory> {
+        Arc::new(FaultyFactory(tcp_stack_factory(s, t), true))
+    }
+    fn panicking_stack(s: TcpBannerSettings, t: u32) -> Arc<dyn TcpStackFactory> {
+        Arc::new(FaultyFactory(tcp_stack_factory(s, t), false))
+    }
+    fn bad_telnet(_: &TcpBannerSettings, _: u16, _: Option<u16>, _: &[&[u8]]) -> StreamResult {
+        StreamResult {
+            app_proto: Some(app_id::TELNET),
+            records: vec![(app_id::TELNET, b"x".to_vec())],
+            actions: vec![StreamAction::Send(vec![255, 252])],
+        }
+    }
+
+    /// I1: a stack that never ACKs in-order data (so the delivery stops short) is a finding of the stack family, not
+    /// an uncounted "incomplete" delivery; the product on the same inputs is clean and stalls only where C itself
+    /// drops data.
+    #[test]
+    fn a_stack_that_never_acks_in_order_data_is_a_finding() {
+        let c = tcp_corpus();
+        let o = fuzz_tcp_with(
+            "stack",
+            11,
+            &c,
+            Target {
+                stack: small_dropping_stack,
+                ..Target::PRODUCT
+            },
+            rss_kib,
+            |n, _| n >= 3000,
+        )
+        .unwrap();
+        assert!(o.invariant_failures > 20, "{:?}", o.stats);
+        assert_eq!((o.crashes, o.split_mismatches), (0, 0));
+        assert_eq!(o.verdict().exit_code(), 1);
+        let f = o.findings.iter().find(|f| f.kind == "invariant").unwrap();
+        assert!(
+            f.what.starts_with("the stack stopped taking in-order data"),
+            "{}",
+            f.what
+        );
+        let p = fuzz_tcp("stack", 11, &c, |n, _| n >= 3000).unwrap();
+        assert_eq!(p.sha256, o.sha256);
+        assert!(p.clean(), "{:#?}", p.findings);
+        assert!(p.stats.delivered_incomplete > 0, "{:?}", p.stats);
+    }
+
+    /// M1 to M4 of the review: a finding carries its input index; a stack crash keeps its events; a malformed reply of
+    /// the parser on the whole stream is an invariant, not a split mismatch; the budget is the whole-stream run, the
+    /// split run is reported apart.
+    #[test]
+    fn findings_carry_index_events_and_a_label_of_their_own() {
+        let c = tcp_corpus();
+        let o = fuzz_tcp_with(
+            "stack",
+            4,
+            &c,
+            Target {
+                stack: panicking_stack,
+                ..Target::PRODUCT
+            },
+            rss_kib,
+            |n, _| n >= 100,
+        )
+        .unwrap();
+        let f = o.findings.iter().find(|f| f.kind == "crash").unwrap();
+        assert!(f.index >= 1 && f.index <= 100, "{}", f.index);
+        assert!(
+            f.events.len() >= 3 && matches!(f.events.last(), Some(StackEvent::Segment { .. })),
+            "{} {:?}",
+            f.what,
+            f.events.len()
+        );
+        let j = &tcp_report(4, "100 inputs", &c, &o)["findings"][0];
+        assert_eq!(j["index"], o.findings[0].index);
+        assert!(j["events"].as_array().is_some_and(|e| e.len() >= 3));
+        let o = fuzz_tcp_with(
+            "telnet",
+            5,
+            &c,
+            Target {
+                stream: bad_telnet,
+                ..Target::PRODUCT
+            },
+            rss_kib,
+            |n, _| n >= 50,
+        )
+        .unwrap();
+        assert_eq!((o.split_mismatches, o.invariant_failures), (0, 50));
+        assert!(
+            o.findings[0]
+                .what
+                .starts_with("the whole stream: a telnet reply of 2 bytes"),
+            "{}",
+            o.findings[0].what
+        );
+        let p = fuzz_tcp("http", 5, &c, |n, _| n >= 50).unwrap();
+        assert!(
+            p.stats.max_split_ns > 0 && p.stats.max_ns > 0,
+            "{:?}",
+            p.stats
+        );
+        assert!(tcp_report(5, "50", &c, &p)["stats"]["max_split_us"].is_u64());
     }
 
     #[test]

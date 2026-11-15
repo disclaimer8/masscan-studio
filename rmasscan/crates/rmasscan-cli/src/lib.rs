@@ -14,6 +14,7 @@
 #![forbid(unsafe_code)]
 
 pub mod args;
+pub mod banner_settings;
 pub mod conf;
 pub mod live;
 pub mod output;
@@ -95,6 +96,13 @@ fn is_capture_refusal(msg: &str) -> bool {
         && (msg.ends_with(": unknown capture type") || msg.ends_with(": unknown nocapture type"))
 }
 
+/// `FAIL: <значение>: unknown hello type` (`src/main-conf.c:1201`) и пустой файл `--hello-file`
+/// (`[FAILED] could not read hello file`, `:1239`): строки C.
+fn is_hello_refusal(msg: &str) -> bool {
+    (msg.starts_with("FAIL: ") && msg.ends_with(": unknown hello type"))
+        || msg == "[FAILED] could not read hello file"
+}
+
 /// R3: поверх IPv6 только TCP SYN. Живой скан и `--offline --packet-trace` с целью IPv6 и портом не TCP (`U:`, `S:`,
 /// `I:`, `O:`, `--arp`) отказывают до обнаружения адаптера и до кадра (C шлёт их и по IPv6; здесь отложено). `-sL`,
 /// `--echo`/`--echo-all`, `--iflist`, `--readscan` и `--offline` без трассировки ничего не строят и принимают любые
@@ -141,6 +149,7 @@ pub fn error_text(msg: &str) -> String {
         || msg.starts_with(OPEN_FAILURE_PREFIX)
         || msg.starts_with(conf::BAD_BANNER_APP)
         || is_capture_refusal(msg)
+        || is_hello_refusal(msg)
         || msg == ARP_PORTSCAN_REFUSAL
     {
         msg.to_string()

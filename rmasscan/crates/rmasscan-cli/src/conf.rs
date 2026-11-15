@@ -268,6 +268,11 @@ pub fn apply_conf_key(
         "bannertypes" | "bannertype" | "bannerapps" | "bannerapp" => {
             base.scan.banner_types.insert(banner_app(value)?);
         }
+        // `SET_hello_file` (`src/main-conf.c:1207-1254`): файл читает слой CLI и дальше это `hello-string[PORT]`;
+        // набранное имя ключа несёт индекс, как в argv.
+        "hellofile" | "hellofilename" => {
+            crate::banner_settings::apply_hello_file(&mut base.scan, name, value)?;
+        }
         "ndjsonstatus" | "statusndjson" => base.ndjson_status = parse_bool(value),
         "jsonstatus" | "statusjson" => {
             return Err(format!("{name} not supported, use --ndjson-status"));

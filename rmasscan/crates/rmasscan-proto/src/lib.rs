@@ -5,6 +5,7 @@
 pub mod app;
 pub mod banner;
 mod banner1;
+pub mod base64;
 pub mod http_request;
 mod memcached_text;
 pub mod normalize;

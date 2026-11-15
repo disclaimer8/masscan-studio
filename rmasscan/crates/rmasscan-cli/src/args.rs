@@ -3,7 +3,7 @@
 //! :2434) из masscan © Robert David Graham
 //! (github.com/robertdavidgraham/masscan, HEAD 8e6b3b0).
 //!
-//! Любая опция вне подмножества (например `--heartbleed` или `--hello`) - ошибка clap,
+//! Любая опция вне подмножества (например `--heartbleed` или `--script`) - ошибка clap,
 //! а не молчаливый пропуск (Review Focus №5).
 //!
 //! Опции вывода (`SET_output_*`, main-conf.c:1616–1806, `-o<буква>` :3401–3459) разбираются с семантикой C:
@@ -498,6 +498,88 @@ pub struct Cli {
         help = "Accepted for masscan compatibility; like masscan it has no effect"
     )]
     pub hello_timeout: Vec<String>,
+    // `hello` (`src/main-conf.c:1181-1210`, таблица :2387): каждое вхождение ставит свой флаг, неизвестное
+    // значение отказывает с текстом C на разборе конфигурации.
+    #[arg(
+        long = "hello",
+        value_name = "TYPE",
+        action = clap::ArgAction::Append,
+        help = "Send this hello on every TCP port (except 65535): ssl, smbv1 or http; repeatable"
+    )]
+    pub hello: Vec<String>,
+    // `hello-string[PORT]`, `hello-file[PORT]` (`hello-filename`) и любое написание `http-header`/`http-field`
+    // (`src/main-conf.c:1207-1286`, `:1335-1408`): [`preprocess_args`] переписывает их до `EQUALS` в скрытые
+    // опции `--rmasscan-…=набранное-имя=значение`, потому что индекс и форма заголовка читаются из набранного
+    // имени (справка C2, C3), а clap такого имени не выражает.
+    #[arg(long = "rmasscan-hello-string", hide = true, action = clap::ArgAction::Append)]
+    hello_string_kv: Vec<String>,
+    #[arg(long = "rmasscan-hello-file", hide = true, action = clap::ArgAction::Append)]
+    hello_file_kv: Vec<String>,
+    #[arg(long = "rmasscan-http-header", hide = true, action = clap::ArgAction::Append)]
+    http_header_kv: Vec<String>,
+    // `connection-timeout` и синоним `tcp-timeout` старого стиля (`src/main-conf.c:2765-2767`): жизнь
+    // соединения баннеров в секундах, 0 это умолчание C 30; в paused.conf не пишется.
+    #[arg(
+        long = "connection-timeout",
+        alias = "tcp-timeout",
+        value_name = "SECONDS",
+        action = clap::ArgAction::Append,
+        help = "Lifetime of a TCP banner connection in seconds (default 30; alias: --tcp-timeout)"
+    )]
+    pub connection_timeout: Vec<String>,
+    // `http-*` (`src/main-conf.c:1300-1505`, таблица :2391-2398): одиночные держат последнее значение, cookie
+    // копятся (не больше 16). Синоним C `http-useragent` даёт тот же ключ `EQUALS`, что `http-user-agent`,
+    // поэтому синонимом clap не объявлен.
+    #[arg(
+        long = "http-method",
+        value_name = "METHOD",
+        action = clap::ArgAction::Append,
+        help = "Method of the HTTP banner request (default GET)"
+    )]
+    pub http_method: Vec<String>,
+    #[arg(
+        long = "http-url",
+        alias = "http-uri",
+        value_name = "URL",
+        action = clap::ArgAction::Append,
+        help = "URL of the HTTP banner request (default /; alias: --http-uri)"
+    )]
+    pub http_url: Vec<String>,
+    #[arg(
+        long = "http-version",
+        value_name = "VERSION",
+        action = clap::ArgAction::Append,
+        help = "Version of the HTTP banner request (default HTTP/1.0)"
+    )]
+    pub http_version: Vec<String>,
+    #[arg(
+        long = "http-host",
+        value_name = "HOST",
+        action = clap::ArgAction::Append,
+        help = "Host field of the HTTP banner request (none by default)"
+    )]
+    pub http_host: Vec<String>,
+    #[arg(
+        long = "http-user-agent",
+        value_name = "AGENT",
+        action = clap::ArgAction::Append,
+        help = "User-Agent field of the HTTP banner request"
+    )]
+    pub http_user_agent: Vec<String>,
+    #[arg(
+        long = "http-payload",
+        value_name = "PAYLOAD",
+        action = clap::ArgAction::Append,
+        help = "Body of the HTTP banner request (also sets Content-Length)"
+    )]
+    pub http_payload: Vec<String>,
+    #[arg(
+        long = "http-cookie",
+        value_name = "COOKIE",
+        action = clap::ArgAction::Append,
+        help = "Add a Cookie field to the HTTP banner request (repeatable, at most 16; a header NAME:VALUE or [NAME] is set with --http-header)"
+    )]
+    pub http_cookie: Vec<String>,
     // Каждое вхождение проверяется (Р6), побеждает последнее (Р17).
     #[arg(
         long = "output-format",
@@ -653,11 +735,12 @@ pub struct Cli {
     /// Ключи `имя[i]=значение` массива адаптеров и позиции clap.
     #[arg(skip)]
     nic_pos: Vec<(usize, String)>,
-    /// Опции баннеров (`--banners`, `--nobanners`, `--rawudp`, `--capture`, `--nocapture`, `--hello-timeout`) по
-    /// порядку argv: позиция clap, ключ ядра и значение. Они меняют одни и те же флаги (`--rawudp --nobanners`), поэтому
-    /// применяются одной последовательностью, а не «последним вхождением» каждой.
+    /// Опции баннеров (`--banners`, `--nobanners`, `--rawudp`, `--capture`, `--nocapture`, `--hello-timeout`,
+    /// `--hello*`, `--connection-timeout`, `--http-*`) по порядку argv: позиция clap и шаг. Они меняют одни и те
+    /// же флаги и списки (`--rawudp --nobanners`), поэтому применяются одной последовательностью, а не
+    /// «последним вхождением» каждой.
     #[arg(skip)]
-    banner_steps: Vec<(usize, &'static str, String)>,
+    banner_steps: Vec<(usize, BannerStep)>,
     /// Позиция clap последнего появления каждой группы опций вывода (`format`, `filename`, `append`, `flush`,
     /// `style`, `show`).
     #[arg(skip)]
@@ -665,6 +748,16 @@ pub struct Cli {
     /// Разобранная конфигурация с `--resume`: файл читается один раз на `Cli`.
     #[arg(skip)]
     resolved: std::sync::OnceLock<Result<FullConf, String>>,
+}
+
+/// Один шаг опций баннеров в порядке argv: обычный ключ ядра или опция, чей смысл читается из набранного
+/// имени (`hello-string[PORT]`, `hello-file[PORT]`, `http-header` с правилом `name += 11`, справка C2, C3).
+#[derive(Debug, Clone)]
+enum BannerStep {
+    Kv(&'static str, String),
+    HelloString(String, String),
+    HelloFile(String, String),
+    HttpHeader(String, String),
 }
 
 /// Опция, меняющая порты или тип скана (`masscan_set_parameter` зовётся по ходу `argv`).
@@ -721,14 +814,24 @@ const POSITIONAL_KEYS: [&str; 29] = [
     "tcp_tsecho",
 ];
 
-/// Опции баннеров: идентификатор clap и ключ `masscan_set_parameter` (`src/main-conf.c:2377-2403`).
-const BANNER_KEYS: [(&str, &str); 6] = [
+/// Опции баннеров: идентификатор clap и ключ `masscan_set_parameter` (`src/main-conf.c:2377-2403`,
+/// `connection-timeout` старого стиля `:2765-2767`).
+const BANNER_KEYS: [(&str, &str); 15] = [
     ("banners", "banners"),
     ("nobanners", "nobanners"),
     ("rawudp", "rawudp"),
     ("capture", "capture"),
     ("nocapture", "nocapture"),
     ("hello_timeout", "hello-timeout"),
+    ("hello", "hello"),
+    ("connection_timeout", "connection-timeout"),
+    ("http_method", "http-method"),
+    ("http_url", "http-url"),
+    ("http_version", "http-version"),
+    ("http_host", "http-host"),
+    ("http_user_agent", "http-user-agent"),
+    ("http_payload", "http-payload"),
+    ("http_cookie", "http-cookie"),
 ];
 
 /// Одиночные опции адаптера, которые идут по порядку `argv` вместе с `--adapter[i]` и т.п.
@@ -884,6 +987,19 @@ where
             out.push(raw);
             out.extend(it.by_ref());
             break;
+        }
+        // `--hello-string[P]`, `--hello-file[P]` и любое написание `--http-header`/`--http-field` раньше
+        // `EQUALS`: индекс и форма заголовка читаются из набранного имени (справка C2, C3).
+        if let Some(step) = banner_typed_option(&raw) {
+            let step = step?;
+            let value = match step.inline {
+                Some(v) => v,
+                None => it
+                    .next()
+                    .ok_or_else(|| format!("{}: empty parameter", step.typed))?,
+            };
+            out.push(format!("--{}={}={value}", step.hidden, step.typed));
+            continue;
         }
         let a = equals_option(&raw)?.unwrap_or(raw);
         if let Some((name, inline)) = numable_split(&a) {
@@ -1067,6 +1183,48 @@ fn indexed_nic_key(a: &str) -> Option<Result<(&str, Option<&str>), String>> {
     Some(Ok(match cut {
         Some(i) => (&rest[..i], Some(&rest[i + 1..])),
         None => (rest, None),
+    }))
+}
+
+/// `--hello-string`, `--hello-file` (`hello-filename`) и любое написание `--http-header`/`--http-field` по
+/// `EQUALS`, до [`equals_option`]: набранное имя целиком (со скобками) и встроенное значение для скрытой опции
+/// `--rmasscan-…`. Разделитель значения тот же, что у всякого имени ([`equals_option`]): первое `=`, иначе первое
+/// `:` (`masscan_command_line`, :3279-3289), поэтому двоеточие внутри скобок режет набранное имя, как у C.
+/// Индекс от 65536 и незакрытая `[` в набранном имени отказывают как у всякого имени ([`check_c_index`], Р17,
+/// `bad index` раньше незакрытой). `None`, если аргумент не такой.
+/// Результат [`banner_typed_option`]: скрытая опция, набранное имя и встроенное значение.
+struct TypedBannerOption {
+    hidden: &'static str,
+    typed: String,
+    inline: Option<String>,
+}
+
+fn banner_typed_option(a: &str) -> Option<Result<TypedBannerOption, String>> {
+    let rest = a.strip_prefix("--")?;
+    let base_end = rest.find(['[', '=', ':']).unwrap_or(rest.len());
+    let hidden = match normalize_key(&rest[..base_end]).as_str() {
+        "hellostring" => "rmasscan-hello-string",
+        "hellofile" | "hellofilename" => "rmasscan-hello-file",
+        "httpheader" | "httpfield" => "rmasscan-http-header",
+        _ => return None,
+    };
+    let split = || -> Result<(&str, Option<&str>), String> {
+        let (typed, inline) = match rest.find('=').or_else(|| rest.find(':')) {
+            Some(i) => (&rest[..i], Some(&rest[i + 1..])),
+            None => (rest, None),
+        };
+        if let Some(open) = typed.find('[') {
+            check_c_index(typed)?;
+            if !typed[open..].contains(']') {
+                return Err(format!("--{typed}: unclosed '[' in the option name"));
+            }
+        }
+        Ok((typed, inline))
+    };
+    Some(split().map(|(typed, inline)| TypedBannerOption {
+        hidden,
+        typed: typed.to_string(),
+        inline: inline.map(std::string::ToString::to_string),
     }))
 }
 
@@ -1289,11 +1447,31 @@ impl Cli {
         cli.port_events.sort_by_key(|(pos, _)| *pos);
         for (id, key) in BANNER_KEYS {
             if let (Some(values), Some(indices)) = (m.get_many::<String>(id), m.indices_of(id)) {
-                cli.banner_steps
-                    .extend(indices.zip(values).map(|(pos, v)| (pos, key, v.clone())));
+                cli.banner_steps.extend(
+                    indices
+                        .zip(values)
+                        .map(|(pos, v)| (pos, BannerStep::Kv(key, v.clone()))),
+                );
             }
         }
-        cli.banner_steps.sort_by_key(|(pos, _, _)| *pos);
+        // Скрытые опции с набранным именем (`preprocess_args` пишет `имя=значение` одним словом).
+        for (id, make) in [
+            (
+                "hello_string_kv",
+                BannerStep::HelloString as fn(String, String) -> BannerStep,
+            ),
+            ("hello_file_kv", BannerStep::HelloFile),
+            ("http_header_kv", BannerStep::HttpHeader),
+        ] {
+            if let (Some(values), Some(indices)) = (m.get_many::<String>(id), m.indices_of(id)) {
+                cli.banner_steps
+                    .extend(indices.zip(values).map(|(pos, kv)| {
+                        let (name, value) = kv.split_once('=').unwrap_or((kv, ""));
+                        (pos, make(name.to_string(), value.to_string()))
+                    }));
+            }
+        }
+        cli.banner_steps.sort_by_key(|(pos, _)| *pos);
         let last = |id: &str| m.indices_of(id).and_then(Iterator::max);
         cli.key_pos = POSITIONAL_KEYS
             .iter()
@@ -1665,10 +1843,23 @@ impl Cli {
         if take("badsum") && self.badsum {
             cfg.badsum = true;
         }
-        // Опции баннеров (`src/main-conf.c:1106-1180`, :1288-1298, :1546-1554) по порядку argv внутри сегмента.
-        for (pos, key, value) in &self.banner_steps {
-            if self.segment_of(*pos) == seg {
-                apply_core_kv(cfg, key, value).map_err(|e| e.to_string())?;
+        // Опции баннеров (`src/main-conf.c:1106-1505`, :1546-1554, :2765-2767) по порядку argv внутри сегмента.
+        for (pos, step) in &self.banner_steps {
+            if self.segment_of(*pos) != seg {
+                continue;
+            }
+            match step {
+                BannerStep::Kv(key, value) => {
+                    apply_core_kv(cfg, key, value).map_err(|e| e.to_string())?;
+                }
+                BannerStep::HelloString(name, value) | BannerStep::HttpHeader(name, value) => {
+                    if !apply_core_kv(cfg, name, value).map_err(|e| e.to_string())? {
+                        return Err(format!("unknown banner option {name:?}"));
+                    }
+                }
+                BannerStep::HelloFile(name, file) => {
+                    crate::banner_settings::apply_hello_file(cfg, name, file)?;
+                }
             }
         }
         for (id, key, values) in [
@@ -3785,5 +3976,333 @@ adapter-ip = 198.18.0.9\noutput-filename = base.xml\n",
         assert!(cli.offline);
         assert_eq!(cli.range, ["10.0.0.1"]);
         assert_eq!(cli.retries, Some(2));
+    }
+
+    // Задача 13: `--hello*`, `--connection-timeout`, `--http-*` (справка C1-C4).
+
+    fn banner_cfg(a: &[&str]) -> ScanConfig {
+        parse(a).unwrap().to_config().unwrap()
+    }
+
+    fn banner_err(a: &[&str]) -> String {
+        match parse(a) {
+            Err(ParseError::Masscan(t)) => t,
+            Ok(cli) => cli.to_config().unwrap_err(),
+            Err(e) => panic!("{a:?}: {e:?}"),
+        }
+    }
+
+    /// `--hello-string` без `[P]` C читает как порт 0 (`ARRAY`, `src/main-conf.c:881-890`); здесь это отказ
+    /// (Р17).
+    #[test]
+    fn hello_string_without_index_fails() {
+        for a in [
+            &["--hello-string", "QUJD"][..],
+            &["--hello-string=QUJD"][..],
+            &["--HELLO_STRING:QUJD"][..],
+        ] {
+            assert!(parse(a).unwrap().to_config().is_err(), "{a:?}");
+        }
+    }
+
+    /// Незакрытая `[` у `--hello-string`/`--hello-file`/`--http-header`: тот же отказ Р17, что у любой опции.
+    #[test]
+    fn hello_string_unpaired_index_fails() {
+        for (a, name) in [
+            (&["--hello-string[80", "QUJD"][..], "--hello-string[80"),
+            (&["--hello-string[80=QUJD"][..], "--hello-string[80"),
+            (&["--hello-file[80", "f"][..], "--hello-file[80"),
+            (&["--http-header[X", "v"][..], "--http-header[X"),
+        ] {
+            assert_eq!(
+                masscan_err(a),
+                format!("{name}: unclosed '[' in the option name"),
+                "{a:?}"
+            );
+        }
+    }
+
+    /// Индекс не десятичный: C `ARRAY` взял бы ведущие цифры или 0, здесь отказ (Р17).
+    #[test]
+    fn hello_string_non_decimal_index_fails() {
+        for a in [
+            &["--hello-string[x]", "QUJD"][..],
+            &["--hello-string[8x]", "QUJD"][..],
+            &["--hello-string[]", "QUJD"][..],
+            &["--hello-string[-1]", "QUJD"][..],
+            &["--hello-string[0x50]", "QUJD"][..],
+            &["--hello-file[8.0]", "f"][..],
+        ] {
+            assert!(parse(a).unwrap().to_config().is_err(), "{a:?}");
+        }
+        // Ведущие нули десятичны, хвост после `]` C не смотрит.
+        let cfg = banner_cfg(&["--hello-string[00080]junk", "QUJD"]);
+        assert_eq!(cfg.hello_strings, [(80, "QUJD".to_string())]);
+    }
+
+    /// Индекс от 65536 это `bad index` C и код 1 (`src/main-conf.c:2437-2441`, `:1276-1278`), ещё на разборе.
+    #[test]
+    fn hello_string_index_65536_fails() {
+        for (a, name) in [
+            (
+                &["--hello-string[65536]", "QUJD"][..],
+                "hello-string[65536]",
+            ),
+            (&["--hello-string[70000]=QUJD"][..], "hello-string[70000]"),
+            (&["--hello-file[65536]", "f"][..], "hello-file[65536]"),
+        ] {
+            assert_eq!(masscan_err(a), format!("{name}: bad index"), "{a:?}");
+        }
+        let cfg = banner_cfg(&["--hello-string[65535]", "QUJD"]);
+        assert_eq!(cfg.hello_strings, [(65535, "QUJD".to_string())]);
+    }
+
+    /// Неверный base64 по определению справки C2 отказывает: пробел, `=` в середине, `QUJD=`, один хвостовой
+    /// знак, байт вне алфавита (E1.6: C на части из них зависает).
+    #[test]
+    fn hello_string_invalid_base64_fails() {
+        for bad in ["QU JD", "QU=JD", "QUJD=", "Q", "QUJD*", "QUJD\t"] {
+            let a = [format!("--hello-string[80]={bad}")];
+            assert!(
+                parse(&[a[0].as_str()]).unwrap().to_config().is_err(),
+                "{bad:?}"
+            );
+        }
+        for bad in ["", "QQ==", "QUE=", "QUJD", "QUE"] {
+            let a = [format!("--hello-string[80]={bad}")];
+            assert!(
+                parse(&[a[0].as_str()]).unwrap().to_config().is_ok(),
+                "{bad:?}"
+            );
+        }
+    }
+
+    /// Эхо `hello-string[%u] = %s` от новой записи к старой (`src/main-conf.c:1264-1268`: список в начало),
+    /// хранится порядок argv.
+    #[test]
+    fn hello_string_echo_newest_first() {
+        // Разделитель `:` с набивкой `=` в значении C не разбирает (`strchr('=')` первый), поэтому третье
+        // значение отдельным словом.
+        let cfg = banner_cfg(&[
+            "--hello-string[80]",
+            "QUJD",
+            "--hello-string[443]=aGVsbG8=",
+            "--Hello.String[80]",
+            "RA==",
+        ]);
+        assert_eq!(
+            cfg.hello_strings,
+            [
+                (80, "QUJD".to_string()),
+                (443, "aGVsbG8=".to_string()),
+                (80, "RA==".to_string()),
+            ]
+        );
+        let mut s = String::new();
+        rmasscan_core::config::echo(&cfg, false, &mut s);
+        let lines: Vec<&str> = s
+            .lines()
+            .filter(|l| l.starts_with("hello-string"))
+            .collect();
+        assert_eq!(
+            lines,
+            [
+                "hello-string[80] = RA==",
+                "hello-string[443] = aGVsbG8=",
+                "hello-string[80] = QUJD",
+            ]
+        );
+    }
+
+    /// `--hello-file[P]` (`hello-filename`, `src/main-conf.c:1212-1258`): байты файла кодируются и дальше это
+    /// `hello-string[P]`; сам ключ в эхо не пишется.
+    #[test]
+    fn hello_file_becomes_hello_string() {
+        let dir = crate::scratch::Scratch::new();
+        let f = dir.write("hello.bin", b"\x00hello\xff");
+        let name = format!("--hello-filename[8080]={}", f.display());
+        let cfg = banner_cfg(&[name.as_str()]);
+        assert_eq!(cfg.hello_strings, [(8080, "AGhlbGxv/w==".to_string())]);
+        let mut s = String::new();
+        rmasscan_core::config::echo(&cfg, false, &mut s);
+        assert!(s.contains("hello-string[8080] = AGhlbGxv/w==\n"), "{s}");
+        assert!(!s.contains("hello-file"), "{s}");
+        assert_eq!(
+            crate::banner_settings::tcp_banner_settings(&cfg)
+                .unwrap()
+                .hello_strings,
+            [(8080, b"\x00hello\xff".to_vec())]
+        );
+        // Отдельное слово и написание `EQUALS` дают то же.
+        let cfg = banner_cfg(&["--Hello_File[80]", f.to_str().unwrap()]);
+        assert_eq!(cfg.hello_strings, [(80, "AGhlbGxv/w==".to_string())]);
+    }
+
+    /// Файл длиннее 12285 байт C молча обрезал бы (`src/main-conf.c:1237-1246`); здесь отказ (E1.14).
+    #[test]
+    fn hello_file_over_12285_fails() {
+        let dir = crate::scratch::Scratch::new();
+        let max = dir.write("max.bin", &[b'x'; 12285]);
+        let cfg = banner_cfg(&["--hello-file[80]", max.to_str().unwrap()]);
+        assert_eq!(cfg.hello_strings.len(), 1);
+        let over = dir.write("over.bin", &[b'x'; 12286]);
+        assert!(
+            parse(&["--hello-file[80]", over.to_str().unwrap()])
+                .unwrap()
+                .to_config()
+                .is_err()
+        );
+    }
+
+    /// Пустой файл hello: текст C `[FAILED] could not read hello file` (`src/main-conf.c:1240-1244`); каталог у C
+    /// открывается, но `fread` даёт 0 байт, поэтому тот же текст, а не ошибка открытия.
+    #[test]
+    fn hello_file_empty_fails_with_c_text() {
+        let dir = crate::scratch::Scratch::new();
+        let f = dir.write("empty.bin", b"");
+        assert_eq!(
+            banner_err(&["--hello-file[80]", f.to_str().unwrap()]),
+            "[FAILED] could not read hello file"
+        );
+        assert_eq!(
+            banner_err(&["--hello-file[80]", dir.dir().to_str().unwrap()]),
+            "[FAILED] could not read hello file"
+        );
+    }
+
+    /// Форма `--http-header` выбирается по `name += 11` от набранного имени (`src/main-conf.c:1361`, справка
+    /// C3): `HTTP_HEADER[X]` скобочная, `httpheader[X]` (11-й знак не `[`) требует двоеточие в значении.
+    #[test]
+    fn http_header_form_by_typed_name_like_c() {
+        let cfg = banner_cfg(&["--HTTP_HEADER[X]", "v"]);
+        assert_eq!(cfg.http.headers, [("X".to_string(), "v".to_string())]);
+        let cfg = banner_cfg(&["--httpheader[X]", "a:b"]);
+        assert_eq!(cfg.http.headers, [("a".to_string(), "b".to_string())]);
+        // Скобочная форма снимает пунктуацию по краям; двоеточная режет пробелы у имени и значения.
+        let cfg = banner_cfg(&["--http-header[X-Lab]", " v ", "--http-header", "Y :  w"]);
+        assert_eq!(
+            cfg.http.headers,
+            [
+                ("X-Lab".to_string(), " v ".to_string()),
+                ("Y".to_string(), "w".to_string()),
+            ]
+        );
+        // Двоеточие разделителя — первое в токене, как у C и у всякого имени: внутри скобок оно режет набранное
+        // имя, и остаток это незакрытая `[` (Р17).
+        assert!(parse(&["--http-header[A:B]:v"]).is_err());
+    }
+
+    /// Набранное имя короче 11 знаков: `name += 11` уходит за NUL (E1.7), здесь отказ.
+    #[test]
+    fn http_header_short_spelling_fails() {
+        for a in [
+            &["--http-field", "X:v"][..],
+            &["--httpheader", "X:v"][..],
+            &["--http.field=X:v"][..],
+        ] {
+            assert!(parse(a).unwrap().to_config().is_err(), "{a:?}");
+        }
+    }
+
+    /// Ни скобок, ни двоеточия: две строки C (`src/main-conf.c:1388-1390`).
+    #[test]
+    fn http_header_neither_form_fails_with_hint() {
+        assert_eq!(
+            banner_err(&["--http-header", "NoColonHere"]),
+            "[-] --http-header needs both a name and value\n    hint: \"--http-header Name:value\""
+        );
+    }
+
+    /// 17-й заголовок и 17-я cookie отказывают (brief; C лишнее молча отбрасывал, справка C3).
+    #[test]
+    fn http_header_17th_fails() {
+        let mut a: Vec<String> = Vec::new();
+        for i in 0..16 {
+            a.push(format!("--http-header=X{i}:v"));
+        }
+        let refs: Vec<&str> = a.iter().map(String::as_str).collect();
+        assert_eq!(banner_cfg(&refs).http.headers.len(), 16);
+        a.push("--http-header=X16:v".to_string());
+        let refs: Vec<&str> = a.iter().map(String::as_str).collect();
+        assert!(parse(&refs).unwrap().to_config().is_err());
+        let mut a: Vec<String> = (0..17).map(|_| "--http-cookie=a=b".to_string()).collect();
+        let refs: Vec<&str> = a.iter().map(String::as_str).collect();
+        assert!(parse(&refs).unwrap().to_config().is_err());
+        a.truncate(16);
+        let refs: Vec<&str> = a.iter().map(String::as_str).collect();
+        assert_eq!(banner_cfg(&refs).http.cookies.len(), 16);
+    }
+
+    /// Любое другое значение `--http-*`, включая CRLF, как у C (`src/main-conf.c:1300-1505`): хранится как
+    /// дано и попадает в запрос задачи 10 без нормализации.
+    #[test]
+    fn http_values_with_crlf_like_c() {
+        let cfg = banner_cfg(&[
+            "--http-host=a\r\nX: b",
+            "--http-header=Y:c\nd",
+            "--http-method=",
+            "--http-payload=p\r\nq",
+        ]);
+        assert_eq!(cfg.http.host.as_deref(), Some("a\r\nX: b"));
+        assert_eq!(cfg.http.method.as_deref(), Some(""));
+        assert_eq!(cfg.http.payload.as_deref(), Some("p\r\nq"));
+        let req = crate::banner_settings::tcp_banner_settings(&cfg)
+            .unwrap()
+            .http_request;
+        assert!(
+            req.windows(13).any(|w| w == b"Host: a\r\nX: b"),
+            "{:?}",
+            String::from_utf8_lossy(&req)
+        );
+        assert!(req.ends_with(b"p\r\nq"));
+    }
+
+    /// Те же случаи через файл `-c`: ключи файла подчиняются тем же правилам, включая набранное имя
+    /// `http-header` и файл `--hello-file`.
+    #[test]
+    fn banner_options_in_config_file() {
+        let dir = crate::scratch::Scratch::new();
+        let hello = dir.write("hello.bin", b"hi");
+        let text = format!(
+            "hello = ssl\nhello-string[80] = QUJD\nhello-file[81] = {}\nconnection-timeout = 6\n\
+             HTTP_HEADER[X] = v\nhttpheader[Y] = a:b\nhttp-method = POST\nhttp-cookie = a=b\ncapture = html\n",
+            hello.display()
+        );
+        let f = dir.write("banner.conf", text.as_bytes());
+        let cfg = banner_cfg(&["-c", f.to_str().unwrap()]);
+        assert!(cfg.hello_ssl);
+        assert_eq!(
+            cfg.hello_strings,
+            [(80, "QUJD".to_string()), (81, "aGk=".to_string())]
+        );
+        assert_eq!(cfg.connection_timeout, 6);
+        assert_eq!(
+            cfg.http.headers,
+            [
+                ("X".to_string(), "v".to_string()),
+                ("a".to_string(), "b".to_string()),
+            ]
+        );
+        assert_eq!(cfg.http.method.as_deref(), Some("POST"));
+        assert_eq!(cfg.http.cookies, ["a=b"]);
+        assert!(cfg.capture.html);
+        for (name, text) in [
+            ("bad-hello.conf", "hello = tls\n"),
+            ("bad-b64.conf", "hello-string[80] = Q\n"),
+            ("no-index.conf", "hello-string = QUJD\n"),
+            ("short.conf", "http-field = X:v\n"),
+            ("no-form.conf", "http-header = NoColon\n"),
+            ("unclosed.conf", "http-header[X = v\n"),
+            ("big-index.conf", "hello-string[65536] = QUJD\n"),
+        ] {
+            let f = dir.write(name, text.as_bytes());
+            assert!(
+                parse(&["-c", f.to_str().unwrap()])
+                    .unwrap()
+                    .to_config()
+                    .is_err(),
+                "{name}"
+            );
+        }
     }
 }

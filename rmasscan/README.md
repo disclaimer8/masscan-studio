@@ -160,10 +160,9 @@ Ctrl-C выходит сразу с кодом 1, `paused.conf` к этому м
   `--spoof-ip`, `--src-ip`, `--src-port`, `--spoof-mac`, `--src-mac`, `--router`, `--dst-mac`, …;
   `--router-mac-ipv4 MAC` (синоним `--router-ipv4`, `:2602-2612`) задаёт MAC шлюза только для IPv4, как ключ файла.
   Опции C, которых в rmasscan нет, неизвестны во всех написаниях; вот все синонимы таких опций: `--nmap-service-probe`,
-  `--hello-filename`, `--http-field`, `--http-uri`, `--http-useragent`, `--min-pkt`, `--tcp-debug`, `--oproto`,
-  `--tcp-port`, `--exclude-port`, `--tcp-timeout`, `--max-hostgroup`, `--max-parallelism`, `--max-rtt-timeout`,
-  `--initial-rtt-timeout`, `--unprivileged`, `--readranges`, `--max-scan-delay`, `--sendqueue`, `--self-test`,
-  `--regress`, `--backtrace`, `--adapter-vlan`. Отличия от C:
+  `--min-pkt`, `--tcp-debug`, `--oproto`, `--tcp-port`, `--exclude-port`, `--max-hostgroup`, `--max-parallelism`,
+  `--max-rtt-timeout`, `--initial-rtt-timeout`, `--unprivileged`, `--readranges`, `--max-scan-delay`, `--sendqueue`,
+  `--self-test`, `--regress`, `--backtrace`, `--adapter-vlan`. Отличия от C:
   - ошибка разбора clap (неизвестная опция, неверное значение) печатает текст clap и выходит с кодом 1, как `exit(1)` C
     на неизвестное имя (`:3036`, у C текст `CONF: unknown config option: имя=значение`); до подэтапа 4b код был 2;
   - значение, пропущенное в конце argv или перед следующей `--опцией` (`--rate` последним словом, `--rate --seed 1`),
@@ -176,7 +175,13 @@ Ctrl-C выходит сразу с кодом 1, `paused.conf` к этому м
   - голое `--` заканчивает опции: слова правее него это цели, их не переписывает ни одно правило; у C `--` это
     неизвестная опция (`CONF: unknown config option`, код 1);
   - `--help` и `--version` печатают справку и версию в stdout и выходят с кодом 0; C выходит с кодом 1 (`:3225-3227`,
-    `:3010-3012`).
+    `:3010-3012`);
+  - неверный base64 в `--hello-string` (справка C2), файл `--hello-file` длиннее 12 285 байт, набранное имя
+    `--http-header` короче 11 знаков и 17-й заголовок или cookie — ошибка с кодом 1: декодер C на части неверных
+    значений base64 зависает (E1.6, `src/crypto-base64.c:134`, `:146`), длинный файл молча обрезает (E1.14,
+    `src/main-conf.c:1237-1246`), на коротком написании читает за концом имени (E1.7, `name += 11`,
+    `src/main-conf.c:1361`), а лишние заголовки и cookie молча отбрасывает (справка C3). Любое другое значение
+    `--http-*`, включая CRLF и пустые, принимается как у C.
 - Кадры стека TCP (подэтап 4b, справка E1.10; эталоны `tests/golden/tcp-frames`, `crates/rmasscan-core/src/tcp_frame.rs`)
   совпадают с `tcp_create_packet` C (`src/templ-pkt.c:419-613`) побайтно, кроме суммы заголовка IPv4: C обновляет её
   приращением и сворачивает дважды (`:466-473`), и примерно в одном кадре из 100 000 она неверна (вектор: `ip_me

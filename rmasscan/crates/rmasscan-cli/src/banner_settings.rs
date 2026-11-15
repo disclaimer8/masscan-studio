@@ -69,15 +69,98 @@ fn encode_base64(data: &[u8]) -> String {
     out
 }
 
-/// Текст `strerror(errno)` (`src/main-conf.c:1233`): у ошибки ОС это её описание без хвоста ` (os error N)`,
-/// который добавляет `Display` std; у прочих ошибок их текст как есть.
+/// Текст `strerror(errno)` после `fopen` (`src/main-conf.c:1231-1234`) на этой ОС. В Linux и macOS код ошибки ОС
+/// и есть `errno`, а описание std это `strerror_r` той же libc, что у C: берётся оно без хвоста ` (os error N)`,
+/// который добавляет `Display` std. В Windows код std это код Win32 (`GetLastError`), а текст std это
+/// `FormatMessageW` ("The system cannot find the file specified."); C там печатает `strerror` CRT от `errno`, в
+/// который `fopen` переводит тот же код Win32: перевод [`crt_errno_of_win32`] и текст [`crt_strerror`]. У ошибок без
+/// кода ОС их текст как есть.
 fn c_strerror(e: &std::io::Error) -> String {
     let text = e.to_string();
     match e.raw_os_error() {
+        Some(code) if cfg!(windows) => crt_strerror(crt_errno_of_win32(code)).to_string(),
         Some(code) => text
             .strip_suffix(&format!(" (os error {code})"))
             .map_or_else(|| text.clone(), str::to_string),
         None => text,
+    }
+}
+
+/// `errno` CRT (`errno.h` MSVC) по номеру.
+mod crt {
+    pub(super) const ENOENT: i32 = 2;
+    pub(super) const E2BIG: i32 = 7;
+    pub(super) const ENOEXEC: i32 = 8;
+    pub(super) const EBADF: i32 = 9;
+    pub(super) const ECHILD: i32 = 10;
+    pub(super) const EAGAIN: i32 = 11;
+    pub(super) const ENOMEM: i32 = 12;
+    pub(super) const EACCES: i32 = 13;
+    pub(super) const EEXIST: i32 = 17;
+    pub(super) const EXDEV: i32 = 18;
+    pub(super) const EISDIR: i32 = 21;
+    pub(super) const EINVAL: i32 = 22;
+    pub(super) const EMFILE: i32 = 24;
+    pub(super) const ENOSPC: i32 = 28;
+    pub(super) const EPIPE: i32 = 32;
+    pub(super) const ENOTEMPTY: i32 = 41;
+    pub(super) const EILSEQ: i32 = 42;
+}
+
+/// `errno` CRT для кода Win32, как его ставит `fopen` (`_dosmaperr`, таблица `errtable` UCRT `errno.cpp`; у
+/// msvcrt `dosmap.c` та же без 1113): коды таблицы, затем 19-36 (`ERROR_WRITE_PROTECT`..
+/// `ERROR_SHARING_BUFFER_EXCEEDED`) это `EACCES`, 188-202 (`ERROR_INVALID_STARTING_CODESEG`..
+/// `ERROR_INFLOOP_IN_RELOC_CHAIN`) `ENOEXEC`, остальное `EINVAL`.
+fn crt_errno_of_win32(code: i32) -> i32 {
+    use crt::*;
+    match code {
+        // FILE_NOT_FOUND, PATH_NOT_FOUND, INVALID_DRIVE, NO_MORE_FILES, BAD_NETPATH, BAD_NET_NAME, BAD_PATHNAME,
+        // FILENAME_EXCED_RANGE.
+        2 | 3 | 15 | 18 | 53 | 67 | 161 | 206 => ENOENT,
+        4 => EMFILE,
+        // ACCESS_DENIED, CURRENT_DIRECTORY, LOCK_VIOLATION, NETWORK_ACCESS_DENIED, CANNOT_MAKE, FAIL_I24,
+        // DRIVE_LOCKED, SEEK_ON_DEVICE, NOT_LOCKED, LOCK_FAILED, и диапазон 19-36 (SHARING_VIOLATION 32 в нём).
+        5 | 16 | 19..=36 | 65 | 82 | 83 | 108 | 132 | 158 | 167 => EACCES,
+        6 | 114 | 130 => EBADF,
+        7..=9 | 1816 => ENOMEM,
+        10 => E2BIG,
+        11 | 188..=202 => ENOEXEC,
+        17 => EXDEV,
+        80 | 183 => EEXIST,
+        89 | 164 | 215 => EAGAIN,
+        109 => EPIPE,
+        112 => ENOSPC,
+        128 | 129 => ECHILD,
+        145 => ENOTEMPTY,
+        1113 => EILSEQ,
+        _ => EINVAL,
+    }
+}
+
+/// `strerror` CRT (`_sys_errlist`, UCRT `syserr.cpp`, у msvcrt те же тексты) для каждого `errno`, который даёт
+/// [`crt_errno_of_win32`]. ENOENT, EACCES, EISDIR и прочие частые совпадают с glibc; ENOMEM у CRT "Not enough
+/// space".
+fn crt_strerror(errno: i32) -> &'static str {
+    use crt::*;
+    match errno {
+        ENOENT => "No such file or directory",
+        E2BIG => "Arg list too long",
+        ENOEXEC => "Exec format error",
+        EBADF => "Bad file descriptor",
+        ECHILD => "No child processes",
+        EAGAIN => "Resource temporarily unavailable",
+        ENOMEM => "Not enough space",
+        EACCES => "Permission denied",
+        EEXIST => "File exists",
+        EXDEV => "Improper link",
+        EISDIR => "Is a directory",
+        EINVAL => "Invalid argument",
+        EMFILE => "Too many open files",
+        ENOSPC => "No space left on device",
+        EPIPE => "Broken pipe",
+        ENOTEMPTY => "Directory not empty",
+        EILSEQ => "Illegal byte sequence",
+        _ => "Unknown error",
     }
 }
 
@@ -187,5 +270,35 @@ mod tests {
         );
         let off = cfg_with(&[("capture", "html"), ("nocapture", "html")]);
         assert!(!tcp_banner_settings(&off).unwrap().capture_html);
+    }
+
+    /// Текст ошибки `fopen` у C на каждой ОС (4b, приёмка на госте Windows): в Windows код Win32 идёт через
+    /// `_dosmaperr` в `errno` и `strerror` CRT, а не в текст `FormatMessageW`; в Linux и macOS это `strerror` libc.
+    /// Сам перевод проверяется на любой ОС.
+    #[test]
+    fn open_errors_print_the_c_library_text() {
+        use super::{c_strerror, crt_errno_of_win32, crt_strerror};
+        let win = |code| crt_strerror(crt_errno_of_win32(code));
+        for (code, text) in [
+            (2, "No such file or directory"),   // ERROR_FILE_NOT_FOUND
+            (3, "No such file or directory"),   // ERROR_PATH_NOT_FOUND
+            (206, "No such file or directory"), // ERROR_FILENAME_EXCED_RANGE
+            (5, "Permission denied"),           // ERROR_ACCESS_DENIED (у CRT и каталог)
+            (32, "Permission denied"),          // ERROR_SHARING_VIOLATION, диапазон 19-36
+            (4, "Too many open files"),         // ERROR_TOO_MANY_OPEN_FILES
+            (8, "Not enough space"),            // ERROR_NOT_ENOUGH_MEMORY
+            (123, "Invalid argument"),          // ERROR_INVALID_NAME, вне таблицы
+            (1113, "Illegal byte sequence"),    // ERROR_NO_UNICODE_TRANSLATION
+            (193, "Exec format error"),         // ERROR_BAD_EXE_FORMAT, диапазон 188-202
+        ] {
+            assert_eq!(win(code), text, "Win32 {code}");
+        }
+        assert_eq!(crt_strerror(super::crt::EISDIR), "Is a directory");
+        // Код 2 это ENOENT в Linux и macOS и ERROR_FILE_NOT_FOUND в Windows: один текст C везде, без хвоста std.
+        assert_eq!(
+            c_strerror(&std::io::Error::from_raw_os_error(2)),
+            "No such file or directory"
+        );
+        assert_eq!(c_strerror(&std::io::Error::other("x")), "x");
     }
 }

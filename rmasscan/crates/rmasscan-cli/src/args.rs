@@ -4554,15 +4554,20 @@ adapter-ip = 198.18.0.9\noutput-filename = base.xml\n",
     }
 
     /// M2 ревью задач 11-13: нечитаемый `--hello-file` это две строки C, вторая с текстом `strerror` без хвоста
-    /// ` (os error N)` (`src/main-conf.c:1232-1233`).
+    /// ` (os error N)` (`src/main-conf.c:1232-1233`). Текст тот, что печатает C на каждой ОС: ENOENT у glibc и macOS,
+    /// а в Windows `fopen` переводит ERROR_FILE_NOT_FOUND и ERROR_PATH_NOT_FOUND в тот же ENOENT, и `strerror` CRT
+    /// даёт тот же текст (не "The system cannot find the file specified." std; приёмка 4b на госте).
     #[test]
     fn hello_file_open_failure_prints_c_strerror() {
         let dir = crate::scratch::Scratch::new();
         let missing = dir.path("missing.bin");
-        let m = missing.to_str().unwrap();
-        assert_eq!(
-            banner_err(&["--hello-file[80]", m]),
-            format!("[-] [FAILED] --hello-file\n[-] {m}: No such file or directory")
-        );
+        let in_missing_dir = dir.path("missing-dir").join("hello.bin");
+        for path in [missing, in_missing_dir] {
+            let m = path.to_str().unwrap();
+            assert_eq!(
+                banner_err(&["--hello-file[80]", m]),
+                format!("[-] [FAILED] --hello-file\n[-] {m}: No such file or directory")
+            );
+        }
     }
 }

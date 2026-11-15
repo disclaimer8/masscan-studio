@@ -44,28 +44,34 @@
 //!
 //! UDP over IPv6 is not in this window (the IPv6 stage refuses it, its R3); IPv6 banners come over TCP (R16).
 //!
-//! Sub-stage 4b adds eight TCP cases ([`TCP_CASES`]): TCP banners through the user-mode stack over IPv4 and IPv6, the
-//! end-of-scan flush, `--banners --noreset`, the stateless RST and `--noreset` without `--banners` (R8), and two cases
-//! whose source has no neighbour entry, so the peer resolves it through the scanner's own ARP and NDP replies (R9).
+//! Sub-stage 4b adds nine TCP cases ([`TCP_CASES`]): TCP banners through the user-mode stack over IPv4 and IPv6, the
+//! end-of-scan flush, `--banners --noreset`, the stateless RST and `--noreset` without `--banners` (R8), two cases
+//! whose source has no neighbour entry, so the peer resolves it through the scanner's own ARP and NDP replies (R9), and
+//! a quiet control of rmasscan alone without the heartbeat ([`TcpCase::quiet`]: its hello and lifetime timers on a
+//! link that carries nothing but the scan).
 //! Both scanners run one argv from a source no interface of the scanner namespace holds ([`TCP_SOURCE`],
 //! [`TCP_SOURCE6`], [`RESOLVE_SOURCE`], [`RESOLVE_SOURCE6`]) with the next hop given. The stand is the IPv6 stand
 //! (`capture isolation --mode ipv6`) with the protocols stand's ICMP setting, no TIME_WAIT socket in the peer
 //! namespace ([`PeerTcp`]) and permanent neighbour entries for the first two sources; the responder answers each
 //! connection with the script of [`TCP_SCENARIOS`] by its local address and port and heartbeats the link
-//! ([`HEARTBEAT_PAYLOAD`]). What is judged: the stand's behaviour (INVALID), each scanner's frames per connection
-//! (hello window, lifetime window, the stateless RST rule, no frame of a destroyed connection, the answers to the
-//! peer's requests in C's form), the banners of each connection against its scenario and in one run after its `open`
-//! (M1), and rmasscan against C: the records as a multiset and every connection's scanner segments (flags, payload,
-//! relative seq and ack) in order. The window's differences are E1's (`ipv6-ttl`, `ipv4-stack-checksum`,
-//! `memcached-tcp-past-segment`, `no-frame-from-destroyed-tcb`, `minecraft-unsplit`), 4a's `udp-raw-past-datagram`,
-//! and the protocols stage's `udp-checksum-ffff` and `rx-checksum-verify` ([`DEVIATIONS`]). The 4a UDP cases also
-//! judge M1 and M2 (rmasscan's `-oL` text of the raw banner on 1900 and 11211 is the datagram's `normalize_string`).
+//! ([`HEARTBEAT_PAYLOAD`]). What is judged, in this order within a step so that a fault is booked on the side that made
+//! it: the scanner checks whose evidence is the scanner's alone (the answers to the peer's requests in C's form, each
+//! SYN once, every frame explained), the stand's behaviour (INVALID, leaving out what those explain), each scanner's
+//! frames per connection (hello window, lifetime window, the stateless RST rule, no frame of a destroyed connection),
+//! the banners of each connection against its scenario and in one run after its `open` (M1, rmasscan's in its own
+//! step); then, before any comparison with C, C's forced exit and the deviations' conditions; then rmasscan against C:
+//! the records as a multiset and every connection's scanner segments (flags, payload, relative seq and ack) in order.
+//! The window's differences are E1's (`ipv6-ttl`, `ipv4-stack-checksum`, `memcached-tcp-past-segment`,
+//! `no-frame-from-destroyed-tcb`, `minecraft-unsplit`), 4a's `udp-raw-past-datagram`, and the protocols stage's
+//! `udp-checksum-ffff` and `rx-checksum-verify` ([`DEVIATIONS`]). The 4a UDP cases also judge M1 and M2 (rmasscan's
+//! `-oL` text of the raw banner on 1900 and 11211 is the datagram's `normalize_string`, by the verifier's own escaper
+//! [`c_normalize_string`]).
 //!
 //! Layout of an evidence directory: `manifest.json` (key `banners`: `linux`), `teardown.json`, `runs/<tag>/` per
 //! case: `expect.json` ([`BannerExpect`]), `isolation.json`, `isolation-post.json`, `peer-stack.json`,
 //! `peer-tcp.json` (TCP cases), `hashes-before-copy.txt`, and one directory per step: `argv.json`, `stdout.txt
-//! stderr.txt exit.txt`, the document (`output.bin`, `output.txt`), the peer witness `peer.pcap capture.json peer.err`
-//! and `responder.json`.
+//! stderr.txt exit.txt`, the document (`output.bin`, `output.txt`), the peer witness `peer.pcap capture.json peer.err`,
+//! `responder.json`, and in a resolve case `neigh-flush.json` ([`NeighFlush`]).
 #[cfg(test)]
 use crate::verify::{self, array, s};
 use crate::{
@@ -163,7 +169,12 @@ pub fn argv(c: &CaseSpec, out: Out) -> Vec<String> {
 pub fn steps(tag: &str) -> Option<Vec<StepSpec>> {
     match any_case(tag)? {
         Case::Udp(c) => Some(pair_steps(c.outs, |out, _| argv(&c, out))),
-        Case::Tcp(c) => Some(pair_steps(c.outs, |out, _| tcp_argv(&c, out))),
+        Case::Tcp(c) => {
+            let mut s = pair_steps(c.outs, |out, _| tcp_argv(&c, out));
+            // The quiet control is rmasscan's alone (TcpCase::quiet).
+            s.retain(|x| !c.quiet || x.who == Who::Rmasscan);
+            Some(s)
+        }
     }
 }
 /// `expect.json`: the case as the suite planned it. `tcp` only for a TCP case (the UDP cases' record is 4a's).
@@ -187,6 +198,8 @@ pub struct TcpExpect {
     pub noreset: bool,
     pub connection_timeout: Option<u32>,
     pub wait: u32,
+    /// The responder heartbeats the link (every TCP case but the quiet control, [`TcpCase::quiet`]).
+    pub heartbeat: bool,
 }
 pub fn expect(tag: &str) -> Option<BannerExpect> {
     match any_case(tag)? {
@@ -209,6 +222,7 @@ pub fn expect(tag: &str) -> Option<BannerExpect> {
                 noreset: c.noreset,
                 connection_timeout: c.connection_timeout,
                 wait: c.wait,
+                heartbeat: !c.quiet,
             }),
         }),
     }
@@ -300,6 +314,11 @@ pub struct TcpCase {
     pub wait: u32,
     pub outs: &'static [Out],
     pub deviations: &'static [&'static str],
+    /// The quiet control: one rmasscan step and no peer heartbeat, so that rmasscan's hello and lifetime timers are
+    /// judged on a link that carries nothing but the scan (the heartbeat of every other TCP step would hide a timer
+    /// that runs only when a frame arrives). No oracle step: C's receive loop needs the heartbeat
+    /// ([`HEARTBEAT_PAYLOAD`]).
+    pub quiet: bool,
 }
 impl TcpCase {
     pub fn source(&self) -> IpAddr {
@@ -345,7 +364,9 @@ const V6_SHORT: &[&str] = &[
     "ipv6-ttl",
     "no-frame-from-destroyed-tcb",
 ];
-pub const TCP_CASES: [TcpCase; 8] = [
+/// The quiet control has no C step: only the condition on the peer's segments.
+const QUIET: &[&str] = &["rx-checksum-verify"];
+pub const TCP_CASES: [TcpCase; 9] = [
     TcpCase {
         tag: "t01_tcp4",
         v6: false,
@@ -358,6 +379,7 @@ pub const TCP_CASES: [TcpCase; 8] = [
         wait: 14,
         outs: &[Out::Binary, Out::List],
         deviations: V4_TCP,
+        quiet: false,
     },
     TcpCase {
         tag: "t02_tcp6",
@@ -371,6 +393,7 @@ pub const TCP_CASES: [TcpCase; 8] = [
         wait: 14,
         outs: &[Out::Binary, Out::List],
         deviations: V6_TCP,
+        quiet: false,
     },
     TcpCase {
         tag: "t03_teardown",
@@ -384,6 +407,7 @@ pub const TCP_CASES: [TcpCase; 8] = [
         wait: 6,
         outs: &[Out::Binary],
         deviations: V4_SHORT,
+        quiet: false,
     },
     TcpCase {
         tag: "t04_banners_noreset",
@@ -397,6 +421,7 @@ pub const TCP_CASES: [TcpCase; 8] = [
         wait: 14,
         outs: &[Out::List],
         deviations: V4_SHORT,
+        quiet: false,
     },
     TcpCase {
         tag: "t05_stateless_rst",
@@ -410,6 +435,7 @@ pub const TCP_CASES: [TcpCase; 8] = [
         wait: 3,
         outs: &[Out::List],
         deviations: V4_SHORT,
+        quiet: false,
     },
     TcpCase {
         tag: "t06_noreset",
@@ -423,6 +449,7 @@ pub const TCP_CASES: [TcpCase; 8] = [
         wait: 3,
         outs: &[Out::List],
         deviations: V4_SHORT,
+        quiet: false,
     },
     TcpCase {
         tag: "t07_resolve_arp",
@@ -436,6 +463,7 @@ pub const TCP_CASES: [TcpCase; 8] = [
         wait: 8,
         outs: &[Out::List],
         deviations: V4_SHORT,
+        quiet: false,
     },
     TcpCase {
         tag: "t08_resolve_ndp",
@@ -449,6 +477,23 @@ pub const TCP_CASES: [TcpCase; 8] = [
         wait: 8,
         outs: &[Out::List],
         deviations: V6_SHORT,
+        quiet: false,
+    },
+    // M3: rmasscan alone on a quiet link: the hello on .4:80, .5:80 and .5:3389, the lifetime RST on the two held
+    // connections (.4:80, .5:3389), both from the stack's own timers with no frame of the peer to wake it.
+    TcpCase {
+        tag: "t09_quiet_timers",
+        v6: false,
+        resolve: false,
+        targets: "198.18.0.4-198.18.0.5",
+        ports: "80,3389",
+        banners: true,
+        noreset: false,
+        connection_timeout: Some(8),
+        wait: 14,
+        outs: &[Out::List],
+        deviations: QUIET,
+        quiet: true,
     },
 ];
 pub fn tcp_case(tag: &str) -> Option<TcpCase> {
@@ -1475,16 +1520,48 @@ pub fn peer_tcp_problem(p: &PeerTcp) -> Option<String> {
         )
     })
 }
+/// `<step>/neigh-flush.json` of a resolve case: the command the suite ran in the peer namespace before the step so
+/// that the peer resolves the source afresh with this step's scanner, and its exit code.
+pub const NEIGH_FLUSH_JSON: &str = "neigh-flush.json";
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct NeighFlush {
+    pub argv: Vec<String>,
+    pub rc: i32,
+}
+/// The flush of the peer's neighbour entry for `src` in namespace `ns`: `ip -n NS [-6] neigh flush to SRC dev
+/// veth-b`.
+pub fn neigh_flush_argv(ns: &str, src: IpAddr) -> Vec<String> {
+    let mut a: Vec<String> = vec![crate::autodetect_suite::IP.into(), "-n".into(), ns.into()];
+    if src.is_ipv6() {
+        a.push("-6".into());
+    }
+    a.extend(["neigh", "flush", "to", &src.to_string(), "dev", pv::PEER_IF].map(str::to_owned));
+    a
+}
+/// Why a step's flush record does not show the peer's entry for the case's source flushed, or `None`.
+pub fn neigh_flush_problem(f: &NeighFlush, c: &TcpCase) -> Option<String> {
+    let ns = f.argv.get(2).map_or("", String::as_str);
+    if f.argv != neigh_flush_argv(ns, c.source()) || ns.is_empty() {
+        return Some(format!(
+            "{:?} is not the flush of the peer's entry for {} ({:?})",
+            f.argv,
+            c.source(),
+            neigh_flush_argv("<peer namespace>", c.source())
+        ));
+    }
+    (f.rc != 0).then(|| format!("the flush exited {}", f.rc))
+}
 /// The responder of a TCP case (`capture responder --tcp-answer banners`): a kernel socket on every peer address of
 /// the stand (IPv4 and IPv6) and every TCP port of the window that has a scenario there, answering with
 /// [`TCP_SCENARIOS`] by the connection's local address and port, and the heartbeat ([`HEARTBEAT_PAYLOAD`]) on the
-/// peer link to the scanner MAC for the case's wait plus [`HEARTBEAT_AFTER_WAIT_S`].
+/// peer link to the scanner MAC for the case's wait plus [`HEARTBEAT_AFTER_WAIT_S`] (none for the quiet control).
 pub fn tcp_responder_args(c: &TcpCase) -> Vec<String> {
     let st = stand();
     let mut ips: Vec<String> = st.peer_ips.iter().map(Ipv4Addr::to_string).collect();
     ips.extend(capture::IPV6_PEERS.iter().map(|s| (*s).to_owned()));
     let ports: BTreeSet<u16> = TCP_SCENARIOS.iter().map(|x| x.port).collect();
-    vec![
+    let mut a: Vec<String> = vec![
         "--tcp-answer".into(),
         TCP_ANSWER.into(),
         "--tcp-ips".into(),
@@ -1495,6 +1572,11 @@ pub fn tcp_responder_args(c: &TcpCase) -> Vec<String> {
             .map(u16::to_string)
             .collect::<Vec<_>>()
             .join(","),
+    ];
+    if c.quiet {
+        return a;
+    }
+    a.extend([
         "--heartbeat-iface".into(),
         pv::PEER_IF.into(),
         "--heartbeat-dst".into(),
@@ -1505,7 +1587,8 @@ pub fn tcp_responder_args(c: &TcpCase) -> Vec<String> {
             .join(":"),
         "--heartbeat-secs".into(),
         (c.wait + HEARTBEAT_AFTER_WAIT_S).to_string(),
-    ]
+    ]);
+    a
 }
 /// The responder of a case: 4a's for a UDP case, [`tcp_responder_args`] for a TCP case.
 pub fn responder_args_for(c: &Case) -> Vec<String> {
@@ -1621,24 +1704,32 @@ pub fn ipv4_header_sum_ok(f: &[u8]) -> bool {
 }
 /// The TCP checksum of a frame is right, with its family's pseudo-header (RFC 793, RFC 8200 §8.1).
 pub fn tcp_sum_ok(f: &[u8]) -> bool {
+    l4_sum_ok(f, 6)
+}
+/// The ICMPv6 checksum of a frame is right (RFC 4443 §2.3: the IPv6 pseudo-header).
+pub fn icmp6_sum_ok(f: &[u8]) -> bool {
+    iv::pkt(f).is_some_and(|p| p.src.is_ipv6()) && l4_sum_ok(f, 58)
+}
+/// The upper-layer checksum of a frame whose upper protocol is `proto`, with its family's pseudo-header.
+fn l4_sum_ok(f: &[u8], proto: u8) -> bool {
     let Some(p) = iv::pkt(f) else { return false };
     let mut pseudo = Vec::with_capacity(40);
     match (p.src, p.dst) {
         (IpAddr::V4(s), IpAddr::V4(d)) => {
             pseudo.extend(s.octets());
             pseudo.extend(d.octets());
-            pseudo.extend([0, 6]);
+            pseudo.extend([0, proto]);
             pseudo.extend((p.l4.len() as u16).to_be_bytes());
         }
         (IpAddr::V6(s), IpAddr::V6(d)) => {
             pseudo.extend(s.octets());
             pseudo.extend(d.octets());
             pseudo.extend((p.l4.len() as u32).to_be_bytes());
-            pseudo.extend([0, 0, 0, 6]);
+            pseudo.extend([0, 0, 0, proto]);
         }
         _ => return false,
     }
-    p.proto == 6 && ones(p.l4, ones(&pseudo, 0)) == 0xffff
+    p.proto == proto && ones(p.l4, ones(&pseudo, 0)) == 0xffff
 }
 /// One segment of a connection as the comparison sees it.
 #[derive(Debug, Clone, PartialEq)]
@@ -1678,6 +1769,8 @@ pub struct Conn {
     pub reply_flags: u8,
     pub reply_ttl: u8,
     pub reply_ack: u32,
+    /// Both sums of the reply are right (IPv4 header and TCP): rmasscan drops a reply with a wrong one, C reads it.
+    pub reply_sums_ok: bool,
     /// The peer's initial sequence number (its SYN-ACK's, or the RST's sequence number).
     pub iss_them: u32,
     pub iss_me: u32,
@@ -1699,6 +1792,15 @@ impl Conn {
     /// The peer's data segments, in wire order.
     pub fn peer_data(&self) -> Vec<&Seg> {
         self.peer.iter().filter(|s| !s.payload.is_empty()).collect()
+    }
+    /// How many segments the peer's stream came in: its data segments at distinct sequence numbers (a
+    /// retransmission is no second segment of a split delivery).
+    pub fn peer_segments(&self) -> usize {
+        self.peer_data()
+            .iter()
+            .map(|s| s.seq)
+            .collect::<BTreeSet<u32>>()
+            .len()
     }
     /// The peer's stream: its data in sequence order, each byte once, up to the first hole.
     pub fn peer_stream(&self) -> Vec<u8> {
@@ -1745,22 +1847,28 @@ impl Conn {
         }
         at.into_iter().reduce(f64::min)
     }
+    /// A segment of the scanner is the stack's RST to a FIN of the peer that came after the connection was destroyed:
+    /// R8's RST to a FIN without a connection (`src/main.c:1019-1041`, `tcpcon_send_RST`,
+    /// `src/stack-tcp-core.c:1261-1282`: flags 0x04, seq the FIN's ack).
+    pub fn rst_to_fin_without_tcb(&self, s: &Seg) -> bool {
+        let Some(d) = self.destroyed_at() else {
+            return false;
+        };
+        s.t > d
+            && s.flags == RST
+            && self.peer.iter().any(|p| {
+                p.t > d && p.t <= s.t && p.flags & FIN != 0 && p.flags & RST == 0 && p.ack == s.seq
+            })
+    }
     /// The scanner's segments after the connection was destroyed, but a RST to a FIN of the peer (the stack's RST to
-    /// a FIN without a connection, `src/main.c:1019-1041`).
+    /// a FIN without a connection, [`Conn::rst_to_fin_without_tcb`]).
     pub fn after_destroy(&self) -> Vec<&Seg> {
         let Some(d) = self.destroyed_at() else {
             return Vec::new();
         };
         self.scanner
             .iter()
-            .filter(|s| s.t > d)
-            .filter(|s| {
-                !(s.flags == RST
-                    && self
-                        .peer
-                        .iter()
-                        .any(|p| p.t > d && p.t <= s.t && p.flags & FIN != 0))
-            })
+            .filter(|s| s.t > d && !self.rst_to_fin_without_tcb(s))
             .collect()
     }
     /// The scanner's segments as the comparison with C sees them.
@@ -1784,6 +1892,12 @@ pub struct TcpView {
     pub noise: Vec<String>,
     pub scanner_unexplained: Vec<String>,
     pub peer_unexpected: Vec<String>,
+    /// Frames of the peer that answer an earlier unexplained frame of the scanner (its TCP 4-tuple mirrored, or a
+    /// request for the address it came from): the scanner's doing, judged by its unexplained frame, not the stand's.
+    pub peer_answers_to_scanner: Vec<String>,
+    /// Frames of the scanner that answer an earlier unexpected frame of the peer (its TCP 4-tuple mirrored, as the
+    /// stack's RST to a FIN without a connection): the stand's doing, judged by the peer's frame.
+    pub scanner_answers_to_peer: Vec<String>,
     pub outside_window: usize,
     /// The capture's window (last start marker, first end marker).
     pub window: (f64, f64),
@@ -1851,8 +1965,16 @@ fn ipv6_kernel_noise(f: &[u8]) -> bool {
             })
     })
 }
+/// A TCP 4-tuple as a frame carries it: (source, source port, destination, destination port).
+type Tuple = (IpAddr, u16, IpAddr, u16);
+/// The other direction of a 4-tuple.
+fn mirrored(t: Tuple) -> Tuple {
+    (t.2, t.3, t.0, t.1)
+}
 /// A capture of a TCP step: the scanner's SYNs from the case's source, every connection the peer opened or reset with
-/// both sides' segments, the resolution of the source (resolve cases), the heartbeat, and everything else named.
+/// both sides' segments, the resolution of the source (resolve cases), the heartbeat, and everything else named. A
+/// stray frame of one side that answers an earlier stray frame of the other is put to the side that began
+/// ([`TcpView::peer_answers_to_scanner`], [`TcpView::scanner_answers_to_peer`]).
 pub fn tcp_view(c: &TcpCase, fr: &Frames, st: &Stand) -> TcpView {
     let w = av::classify(fr, st.scanner_mac);
     let (start, end) = av::window(&w);
@@ -1862,6 +1984,11 @@ pub fn tcp_view(c: &TcpCase, fr: &Frames, st: &Stand) -> TcpView {
         ..TcpView::default()
     };
     let scrubbed_ip = IpAddr::V4(Ipv4Addr::BROADCAST);
+    // The TCP 4-tuples of the scanner's unexplained frames and the addresses they came from, and the 4-tuples of the
+    // peer's unexpected TCP frames, so far.
+    let mut scanner_stray: BTreeSet<Tuple> = BTreeSet::new();
+    let mut stray_sources: BTreeSet<IpAddr> = BTreeSet::new();
+    let mut peer_stray: BTreeSet<Tuple> = BTreeSet::new();
     for (t, f) in fr {
         let t = *t;
         let from_scanner = f.get(6..12) == Some(&st.scanner_mac[..]);
@@ -1871,6 +1998,32 @@ pub fn tcp_view(c: &TcpCase, fr: &Frames, st: &Stand) -> TcpView {
                 v.scanner_unexplained.push(what);
             } else if from_peer {
                 v.peer_unexpected.push(what);
+            }
+        };
+        // A stray TCP frame: put to the side that began, by the 4-tuple of the other side's earlier stray frame.
+        let tuple = tcp_head(f).map(|h| (h.src, h.sp, h.dst, h.dp));
+        let stray = |what: String,
+                     v: &mut TcpView,
+                     scanner_stray: &mut BTreeSet<Tuple>,
+                     stray_sources: &mut BTreeSet<IpAddr>,
+                     peer_stray: &mut BTreeSet<Tuple>| {
+            match tuple {
+                Some(k) if from_scanner && peer_stray.contains(&mirrored(k)) => {
+                    v.scanner_answers_to_peer.push(what);
+                }
+                Some(k) if from_peer && scanner_stray.contains(&mirrored(k)) => {
+                    v.peer_answers_to_scanner.push(what);
+                }
+                Some(k) if from_scanner => {
+                    scanner_stray.insert(k);
+                    stray_sources.insert(k.0);
+                    v.scanner_unexplained.push(what);
+                }
+                Some(k) if from_peer => {
+                    peer_stray.insert(k);
+                    v.peer_unexpected.push(what);
+                }
+                _ => odd(what, v),
             }
         };
         if f.get(12..14) == Some(&crate::link::MARKER_ETHERTYPE[..]) {
@@ -1895,6 +2048,15 @@ pub fn tcp_view(c: &TcpCase, fr: &Frames, st: &Stand) -> TcpView {
                 (_, true, Some(2), IpAddr::V4(s)) if spa == Some(s) => {
                     v.answers.push((t, f.clone()))
                 }
+                // The peer resolves the address a stray frame of the scanner came from, to answer it.
+                (true, _, Some(1), _)
+                    if tpa.is_some_and(|a| stray_sources.contains(&IpAddr::V4(a))) =>
+                {
+                    v.peer_answers_to_scanner.push(format!(
+                        "{}, for a source of the scanner's stray frame",
+                        describe_frame(f)
+                    ))
+                }
                 _ => odd(describe_frame(f), &mut v),
             }
             continue;
@@ -1916,6 +2078,15 @@ pub fn tcp_view(c: &TcpCase, fr: &Frames, st: &Stand) -> TcpView {
                 (136, IpAddr::V6(s)) if from_scanner && target == Some(s) => {
                     v.answers.push((t, f.clone()));
                 }
+                (135, _)
+                    if from_peer
+                        && target.is_some_and(|a| stray_sources.contains(&IpAddr::V6(a))) =>
+                {
+                    v.peer_answers_to_scanner.push(format!(
+                        "{}, for a source of the scanner's stray frame",
+                        describe_frame(f)
+                    ))
+                }
                 _ => odd(describe_frame(f), &mut v),
             }
             continue;
@@ -1934,11 +2105,20 @@ pub fn tcp_view(c: &TcpCase, fr: &Frames, st: &Stand) -> TcpView {
             ip_sum_ok: ipv4_header_sum_ok(f),
         };
         let inside = (start..=end).contains(&t);
+        let mut stray = |what: String, v: &mut TcpView| {
+            stray(
+                what,
+                v,
+                &mut scanner_stray,
+                &mut stray_sources,
+                &mut peer_stray,
+            )
+        };
         if from_scanner {
             if h.src == scrubbed_ip && h.dst == scrubbed_ip && h.sp == 0xffff && h.dp == 0xffff {
                 v.scrubbed.push((t, f.clone()));
             } else if h.src != src {
-                odd(describe_frame(f), &mut v);
+                stray(describe_frame(f), &mut v);
             } else if h.flags & 0x3f == SYN {
                 v.outside_window += usize::from(!inside);
                 v.probes.push(TcpProbe {
@@ -1952,7 +2132,7 @@ pub fn tcp_view(c: &TcpCase, fr: &Frames, st: &Stand) -> TcpView {
             } else if let Some(i) = v.conn_of(h.dst, h.dp, h.sp) {
                 v.conns[i].scanner.push(seg);
             } else {
-                odd(
+                stray(
                     format!("{}, of no connection the stand opened", describe_frame(f)),
                     &mut v,
                 );
@@ -1960,7 +2140,7 @@ pub fn tcp_view(c: &TcpCase, fr: &Frames, st: &Stand) -> TcpView {
             continue;
         }
         if !from_peer || h.dst != src {
-            odd(describe_frame(f), &mut v);
+            stray(describe_frame(f), &mut v);
             continue;
         }
         if let Some(i) = v.conn_of(h.src, h.sp, h.dp) {
@@ -1989,6 +2169,7 @@ pub fn tcp_view(c: &TcpCase, fr: &Frames, st: &Stand) -> TcpView {
                     reply_flags: h.flags,
                     reply_ttl: h.ttl,
                     reply_ack: h.ack,
+                    reply_sums_ok: seg.sums_ok,
                     iss_them: h.seq,
                     iss_me: p.seq,
                     repeats: 0,
@@ -1996,7 +2177,7 @@ pub fn tcp_view(c: &TcpCase, fr: &Frames, st: &Stand) -> TcpView {
                     peer: Vec::new(),
                 });
             }
-            _ => odd(
+            _ => stray(
                 format!("{}, which answers no SYN of the scan", describe_frame(f)),
                 &mut v,
             ),
@@ -2006,6 +2187,30 @@ pub fn tcp_view(c: &TcpCase, fr: &Frames, st: &Stand) -> TcpView {
 }
 
 // ------------------------------------------------------------------ the documents
+
+/// C's `-oL` text of a banner's bytes, written here from the C source and not taken from the product
+/// (`normalize_string`, `src/output.c:144-170`, called with `MAX_BANNER_LENGTH` 8192 by `src/out-text.c:71`): a byte
+/// that `isprint` (0x20-0x7e in the C locale) and is none of `< > & \ " '` stays, every other byte is `\x` and two
+/// lowercase hex digits; a byte stays while `offset + 2 < 8192`, an escape while `offset + 5 < 8192`, else it is
+/// dropped (and later bytes may still fit).
+pub fn c_normalize_string(px: &[u8]) -> String {
+    const BUF_LEN: usize = 8192;
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::new();
+    for &c in px {
+        if (0x20..=0x7e).contains(&c) && !b"<>&\\\"'".contains(&c) {
+            if out.len() + 2 < BUF_LEN {
+                out.push(char::from(c));
+            }
+        } else if out.len() + 5 < BUF_LEN {
+            out.push('\\');
+            out.push('x');
+            out.push(char::from(HEX[usize::from(c >> 4)]));
+            out.push(char::from(HEX[usize::from(c & 0xf)]));
+        }
+    }
+    out
+}
 
 /// The application of a banner record: its number (`-oB`) or its name (`-oL`).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -2681,7 +2886,8 @@ fn banner_checks(r: &mut Run, c: &CaseSpec, s: &Side<BView>, d: &Document) {
     }
     if s.spec.who == Who::Rmasscan && s.spec.out == Out::List {
         // M2: in -oL, rmasscan's raw banner on the ports where C reads past the datagram is the datagram's
-        // normalize_string (out-text.c), not just present (udp-raw-past-datagram masks it against C).
+        // normalize_string (out-text.c), not just present (udp-raw-past-datagram masks it against C); the text is the
+        // verifier's own C escaper (c_normalize_string), not the product's.
         let mut off = Vec::new();
         let mut raw = 0;
         for a in v
@@ -2699,7 +2905,7 @@ fn banner_checks(r: &mut Run, c: &CaseSpec, s: &Side<BView>, d: &Document) {
             });
             let Some(x) = last else { continue };
             raw += 1;
-            let want = rmasscan_proto::normalize_string(datagram);
+            let want = c_normalize_string(datagram);
             if !matches!(&x.body, Body::Banner { data: Data::Text(t), .. } if *t == want) {
                 off.push(format!("{}, the datagram's text {want:?}", x.show()));
             }
@@ -2888,15 +3094,117 @@ fn ip_text(ip: IpAddr) -> String {
     }
 }
 
+/// The probes that repeat the 4-tuple of an earlier SYN of the scan (`--retries 0`: each SYN of the plan goes out
+/// once): the scanner's, and no answer of the stand is owed to them.
+fn repeated_syns(v: &TcpView) -> Vec<usize> {
+    let mut seen = BTreeSet::new();
+    v.probes
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| !seen.insert((p.ip, p.port, p.sport)))
+        .map(|(i, _)| i)
+        .collect()
+}
+
+/// What is wrong with the scanner's answers to the peer's requests for its source: each request answered exactly once
+/// before the next, in C's form ([`answer_form_problem`]), and the peer asks only once. The peer asks again only while
+/// its request is unanswered or after an answer it dropped (Linux retransmits a who-has or a solicitation every second
+/// while the entry is INCOMPLETE; a REACHABLE entry lasts 15-45 s, longer than a resolve step): a second request is
+/// the scanner's too. No request is the stand's (the "resolved at least once" check of [`tcp_stand`]).
+fn resolution_problems(c: &TcpCase, v: &TcpView, st: &Stand) -> Vec<String> {
+    let src = c.source();
+    let mut bad = Vec::new();
+    for (i, (t, q)) in v.requests.iter().enumerate() {
+        let next = v.requests.get(i + 1).map_or(f64::INFINITY, |x| x.0);
+        let mine: Vec<&(f64, Vec<u8>)> = v
+            .answers
+            .iter()
+            .filter(|(a, _)| *a >= *t && *a < next)
+            .collect();
+        match mine.as_slice() {
+            [(_, a)] => {
+                bad.extend(answer_form_problem(q, a, st, src).map(|p| format!("request {i}: {p}")))
+            }
+            other => bad.push(format!("{} answers to request {i}", other.len())),
+        }
+    }
+    if v.requests.len() > 1 {
+        bad.push(format!(
+            "the peer asked {} times: it took no answer (it asks again only while unanswered)",
+            v.requests.len()
+        ));
+    }
+    bad
+}
+
+/// The checks of a TCP step whose evidence is the scanner's alone, judged before the stand's (FAIL on rmasscan's step
+/// once the evidence is proven, INVALID on the oracle's), so that a fault of the scanner is never booked on the stand:
+/// the answers to the peer's requests for the source (unanswered or dropped, they leave the peer without the SYN-ACK
+/// it owes), SYNs on the wire and each once, and every frame of the scanner MAC explained (a frame of the peer that
+/// answers an unexplained one is the scanner's doing, [`TcpView::peer_answers_to_scanner`]).
+fn tcp_scanner_first(r: &mut Run, c: &TcpCase, s: &Side<BView>, v: &TcpView, st: &Stand) {
+    if c.resolve {
+        let bad = resolution_problems(c, v, st);
+        cap(
+            r,
+            s,
+            "the scanner answers every request of the peer for its source exactly once, at once and in C's form (an ARP reply of 60 bytes to the requester; a Neighbor Advertisement of 86 bytes to the requester with hop limit 255, code 0, flags 0x60, the source as its target, the scanner's MAC as its target link-layer address and a right ICMPv6 checksum), and the peer takes it (it asks once)",
+            bad.is_empty(),
+            if bad.is_empty() {
+                format!("{} requests, {} answers", v.requests.len(), v.answers.len())
+            } else {
+                some4(&bad, 4).join("; ")
+            },
+        );
+    }
+    let repeated = repeated_syns(v);
+    cap(
+        r,
+        s,
+        "the scan put its SYNs on the wire, each once (--retries 0: no 4-tuple's SYN repeated)",
+        !v.probes.is_empty() && repeated.is_empty(),
+        if repeated.is_empty() {
+            format!("{} SYNs", v.probes.len())
+        } else {
+            repeated
+                .iter()
+                .take(4)
+                .map(|i| {
+                    let p = &v.probes[*i];
+                    format!("{}:{} again at {:.3}", ip_text(p.ip), p.port, p.t)
+                })
+                .collect::<Vec<_>>()
+                .join("; ")
+        },
+    );
+    pair_verify::scanner_frame_checks(
+        r,
+        s,
+        "every frame of the scanner MAC is a SYN of the scan, a segment of one of its connections or an answer to the peer's request for its source",
+        &v.scanner_unexplained,
+        "the scanner's answers to the peer's requests for its source stay within one per request",
+        &[("answers_for_source", v.answers.len(), v.requests.len())],
+    );
+}
+
 /// The stand of a TCP step behaved (INVALID for both scanners otherwise): each SYN answered once, with a SYN-ACK
 /// exactly where the table has a scenario and a reset elsewhere; each scenario's stream on the wire is a prefix of its
 /// script's writes and a split one came in more than one segment; nothing else from the peer and no IPv6 noise; the
-/// heartbeat covered the scan; the source was resolved only in a resolve case.
-fn tcp_stand(r: &mut Run, c: &TcpCase, s: &Side<BView>, v: &TcpView) {
+/// heartbeat covered the scan (none at all on the quiet control); the source was resolved only in a resolve case. What
+/// [`tcp_scanner_first`] puts to the scanner is left out: a repeated SYN, a SYN left unanswered after the scanner
+/// failed the peer's request for its source, a frame of the peer that answers an unexplained frame of the scanner.
+fn tcp_stand(r: &mut Run, c: &TcpCase, s: &Side<BView>, v: &TcpView, st: &Stand) {
     let name = s.spec.name;
+    let repeated = repeated_syns(v);
+    let unresolved = c.resolve && !resolution_problems(c, v, st).is_empty();
     let mut bad = Vec::new();
+    let mut theirs = 0;
     for (i, p) in v.probes.iter().enumerate() {
         let answers: Vec<&Conn> = v.conns.iter().filter(|x| x.probe == i).collect();
+        if repeated.contains(&i) || (unresolved && answers.is_empty()) {
+            theirs += 1;
+            continue;
+        }
         let want_open = tcp_scenario(p.port, p.ip).is_some();
         if answers.len() != 1 || answers[0].open != want_open {
             bad.push(format!(
@@ -2912,8 +3220,15 @@ fn tcp_stand(r: &mut Run, c: &TcpCase, s: &Side<BView>, v: &TcpView) {
         &format!(
             "{name}: the stand answered every SYN exactly once, with a SYN-ACK where the table has a scenario and a reset elsewhere"
         ),
-        bad.is_empty() && !v.probes.is_empty(),
-        some4(&bad, 4).join("; "),
+        bad.is_empty(),
+        if bad.is_empty() {
+            format!(
+                "{} SYNs, {theirs} left to the scanner's checks (repeated, or unanswered after the scanner failed the peer's request)",
+                v.probes.len()
+            )
+        } else {
+            some4(&bad, 4).join("; ")
+        },
     );
     let mut streams = Vec::new();
     let mut split = Vec::new();
@@ -2929,8 +3244,13 @@ fn tcp_stand(r: &mut Run, c: &TcpCase, s: &Side<BView>, v: &TcpView) {
                 x.port,
                 got.len()
             ));
-        } else if got == want && sc.split && x.peer_data().len() < 2 {
-            split.push(format!("{}:{}: one data segment", ip_text(x.ip), x.port));
+        } else if got == want && sc.split && x.peer_segments() < 2 {
+            split.push(format!(
+                "{}:{}: one data segment ({} on the wire)",
+                ip_text(x.ip),
+                x.port,
+                x.peer_data().len()
+            ));
         }
     }
     r.inv(
@@ -2942,7 +3262,7 @@ fn tcp_stand(r: &mut Run, c: &TcpCase, s: &Side<BView>, v: &TcpView) {
     );
     r.inv(
         &format!(
-            "{name}: every split scenario came in more than one data segment (where C does not depend on the split, E2)"
+            "{name}: every split scenario came in more than one data segment at distinct sequence numbers (where C does not depend on the split, E2)"
         ),
         split.is_empty(),
         some4(&split, 4).join("; "),
@@ -2950,7 +3270,14 @@ fn tcp_stand(r: &mut Run, c: &TcpCase, s: &Side<BView>, v: &TcpView) {
     r.inv(
         &format!("{name}: nothing on the peer side answers anything the scan did not send"),
         v.peer_unexpected.is_empty(),
-        some4(&v.peer_unexpected, 4).join("; "),
+        if v.peer_unexpected.is_empty() {
+            format!(
+                "{} frames of the peer answer the scanner's unexplained frames (the scanner's check)",
+                v.peer_answers_to_scanner.len()
+            )
+        } else {
+            some4(&v.peer_unexpected, 4).join("; ")
+        },
     );
     r.inv(
         &format!(
@@ -2964,27 +3291,38 @@ fn tcp_stand(r: &mut Run, c: &TcpCase, s: &Side<BView>, v: &TcpView) {
         v.outside_window == 0,
         v.outside_window,
     );
-    // The heartbeat keeps C's receive loop turning (HEARTBEAT_PAYLOAD): it must cover the scan.
-    let (lo, hi) = match (v.probes.first(), v.probes.last()) {
-        (Some(a), Some(b)) => (a.t, b.t + f64::from(c.wait)),
-        _ => (0.0, 0.0),
-    };
-    let mut beats: Vec<f64> = v.heartbeats.clone();
-    beats.sort_by(f64::total_cmp);
-    let mut gap = 0f64;
-    let mut prev = lo;
-    for b in beats.iter().copied().filter(|b| (lo..=hi).contains(b)) {
-        gap = gap.max(b - prev);
-        prev = b;
+    if c.quiet {
+        // M3: the control runs rmasscan's timers with nothing but the scan on the link.
+        r.inv(
+            &format!(
+                "{name}: no peer heartbeat on the wire (the quiet control: rmasscan's hello and lifetime timers on a quiet link)"
+            ),
+            v.heartbeats.is_empty(),
+            format!("{} heartbeats", v.heartbeats.len()),
+        );
+    } else {
+        // The heartbeat keeps C's receive loop turning (HEARTBEAT_PAYLOAD): it must cover the scan.
+        let (lo, hi) = match (v.probes.first(), v.probes.last()) {
+            (Some(a), Some(b)) => (a.t, b.t + f64::from(c.wait)),
+            _ => (0.0, 0.0),
+        };
+        let mut beats: Vec<f64> = v.heartbeats.clone();
+        beats.sort_by(f64::total_cmp);
+        let mut gap = 0f64;
+        let mut prev = lo;
+        for b in beats.iter().copied().filter(|b| (lo..=hi).contains(b)) {
+            gap = gap.max(b - prev);
+            prev = b;
+        }
+        gap = gap.max(hi - prev);
+        r.inv(
+            &format!(
+                "{name}: the peer heartbeat covered the scan (no gap over {HEARTBEAT_MAX_GAP} s from the first SYN to the end of the wait)"
+            ),
+            gap <= HEARTBEAT_MAX_GAP,
+            format!("{} heartbeats, largest gap {gap:.3} s", beats.len()),
+        );
     }
-    gap = gap.max(hi - prev);
-    r.inv(
-        &format!(
-            "{name}: the peer heartbeat covered the scan (no gap over {HEARTBEAT_MAX_GAP} s from the first SYN to the end of the wait)"
-        ),
-        gap <= HEARTBEAT_MAX_GAP && !v.probes.is_empty(),
-        format!("{} heartbeats, largest gap {gap:.3} s", beats.len()),
-    );
     r.inv(
         &format!(
             "{name}: the peer resolved the source {} (ARP who-has or Neighbor Solicitation)",
@@ -2999,50 +3337,80 @@ fn tcp_stand(r: &mut Run, c: &TcpCase, s: &Side<BView>, v: &TcpView) {
     );
 }
 
-/// One answer of the scanner to a request of the peer for its source, in C's form: an ARP reply of 60 bytes to the
-/// requester (`src/stack-arpv4.c:282-363`) or a Neighbor Advertisement of C's form (`src/stack-ndpv6.c:95-182`).
+/// What is wrong with one answer of the scanner to a request of the peer for its source, against C's form: an ARP
+/// reply of 60 bytes to the requester (`src/stack-arpv4.c:282-363`), or C's Neighbor Advertisement
+/// (`src/stack-ndpv6.c:144-178`: the request with type 136, code 0, flags 0x60, the target and the target link-layer
+/// option, its checksum; hop limit and length as the request's, 255 and 32 from the Linux peer) as RFC 4861 §7.1.2
+/// has the peer take it: hop limit 255, code 0, a right checksum, ICMPv6 length 32 (24 and one option), to the
+/// requester's MAC and address. The view takes as answers only frames of the scanner MAC for the source (an ARP reply
+/// with the source as sender address, an NA with the source as target), so those fields are not judged again here.
 fn answer_form_problem(req: &[u8], ans: &[u8], st: &Stand, src: IpAddr) -> Option<String> {
+    let wrong = |what: &str, fields: &[(&str, bool)]| -> Option<String> {
+        let off: Vec<&str> = fields
+            .iter()
+            .filter(|(_, ok)| !ok)
+            .map(|(n, _)| *n)
+            .collect();
+        (!off.is_empty()).then(|| format!("{what} not in C's form: {}", off.join(", ")))
+    };
     match src {
-        IpAddr::V4(s) => {
-            let ok = ans.len() == 60
-                && ans[..6] == req[22..28]
-                && ans[6..12] == st.scanner_mac
-                && ans[12..22] == [8, 6, 0, 1, 8, 0, 6, 4, 0, 2]
-                && ans[22..28] == st.scanner_mac
-                && ans[28..32] == s.octets()
-                && ans[32..42] == req[22..32]
-                && ans[42..].iter().all(|b| *b == 0);
-            (!ok).then(|| format!("an ARP reply of {} bytes not in C's form", ans.len()))
+        IpAddr::V4(_) => {
+            let at = |r: std::ops::Range<usize>| ans.get(r);
+            wrong(
+                &format!("an ARP reply of {} bytes", ans.len()),
+                &[
+                    ("length 60", ans.len() == 60),
+                    ("to the requester's MAC", at(0..6) == req.get(22..28)),
+                    (
+                        "an Ethernet ARP reply",
+                        at(12..22) == Some(&[8, 6, 0, 1, 8, 0, 6, 4, 0, 2][..]),
+                    ),
+                    (
+                        "the scanner MAC as sender",
+                        at(22..28) == Some(&st.scanner_mac[..]),
+                    ),
+                    ("the requester as target", at(32..42) == req.get(22..32)),
+                    (
+                        "zero padding",
+                        ans.get(42..).is_some_and(|p| p.iter().all(|b| *b == 0)),
+                    ),
+                ],
+            )
         }
         IpAddr::V6(s) => {
             let (Some(q), Some(a)) = (iv::pkt(req), iv::pkt(ans)) else {
-                return Some("an unparsable NS or NA".into());
+                return Some("a Neighbor Advertisement not in C's form: unparsable".into());
             };
-            let opt = a.l4.get(24..32);
-            let ok = ans[..6] == req[6..12]
-                && ans[6..12] == st.scanner_mac
-                && a.src == IpAddr::V6(s)
-                && a.dst == q.src
-                && a.l4.first() == Some(&136)
-                && a.l4.get(4) == Some(&0x60)
-                && a.l4.get(8..24) == Some(&s.octets()[..])
-                && opt.is_some_and(|o| o[..2] == [2, 1] && o[2..] == st.scanner_mac);
-            (!ok).then(|| "a Neighbor Advertisement not in C's form".into())
+            let l4 = |r: std::ops::Range<usize>| a.l4.get(r);
+            let mut tlla = vec![2, 1];
+            tlla.extend(st.scanner_mac);
+            wrong(
+                "a Neighbor Advertisement",
+                &[
+                    ("86 bytes", ans.len() == 86),
+                    ("to the requester's MAC", ans.get(..6) == req.get(6..12)),
+                    ("no extension header", !a.ext),
+                    ("hop limit 255", a.ttl == 255),
+                    ("from the source", a.src == IpAddr::V6(s)),
+                    ("to the requester", a.dst == q.src),
+                    ("ICMPv6 length 32", a.l4.len() == 32),
+                    ("code 0", l4(1..2) == Some(&[0][..])),
+                    ("flags 0x60", l4(4..8) == Some(&[0x60, 0, 0, 0][..])),
+                    (
+                        "the scanner MAC as target link-layer address",
+                        l4(24..32) == Some(&tlla[..]),
+                    ),
+                    ("a right checksum", icmp6_sum_ok(ans)),
+                ],
+            )
         }
     }
 }
 
-/// What a TCP step proves about the scanner's frames (FAIL on rmasscan's step once the evidence is proven, INVALID on
-/// the oracle's).
-fn tcp_scanner(r: &mut Run, c: &TcpCase, s: &Side<BView>, v: &TcpView, st: &Stand) {
-    pair_verify::scanner_frame_checks(
-        r,
-        s,
-        "every frame of the scanner MAC is a SYN of the scan, a segment of one of its connections or an answer to the peer's request for its source",
-        &v.scanner_unexplained,
-        "the scanner's answers to the peer's requests for its source stay within one per request",
-        &[("answers_for_source", v.answers.len(), v.requests.len())],
-    );
+/// What a TCP step proves about the scanner's frames once the stand is known to have behaved (FAIL on rmasscan's
+/// step once the evidence is proven, INVALID on the oracle's): no frame of a destroyed connection or a scrubbed TCB,
+/// right sums, the hello and lifetime windows, the stateless RST rule, the resolved connection's data.
+fn tcp_scanner(r: &mut Run, c: &TcpCase, s: &Side<BView>, v: &TcpView) {
     if s.spec.who == Who::Rmasscan {
         cap(
             r,
@@ -3135,13 +3503,18 @@ fn tcp_scanner(r: &mut Run, c: &TcpCase, s: &Side<BView>, v: &TcpView, st: &Stan
     }
     if c.banners {
         // The lifetime RST: timeout + 2 ± 2 s after the SYN-ACK, on every connection the scenario holds open when the
-        // case's lifetime ends inside the scan; none at all otherwise (teardown).
+        // case's lifetime ends inside the scan; none at all otherwise (teardown). R8's RST to a FIN of the peer after
+        // the connection's end (Conn::rst_to_fin_without_tcb) is no lifetime RST: after_destroy judges it.
         let life = f64::from(c.lifetime());
         let within = c.connection_timeout.is_some();
         let mut bad = Vec::new();
         let mut rsts = 0;
         for x in v.conns.iter().filter(|x| x.open) {
-            let mine: Vec<&Seg> = x.scanner.iter().filter(|g| g.flags & RST != 0).collect();
+            let mine: Vec<&Seg> = x
+                .scanner
+                .iter()
+                .filter(|g| g.flags & RST != 0 && !x.rst_to_fin_without_tcb(g))
+                .collect();
             let held = tcp_scenario(x.port, x.ip).is_some_and(TcpScenario::held);
             for g in &mine {
                 let dt = g.t - x.reply_t;
@@ -3218,33 +3591,8 @@ fn tcp_scanner(r: &mut Run, c: &TcpCase, s: &Side<BView>, v: &TcpView, st: &Stan
             },
         );
     }
-    // The answers to the peer's requests for the source: one each, before the next request, in C's form.
-    let src = c.source();
-    let mut bad = Vec::new();
-    for (i, (t, q)) in v.requests.iter().enumerate() {
-        let next = v.requests.get(i + 1).map_or(f64::INFINITY, |x| x.0);
-        let mine: Vec<&(f64, Vec<u8>)> = v
-            .answers
-            .iter()
-            .filter(|(a, _)| *a >= *t && *a < next)
-            .collect();
-        match mine.as_slice() {
-            [(_, a)] => bad.extend(answer_form_problem(q, a, st, src)),
-            other => bad.push(format!("{} answers to request {i}", other.len())),
-        }
-    }
     if c.resolve {
-        cap(
-            r,
-            s,
-            "the scanner answers every request of the peer for its source exactly once, in C's form (an ARP reply of 60 bytes to the requester, a Neighbor Advertisement with flags 0x60 and the scanner's MAC)",
-            bad.is_empty() && !v.requests.is_empty(),
-            if bad.is_empty() {
-                format!("{} answers", v.answers.len())
-            } else {
-                some4(&bad, 4).join("; ")
-            },
-        );
+        // The peer took the answer: its SYN-ACK came, and the connection carried data.
         let done = v
             .conns
             .iter()
@@ -3284,6 +3632,14 @@ fn tcp_counts(v: &TcpView) -> serde_json::Map<String, Value> {
     m.insert("scrubbed_tcb_segments".into(), json!(v.scrubbed.len()));
     m.insert("heartbeats".into(), json!(v.heartbeats.len()));
     m.insert("unexplained".into(), json!(v.scanner_unexplained.len()));
+    m.insert(
+        "answers_to_the_peers_stray_frames".into(),
+        json!(v.scanner_answers_to_peer.len()),
+    );
+    m.insert(
+        "peer_answers_to_unexplained".into(),
+        json!(v.peer_answers_to_scanner.len()),
+    );
     m
 }
 
@@ -3463,11 +3819,27 @@ fn tcp_vs_c(r: &mut Run, c: &TcpCase, rm: &Side<BView>, or: &Side<BView>) {
         },
     );
     if c.resolve && !c.v6 {
-        let same = a.requests.len() == b.requests.len()
-            && a.answers
-                .iter()
-                .map(|x| &x.1)
-                .eq(b.answers.iter().map(|x| &x.1));
+        // How often the peer asked is the stand's, not a difference from C (M5); a scanner that failed the peer's
+        // request made it ask again, which that step's own check judged (tcp_scanner_first).
+        let st = stand();
+        let failed = |v: &TcpView| !resolution_problems(c, v, &st).is_empty();
+        r.inv(
+            &format!(
+                "{}: the peer asked both scanners for the source as often ({}), or one of them failed its request",
+                rm.spec.name, or.spec.name
+            ),
+            a.requests.len() == b.requests.len() || failed(a) || failed(b),
+            format!(
+                "{} requests, C's step {}",
+                a.requests.len(),
+                b.requests.len()
+            ),
+        );
+        let same = a
+            .answers
+            .iter()
+            .map(|x| &x.1)
+            .eq(b.answers.iter().map(|x| &x.1));
         r.cap(
             &format!(
                 "{}: the ARP replies for the source equal the C oracle's ({}) byte for byte",
@@ -3479,29 +3851,15 @@ fn tcp_vs_c(r: &mut Run, c: &TcpCase, rm: &Side<BView>, or: &Side<BView>) {
     }
 }
 
-/// [`tcp_vs_c`] for each document's pair of steps, the TCP deviations' conditions and the notes of a TCP case.
-fn tcp_finish(
+/// Before the comparisons with C of a TCP case: C's forced exit and the TCP deviations' conditions, so that an unmet
+/// one makes every comparison after it INVALID ([`PairPlan::before_vs_c`]).
+fn tcp_before_vs_c(
     r: &mut Run,
     c: &TcpCase,
     sides: &[Side<BView>],
     docs: &[Option<Document>],
     tally: Tally,
 ) {
-    let mut counts = serde_json::Map::new();
-    for (s, d) in sides.iter().zip(docs) {
-        let Some(d) = d else { continue };
-        tcp_banner_checks(r, s, d);
-        let mut by_app: BTreeMap<String, usize> = BTreeMap::new();
-        for name in d.records.iter().filter_map(Rec::app_name) {
-            *by_app.entry(name).or_default() += 1;
-        }
-        counts.insert(s.spec.name.into(), json!(by_app));
-    }
-    for pair in sides.chunks(2) {
-        if let [rm, or] = pair {
-            tcp_vs_c(r, c, rm, or);
-        }
-    }
     // C's forced exit skips tcpcon_destroy_table (src/main.c:1111-1113, :1489-1496): the banners of connections still
     // alive at the end of its scan were never written, so its document is no reference for them.
     for s in sides
@@ -3524,6 +3882,29 @@ fn tcp_finish(
             format!("forced exit {}, {alive} connections alive at the end", s.forced_exit),
         );
     }
+    tcp_deviations(r, c, sides, docs, tally.collapsed);
+}
+
+/// [`tcp_vs_c`] for each document's pair of steps, the oracle's banner checks (rmasscan's are its step's) and the
+/// notes of a TCP case.
+fn tcp_finish(r: &mut Run, c: &TcpCase, sides: &[Side<BView>], docs: &[Option<Document>]) {
+    let mut counts = serde_json::Map::new();
+    for (s, d) in sides.iter().zip(docs) {
+        let Some(d) = d else { continue };
+        if s.spec.who == Who::Oracle {
+            tcp_banner_checks(r, s, d);
+        }
+        let mut by_app: BTreeMap<String, usize> = BTreeMap::new();
+        for name in d.records.iter().filter_map(Rec::app_name) {
+            *by_app.entry(name).or_default() += 1;
+        }
+        counts.insert(s.spec.name.into(), json!(by_app));
+    }
+    for pair in sides.chunks(2) {
+        if let [rm, or] = pair {
+            tcp_vs_c(r, c, rm, or);
+        }
+    }
     r.notes
         .insert("banners_by_app".into(), Value::Object(counts));
     r.notes.insert(
@@ -3535,7 +3916,6 @@ fn tcp_finish(
                 .collect::<Vec<_>>()
         ),
     );
-    tcp_deviations(r, c, sides, docs, tally.collapsed);
 }
 
 /// Each named deviation of a TCP case: the wire condition that keeps it from changing the comparison, and the notes.
@@ -3552,12 +3932,18 @@ fn tcp_deviations(
         .collect();
     named_deviations(r, c.deviations, &DEVIATIONS, |name| match name {
         "rx-checksum-verify" => {
+            // The replies (SYN-ACK, RST) and every later segment of the peer.
             let bad = views
                 .iter()
-                .flat_map(|(_, v)| v.conns.iter().flat_map(|x| &x.peer))
-                .filter(|g| !g.sums_ok)
-                .count();
-            (bad == 0, format!("{bad} peer segments with a wrong sum"))
+                .flat_map(|(_, v)| &v.conns)
+                .map(|x| {
+                    usize::from(!x.reply_sums_ok) + x.peer.iter().filter(|g| !g.sums_ok).count()
+                })
+                .sum::<usize>();
+            (
+                bad == 0,
+                format!("{bad} replies and peer segments with a wrong sum"),
+            )
         }
         "ipv4-stack-checksum" => {
             // A wrong IPv4 header checksum of C makes the peer drop the frame: the two wires would part.
@@ -3621,7 +4007,7 @@ fn tcp_deviations(
             let bad = views
                 .iter()
                 .flat_map(|(_, v)| v.conns.iter().filter(|x| x.port == 25565))
-                .filter(|x| x.peer_data().len() > 1)
+                .filter(|x| x.peer_segments() > 1)
                 .count();
             (
                 bad == 0,
@@ -3715,6 +4101,11 @@ fn tcp_rmasscan_step(r: &mut Run, c: &TcpCase, s: &Side<BView>, doc: Option<&Doc
             }
         },
     );
+    // rmasscan's own banners (M1, the scenarios' applications) are judged here, in its step: before the oracle's
+    // step, so that a C that never answered (t08) leaves rmasscan's verdict on its own document standing.
+    if let Some(d) = doc {
+        tcp_banner_checks(r, s, d);
+    }
 }
 
 // ------------------------------------------------------------------ privacy and evidence
@@ -3967,6 +4358,24 @@ impl PairPlan for Banners {
                 problem.unwrap_or_else(|| format!("{p:?}")),
             );
         }
+        // M8: before every step of a resolve case the suite flushed the peer's entry for the source, and says so.
+        if let Case::Tcp(t) = c
+            && t.resolve
+        {
+            for spec in steps(t.tag).unwrap_or_default() {
+                if let Some(f) = av::typed::<NeighFlush>(r, &d.join(spec.name), NEIGH_FLUSH_JSON) {
+                    let problem = neigh_flush_problem(&f, t);
+                    r.inv(
+                        &format!(
+                            "{}/{NEIGH_FLUSH_JSON}: the peer's neighbour entry for the source was flushed before the step",
+                            spec.name
+                        ),
+                        problem.is_none(),
+                        problem.unwrap_or_else(|| format!("{:?}", f.argv)),
+                    );
+                }
+            }
+        }
     }
     fn plan(c: &Case) -> Result<Vec<Vec<u8>>, String> {
         match c {
@@ -4027,8 +4436,12 @@ impl PairPlan for Banners {
                 )
             }
             (Case::Tcp(t), BView::Tcp(v)) => {
-                tcp_stand(r, t, s, v);
-                tcp_scanner(r, t, s, v, &stand());
+                // The scanner's own evidence first, then the stand with what that evidence explains left out, then
+                // what needs a stand that behaved (I1: a fault of the scanner is never the stand's INVALID).
+                let st = stand();
+                tcp_scanner_first(r, t, s, v, &st);
+                tcp_stand(r, t, s, v, &st);
+                tcp_scanner(r, t, s, v);
                 tcp_counts(v)
             }
             _ => {
@@ -4097,15 +4510,29 @@ impl PairPlan for Banners {
             }
         }
     }
-    fn finish(
+    fn before_vs_c(
         r: &mut Run,
         c: &Case,
         sides: &[Side<BView>],
         docs: &[Option<Document>],
         tally: Tally,
     ) {
+        // I2: the deviations' wire conditions and C's forced exit before any comparison with C, so that an unmet one
+        // makes the comparisons INVALID instead of following a FAIL with behaviour.
+        match c {
+            Case::Udp(_) => deviations(r, sides, docs, tally.by_rule, tally.collapsed),
+            Case::Tcp(t) => tcp_before_vs_c(r, t, sides, docs, tally),
+        }
+    }
+    fn finish(
+        r: &mut Run,
+        c: &Case,
+        sides: &[Side<BView>],
+        docs: &[Option<Document>],
+        _tally: Tally,
+    ) {
         let c = match c {
-            Case::Tcp(t) => return tcp_finish(r, t, sides, docs, tally),
+            Case::Tcp(t) => return tcp_finish(r, t, sides, docs),
             Case::Udp(c) => c,
         };
         let mut counts = serde_json::Map::new();
@@ -4151,7 +4578,6 @@ impl PairPlan for Banners {
                     .collect::<Vec<_>>()
             ),
         );
-        deviations(r, sides, docs, tally.by_rule, tally.collapsed);
     }
 }
 

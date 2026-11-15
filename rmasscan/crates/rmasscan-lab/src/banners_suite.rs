@@ -7,7 +7,7 @@
 //! `peer-stack.json`, `peer-tcp.json` (TCP cases), `isolation.json`, `isolation-post.json`, `hashes-before-copy.txt`,
 //! and per step `argv.json`, the
 //! scanner's `stdout.txt stderr.txt exit.txt`, its document (`output.bin`, `output.txt`), the peer witness `peer.pcap
-//! capture.json peer.err` and `responder.json`.
+//! capture.json peer.err`, `responder.json`, and in a resolve case `neigh-flush.json`.
 //!
 //! The driver is the protocols suite's (`protocols_suite::step`: one restarted responder and one witness per step, the
 //! scanner in its own working directory, the oracle under a masked `/etc/masscan`) on the other Linux suites' stand
@@ -16,17 +16,18 @@
 //! window port, each datagram answered once with the scenario reply of its address and port
 //! (`banners_verify::scenario_reply`); for a TCP case a kernel
 //! socket per peer address (IPv4 and IPv6) and scenario port, every connection running its scenario's script
-//! (`banners_verify::TCP_SCENARIOS`), and the peer heartbeat that keeps C's receive loop turning. Before every step of
-//! a resolve case (no neighbour entry for its source) the suite flushes the peer's entry for that source, so each
-//! scanner is asked for its address afresh. Before anything starts and again before every case the suite reads the
-//! peer stack in the peer namespace (`protocols_suite::peer_stack_with`) and the stand's IPv6
+//! (`banners_verify::TCP_SCENARIOS`), and the peer heartbeat that keeps C's receive loop turning (none for the quiet
+//! control, which runs rmasscan alone). Before every step of a resolve case (no neighbour entry for its source) the
+//! suite flushes the peer's entry for that source, so each scanner is asked for its address afresh, and records the
+//! command and its exit code in the step's `neigh-flush.json`. Before anything starts and again before every case
+//! the suite reads the peer stack in the peer namespace (`protocols_suite::peer_stack_with`) and the stand's IPv6
 //! (`ipv6_suite::ipv6_stack`), and refuses (NOT RUN) a peer that rate-limits ICMP errors, ignores Echo, would run
 //! another responder, or an IPv6 stand that is not ready, and before each TCP case the peer's
 //! `net.ipv4.tcp_max_tw_buckets` (`peer-tcp.json`: 0, or NOT RUN). Every target is in 198.18.0.0/24 or
 //! fd00:198:18::/64. The suite never loads a kernel module.
 use crate::{
     autodetect_suite::{
-        self as ad, IP, Linux, LinuxHost, LinuxTools, RESPONDER_POLLS, addresses_outside_the_lab,
+        self as ad, Linux, LinuxHost, LinuxTools, RESPONDER_POLLS, addresses_outside_the_lab,
         not_run, write_record,
     },
     banners_verify::{self as bv, Case},
@@ -175,18 +176,24 @@ fn peer_tcp(l: &Linux) -> Result<bv::PeerTcp, String> {
 }
 
 /// Before a step of a resolve case: the peer namespace forgets the case's source (`ip neigh flush to`), so that it
-/// resolves it afresh with this step's scanner (`banners_verify::RESOLVE_SOURCE`, `RESOLVE_SOURCE6`).
-fn forget_source(l: &Linux, tag: &str, src: std::net::IpAddr) -> Result<(), SuiteError> {
-    let mut argv: Vec<String> = vec![IP.into(), "-n".into(), l.ns_b.clone()];
-    if src.is_ipv6() {
-        argv.push("-6".into());
-    }
-    argv.extend(["neigh", "flush", "to", &src.to_string(), "dev", "veth-b"].map(str::to_owned));
+/// resolves it afresh with this step's scanner (`banners_verify::RESOLVE_SOURCE`, `RESOLVE_SOURCE6`). The command and
+/// its exit code go to the step's `neigh-flush.json` (`banners_verify::NeighFlush`), which the verifier reads.
+fn forget_source(
+    l: &Linux,
+    tag: &str,
+    src: std::net::IpAddr,
+    step_dir: &Path,
+) -> Result<(), SuiteError> {
+    let argv = bv::neigh_flush_argv(&l.ns_b, src);
     let o = l.host.exec(&argv, ad::EXEC_TIMEOUT).map_err(|e| {
         not_run(format!(
             "{tag}: the peer's entry for {src} could not be flushed ({e})"
         ))
     })?;
+    write_record(
+        &step_dir.join(bv::NEIGH_FLUSH_JSON),
+        &bv::NeighFlush { argv, rc: o.rc },
+    )?;
     if o.rc != 0 {
         return Err(not_run(format!(
             "{tag}: ip neigh flush to {src} exit {}: {}; the scanner was not started",
@@ -242,7 +249,7 @@ fn one(
         if let Case::Tcp(tc) = c
             && tc.resolve
         {
-            forget_source(l, tag, tc.source())?;
+            forget_source(l, tag, tc.source(), &run.join(s.name))?;
         }
         step(l, tag, s, base, run, t, &options)?;
     }

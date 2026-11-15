@@ -313,7 +313,14 @@ fn the_suite_writes_what_the_verifier_reads_for_every_case() {
             bv::tcp_case(tag).is_some(),
             "{tag}: peer-tcp.json for a TCP case only"
         );
+        let resolve = bv::tcp_case(tag).is_some_and(|c| c.resolve);
         for step in bv::steps(tag).unwrap() {
+            assert_eq!(
+                d.join(step.name).join(bv::NEIGH_FLUSH_JSON).is_file(),
+                resolve,
+                "{tag}/{}: neigh-flush.json for a step of a resolve case only",
+                step.name
+            );
             for f in [
                 "argv.json",
                 "stdout.txt",
@@ -429,15 +436,21 @@ fn every_target_of_the_table_is_on_the_stand() {
 
 #[test]
 fn a_tcp_case_gets_the_scenario_responder_and_a_resolve_case_a_fresh_peer_entry_per_step() {
-    let s = setup(&["t01_tcp4", "t07_resolve_arp", "t08_resolve_ndp"]);
+    let s = setup(&[
+        "t01_tcp4",
+        "t07_resolve_arp",
+        "t08_resolve_ndp",
+        "t09_quiet_timers",
+    ]);
     assert_eq!(run_suite(&s).unwrap(), 0);
     let responders = s.fake.of("responder");
-    assert_eq!(responders.len(), 4 + 2 + 2, "one responder per step");
+    assert_eq!(responders.len(), 4 + 2 + 2 + 1, "one responder per step");
     for (r, tag) in responders.iter().zip(
         ["t01_tcp4"; 4]
             .into_iter()
             .chain(["t07_resolve_arp"; 2])
-            .chain(["t08_resolve_ndp"; 2]),
+            .chain(["t08_resolve_ndp"; 2])
+            .chain(["t09_quiet_timers"]),
     ) {
         let at = r.iter().position(|a| a == "responder").unwrap();
         let ready = r.iter().position(|a| a == "--ready").unwrap();
@@ -446,7 +459,15 @@ fn a_tcp_case_gets_the_scenario_responder_and_a_resolve_case_a_fresh_peer_entry_
             bv::tcp_responder_args(&bv::tcp_case(tag).unwrap())[..],
             "{tag}"
         );
+        // The quiet control (M3) runs its responder without the heartbeat, every other TCP case with it.
+        assert_eq!(
+            r.iter().any(|a| a == "--heartbeat-iface"),
+            tag != "t09_quiet_timers",
+            "{tag}"
+        );
     }
+    // The quiet control runs rmasscan only.
+    assert_eq!(s.fake.of(&s.fake.oracle).len(), 2 + 1 + 1);
     // Before each step of a resolve case, and only then: ip -n <peer ns> [-6] neigh flush to <source> dev veth-b.
     let flushes: Vec<Vec<String>> = s
         .fake
@@ -473,6 +494,34 @@ fn a_tcp_case_gets_the_scenario_responder_and_a_resolve_case_a_fresh_peer_entry_
             want(true, "fd00:198:18::a"),
         ]
     );
+    // Each flush is recorded in its step's directory (M8): the command and its exit code.
+    for (tag, six, src) in [
+        ("t07_resolve_arp", false, "198.18.0.10"),
+        ("t08_resolve_ndp", true, "fd00:198:18::a"),
+    ] {
+        for step in bv::steps(tag).unwrap() {
+            let rec: bv::NeighFlush = serde_json::from_slice(
+                &fs::read(
+                    s.out
+                        .join("runs")
+                        .join(tag)
+                        .join(step.name)
+                        .join(bv::NEIGH_FLUSH_JSON),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(
+                rec,
+                bv::NeighFlush {
+                    argv: want(six, src),
+                    rc: 0
+                },
+                "{tag}/{}",
+                step.name
+            );
+        }
+    }
     // The suite's own seal of every case is the IPv6 stand's.
     let modes: Vec<String> = s
         .fake

@@ -40,6 +40,8 @@ const SCANNER_MAC: [u8; 6] = [2, 0xaa, 0, 0, 0, 1];
 const PEER_MAC: [u8; 6] = [2, 0xaa, 0, 0, 0, 2];
 const SCANNER_IP: Ipv4Addr = Ipv4Addr::new(198, 18, 0, 1);
 const TTL: u8 = 64;
+/// The peer namespace as the suite names it (`wire-lab.sh`: `wl-peer-<run id>`).
+const PEER_NS: &str = "wl-peer-41-42";
 
 fn probe_peer(p: &[u8]) -> Ipv4Addr {
     Ipv4Addr::new(p[30], p[31], p[32], p[33])
@@ -341,6 +343,8 @@ pub(crate) struct StepSim {
     pub(crate) responder: ResponderRecord,
     /// The document, rendered from `recs` unless a test set its bytes.
     pub(crate) doc: Option<Vec<u8>>,
+    /// `neigh-flush.json` of a step of a resolve case.
+    pub(crate) flush: Option<NeighFlush>,
 }
 impl StepSim {
     pub(crate) fn doc(&self) -> Vec<u8> {
@@ -462,6 +466,7 @@ impl Sim {
                 complete: !oracle,
                 responder: ResponderRecord::default(),
                 doc: None,
+                flush: None,
             });
         }
         Sim {
@@ -504,6 +509,9 @@ impl Sim {
                 format!("{} packets captured\n", s.frames.len()).into_bytes(),
             ));
             f.push((format!("{n}/{RESPONDER_JSON}"), json_(&s.responder)));
+            if let Some(x) = &s.flush {
+                f.push((format!("{n}/{NEIGH_FLUSH_JSON}"), json_(x)));
+            }
             f.push((format!("{n}/{}", s.spec.out.file().unwrap()), s.doc()));
         }
         if let Some(Case::Tcp(_)) = any_case(self.tag) {
@@ -767,7 +775,8 @@ fn tcp_wire(c: &TcpCase, who: Who, t0: f64) -> (Frames, Vec<SimRec>, (usize, usi
             TTL
         }
     };
-    let mut beat = t0 + 0.3;
+    // The quiet control has no heartbeat: its first beat lies past the end.
+    let mut beat = if c.quiet { f64::INFINITY } else { t0 + 0.3 };
     let mut tick = 0u64;
     let (mut replies, mut open) = (0, 0);
     // What the scanner sent on a connection, as the peer kernel takes it.
@@ -1130,6 +1139,10 @@ impl Sim {
                 complete: true,
                 responder: ResponderRecord::default(),
                 doc: None,
+                flush: c.resolve.then(|| NeighFlush {
+                    argv: neigh_flush_argv(PEER_NS, c.source()),
+                    rc: 0,
+                }),
             });
         }
         Sim {
@@ -1154,6 +1167,31 @@ fn judge_one(sim: &Sim) -> (String, Vec<String>) {
     let run = run_of(&res, sim.tag).clone();
     fs::remove_dir_all(&root).unwrap();
     (s(&run["verdict"]).to_owned(), bad(&run))
+}
+/// One case judged in a whole directory (every other planned case as the generator makes it, so PASS), with what the
+/// directory makes of it.
+struct Judged {
+    verdict: String,
+    bad: Vec<String>,
+    behaviour_fail: bool,
+    overall: String,
+}
+fn judge_full(sim: &Sim) -> Judged {
+    let root = scratch();
+    sim.write(&root);
+    for tag in planned_tags().into_iter().filter(|t| *t != sim.tag) {
+        Sim::new(tag).write(&root);
+    }
+    fs::write(root.join(TEARDOWN_JSON), format!("{TEARDOWN}\n")).unwrap();
+    let res = verify_dir(&root);
+    let run = run_of(&res, sim.tag).clone();
+    fs::remove_dir_all(&root).unwrap();
+    Judged {
+        verdict: s(&run["verdict"]).to_owned(),
+        bad: bad(&run),
+        behaviour_fail: run["behaviour_fail"] == true,
+        overall: s(&res["overall"]).to_owned(),
+    }
 }
 /// The index of the first banner record of `(ip, port)` with application `app` in a step's records.
 fn banner_at(recs: &[SimRec], ip: u8, port: u16, app: u16) -> usize {
@@ -1579,7 +1617,8 @@ fn a_stand_that_does_not_echo_the_cookie_is_invalid_not_a_fail() {
 #[test]
 fn cs_raw_banner_past_the_datagram_needs_only_its_length_and_rmasscans_must_be_the_datagram() {
     // C's raw banner on 11211 with another length than the datagram: the documents differ, and the declared
-    // difference no longer explains C (INVALID, which outranks the FAIL).
+    // difference no longer explains C. Its condition is judged before the comparison (I2): the comparison is INVALID,
+    // never a FAIL of rmasscan, and the directory is INVALID.
     let mut sim = Sim::new("b01_banners");
     let st = sim.step_mut("oracle-binary");
     let i = st
@@ -1592,16 +1631,20 @@ fn cs_raw_banner_past_the_datagram_needs_only_its_length_and_rmasscans_must_be_t
     if let SimRec::Banner { payload, .. } = &mut st.recs[i] {
         payload.push(0xee);
     }
-    let (v, b) = judge_one(&sim);
-    assert_eq!(v, INVALID, "{b:#?}");
+    let j = judge_full(&sim);
+    assert_eq!(j.verdict, INVALID, "{:#?}", j.bad);
     assert!(
-        has(&b, FAIL, "binary: the records equal the C oracle's"),
-        "{b:#?}"
+        has(&j.bad, INVALID, "binary: the records equal the C oracle's"),
+        "{:#?}",
+        j.bad
     );
     assert!(
-        has(&b, INVALID, "deviation udp-raw-past-datagram"),
-        "{b:#?}"
+        has(&j.bad, INVALID, "deviation udp-raw-past-datagram"),
+        "{:#?}",
+        j.bad
     );
+    assert!(!j.behaviour_fail, "{:#?}", j.bad);
+    assert_eq!(j.overall, INVALID);
     // rmasscan's raw banner on 1900 that is not the datagram (same length): masked against C, but its own rule fails.
     let mut sim = Sim::new("b01_banners");
     let st = sim.step_mut("binary");
@@ -1706,7 +1749,8 @@ fn the_case_table_is_the_window_of_the_plan() {
             "t05_stateless_rst",
             "t06_noreset",
             "t07_resolve_arp",
-            "t08_resolve_ndp"
+            "t08_resolve_ndp",
+            "t09_quiet_timers"
         ]
     );
     let s = steps("b01_banners").unwrap();
@@ -1933,6 +1977,12 @@ fn the_tcp_cases_scan_from_their_own_source_with_one_argv_for_both_scanners() {
     );
     for tag in planned_tags() {
         let s = steps(tag).unwrap();
+        if tcp_case(tag).is_some_and(|c| c.quiet) {
+            // The quiet control (M3): rmasscan alone, without the heartbeat.
+            assert_eq!(s.len(), 1, "{tag}");
+            assert_eq!(s[0].who, Who::Rmasscan, "{tag}");
+            continue;
+        }
         for pair in s.chunks(2) {
             assert_eq!(
                 pair[0].argv, pair[1].argv,
@@ -2410,24 +2460,33 @@ fn a_heartbeat_gap_or_a_tcp_frame_from_another_source_is_never_a_pass() {
 
 #[test]
 fn cs_forced_exit_with_connections_alive_leaves_no_reference_for_their_banners() {
-    // t03: C killed by its own forced exit never flushed the held connections: INVALID, not a FAIL of rmasscan.
-    let (v, b) = judge_tcp("t03_teardown", |sim| {
-        let st = sim.step_mut("oracle-binary");
-        st.stderr
-            .push_str("[-] Passed the wait window but still running, forcing exit...\n");
-        st.complete = false;
-        st.recs
-            .retain(|r| !matches!(r, SimRec::TcpBanner { ip, port: 80, .. } if *ip == ip4(4)));
-    });
-    assert_eq!(v, INVALID, "{b:#?}");
+    // t03: C killed by its own forced exit never flushed the held connections: INVALID, not a FAIL of rmasscan. The
+    // rule is judged before the comparisons with C (I2): the comparison of the records is INVALID too, the run carries
+    // no behaviour FAIL, and the directory is INVALID.
+    let mut sim = Sim::new("t03_teardown");
+    let st = sim.step_mut("oracle-binary");
+    st.stderr
+        .push_str("[-] Passed the wait window but still running, forcing exit...\n");
+    st.complete = false;
+    st.recs
+        .retain(|r| !matches!(r, SimRec::TcpBanner { ip, port: 80, .. } if *ip == ip4(4)));
+    let j = judge_full(&sim);
+    let b = &j.bad;
+    assert_eq!(j.verdict, INVALID, "{b:#?}");
     assert!(
         has(
-            &b,
+            b,
             INVALID,
             "oracle-binary: C flushed its connections alive at the end of the scan"
         ),
         "{b:#?}"
     );
+    assert!(
+        has(b, INVALID, "binary: the records equal the C oracle's"),
+        "{b:#?}"
+    );
+    assert!(!j.behaviour_fail, "{b:#?}");
+    assert_eq!(j.overall, INVALID, "{b:#?}");
     // A forced exit after every connection ended changes nothing.
     let (v, b) = judge_tcp("t01_tcp4", |sim| {
         let st = sim.step_mut("oracle-list");
@@ -2490,4 +2549,1317 @@ fn ipv6_kernel_noise_on_a_udp_step_is_the_stands_not_the_scanners() {
         "{b:#?}"
     );
     assert!(!b.iter().any(|x| x.starts_with(FAIL)), "{b:#?}");
+}
+
+// ------------------------------------------------------------------ TCP: one rule at a time (review I1-I3, M1-M8)
+
+/// The IPv6 stand address fd00:198:18::`g`.
+fn ip6(g: u16) -> IpAddr {
+    IpAddr::V6(Ipv6Addr::new(0xfd00, 0x198, 0x18, 0, 0, 0, 0, g))
+}
+/// A step's capture as the verifier takes it apart.
+fn view_of(c: &TcpCase, st: &StepSim) -> TcpView {
+    tcp_view(c, &st.frames, &stand())
+}
+fn resort(st: &mut StepSim) {
+    st.frames.sort_by(|a, b| a.0.total_cmp(&b.0));
+}
+/// The indices of a step's TCP frames on the connection to `peer:port`: the scanner's (its SYN aside) or the peer's.
+fn conn_frames(st: &StepSim, peer: IpAddr, port: u16, scanner: bool) -> Vec<usize> {
+    let mac = if scanner { SCANNER_MAC } else { PEER_MAC };
+    st.frames
+        .iter()
+        .enumerate()
+        .filter(|(_, (_, f))| {
+            f.get(6..12) == Some(&mac[..])
+                && tcp_head(f).is_some_and(|h| {
+                    if scanner {
+                        h.dst == peer && h.dp == port && h.flags & 0x3f != 0x02
+                    } else {
+                        h.src == peer && h.sp == port
+                    }
+                })
+        })
+        .map(|(i, _)| i)
+        .collect()
+}
+/// The end of a frame's IP packet (an Ethernet trailer left out) and the start of its upper layer.
+fn ip_bounds(g: &[u8]) -> (usize, usize) {
+    if g[12..14] == [0x86, 0xdd] {
+        (54 + usize::from(u16::from_be_bytes([g[18], g[19]])), 54)
+    } else {
+        (
+            14 + usize::from(u16::from_be_bytes([g[16], g[17]])),
+            14 + usize::from(g[14] & 0x0f) * 4,
+        )
+    }
+}
+/// Sets the IPv4 header checksum (IPv4) and the TCP or ICMPv6 checksum of a frame again, by hand.
+fn set_sums(g: &mut [u8]) {
+    let sum16 = crate::protocols_verify::tests::sum16;
+    let (end, l4) = ip_bounds(g);
+    let v6 = g[12..14] == [0x86, 0xdd];
+    let mut pseudo = if v6 {
+        let mut p = g[22..54].to_vec();
+        p.extend(((end - l4) as u32).to_be_bytes());
+        p.extend([0, 0, 0, g[20]]);
+        p
+    } else {
+        g[24..26].fill(0);
+        let h = sum16(&g[14..l4], 0);
+        g[24..26].copy_from_slice(&h.to_be_bytes());
+        let mut p = g[26..34].to_vec();
+        p.extend([0, g[23]]);
+        p.extend(((end - l4) as u16).to_be_bytes());
+        p
+    };
+    let proto = if v6 { g[20] } else { g[23] };
+    let at = l4 + if proto == 6 { 16 } else { 2 };
+    g[at..at + 2].fill(0);
+    pseudo.extend(&g[l4..end]);
+    let v = sum16(&pseudo, 0);
+    g[at..at + 2].copy_from_slice(&v.to_be_bytes());
+}
+/// A TCP frame (either family) with some fields changed, its lengths and sums set again, the rest of it kept.
+fn tcp_rebuilt(
+    f: &[u8],
+    seq: Option<u32>,
+    ack: Option<u32>,
+    flags: Option<u8>,
+    payload: Option<&[u8]>,
+) -> Vec<u8> {
+    let (end, l4) = ip_bounds(f);
+    let off = usize::from(f[l4 + 12] >> 4) * 4;
+    let mut g = f[..l4 + off].to_vec();
+    if let Some(x) = seq {
+        g[l4 + 4..l4 + 8].copy_from_slice(&x.to_be_bytes());
+    }
+    if let Some(x) = ack {
+        g[l4 + 8..l4 + 12].copy_from_slice(&x.to_be_bytes());
+    }
+    if let Some(x) = flags {
+        g[l4 + 13] = x;
+    }
+    g.extend(payload.unwrap_or(&f[l4 + off..end]));
+    let n = g.len();
+    if g[12..14] == [0x86, 0xdd] {
+        g[18..20].copy_from_slice(&((n - 54) as u16).to_be_bytes());
+    } else {
+        g[16..18].copy_from_slice(&((n - 14) as u16).to_be_bytes());
+    }
+    set_sums(&mut g);
+    g
+}
+/// A data segment of the peer cut in two at `at` (the second one `at` bytes on), both at its time.
+fn split_peer_segment(st: &mut StepSim, i: usize, at: usize) {
+    let (t, f) = st.frames[i].clone();
+    let h = tcp_head(&f).unwrap();
+    st.frames[i].1 = tcp_rebuilt(&f, None, None, None, Some(&h.payload[..at]));
+    let second = tcp_rebuilt(
+        &f,
+        Some(h.seq.wrapping_add(at as u32)),
+        None,
+        None,
+        Some(&h.payload[at..]),
+    );
+    st.frames.insert(i + 1, (t, second));
+}
+fn is_request(f: &[u8]) -> bool {
+    (f.get(12..14) == Some(&[8, 6][..]) && f.get(20..22) == Some(&[0, 1][..]))
+        || iv::pkt(f).is_some_and(|p| p.proto == 58 && p.l4.first() == Some(&135))
+}
+fn is_answer(f: &[u8]) -> bool {
+    (f.get(12..14) == Some(&[8, 6][..]) && f.get(20..22) == Some(&[0, 2][..]))
+        || iv::pkt(f).is_some_and(|p| p.proto == 58 && p.l4.first() == Some(&136))
+}
+/// A resolve step as a live run leaves it when the peer never took the scanner's answer: the peer asks three times,
+/// one second apart (each followed by `answer` applied to the scanner's answer, or by nothing), never sends its
+/// SYN-ACK (it has no MAC for the source), and the scanner writes nothing.
+fn starved(st: &mut StepSim, answer: Option<fn(&mut Vec<u8>)>) {
+    let (t, q) = st
+        .frames
+        .iter()
+        .find(|(_, f)| is_request(f))
+        .cloned()
+        .unwrap();
+    let a = st
+        .frames
+        .iter()
+        .find(|(_, f)| is_answer(f))
+        .cloned()
+        .unwrap()
+        .1;
+    st.frames.retain(|(_, f)| {
+        !is_request(f) && !is_answer(f) && tcp_head(f).is_none_or(|h| h.flags & 0x3f == 0x02)
+    });
+    for k in 0..3 {
+        let at = t + f64::from(k);
+        st.frames.push((at, q.clone()));
+        if let Some(edit) = answer {
+            let mut x = a.clone();
+            edit(&mut x);
+            st.frames.push((at + 0.0003, x));
+        }
+    }
+    resort(st);
+    st.doc = Some(Vec::new());
+    st.recs.clear();
+}
+fn no(b: &[String], result: &str) -> bool {
+    !b.iter().any(|x| x.starts_with(result))
+}
+
+#[test]
+fn a_request_rmasscan_leaves_unanswered_is_its_behaviour_fail_never_the_stands() {
+    // I1, t07 as a live run leaves it: rmasscan never answers the who-has, the peer asks three times and never sends
+    // its SYN-ACK. The unanswered SYN is the scanner's doing: a FAIL with behaviour, no INVALID anywhere.
+    let c = tcp_case("t07_resolve_arp").unwrap();
+    let mut sim = Sim::new(c.tag);
+    let st = sim.step_mut("list");
+    starved(st, None);
+    st.stderr = tcp_rm_stderr(&c, (1, 0, 0));
+    let j = judge_full(&sim);
+    let b = &j.bad;
+    assert_eq!(j.verdict, FAIL, "{b:#?}");
+    assert!(
+        has(
+            b,
+            FAIL,
+            "list: the scanner answers every request of the peer for its source"
+        ),
+        "{b:#?}"
+    );
+    assert!(has(b, FAIL, "0 answers to request 0"), "{b:#?}");
+    assert!(no(b, INVALID), "{b:#?}");
+    assert!(j.behaviour_fail && j.overall == FAIL, "{b:#?}");
+    // The same next to a stand fault of the step's own (a heartbeat gap): the scanner's check comes before the
+    // stand's, so its FAIL keeps its behaviour and the directory FAILs although the run is INVALID.
+    let mut sim = Sim::new(c.tag);
+    let st = sim.step_mut("list");
+    starved(st, None);
+    st.stderr = tcp_rm_stderr(&c, (1, 0, 0));
+    let first = st
+        .frames
+        .iter()
+        .find(|(_, f)| tcp_head(f).is_some())
+        .unwrap()
+        .0;
+    st.frames.retain(|(t, f)| {
+        !(f.get(14..)
+            .is_some_and(|x| x.starts_with(HEARTBEAT_PAYLOAD))
+            && *t > first + 0.5
+            && *t < first + 3.5)
+    });
+    let j = judge_full(&sim);
+    let b = &j.bad;
+    assert_eq!(j.verdict, INVALID, "{b:#?}");
+    assert!(
+        has(b, INVALID, "list: the peer heartbeat covered the scan"),
+        "{b:#?}"
+    );
+    assert!(
+        has(
+            b,
+            FAIL,
+            "list: the scanner answers every request of the peer for its source"
+        ),
+        "{b:#?}"
+    );
+    assert!(j.behaviour_fail && j.overall == FAIL, "{b:#?}");
+}
+
+#[test]
+fn an_answer_the_peer_drops_is_rmasscans_fail_and_cs_silence_its_own_invalid() {
+    let c = tcp_case("t08_resolve_ndp").unwrap();
+    let hop64: fn(&mut Vec<u8>) = |f| f[21] = 64;
+    // I1: rmasscan's NA with hop limit 64 (RFC 4861 §7.1.2: the Linux peer drops it), as a live run leaves it.
+    let mut sim = Sim::new(c.tag);
+    let st = sim.step_mut("list");
+    starved(st, Some(hop64));
+    st.stderr = tcp_rm_stderr(&c, (1, 0, 0));
+    let j = judge_full(&sim);
+    let b = &j.bad;
+    assert_eq!(j.verdict, FAIL, "{b:#?}");
+    assert!(has(b, FAIL, "hop limit 255"), "{b:#?}");
+    assert!(has(b, FAIL, "the peer asked 3 times"), "{b:#?}");
+    assert!(no(b, INVALID), "{b:#?}");
+    assert!(j.behaviour_fail && j.overall == FAIL, "{b:#?}");
+    // C that never answers the solicitation (the accepted concern: its responder answers by a stale opcode) and a
+    // correct rmasscan: C's step is INVALID, nothing of rmasscan's FAILs, the directory is INVALID.
+    let mut sim = Sim::new(c.tag);
+    starved(sim.step_mut("oracle-list"), None);
+    let j = judge_full(&sim);
+    let b = &j.bad;
+    assert_eq!(j.verdict, INVALID, "{b:#?}");
+    assert!(
+        has(
+            b,
+            INVALID,
+            "oracle-list: the scanner answers every request of the peer for its source"
+        ),
+        "{b:#?}"
+    );
+    assert!(no(b, FAIL), "{b:#?}");
+    assert!(!j.behaviour_fail && j.overall == INVALID, "{b:#?}");
+    // Both: rmasscan's FAIL keeps its behaviour whatever C did (its step comes first): the directory FAILs.
+    let mut sim = Sim::new(c.tag);
+    let st = sim.step_mut("list");
+    starved(st, Some(hop64));
+    st.stderr = tcp_rm_stderr(&c, (1, 0, 0));
+    starved(sim.step_mut("oracle-list"), None);
+    let j = judge_full(&sim);
+    let b = &j.bad;
+    assert!(
+        has(b, FAIL, "list: the scanner answers every request"),
+        "{b:#?}"
+    );
+    assert!(j.behaviour_fail && j.overall == FAIL, "{b:#?}");
+    // C silent and rmasscan's document without the scenario's last banner: rmasscan's own banner checks come in its
+    // step, before C's INVALID, so the FAIL keeps its behaviour.
+    let mut sim = Sim::new(c.tag);
+    let st = sim.step_mut("list");
+    let last = st
+        .recs
+        .iter()
+        .rposition(|r| matches!(r, SimRec::TcpBanner { .. }))
+        .unwrap();
+    st.recs.remove(last);
+    starved(sim.step_mut("oracle-list"), None);
+    let j = judge_full(&sim);
+    let b = &j.bad;
+    assert!(
+        has(b, FAIL, "list: each connection's banners carry"),
+        "{b:#?}"
+    );
+    assert!(j.behaviour_fail && j.overall == FAIL, "{b:#?}");
+}
+
+#[test]
+fn a_second_request_after_an_answer_in_form_is_the_scanners() {
+    // t07: the peer asks again one second after rmasscan's answer, which was in C's form: the peer did not take it.
+    let (v, b) = judge_tcp("t07_resolve_arp", |sim| {
+        let st = sim.step_mut("list");
+        let (t, q) = st
+            .frames
+            .iter()
+            .find(|(_, f)| is_request(f))
+            .cloned()
+            .unwrap();
+        let (ta, a) = st
+            .frames
+            .iter()
+            .find(|(_, f)| is_answer(f))
+            .cloned()
+            .unwrap();
+        st.frames.push((t + 1.0, q));
+        st.frames.push((ta + 1.0, a));
+        resort(st);
+    });
+    assert_eq!(v, FAIL, "{b:#?}");
+    assert!(has(b.as_slice(), FAIL, "the peer asked 2 times"), "{b:#?}");
+}
+
+#[test]
+fn every_field_of_the_answer_to_the_peers_request_is_judged() {
+    type Edit = fn(&mut Vec<u8>);
+    let cases: [(&str, &str, Edit); 9] = [
+        ("t08_resolve_ndp", "hop limit 255", |f| f[21] = 64),
+        ("t08_resolve_ndp", "a right checksum", |f| f[56] ^= 1),
+        ("t08_resolve_ndp", "code 0", |f| {
+            f[55] = 0x55;
+            set_sums(f);
+        }),
+        (
+            "t08_resolve_ndp",
+            "the scanner MAC as target link-layer address",
+            |f| {
+                f[85] ^= 1;
+                set_sums(f);
+            },
+        ),
+        ("t08_resolve_ndp", "ICMPv6 length 32", |f| {
+            f.extend([0u8; 8]);
+            let n = (f.len() - 54) as u16;
+            f[18..20].copy_from_slice(&n.to_be_bytes());
+            set_sums(f);
+        }),
+        ("t08_resolve_ndp", "to the requester's MAC", |f| f[4] ^= 1),
+        ("t07_resolve_arp", "length 60", |f| f.truncate(42)),
+        ("t07_resolve_arp", "zero padding", |f| f[59] = 1),
+        ("t07_resolve_arp", "to the requester's MAC", |f| f[4] ^= 1),
+    ];
+    for (tag, field, edit) in cases {
+        let (v, b) = judge_tcp(tag, |sim| {
+            let st = sim.step_mut("list");
+            let i = st.frames.iter().position(|(_, f)| is_answer(f)).unwrap();
+            edit(&mut st.frames[i].1);
+        });
+        assert_eq!(v, FAIL, "{tag} {field}: {b:#?}");
+        assert!(
+            has(
+                &b,
+                FAIL,
+                "list: the scanner answers every request of the peer for its source"
+            ) && has(&b, FAIL, field),
+            "{tag} {field}: {b:#?}"
+        );
+    }
+}
+
+#[test]
+fn after_the_resolution_the_connection_must_carry_its_stream() {
+    // t07: the answer is right but the connection never carried the scenario's data (nor banners).
+    let (v, b) = judge_tcp("t07_resolve_arp", |sim| {
+        let st = sim.step_mut("list");
+        st.frames.retain(|(_, f)| {
+            !(f.get(6..12) == Some(&PEER_MAC[..])
+                && tcp_head(f).is_some_and(|h| !h.payload.is_empty()))
+        });
+        st.recs.retain(|r| !matches!(r, SimRec::TcpBanner { .. }));
+    });
+    assert_eq!(v, FAIL, "{b:#?}");
+    assert!(
+        has(
+            &b,
+            FAIL,
+            "list: after the resolution the connection opens and carries its scenario's stream"
+        ),
+        "{b:#?}"
+    );
+}
+
+#[test]
+fn a_stray_frame_is_put_to_the_side_that_began_it() {
+    let src = IpAddr::V4(TCP_SOURCE);
+    // rmasscan sends an ACK to 198.18.0.2:8080, which it never opened, and the peer kernel answers with a RST: the
+    // scanner's FAIL, and the RST no fault of the stand (I1).
+    let (v, b) = judge_tcp("t01_tcp4", |sim| {
+        let st = sim.step_mut("binary");
+        let t = st.frames[st.frames.len() / 2].0;
+        st.frames
+            .push((t, scanner_seg(TCP_SOURCE, 2, 8080, 7, 9, 0x10)));
+        st.frames.push((
+            t + 0.0005,
+            peer_seg(ip4(2), src, (8080, SOURCE_PORT), 9, 0, 0x04, &[]),
+        ));
+        resort(st);
+    });
+    assert_eq!(v, FAIL, "{b:#?}");
+    assert!(
+        has(
+            &b,
+            FAIL,
+            "binary: every frame of the scanner MAC is a SYN of the scan"
+        ) && has(&b, FAIL, "of no connection the stand opened"),
+        "{b:#?}"
+    );
+    assert!(no(&b, INVALID), "{b:#?}");
+    // The other way round: the peer sends a FIN on a 4-tuple without a connection and the scanner's stack answers it
+    // with its RST (src/main.c:1019-1041): the stand's INVALID, and the RST is no unexplained frame.
+    let (v, b) = judge_tcp("t01_tcp4", |sim| {
+        let st = sim.step_mut("binary");
+        let t = st.frames[st.frames.len() / 2].0;
+        st.frames.push((
+            t,
+            peer_seg(ip4(2), src, (8080, SOURCE_PORT), 9, 7, 0x11, &[]),
+        ));
+        st.frames
+            .push((t + 0.0005, scanner_seg(TCP_SOURCE, 2, 8080, 7, 10, 0x04)));
+        resort(st);
+    });
+    assert_eq!(v, INVALID, "{b:#?}");
+    assert!(
+        has(
+            &b,
+            INVALID,
+            "binary: nothing on the peer side answers anything the scan did not send"
+        ),
+        "{b:#?}"
+    );
+    assert!(no(&b, FAIL), "{b:#?}");
+    // A segment of rmasscan from another source of the window (198.18.0.10: no safety finding) on the 4-tuple of a
+    // connection, and the peer's who-has for that address: the scanner's FAIL, the who-has no fault of the stand.
+    let (v, b) = judge_tcp("t01_tcp4", |sim| {
+        let st = sim.step_mut("binary");
+        let i = conn_frames(st, ip4(2), 21, true)[0];
+        let (t, mut f) = st.frames[i].clone();
+        f[26..30].copy_from_slice(&RESOLVE_SOURCE.octets());
+        set_sums(&mut f);
+        st.frames.push((t + 0.001, f));
+        st.frames
+            .push((t + 0.002, resolution(IpAddr::V4(RESOLVE_SOURCE)).0));
+        resort(st);
+    });
+    assert_eq!(v, FAIL, "{b:#?}");
+    assert!(
+        has(
+            &b,
+            FAIL,
+            "binary: every frame of the scanner MAC is a SYN of the scan"
+        ),
+        "{b:#?}"
+    );
+    assert!(no(&b, INVALID), "{b:#?}");
+    assert!(
+        !b.iter()
+            .any(|x| x.starts_with(FAIL) && x.contains("safety")),
+        "{b:#?}"
+    );
+}
+
+#[test]
+fn a_repeated_syn_of_rmasscan_is_its_fail_never_the_stands() {
+    let (v, b) = judge_tcp("t05_stateless_rst", |sim| {
+        let st = sim.step_mut("list");
+        let (t, syn) = st
+            .frames
+            .iter()
+            .find(|(_, f)| {
+                f.get(6..12) == Some(&SCANNER_MAC[..])
+                    && tcp_head(f).is_some_and(|h| h.flags == 0x02)
+            })
+            .cloned()
+            .unwrap();
+        st.frames.push((t + 0.005, syn));
+        resort(st);
+    });
+    assert_eq!(v, FAIL, "{b:#?}");
+    assert!(
+        has(
+            &b,
+            FAIL,
+            "list: the scan put its SYNs on the wire, each once"
+        ),
+        "{b:#?}"
+    );
+    assert!(
+        has(&b, FAIL, "list: the probes on the wire equal the plan"),
+        "{b:#?}"
+    );
+    assert!(no(&b, INVALID), "{b:#?}");
+}
+
+#[test]
+fn every_field_of_a_connections_segments_is_compared_with_cs() {
+    // 198.18.0.2:21 (FTP: no hello, no lifetime RST): each edit changes one field of one of rmasscan's segments, and
+    // only the comparison with C sees it.
+    type Edit = fn(&mut StepSim, &[usize]);
+    let data = |st: &StepSim, k: &[usize]| {
+        *k.iter()
+            .find(|i| !tcp_head(&st.frames[**i].1).unwrap().payload.is_empty())
+            .unwrap()
+    };
+    let _ = data;
+    let edits: [(&str, Edit); 4] = [
+        ("seq", |st, k| {
+            let i = *k
+                .iter()
+                .find(|i| !tcp_head(&st.frames[**i].1).unwrap().payload.is_empty())
+                .unwrap();
+            let h = tcp_head(&st.frames[i].1).unwrap();
+            st.frames[i].1 = tcp_rebuilt(
+                &st.frames[i].1,
+                Some(h.seq.wrapping_add(1)),
+                None,
+                None,
+                None,
+            );
+        }),
+        ("ack", |st, k| {
+            let h = tcp_head(&st.frames[k[0]].1).unwrap();
+            st.frames[k[0]].1 = tcp_rebuilt(
+                &st.frames[k[0]].1,
+                None,
+                Some(h.ack.wrapping_add(1)),
+                None,
+                None,
+            );
+        }),
+        ("flags", |st, k| {
+            let i = *k
+                .iter()
+                .find(|i| !tcp_head(&st.frames[**i].1).unwrap().payload.is_empty())
+                .unwrap();
+            st.frames[i].1 = tcp_rebuilt(&st.frames[i].1, None, None, Some(0x10), None);
+        }),
+        ("order", |st, k| {
+            let (a, b) = (st.frames[k[1]].1.clone(), st.frames[k[2]].1.clone());
+            assert_ne!(tcp_head(&a), tcp_head(&b));
+            st.frames[k[1]].1 = b;
+            st.frames[k[2]].1 = a;
+        }),
+    ];
+    for (what, edit) in edits {
+        let (v, b) = judge_tcp("t01_tcp4", |sim| {
+            let st = sim.step_mut("binary");
+            let k = conn_frames(st, ip4(2), 21, true);
+            edit(st, &k);
+        });
+        assert_eq!(v, FAIL, "{what}: {b:#?}");
+        assert!(
+            has(
+                &b,
+                FAIL,
+                "binary: every connection's scanner segments equal the C oracle's"
+            ),
+            "{what}: {b:#?}"
+        );
+        assert_eq!(
+            b.iter().filter(|x| x.starts_with(FAIL)).count(),
+            1,
+            "{what}: only the comparison sees it: {b:#?}"
+        );
+    }
+}
+
+#[test]
+fn a_tcp_connections_banners_come_in_one_run_after_its_open_m1() {
+    let at = |recs: &[SimRec], o: u8, port: u16, banner: bool| {
+        recs.iter()
+            .position(|r| match r {
+                SimRec::TcpBanner { ip, port: p, .. } => banner && *ip == ip4(o) && *p == port,
+                SimRec::TcpStatus { ip, port: p, .. } => !banner && *ip == ip4(o) && *p == port,
+                _ => false,
+            })
+            .unwrap()
+    };
+    // A banner of 198.18.0.2:21 between two banners of 198.18.0.2:80: only M1 sees it (the records against C are a
+    // multiset, the own wire holds the status records only).
+    let (v, b) = judge_tcp("t01_tcp4", |sim| {
+        let st = sim.step_mut("binary");
+        let r = st.recs.remove(at(&st.recs, 2, 21, true));
+        let http = at(&st.recs, 2, 80, true);
+        st.recs.insert(http + 1, r);
+    });
+    assert_eq!(v, FAIL, "{b:#?}");
+    assert!(
+        has(
+            &b,
+            FAIL,
+            "binary: the banners of one TCP connection come in one run, after its open record (M1)"
+        ) && has(&b, FAIL, "198.18.0.2:80: its banners are not in one run"),
+        "{b:#?}"
+    );
+    assert!(!has(&b, FAIL, "the records equal the C oracle's"), "{b:#?}");
+    // The banner of 198.18.0.2:21 just before its own open record.
+    let (v, b) = judge_tcp("t01_tcp4", |sim| {
+        let st = sim.step_mut("binary");
+        let r = st.recs.remove(at(&st.recs, 2, 21, true));
+        let open = at(&st.recs, 2, 21, false);
+        st.recs.insert(open, r);
+    });
+    assert_eq!(v, FAIL, "{b:#?}");
+    assert!(
+        has(&b, FAIL, "198.18.0.2:21: a banner before its open"),
+        "{b:#?}"
+    );
+    assert!(!has(&b, FAIL, "the records equal the C oracle's"), "{b:#?}");
+}
+
+#[test]
+fn rmasscans_stack_frames_need_right_ipv4_header_and_tcp_sums() {
+    for (what, at) in [("TCP", 34 + 16), ("IPv4 header", 24)] {
+        let (v, b) = judge_tcp("t01_tcp4", |sim| {
+            let st = sim.step_mut("list");
+            let i = conn_frames(st, ip4(2), 21, true)[1];
+            st.frames[i].1[at] ^= 0x01;
+        });
+        assert_eq!(v, FAIL, "{what}: {b:#?}");
+        assert!(
+            has(
+                &b,
+                FAIL,
+                "list: every stack frame of rmasscan carries right IPv4 header and TCP sums"
+            ),
+            "{what}: {b:#?}"
+        );
+    }
+}
+
+#[test]
+fn a_frame_after_the_peers_ack_of_its_fin_in_last_ack_fails() {
+    // 198.18.0.2:80 ends in the peer's LAST_ACK (its FIN, the scanner's FIN, its ACK of that FIN), no RST anywhere.
+    let c = tcp_case("t01_tcp4").unwrap();
+    let (v, b) = judge_tcp(c.tag, |sim| {
+        let st = sim.step_mut("list");
+        let v = view_of(&c, st);
+        let x = v
+            .conns
+            .iter()
+            .find(|x| x.ip == ip4(2) && x.port == 80)
+            .unwrap();
+        assert!(x.scanner.iter().chain(&x.peer).all(|g| g.flags & 0x04 == 0));
+        let end = x.destroyed_at().unwrap();
+        let last = *conn_frames(st, ip4(2), 80, true).last().unwrap();
+        let f = st.frames[last].1.clone();
+        st.frames.push((end + 0.1, f));
+        resort(st);
+    });
+    assert_eq!(v, FAIL, "{b:#?}");
+    assert!(
+        has(
+            &b,
+            FAIL,
+            "list: no frame of a connection after the connection was destroyed"
+        ),
+        "{b:#?}"
+    );
+}
+
+#[test]
+fn a_rst_of_the_scanner_outside_the_lifetime_window_fails_and_a_teardown_has_none() {
+    // 198.18.0.2:21 closes by FIN, no lifetime ends it: a RST 5 s after its SYN-ACK is no lifetime RST.
+    let c = tcp_case("t01_tcp4").unwrap();
+    let (v, b) = judge_tcp(c.tag, |sim| {
+        let st = sim.step_mut("list");
+        let v = view_of(&c, st);
+        let x = v
+            .conns
+            .iter()
+            .find(|x| x.ip == ip4(2) && x.port == 21)
+            .unwrap();
+        let next = x.scanner.last().unwrap().seq;
+        st.frames.push((
+            x.reply_t + 5.0,
+            scanner_seg(TCP_SOURCE, 2, 21, next, 0, 0x04),
+        ));
+        resort(st);
+    });
+    assert_eq!(v, FAIL, "{b:#?}");
+    assert!(
+        has(
+            &b,
+            FAIL,
+            "list: the lifetime RST leaves 8-12 s after the SYN-ACK"
+        ) && has(&b, FAIL, "198.18.0.2:21 RST after 5.000 s"),
+        "{b:#?}"
+    );
+    // t03: no lifetime ends inside the scan, so any RST of the scanner fails.
+    let t3 = tcp_case("t03_teardown").unwrap();
+    let (v, b) = judge_tcp(t3.tag, |sim| {
+        let st = sim.step_mut("binary");
+        let v = view_of(&t3, st);
+        let x = v
+            .conns
+            .iter()
+            .find(|x| x.ip == ip4(4) && x.port == 80)
+            .unwrap();
+        let next = x.scanner.last().unwrap().seq;
+        st.frames.push((
+            x.reply_t + 4.0,
+            scanner_seg(TCP_SOURCE, 4, 80, next, 0, 0x04),
+        ));
+        resort(st);
+    });
+    assert_eq!(v, FAIL, "{b:#?}");
+    assert!(
+        has(
+            &b,
+            FAIL,
+            "binary: no RST of the scanner: the connections alive at the end of the scan are flushed without a frame"
+        ),
+        "{b:#?}"
+    );
+}
+
+#[test]
+fn rmasscans_rst_to_a_fin_after_the_connections_end_is_r8s_not_a_lifetime_rst_m4() {
+    // 198.18.0.2:80 after its end: the peer repeats its FIN, the stack answers with its RST to a FIN without a
+    // connection (src/main.c:1019-1041: seq the FIN's ack). Both scanners do it: PASS, the lifetime rule included.
+    let c = tcp_case("t01_tcp4").unwrap();
+    let late_fin = |st: &mut StepSim, good: bool| {
+        let v = view_of(&c, st);
+        let x = v
+            .conns
+            .iter()
+            .find(|x| x.ip == ip4(2) && x.port == 80)
+            .unwrap();
+        let fin = x.peer.iter().find(|g| g.flags & 0x01 != 0).unwrap();
+        let at = x.destroyed_at().unwrap() + 0.5;
+        let (fseq, fack) = (fin.seq, fin.ack);
+        st.frames.push((
+            at,
+            peer_seg(
+                ip4(2),
+                IpAddr::V4(TCP_SOURCE),
+                (80, SOURCE_PORT),
+                fseq,
+                fack,
+                0x11,
+                &[],
+            ),
+        ));
+        let seq = if good { fack } else { fack.wrapping_add(1) };
+        st.frames.push((
+            at + 0.0002,
+            scanner_seg(TCP_SOURCE, 2, 80, seq, fseq.wrapping_add(1), 0x04),
+        ));
+        resort(st);
+    };
+    let (v, b) = judge_tcp(c.tag, |sim| {
+        late_fin(sim.step_mut("list"), true);
+        late_fin(sim.step_mut("oracle-list"), true);
+    });
+    assert_eq!(v, PASS, "{b:#?}");
+    // Another seq than the FIN's ack: no answer to that FIN, a frame after the connection's end and a RST outside
+    // the lifetime window.
+    let (v, b) = judge_tcp(c.tag, |sim| late_fin(sim.step_mut("list"), false));
+    assert_eq!(v, FAIL, "{b:#?}");
+    assert!(
+        has(
+            &b,
+            FAIL,
+            "list: no frame of a connection after the connection was destroyed"
+        ) && has(&b, FAIL, "list: the lifetime RST leaves 8-12 s"),
+        "{b:#?}"
+    );
+}
+
+#[test]
+fn the_hello_window_holds_on_every_hello_port() {
+    // 198.18.0.2:3389 (RDP) over IPv4 and [fd00:198:18::2]:11211 (memcached) over IPv6: the hello 2 s late.
+    for (tag, step, ip, port) in [
+        ("t01_tcp4", "list", ip4(2), 3389),
+        ("t02_tcp6", "binary", ip6(2), 11211),
+    ] {
+        let (v, b) = judge_tcp(tag, |sim| {
+            let st = sim.step_mut(step);
+            let i = conn_frames(st, ip, port, true)
+                .into_iter()
+                .find(|i| !tcp_head(&st.frames[*i].1).unwrap().payload.is_empty())
+                .unwrap();
+            st.frames[i].0 += 2.0;
+            resort(st);
+        });
+        assert_eq!(v, FAIL, "{tag}: {b:#?}");
+        assert!(
+            has(
+                &b,
+                FAIL,
+                &format!("{step}: the hello leaves 1-3.5 s after the SYN-ACK")
+            ) && has(&b, FAIL, &format!(":{port} after 4.")),
+            "{tag}: {b:#?}"
+        );
+    }
+}
+
+#[test]
+fn the_plus_lines_of_a_tcp_step_are_the_stands() {
+    let (v, b) = judge_tcp("t05_stateless_rst", |sim| {
+        let st = sim.step_mut("list");
+        assert!(st.stderr.contains("source-ip = 198.18.0.9 (given)"));
+        st.stderr = st.stderr.replace(
+            "source-ip = 198.18.0.9 (given)",
+            "source-ip = 198.18.0.1 (detected)",
+        );
+    });
+    assert_eq!(v, FAIL, "{b:#?}");
+    assert!(has(&b, FAIL, "list: [+] lines are the stand's"), "{b:#?}");
+}
+
+#[test]
+fn the_stateless_rst_has_cs_form_and_answers_every_reset_too() {
+    let rst = |st: &StepSim, o: u8, port: u16| {
+        st.frames
+            .iter()
+            .position(|(_, f)| {
+                f.get(6..12) == Some(&SCANNER_MAC[..])
+                    && tcp_head(f).is_some_and(|h| {
+                        h.flags == 0x04 && peer_of(h.dst) == Some(o) && h.dp == port
+                    })
+            })
+            .unwrap()
+    };
+    type Edit = fn(&mut StepSim, usize);
+    let edits: [(&str, u16, Edit); 3] = [
+        // Its seq one past the reply's ack.
+        ("seq", 80, |st, i| {
+            let h = tcp_head(&st.frames[i].1).unwrap();
+            st.frames[i].1 = tcp_rebuilt(
+                &st.frames[i].1,
+                Some(h.seq.wrapping_add(1)),
+                None,
+                None,
+                None,
+            );
+        }),
+        // Its ack not 0.
+        ("ack", 80, |st, i| {
+            st.frames[i].1 = tcp_rebuilt(&st.frames[i].1, None, Some(1), None, None);
+        }),
+        // None to the reset of 198.18.0.2:81 (a closed port: the peer's RST is a reply too).
+        ("reset", 81, |st, i| {
+            st.frames.remove(i);
+        }),
+    ];
+    for (what, port, edit) in edits {
+        let (v, b) = judge_tcp("t05_stateless_rst", |sim| {
+            let st = sim.step_mut("list");
+            let i = rst(st, 2, port);
+            edit(st, i);
+        });
+        assert_eq!(v, FAIL, "{what}: {b:#?}");
+        assert!(
+            has(&b, FAIL, "list: exactly one stateless RST per connection"),
+            "{what}: {b:#?}"
+        );
+    }
+}
+
+#[test]
+fn every_stand_check_of_a_tcp_step_is_invalid_and_never_a_fail() {
+    let src = IpAddr::V4(TCP_SOURCE);
+    // 198.18.0.3:22 without an answer, or reset although the table has its scenario.
+    let unanswered = move |st: &mut StepSim, reset: bool| {
+        let (t, syn) = st
+            .frames
+            .iter()
+            .find(|(_, f)| {
+                f.get(6..12) == Some(&SCANNER_MAC[..])
+                    && tcp_head(f).is_some_and(|h| h.flags == 0x02 && h.dst == ip4(3) && h.dp == 22)
+            })
+            .map(|(t, f)| (*t, tcp_head(f).unwrap()))
+            .unwrap();
+        st.frames.retain(|(_, f)| {
+            !tcp_head(f).is_some_and(|h| {
+                (h.dst == ip4(3) && h.dp == 22 && h.flags != 0x02)
+                    || (h.src == ip4(3) && h.sp == 22)
+            })
+        });
+        if reset {
+            st.frames.push((
+                t + 0.001,
+                peer_seg(
+                    ip4(3),
+                    src,
+                    (22, SOURCE_PORT),
+                    0,
+                    syn.seq.wrapping_add(1),
+                    0x14,
+                    &[],
+                ),
+            ));
+        }
+        resort(st);
+    };
+    type Edit = Box<dyn Fn(&mut Sim)>;
+    let cases: Vec<(&str, &str, &str, Edit)> = vec![
+        (
+            "t01_tcp4",
+            "binary: the stand answered every SYN exactly once",
+            "unanswered",
+            Box::new(move |sim| unanswered(sim.step_mut("binary"), false)),
+        ),
+        (
+            "t01_tcp4",
+            "binary: the stand answered every SYN exactly once",
+            "reset",
+            Box::new(move |sim| unanswered(sim.step_mut("binary"), true)),
+        ),
+        (
+            "t01_tcp4",
+            "binary: the peer's stream of every connection is its scenario's writes",
+            "a byte of the SSH ident changed",
+            Box::new(|sim| {
+                let st = sim.step_mut("binary");
+                let i = conn_frames(st, ip4(2), 22, false)
+                    .into_iter()
+                    .find(|i| !tcp_head(&st.frames[*i].1).unwrap().payload.is_empty())
+                    .unwrap();
+                let mut p = tcp_head(&st.frames[i].1).unwrap().payload;
+                p[0] ^= 0x20;
+                st.frames[i].1 = tcp_rebuilt(&st.frames[i].1, None, None, None, Some(&p));
+            }),
+        ),
+        (
+            "t01_tcp4",
+            "binary: every split scenario came in more than one data segment",
+            "the split SSH ident in one segment",
+            Box::new(|sim| merge_split(sim.step_mut("binary"), false)),
+        ),
+        (
+            "t01_tcp4",
+            "binary: every split scenario came in more than one data segment",
+            "the split SSH ident in one segment, sent twice",
+            Box::new(|sim| merge_split(sim.step_mut("binary"), true)),
+        ),
+        (
+            "t01_tcp4",
+            "binary: nothing on the peer side answers anything the scan did not send",
+            "a peer segment of no connection",
+            Box::new(move |sim| {
+                let st = sim.step_mut("binary");
+                let t = st.frames[st.frames.len() / 2].0;
+                st.frames.push((
+                    t,
+                    peer_seg(ip4(2), src, (9999, SOURCE_PORT), 5, 6, 0x10, &[]),
+                ));
+                resort(st);
+            }),
+        ),
+        (
+            "t02_tcp6",
+            "binary: no IPv6 kernel noise on the wire",
+            "an MLD report of the scanner namespace",
+            Box::new(|sim| {
+                let st = sim.step_mut("binary");
+                let t = st.frames[st.frames.len() / 2].0;
+                let ll: Ipv6Addr = capture::IPV6_SCANNER_LL.parse().unwrap();
+                st.frames.push((
+                    t,
+                    v6_frame(
+                        [0x33, 0x33, 0, 0, 0, 0x16],
+                        SCANNER_MAC,
+                        ll,
+                        "ff02::16".parse().unwrap(),
+                        58,
+                        1,
+                        vec![143, 0, 0, 0, 0, 0, 0, 0],
+                    ),
+                ));
+                resort(st);
+            }),
+        ),
+        (
+            "t05_stateless_rst",
+            "list: every SYN and reply lies inside the witness window",
+            "a SYN before the start marker",
+            Box::new(|sim| {
+                let st = sim.step_mut("list");
+                let start = st.frames[0].0;
+                let i = st
+                    .frames
+                    .iter()
+                    .position(|(_, f)| tcp_head(f).is_some_and(|h| h.flags == 0x02))
+                    .unwrap();
+                st.frames[i].0 = start - 0.05;
+                resort(st);
+            }),
+        ),
+        (
+            "t01_tcp4",
+            "list: the peer resolved the source never",
+            "a who-has for the source with a permanent entry",
+            Box::new(|sim| {
+                let st = sim.step_mut("list");
+                let t = st.frames[st.frames.len() / 2].0;
+                st.frames.push((t, resolution(IpAddr::V4(TCP_SOURCE)).0));
+                resort(st);
+            }),
+        ),
+        (
+            "t09_quiet_timers",
+            "list: no peer heartbeat on the wire",
+            "a heartbeat on the quiet control",
+            Box::new(|sim| {
+                let st = sim.step_mut("list");
+                let t = st.frames[st.frames.len() / 2].0;
+                st.frames.push((
+                    t,
+                    crate::link::marker_frame(SCANNER_MAC, PEER_MAC, HEARTBEAT_PAYLOAD),
+                ));
+                resort(st);
+            }),
+        ),
+    ];
+    for (tag, check, what, edit) in cases {
+        let (v, b) = judge_tcp(tag, |sim| edit(sim));
+        assert_eq!(v, INVALID, "{what}: {b:#?}");
+        assert!(has(&b, INVALID, check), "{what}: {b:#?}");
+        assert!(no(&b, FAIL), "{what}: {b:#?}");
+    }
+}
+/// 198.18.0.3:22, whose SSH ident the scenario writes in two segments, in one (and, `twice`, that segment repeated).
+fn merge_split(st: &mut StepSim, twice: bool) {
+    let k: Vec<usize> = conn_frames(st, ip4(3), 22, false)
+        .into_iter()
+        .filter(|i| !tcp_head(&st.frames[*i].1).unwrap().payload.is_empty())
+        .collect();
+    let (a, b) = (
+        tcp_head(&st.frames[k[0]].1).unwrap(),
+        tcp_head(&st.frames[k[1]].1).unwrap(),
+    );
+    assert_eq!(b.seq, a.seq.wrapping_add(a.payload.len() as u32));
+    let mut whole = a.payload.clone();
+    whole.extend(&b.payload);
+    let merged = tcp_rebuilt(&st.frames[k[0]].1, None, None, None, Some(&whole));
+    let t = st.frames[k[0]].0;
+    st.frames[k[0]].1 = merged.clone();
+    st.frames.remove(k[1]);
+    if twice {
+        st.frames.push((t + 0.1, merged));
+    }
+    resort(st);
+}
+
+#[test]
+fn every_deviation_condition_is_judged_on_the_wire() {
+    type Edit = fn(&mut Sim);
+    let cases: [(&str, &str, Edit); 6] = [
+        // rmasscan's -oB IPv6 banner with another ttl than its SYN-ACK's hop limit.
+        ("t02_tcp6", "deviation ipv6-ttl", |sim| {
+            let st = sim.step_mut("binary");
+            let r = st
+                .recs
+                .iter_mut()
+                .find(|r| matches!(r, SimRec::TcpBanner { .. }))
+                .unwrap();
+            if let SimRec::TcpBanner { ttl, .. } = r {
+                *ttl = 1;
+            }
+        }),
+        // The memcached reply of 198.18.0.2 cut before its LF.
+        ("t01_tcp4", "deviation memcached-tcp-past-segment", |sim| {
+            let st = sim.step_mut("list");
+            let i = conn_frames(st, ip4(2), 11211, false)
+                .into_iter()
+                .find(|i| !tcp_head(&st.frames[*i].1).unwrap().payload.is_empty())
+                .unwrap();
+            split_peer_segment(st, i, 10);
+        }),
+        // A stack frame of C with a wrong IPv4 header checksum.
+        ("t01_tcp4", "deviation ipv4-stack-checksum", |sim| {
+            let st = sim.step_mut("oracle-list");
+            let i = conn_frames(st, ip4(2), 21, true)[1];
+            st.frames[i].1[24] ^= 0x01;
+        }),
+        // A data segment of the peer with a wrong TCP checksum.
+        ("t01_tcp4", "deviation rx-checksum-verify", |sim| {
+            let st = sim.step_mut("list");
+            let i = conn_frames(st, ip4(2), 22, false)
+                .into_iter()
+                .find(|i| !tcp_head(&st.frames[*i].1).unwrap().payload.is_empty())
+                .unwrap();
+            st.frames[i].1[34 + 16] ^= 0x01;
+        }),
+        // The peer's SYN-ACK with a wrong IPv4 header checksum.
+        ("t01_tcp4", "deviation rx-checksum-verify", |sim| {
+            let st = sim.step_mut("oracle-binary");
+            let i = conn_frames(st, ip4(2), 22, false)[0];
+            assert_eq!(tcp_head(&st.frames[i].1).unwrap().flags, 0x12);
+            st.frames[i].1[24] ^= 0x01;
+        }),
+        // The Minecraft reply of 198.18.0.2 in two segments on C's wire.
+        ("t01_tcp4", "deviation minecraft-unsplit", |sim| {
+            let st = sim.step_mut("oracle-list");
+            let i = conn_frames(st, ip4(2), 25565, false)
+                .into_iter()
+                .find(|i| !tcp_head(&st.frames[*i].1).unwrap().payload.is_empty())
+                .unwrap();
+            split_peer_segment(st, i, 50);
+        }),
+    ];
+    for (tag, check, edit) in cases {
+        let (v, b) = judge_tcp(tag, edit);
+        assert_eq!(v, INVALID, "{check}: {b:#?}");
+        assert!(has(&b, INVALID, check), "{check}: {b:#?}");
+        assert!(no(&b, FAIL), "{check}: {b:#?}");
+    }
+}
+
+#[test]
+fn an_unmet_deviation_condition_makes_the_comparison_invalid_not_a_fail_i2() {
+    // C's Minecraft reply split by the peer kernel, and C's parser losing bytes of it (src/proto-mc.c:68-89): the
+    // records differ, but the condition is judged first, so the comparison is INVALID, the run has no behaviour FAIL
+    // and the directory is INVALID.
+    let mut sim = Sim::new("t01_tcp4");
+    let st = sim.step_mut("oracle-list");
+    let i = conn_frames(st, ip4(2), 25565, false)
+        .into_iter()
+        .find(|i| !tcp_head(&st.frames[*i].1).unwrap().payload.is_empty())
+        .unwrap();
+    split_peer_segment(st, i, 50);
+    let r = st
+        .recs
+        .iter_mut()
+        .find(|r| matches!(r, SimRec::TcpBanner { port: 25565, .. }))
+        .unwrap();
+    if let SimRec::TcpBanner { payload, .. } = r {
+        payload[60..].fill(0);
+    }
+    let j = judge_full(&sim);
+    let b = &j.bad;
+    assert_eq!(j.verdict, INVALID, "{b:#?}");
+    assert!(has(b, INVALID, "deviation minecraft-unsplit"), "{b:#?}");
+    assert!(
+        has(b, INVALID, "list: the records equal the C oracle's"),
+        "{b:#?}"
+    );
+    assert!(no(b, FAIL) && !j.behaviour_fail, "{b:#?}");
+    assert_eq!(j.overall, INVALID, "{b:#?}");
+}
+
+#[test]
+fn the_verifiers_own_c_escaper_gives_cs_list_text() {
+    // src/output.c:144-170, written by hand: printable but < > & \ " ' stays, the rest is \xNN in lowercase.
+    assert_eq!(
+        c_normalize_string(b"A<b>&\\\"' ~\x00\x1f\x7f\x80\xff"),
+        "A\\x3cb\\x3e\\x26\\x5c\\x22\\x27 ~\\x00\\x1f\\x7f\\x80\\xff"
+    );
+    // The 8192-byte buffer: an escape fits while offset + 5 < 8192, a byte while offset + 2 < 8192.
+    let mut px = vec![0u8; 3000];
+    px.extend(b"abc");
+    let want = format!("{}ab", "\\x00".repeat(2047));
+    assert_eq!(c_normalize_string(&px), want);
+    // Three bytes first: the 2047th escape would start at offset 8187, where 8187 + 5 is no longer below 8192.
+    let mut edge = b"abc".to_vec();
+    edge.extend([0u8; 3000]);
+    edge.extend(b"defg");
+    assert_eq!(
+        c_normalize_string(&edge),
+        format!("abc{}def", "\\x00".repeat(2046))
+    );
+    assert_eq!(c_normalize_string(&edge), normalize_string(&edge));
+    // The product's escaper agrees (a cross-check; the expectation above is the anchor).
+    for px in [&px[..], b"\x01\x02 <a href='x'>\r\n"] {
+        assert_eq!(c_normalize_string(px), normalize_string(px));
+    }
+}
+
+#[test]
+fn a_wrong_list_text_of_rmasscans_raw_banner_on_11211_fails_m2() {
+    let mut sim = Sim::new("b01_banners");
+    let st = sim.step_mut("list");
+    let i = st
+        .recs
+        .iter()
+        .rposition(
+            |r| matches!(r, SimRec::Banner { ip, port: 11211, app: 0, .. } if ip.octets()[3] == 2),
+        )
+        .unwrap();
+    if let SimRec::Banner { payload, .. } = &mut st.recs[i] {
+        payload[0] ^= 0x20;
+    }
+    let (v, b) = judge_one(&sim);
+    assert_eq!(v, FAIL, "{b:#?}");
+    assert!(
+        has(
+            &b,
+            FAIL,
+            "list: rmasscan's -oL text of the raw banner on 1900 and 11211"
+        ) && has(&b, FAIL, "11211"),
+        "{b:#?}"
+    );
+}
+
+#[test]
+fn a_syn_of_the_scanner_mac_from_no_source_of_the_window_is_a_safety_finding() {
+    let (v, b) = judge_tcp("t01_tcp4", |sim| {
+        let st = sim.step_mut("binary");
+        let t = st.frames[st.frames.len() / 2].0;
+        st.frames.push((
+            t,
+            scanner_seg(Ipv4Addr::new(198, 18, 0, 7), 2, 80, 1, 0, 0x02),
+        ));
+        resort(st);
+    });
+    assert_eq!(v, FAIL, "{b:#?}");
+    assert!(
+        has(
+            &b,
+            FAIL,
+            "no SYN on the binary capture from outside the stand binding or to an address off the stand"
+        ),
+        "{b:#?}"
+    );
+}
+
+#[test]
+fn a_resolve_step_records_the_flush_of_the_peers_entry_m8() {
+    let c = tcp_case("t07_resolve_arp").unwrap();
+    assert_eq!(
+        neigh_flush_argv("wl-peer-1-2", c.source()),
+        [
+            crate::autodetect_suite::IP,
+            "-n",
+            "wl-peer-1-2",
+            "neigh",
+            "flush",
+            "to",
+            "198.18.0.10",
+            "dev",
+            "veth-b"
+        ]
+    );
+    assert!(
+        neigh_flush_argv("wl-peer-1-2", tcp_case("t08_resolve_ndp").unwrap().source())
+            .windows(2)
+            .any(|w| w == ["wl-peer-1-2", "-6"])
+    );
+    let (v, b) = judge_tcp(c.tag, |sim| sim.step_mut("list").flush = None);
+    assert_eq!(v, NOT_RUN, "{b:#?}");
+    assert!(has(&b, NOT_RUN, "neigh-flush.json"), "{b:#?}");
+    let (v, b) = judge_tcp(c.tag, |sim| {
+        if let Some(f) = &mut sim.step_mut("oracle-list").flush {
+            f.rc = 1;
+        }
+    });
+    assert_eq!(v, INVALID, "{b:#?}");
+    assert!(
+        has(
+            &b,
+            INVALID,
+            "oracle-list/neigh-flush.json: the peer's neighbour entry for the source was flushed"
+        ) && has(&b, INVALID, "exited 1"),
+        "{b:#?}"
+    );
+    let (v, b) = judge_tcp(c.tag, |sim| {
+        sim.step_mut("list").flush = Some(NeighFlush {
+            argv: neigh_flush_argv(PEER_NS, IpAddr::V4(TCP_SOURCE)),
+            rc: 0,
+        });
+    });
+    assert_eq!(v, INVALID, "{b:#?}");
+    assert!(has(&b, INVALID, "list/neigh-flush.json"), "{b:#?}");
+}
+
+#[test]
+fn the_quiet_control_judges_rmasscans_timers_on_a_quiet_link_m3() {
+    let c = tcp_case("t09_quiet_timers").unwrap();
+    assert!(c.quiet && c.banners && c.connection_timeout == Some(8));
+    assert_eq!(
+        steps(c.tag)
+            .unwrap()
+            .iter()
+            .map(|s| (s.name, s.who))
+            .collect::<Vec<_>>(),
+        [("list", Who::Rmasscan)]
+    );
+    let r = tcp_responder_args(&c);
+    assert!(!r.iter().any(|a| a.starts_with("--heartbeat")), "{r:?}");
+    assert!(!expect(c.tag).unwrap().tcp.unwrap().heartbeat);
+    assert!(expect("t01_tcp4").unwrap().tcp.unwrap().heartbeat);
+    // The generated control: rmasscan alone, no heartbeat, PASS.
+    let sim = Sim::new(c.tag);
+    assert!(sim.steps[0].frames.iter().all(|(_, f)| {
+        !f.get(14..)
+            .is_some_and(|x| x.starts_with(HEARTBEAT_PAYLOAD))
+    }));
+    // No hello on 198.18.0.4:80, and no lifetime RST on 198.18.0.5:3389: each timer is judged.
+    let (v, b) = judge_tcp(c.tag, |sim| {
+        let st = sim.step_mut("list");
+        let i = conn_frames(st, ip4(4), 80, true)
+            .into_iter()
+            .find(|i| !tcp_head(&st.frames[*i].1).unwrap().payload.is_empty())
+            .unwrap();
+        st.frames.remove(i);
+    });
+    assert_eq!(v, FAIL, "{b:#?}");
+    assert!(
+        has(&b, FAIL, "list: the hello leaves 1-3.5 s") && has(&b, FAIL, "198.18.0.4:80 never"),
+        "{b:#?}"
+    );
+    let (v, b) = judge_tcp(c.tag, |sim| {
+        let st = sim.step_mut("list");
+        let i = conn_frames(st, ip4(5), 3389, true)
+            .into_iter()
+            .find(|i| tcp_head(&st.frames[*i].1).unwrap().flags & 0x04 != 0)
+            .unwrap();
+        st.frames.remove(i);
+    });
+    assert_eq!(v, FAIL, "{b:#?}");
+    assert!(
+        has(&b, FAIL, "198.18.0.5:3389 held open and 0 RSTs"),
+        "{b:#?}"
+    );
 }

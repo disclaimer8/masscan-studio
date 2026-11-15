@@ -161,6 +161,18 @@ pub(crate) trait PairPlan {
         rm: &[Self::Rec],
         oracle: &[Self::Rec],
     ) -> (Vec<Self::Rec>, Vec<Self::Rec>, usize, &'static str);
+    /// After every step's own checks and before any comparison with C: the plan's conditions without which a
+    /// difference from C says nothing about rmasscan (its named deviations, the oracle's forced exit). An unmet one is
+    /// INVALID here, so the comparisons after it are INVALID too and never a FAIL with `behaviour`. `tally` is what
+    /// the comparisons count ([`tally_of`]).
+    fn before_vs_c(
+        _r: &mut Run,
+        _c: &Self::Case,
+        _sides: &[Side<Self::View>],
+        _docs: &[Option<Doc<Self::Rec>>],
+        _tally: Tally,
+    ) {
+    }
     /// After the step loop: the plan's case checks, deviations and notes.
     fn finish(
         r: &mut Run,
@@ -541,6 +553,7 @@ fn judge<P: PairPlan>(r: &mut Run, c: &P::Case, sides: &[Side<P::View>]) {
         }
         docs.push(d);
     }
+    P::before_vs_c(r, c, sides, &docs, tally_of::<P>(c, sides, &docs));
     // Each document: rmasscan's step against the oracle's step of the same document.
     let mut tally = Tally::default();
     let mut order = Map::new();
@@ -632,6 +645,31 @@ fn judge<P: PairPlan>(r: &mut Run, c: &P::Case, sides: &[Side<P::View>]) {
     );
     r.notes
         .insert("scanner_frames".into(), Value::Object(scanner_notes));
+}
+
+/// What the comparisons of a case count, before they run: probe pairs equal only by a named rule, C's records
+/// collapsed (the same sums as the pair loop of [`judge`]).
+fn tally_of<P: PairPlan>(
+    c: &P::Case,
+    sides: &[Side<P::View>],
+    docs: &[Option<Doc<P::Rec>>],
+) -> Tally {
+    let mut t = Tally::default();
+    for (i, pair) in sides.chunks(2).enumerate() {
+        let [rm, or] = pair else { continue };
+        if let (Some(a), Some(b)) = (&rm.view, &or.view) {
+            let (a, b) = (a.probe_frames(), b.probe_frames());
+            t.by_rule += a
+                .iter()
+                .zip(&b)
+                .filter(|(x, y)| P::same_probe(x, y) == Some(true))
+                .count();
+        }
+        if let (Some(Some(x)), Some(Some(y))) = (docs.get(2 * i), docs.get(2 * i + 1)) {
+            t.collapsed += P::vs_c(c, &x.records, &y.records).2;
+        }
+    }
+    t
 }
 
 /// `notes.scanner_frames.<step>`: the count of every named class, the unexplained frames and the bounds.

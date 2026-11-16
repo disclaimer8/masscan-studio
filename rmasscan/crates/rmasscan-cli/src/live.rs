@@ -248,6 +248,20 @@ fn bracket6(ip: Ipv6Addr) -> String {
     format!("[{}]", format_ipv6_c(u128::from(ip)))
 }
 
+/// Расширение порта источника по умолчанию до модели C {p, p+16} при `--banners` (Р10): только
+/// автоопределённый одиночный порт и только если p+16 влезает в u16. Явный `--source-port` (Given) и
+/// диапазоны не трогаются.
+fn widen_banners_ports(ports: (u16, u16), source: Source, banners: bool) -> (u16, u16) {
+    if banners
+        && source == Source::Detected
+        && ports.0 == ports.1
+        && let Some(last) = ports.0.checked_add(16)
+    {
+        return (ports.0, last);
+    }
+    ports
+}
+
 /// Адаптер `k` плана CLI. `--adapter-ip A-B` живёт только в `nics[k]` (одиночное поле хранит первый адрес `nic[0]`):
 /// диапазон берётся оттуда, если его первый адрес и есть источник привязки (обнаруженный адрес диапазона не имеет).
 /// Флаг 17 портов принадлежит этому же адаптеру (спека Р6).
@@ -270,9 +284,12 @@ fn nic_binding(
             )));
         }
     };
+    // Ширина 17 бывает только у диапазона самого C и у расширения Р10: оба идут с маской `last - first`.
+    let width17 =
+        u32::from(binding.source_ports.1).wrapping_sub(u32::from(binding.source_ports.0)) == 16;
     Ok(NicBinding {
         source_ipv4_last,
-        legacy_c_17_port_mask: nic.is_some_and(|n| n.legacy_c_17_port_mask),
+        legacy_c_17_port_mask: nic.is_some_and(|n| n.legacy_c_17_port_mask) || width17,
         // IPv6 только при целях IPv6: по `source_ipv6` движок включает ответчик NS (T4), план IPv4 без него.
         source_ipv6: ipv6.map(|v| v.source),
         next_hop_mac_ipv6: ipv6.and_then(|v| v.next_hop_mac),
@@ -450,7 +467,9 @@ pub fn prepare(
         (s, _) => (s, Source::Given),
     };
     cfg.seed = seed.0;
-    // C: один порт `40000 + time % 20000` и диапазон {p, p+16}; здесь один порт (решение 6).
+    // C: один порт `40000 + time % 20000` и диапазон {p, p+16}; без баннеров здесь один порт (решение 6).
+    // С `--banners` диапазон по умолчанию расширяется до модели C {p, p+16} (Р10, справка §D1): второму
+    // соединению на TLS-порт нужен следующий порт. Явный `--source-port` не трогается.
     let source_ports = match cfg.source_port {
         Some(p) => (p, Source::Given),
         None => {
@@ -458,6 +477,10 @@ pub fn prepare(
             ((p, p), Source::Detected)
         }
     };
+    let source_ports = (
+        widen_banners_ports(source_ports.0, source_ports.1, cfg.banners),
+        source_ports.1,
+    );
     cfg.source_port = Some(source_ports.0);
     let eff = validate(&cfg, Operation::Scan).map_err(|e| e.to_string())?;
     // `--offline --packet-trace` печатает поток одного адаптера; поток `nic[k]` зависит от числа адаптеров
@@ -1679,6 +1702,36 @@ pub fn iflist(backend: &dyn Backend, out: &mut dyn Write) -> Result<(), String> 
 mod tests {
     use super::*;
     use rmasscan_core::stack::StackStats;
+
+    /// Р10: при `--banners` автоопределённый одиночный порт расширяется до {p, p+16}; явный и диапазон — нет;
+    /// без баннеров прежний один порт; у верха u16 расширения нет.
+    #[test]
+    fn banners_default_source_port_widens_to_17() {
+        assert_eq!(
+            widen_banners_ports((41000, 41000), Source::Detected, true),
+            (41000, 41016)
+        );
+        assert_eq!(
+            widen_banners_ports((41000, 41000), Source::Detected, false),
+            (41000, 41000)
+        );
+        assert_eq!(
+            widen_banners_ports((65525, 65525), Source::Detected, true),
+            (65525, 65525)
+        );
+    }
+
+    #[test]
+    fn explicit_source_port_never_widened() {
+        assert_eq!(
+            widen_banners_ports((41000, 41000), Source::Given, true),
+            (41000, 41000)
+        );
+        assert_eq!(
+            widen_banners_ports((41000, 41003), Source::Detected, true),
+            (41000, 41003)
+        );
+    }
 
     /// Р5, решение D7 (перенос 6): `max(1024, rate × (жизнь + 4))`, жизнь это `--connection-timeout` или 30 при 0
     /// (`tcpcon_create_table`, `src/stack-tcp-core.c:665-667`); верхнего предела нет, таблица ленивая (это предел, а не

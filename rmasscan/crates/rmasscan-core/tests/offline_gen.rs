@@ -2,7 +2,7 @@
 //! Graham). Число C — `offline_gen_pps` в tests/golden/manifest.json.
 //!
 //! Сравнение имеет смысл только в release на том же железе, что оракул
-//! (minipc, Pentium Silver N6005):
+//! (bench host, Pentium Silver N6005):
 //!   cargo test --release -p rmasscan-core --test offline_gen -- --ignored --nocapture
 
 mod common;
@@ -33,7 +33,26 @@ fn small_workload_generates_every_target() {
 }
 
 #[test]
-#[ignore = "release-only, minipc: cargo test --release -p rmasscan-core --test offline_gen -- --ignored --nocapture"]
+fn small_cursor_workload_covers_every_target() {
+    // /24 x 1 порт через ProbeCursor: и preload 1, и preload 64 дают 256 зондов с теми же sink.
+    let plan = offline_gen::cursor_plan("10.1.2.0/24", "80", (40000, 40000));
+    let (n1, sink1) = offline_gen::generate_cursor(&plan, 1);
+    let (n64, sink64) = offline_gen::generate_cursor(&plan, 64);
+    assert_eq!((n1, n64), (256, 256));
+    assert_eq!(sink1, sink64);
+    let mut cursor = plan.cursor_for_nic(0, None).unwrap();
+    let mut seen = std::collections::BTreeSet::new();
+    while let Some(p) = cursor.current() {
+        seen.insert((p.ip_them, u32::from(p.port_them)));
+        cursor.advance_sent();
+    }
+    let want: std::collections::BTreeSet<(u32, u32)> =
+        (0..256u32).map(|k| (0x0a01_0200 + k, 80)).collect();
+    assert_eq!(seen, want);
+}
+
+#[test]
+#[ignore = "release-only, bench host: cargo test --release -p rmasscan-core --test offline_gen -- --ignored --nocapture"]
 fn offline_generation_meets_80pct_of_oracle() {
     if cfg!(debug_assertions) {
         panic!("debug build: the 80% comparison is only meaningful with --release");
@@ -65,4 +84,34 @@ fn offline_generation_meets_80pct_of_oracle() {
         ours / oracle
     );
     assert!(ours >= 0.80 * oracle, "{ours} < 80% of {oracle}");
+}
+
+#[test]
+#[ignore = "release-only, bench host: cargo test --release -p rmasscan-core --test offline_gen -- --ignored --nocapture"]
+fn offline_cursor_generation_2_28() {
+    if cfg!(debug_assertions) {
+        panic!("debug build: the cursor timing is only meaningful with --release");
+    }
+    let manifest = common::load_manifest();
+    // Та же проверка CPU, что у сравнения с оракулом (порога здесь нет).
+    if let (Some(ours), Some(want)) = (
+        cpu_model(),
+        manifest
+            .offline_gen_bench
+            .as_ref()
+            .and_then(|b| b.cpu_model.clone()),
+    ) && ours != want
+    {
+        eprintln!("SKIP: CPU '{ours}' differs from oracle CPU '{want}'; not comparable");
+        return;
+    }
+    let plan = offline_gen::cursor_plan("0.0.0.0/4", "80", (40000, 40000));
+    let start = Instant::now();
+    let (n, sink) = offline_gen::generate_cursor(&plan, 64);
+    let secs = start.elapsed().as_secs_f64();
+    assert_eq!(n, 1 << 28);
+    println!(
+        "OFFLINE_CURSOR packets={n} seconds={secs:.3} pps={:.0} sink={sink}",
+        n as f64 / secs
+    );
 }

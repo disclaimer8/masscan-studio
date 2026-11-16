@@ -20,7 +20,7 @@ masscan 0.0.0.0/4 -p80 --rate 100000000 --offline --interface lo \
 
 ### Hardware
 
-minipc: Intel Pentium Silver N6005 @ 2.00 GHz, 4 cores, Ubuntu 26.04 (Linux
+Bench host: Intel Pentium Silver N6005 @ 2.00 GHz, 4 cores, Ubuntu 26.04 (Linux
 7.0.0-38, x86_64). Same machine as the oracle. rustc/cargo 1.99.1 installed via
 rustup (minimal profile, `--no-modify-path`) under `~/.cargo`.
 
@@ -45,19 +45,34 @@ vs 2^24 targets) puts the fixed overhead at 2.3-3.1 s, i.e. 2.4-3.3% of 94 s.
 Removing it makes C about 2.91-2.94 M pps loop-only (2^28/(94.39-2.3) = 2,914,925
 at the low end), so Rust is at parity.
 
-Commands (from the repo root; the tree is shipped with `git archive`, not
-copied from a working tree):
+Commands (the paired G-bench procedure; `$BENCH_HOST` is the ssh name of the
+bench host, `A` and `B` are the two commits compared, `A = B` for a noise check).
+Each tree is shipped with `git archive` into its own directory and built into its
+own target directory; runs alternate A B A B A B, and before every run the
+one-minute load average must be below 0.3:
 
 ```
-git archive HEAD:rmasscan | ssh minipc 'rm -rf ~/rmasscan-bench && mkdir ~/rmasscan-bench && tar -x -C ~/rmasscan-bench'
-ssh minipc 'cd ~/rmasscan-bench && ~/.cargo/bin/cargo test --release \
-  -p rmasscan-core --test offline_gen -- --ignored --nocapture'
+for t in a b; do   # c = A for a, B for b
+  git archive "$c:rmasscan" | ssh "$BENCH_HOST" "rm -rf ~/rmasscan-bench-$t && mkdir ~/rmasscan-bench-$t && tar -x -C ~/rmasscan-bench-$t"
+  ssh -n "$BENCH_HOST" "cd ~/rmasscan-bench-$t && CARGO_TARGET_DIR=~/rmasscan-bench-$t-target ~/.cargo/bin/cargo test --locked --release -p rmasscan-core --test offline_gen --no-run"
+done
+# run i = 1..3, for t in a b, after the load check:
+ssh -n "$BENCH_HOST" "uptime; cd ~/rmasscan-bench-$t && CARGO_TARGET_DIR=~/rmasscan-bench-$t-target ~/.cargo/bin/cargo test --locked --release \
+  -p rmasscan-core --test offline_gen -- --ignored --nocapture --test-threads=1; uptime"
 ```
+
+Each run prints `OFFLINE_GEN` (the 2^28 loop above) and `OFFLINE_CURSOR` (the same
+2^28 workload through `ProbeCursor`: `preload(64)`, `advance_sent_n`, no throttler).
+Per row: medians `mA`, `mB`, the ratio `mB/mA` and the three paired ratios
+`B_i/A_i`; the `sink` values of A and B must be equal. `cargo bench --locked -p
+rmasscan-core` adds the rows `offline_gen`, `cursor_1port`, `cursor_16port` and
+`cursor_mapped` (`/10` x port 80, 4,194,304 probes, or `10.0.0.0/16` x `1-64` with a
+65,536-entry destination map), three runs each, for the Mac ranking (G-mac).
 
 The test refuses to run in debug and skips with a message if `/proc/cpuinfo`
 reports a CPU different from the manifest's `offline_gen_bench.cpu_model`.
 
-All runs (2^28 packets, minipc):
+All runs (2^28 packets, bench host):
 
 | Run | Measured code | Seconds | pps | vs manifest |
 |-----|---------------|---------|-----|-------------|
@@ -88,3 +103,14 @@ reading compares the reviewer's C user time (92.26 s) with the Rust loop time
   arm64 Mac it gives about 5.7 M pps (informational only, different hardware).
 - The ordinary `cargo test` runs only `small_workload_generates_every_target`
   (/24, 256 packets) to keep the pipeline compiled and correct.
+
+### Native-Rust phase 1, rmasscan-core
+
+Paired measurements on the bench host, one row per task (method above). `A` is the
+last accepted code commit, `B` the commit under test; load average is the lowest
+and highest one-minute value in the logs; Mac medians are the medians of nine
+`cargo bench` runs per loop (offline_gen / cursor_1port / cursor_16port /
+cursor_mapped).
+
+| task | A | B | OFFLINE_GEN mA / mB | ratio (pairs) | OFFLINE_CURSOR mA / mB | ratio (pairs) | load avg | sinks | Mac medians (4 loops) | decision |
+|------|---|---|---------------------|---------------|------------------------|---------------|----------|-------|-----------------------|----------|

@@ -8,9 +8,13 @@
 //! офлайне ничего не делает, поэтому здесь его нет.
 #![allow(dead_code)]
 
+use std::collections::BTreeMap;
+
+use rmasscan_core::config::{Operation, ScanConfig, validate};
 use rmasscan_core::cookie::syn_cookie_ipv4;
 use rmasscan_core::massip::MassIp;
 use rmasscan_core::packet::{LinkType, TcpSynTemplate};
+use rmasscan_core::probe::{AdapterBinding, NicBinding, ReadyPlan};
 use rmasscan_core::scan::{Shard, transmit_scan};
 use rmasscan_core::targets::{add_target_string, parse_ports};
 use rmasscan_core::throttle::{SystemClock, Throttler};
@@ -21,6 +25,8 @@ pub const ORACLE_SEED: u64 = 1;
 /// `--adapter-ip 10.255.0.1 --source-port 40000` оракула.
 const IP_ME: u32 = 0x0aff_0001;
 const PORT_ME: u16 = 40000;
+const MAC_ME: [u8; 6] = [0x00, 0x11, 0x22, 0x33, 0x44, 0x55];
+const MAC_NH: [u8; 6] = [0x66, 0x55, 0x44, 0x33, 0x22, 0x11];
 
 pub fn build_massip(targets: &str, ports: &str) -> MassIp {
     let mut m = MassIp::new();
@@ -42,11 +48,7 @@ pub fn generate(massip: &MassIp) -> (u64, u64) {
 pub fn generate_with(massip: &MassIp, mut on_target: impl FnMut(u32, u32)) -> (u64, u64) {
     let clock = SystemClock::new();
     let mut throttler = Throttler::start(ORACLE_RATE, &clock); // main.c:249
-    let tmpl = TcpSynTemplate::new(
-        [0x00, 0x11, 0x22, 0x33, 0x44, 0x55],
-        [0x66, 0x55, 0x44, 0x33, 0x22, 0x11],
-        LinkType::Ethernet,
-    );
+    let tmpl = TcpSynTemplate::new(MAC_ME, MAC_NH, LinkType::Ethernet);
     let mut frame = Vec::with_capacity(64);
     let mut packets_sent = 0u64;
     let mut batch = 0u64;
@@ -81,4 +83,70 @@ pub fn generate_with(massip: &MassIp, mut on_target: impl FnMut(u32, u32)) -> (u
     )
     .unwrap();
     (packets_sent, sink)
+}
+
+fn cursor_config(targets: &str, ports: &str) -> rmasscan_core::config::EffectiveConfig {
+    let cfg = ScanConfig {
+        targets: build_massip(targets, ports),
+        seed: ORACLE_SEED,
+        max_rate: ORACLE_RATE,
+        blackrock_rounds: 14,
+        ..ScanConfig::default()
+    };
+    validate(&cfg, Operation::Scan).unwrap()
+}
+
+fn cursor_binding(source_ports: (u16, u16)) -> AdapterBinding {
+    AdapterBinding {
+        interface_id: "bench0".to_string(),
+        link_type: LinkType::Ethernet,
+        source_ipv4: IP_ME,
+        source_mac: MAC_ME,
+        next_hop_mac: MAC_NH,
+        source_ports,
+    }
+}
+
+/// План CLI на один адаптер Ethernet с адресом и MAC оракула, seed 1, rate 1e8, 14 раундов.
+pub fn cursor_plan(targets: &str, ports: &str, source_ports: (u16, u16)) -> ReadyPlan {
+    let nic = NicBinding::from(cursor_binding(source_ports));
+    ReadyPlan::new_cli(cursor_config(targets, ports), vec![nic]).unwrap()
+}
+
+/// План с картой назначений: у каждой цели свой одноадресный MAC `02:00:<4 байта адреса>`.
+pub fn mapped_plan(targets: &str, ports: &str) -> ReadyPlan {
+    let effective = cursor_config(targets, ports);
+    let list = effective.massip().ipv4();
+    let destinations: BTreeMap<u32, [u8; 6]> = (0..list.count())
+        .map(|k| {
+            let ip = list.pick(k);
+            let b = ip.to_be_bytes();
+            (ip, [0x02, 0x00, b[0], b[1], b[2], b[3]])
+        })
+        .collect();
+    ReadyPlan::with_destinations(effective, cursor_binding((PORT_ME, PORT_ME)), destinations)
+        .unwrap()
+}
+
+/// Гоняет `ProbeCursor` так, как движок: `preload(preload)`, чтение кадров, `advance_sent_n`.
+/// Возвращает (число зондов, sink). Без троттлера (у движка свой).
+pub fn generate_cursor(plan: &ReadyPlan, preload: usize) -> (u64, u64) {
+    let mut cursor = plan.cursor_for_nic(0, None).unwrap();
+    let mut sent = 0u64;
+    let mut sink = 0u64;
+    loop {
+        let batch = cursor.preload(preload);
+        if batch.is_empty() {
+            break;
+        }
+        for p in batch {
+            sink = sink
+                .wrapping_add(u64::from(p.seqno) + u64::from(p.frame[24]) + u64::from(p.frame[53]));
+        }
+        let len = batch.len();
+        std::hint::black_box(batch);
+        cursor.advance_sent_n(len);
+        sent += len as u64;
+    }
+    (sent, sink)
 }

@@ -88,3 +88,458 @@ reading compares the reviewer's C user time (92.26 s) with the Rust loop time
   arm64 Mac it gives about 5.7 M pps (informational only, different hardware).
 - The ordinary `cargo test` runs only `small_workload_generates_every_target`
   (/24, 256 packets) to keep the pipeline compiled and correct.
+
+## rmasscan-net: нативный Rust, фаза 1 (Linux-стенд)
+
+Как задачи о скорости плана `docs/superpowers/plans/2026-11-16-rmasscan-native-net.md` доказывают ускорение
+`rmasscan-net` и отсутствие регрессий. Числа с Mac (и микробенч `adapter_hot_path_two_threads`) только ранжируют
+кандидатов; доказательство дают ячейки `U` стенда S на Linux-хосте стенда (`$LINUX_HOST`: Intel Pentium Silver N6005,
+4 ядра, тот же CPU, что у оракула выше), сборка из `git archive` коммитов, как `L-gate`. Существующая матрица 4×5
+(`scripts/wire-lab.sh --suite perf`) остаётся 40/40 VALID без потерь RX; стенд S её не заменяет.
+
+### Стенд S
+
+Скрипт ниже (`stand-s.sh`) кладётся на хост в каталог сессии `mktemp -d /tmp/rmasscan-native-net.XXXX` (в
+репозиторий не кладётся отдельно: его текст живёт только здесь и берётся отсюда без изменений). Под `sudo -n` он
+поднимает изоляцию по правилам `scripts/wire-lab.sh`: две netns `rnn-a` (сканер) и `rnn-b` (пир), пара veth
+`rnn-va`/`rnn-vb`, созданная внутри `rnn-a` с концом, сразу перенесённым в `rnn-b`; без uplink, моста и NAT, IPv6
+выключен в обеих netns и на обоих концах, `ip_forward` 0, маршрута по умолчанию нет; MAC `02:aa:00:00:00:01` /
+`02:aa:00:00:00:02`; сканер `10.200.0.1/24` (адрес адаптера `10.200.0.100` сканеру не назначен, у пира на него
+постоянный сосед, ARP на проводе не нужен); у пира 128 адресов `10.200.0.2-10.200.0.129/24` без слушателей (по замыслу
+ядро пира отвечает RST на каждый SYN; но `10.200.0.100` входит в этот диапазон, и в первой сессии пир не ответил ни на
+один SYN — см. «Первая сессия калибровки»); offload контрольных сумм TX выключен на обоих концах (как в `wire-lab.sh`: veth отдаёт
+AF_PACKET кадры с незаконченной суммой, движок их отверг бы). Корневая qdisc `rnn-va` — параметр `--qdisc`
+(по умолчанию `noqueue`, как в матрице; задача 17 передаёт `tbf` через него, не правя скрипт). Изоляцию проверяет
+`rmasscan-lab capture isolation` (режим по умолчанию: только `lo` и veth, не больше одного маршрута без шлюза,
+`ip_forward` 0, IPv6 выключен, нет маршрута до 8.8.8.8, список линков хоста не изменился); снятие — trap на выходе
+(`ip netns del rnn-a; ip netns del rnn-b`, итог `namespaces_left` в журнале; оставшаяся netns делает сессию
+неудачной). Скрипт отказывается стартовать, если `rnn-a`/`rnn-b` уже есть. Каждый прогон сканера идёт под
+`taskset -c 2,3` (один набор на сессию, `--cpus`) и `timeout -k 10 <3 × ожидаемая длительность>`.
+
+Сессия целиком запускается с Mac под общим замком стенда (хост делится с планом `rmasscan-native-core`), после сборки
+на хосте из `git archive` (`l_ship`) нужных sha в каталог сессии `$D`:
+
+```bash
+# на хосте, для каждого sha: wire_scan (release) -> $D/wire_scan-<sha>; один раз rmasscan-lab -> $D/rmasscan-lab;
+# для дымового прогона: cargo test --locked --release -p rmasscan-net --test linux_io --no-run -> $D/linux_io-<sha>
+"$TO" -k 60 7200 ssh -n "$LINUX_HOST" "sudo -n bash $D/stand-s.sh --out $D/s --lab-bin $D/rmasscan-lab \
+  [--smoke $D/linux_io-<sha>] --base $D/wire_scan-<база> [--new $D/wire_scan-<новая>] [--cells tx,rx] [--qdisc noqueue]"
+```
+
+Каталог `$D` создаётся с правами 755 (дымовой прогон запускает тест без привилегий от `nobody`). Итог сессии:
+`$D/s/summary.json` (медианы, `S_AA`, `T`, `R_RX`, отношения и вердикты), `$D/s/runs.jsonl` (каждый прогон: метрики,
+годность и причины негодности), `$D/s/session.log`, `isolation.json`, `stand.txt`, `smoke-*.log`; сырые JSON
+`wire_scan` лежат в `$D/s/runs/` без списка ответов (его выбрасывает `sed`: на `U-RX` это миллионы строк, а
+`reply_unique` в JSON остаётся). Извлечь скрипт из этого файла:
+`awk '/^<!-- stand-s.sh begin -->$/{f=1;next} /^<!-- stand-s.sh end -->$/{f=0} f' rmasscan/BENCHMARKS.md | sed '1d;$d' >stand-s.sh`.
+
+**Дымовой прогон адаптера** (задачи 1, 6, 13, 15, 17): `--smoke` до ячеек — бинарник `linux_io` из
+`cargo test --release --test linux_io --no-run` под `ip netns exec rnn-a env RMASSCAN_LAB_IFACE=rnn-va
+RMASSCAN_LAB_IP=10.200.0.100 RMASSCAN_LAB_MAC=02:aa:00:00:00:01 RMASSCAN_LAB_PEER_MAC=02:aa:00:00:00:02 timeout -k 10
+600 <bin> --ignored --test-threads=1 --skip lab_open_without_privilege_is_permission_denied lab_`, затем
+`lab_open_without_privilege_is_permission_denied` отдельно под `setpriv --reuid=nobody --regid=nogroup
+--clear-groups`; каждый лог проходит проверку «каждая строка `running N tests` имеет итог и N ≥ 1», иначе сессия
+не годна.
+
+### Ячейка U
+
+`wire_scan` (release) из `ip netns exec rnn-a taskset -c 2,3` с `--iface rnn-va --src-ip 10.200.0.100 --src-mac
+02:aa:00:00:00:01 --router-mac 02:aa:00:00:00:02 --seed 1 --source-port 40000 --wait 1`; qdisc `rnn-va` — `noqueue`,
+если задача не говорит иначе. CPU потоков движка берётся из `workers.tx_cpu_ns`/`workers.rx_cpu_ns` JSON (первое поле
+`/proc/thread-self/schedstat`, прочитанное в `Drop` обёрток harness в потоке движка), а не из CPU всего процесса;
+`null` или `0` (учёт выключен) делает прогон INVALID. Перед каждым прогоном пауза 1 с.
+
+- `U-TX` — `--rate 100000000 --targets 10.200.0.0/16 --ports 1-64` (4 194 304 пробы; ожидаемая длительность 20 с,
+  таймаут 60 с). Метрики: `timing.steady_pps` (больше — лучше); CPU потока TX на отправленный кадр
+  `workers.tx_cpu_ns / net.tx_sent`, нс (меньше — лучше; на veth сюда входит и обработка кадра пиром в softirq того
+  же CPU); `net.tx_would_block` (меньше — лучше). Годный прогон: код выхода 0, `reason == "Completed"`, `net.tx_sent`
+  равен числу проб, прирост RX-пакетов `rnn-vb` по `ip -s -j link` не меньше `net.tx_sent`,
+  `rx_health.kernel_drops == 0`, оба `*_cpu_ns` больше нуля.
+- `U-RX` — `--targets 10.200.0.2-10.200.0.129 --ports 1-P --rate R_RX`, `P = ⌈11 · R_RX / 128⌉`, `128 · P` проб
+  (таймаут `3 × (пробы / R_RX + 4)` с). Метрика: CPU потока RX на принятый кадр `workers.rx_cpu_ns / net.rx_packets`,
+  нс (меньше — лучше). Годный прогон: код выхода 0, `reason == "Completed"`, `rx_health.kernel_drops == 0`,
+  `reply_unique` не меньше числа проб, оба `*_cpu_ns` больше нуля. `R_RX` выбирается в калибровке сессии: наибольшая
+  ступень лестницы 400 000, 300 000, 200 000, 150 000, 100 000 pps, на которой все прогоны базы годны (на первом
+  негодном прогоне ступени скрипт спускается на следующую). Движок обрывает скан на первой потере ядра (`RxLoss`),
+  поэтому прогон без ограничения скорости здесь не годен по определению. Для справки (не ворота) после A/B — по одному
+  прогону каждой версии на каждой ступени сверху вниз; наибольшая ступень с годным прогоном у каждой версии пишется
+  в таблицу.
+
+### Протокол сессии, годность и ворота
+
+Одна сессия = один подъём стенда S, без перезапуска хоста, под замком стенда:
+
+1. (задачи 1, 6, 13, 15, 17) дымовой прогон адаптера `--smoke`;
+2. калибровка «база против базы»: по каждой ячейке 5 пар чередованием (`base1`, `base2`) одного и того же
+   бинарника базы. По каждой метрике `S_AA = |медиана₁ − медиана₂| / медиана` (медиана₁ — прогонов `base1`,
+   медиана₂ — `base2`, медиана — всех десяти; при нулевой медиане `S_AA = 0`), порог `T = max(2 %, S_AA)`;
+3. парные A/B (`--new`): 5 пар чередованием (база, новая) в той же сессии; затем справочная лестница `U-RX`;
+4. C-оракул (`--oracle`) — отдельной серией после A/B, только для справки (время и прирост пакетов пира, не ворота).
+
+База — коммит ветки до первой правки задачи, новая — последний коммит задачи (оба sha в заметках задачи), сборка из
+`git archive` этих sha. Негодный прогон — INVALID: никогда не PASS, в медианы не идёт. INVALID базы в калибровке —
+сессия не годна (для `U-RX` — шаг вниз по лестнице, для `U-TX` — новая сессия; скрипт останавливается). INVALID новой
+версии при годной базе — FAIL задачи.
+
+Отношение «в сторону лучше» `r`: для `steady_pps` новая/база, для метрик «меньше — лучше» база/новая; равные
+значения (в том числе два нуля) дают `r = 1`.
+
+- **Без регрессии** (каждая метрика ячейки): `r` медиан новой и базы из A/B не ниже `1 − T` и не ниже 0,97, какой бы
+  ни вышла `S_AA`; и не меньше чем в 4 из 5 пар `r` новой версии к своей паре не ниже `1 − T`.
+- **Ускорение** (целевая метрика задачи): `r` медиан больше `1 + T`, и не меньше 4 из 5 повторов новой версии лучше
+  медианы базы; прочие метрики — «без регрессии». Если ворота «ускорение» не пройдены, продуктовые коммиты задачи
+  отменяются `git revert` (история не переписывается), отрицательный замер с `T` пишется сюда, решение за
+  пользователем.
+
+`summary.json` сессии содержит по каждой метрике медианы, мин–макс, `S_AA`, `T`, `r`, число пар и оба вердикта
+(`no_regression`, `speedup`); строка таблицы ниже переносит их как есть.
+
+### Первая сессия калибровки (задача 1)
+
+2026-11-16, Linux-хост стенда (ядро 7.0.0-38, `taskset -c 2,3` из 4 CPU, qdisc `noqueue`, хост общий с планом
+`rmasscan-native-core` под замком, load average 1,1–1,4). Все бинарники (`wire_scan`, `linux_io`, `rmasscan-lab`) из
+`git archive` коммита `27015f52` (страховка задачи 1: первый коммит, в JSON которого есть `workers.tx_cpu_ns` и
+`rx_cpu_ns`). Текст скрипта — ниже, ровно тот, что работал в сессии (sha256 `aa918b5a…`).
+
+- **Дымовой прогон:** `lab_*` под root — 6 из 6 ok (в том числе `lab_packet_sockets_are_nonblocking_and_cloexec`:
+  оба новых сокета AF_PACKET `O_NONBLOCK|O_CLOEXEC`), `lab_open_without_privilege_is_permission_denied` под `nobody`
+  — ok. Изоляция подтверждена `capture isolation`, снятие — `namespaces_left=0`.
+- **U-TX:** 10 из 10 прогонов калибровки годны (по 20,5–21,5 с). `steady_pps`: медиана 210 785 (203 640–216 117),
+  медиана₁ 210 455, медиана₂ 212 388, `S_AA` 0,92 %, `T` 2,00 %. CPU TX на кадр: медиана 4 713 нс (4 580–4 831),
+  `S_AA` 0,92 %, `T` 2,00 % (на veth сюда входит обработка кадра ядром пира в softirq того же CPU). `tx_would_block`:
+  0 во всех прогонах (`noqueue`: отправка на veth не возвращает EAGAIN), `S_AA` 0, `T` 2 %.
+- **U-RX: сессия не годна** — на каждой ступени лестницы (400 000 … 100 000 pps) первый же прогон базы INVALID:
+  `reply_unique 0`, `net.rx_packets 0` при `kernel_drops 0`. `R_RX` не выбран, `T` для `U-RX` нет.
+
+  Причина — противоречие в значениях ячейки, а не шум: адрес адаптера `10.200.0.100` лежит внутри диапазона пира
+  `10.200.0.2-10.200.0.129`, то есть назначен пиру. Ядро пира отбрасывает каждый SYN со своим же адресом источника как
+  martian source (`in_martian_src` в `/proc/net/stat/rt_cache` растёт на число проб; `nstat` пира: `IpInReceives` без
+  `IpInDelivers`, ни одного `TcpOutRsts`), RST не уходит. То же в `U-TX` (его годность от ответов не зависит, но
+  ожидаемые 8 192 RST тоже не пришли: `rx_packets 0` во всех 10 прогонах). Диагностика вне сессии (тот же стенд,
+  адрес адаптера вынесен за диапазон пира, `10.200.0.200`, постоянный сосед у пира на него): 5 проб — 5 RST;
+  один прогон размера `U-RX` на 400 000 pps — `RxLoss` после 24 431 пробы (`kernel_drops` 269), то есть верх лестницы
+  на этом хосте негоден, и лестница работает как задумано. Выбор исправления (вынести адрес адаптера за диапазон
+  пира или убрать его из диапазона) — решение контролёра; пока его нет, ячейка `U-RX` не используется, а коммит,
+  который применит решение, поменяет здесь текст скрипта и ячейки и повторит калибровку.
+
+### Результаты
+
+| задача | коммит | ячейка | метрика | `T` | база (медиана, мин–макс) | новая | вердикт |
+|---|---|---|---|---|---|---|---|
+| 1 | `27015f52` | U-TX | `steady_pps` | 2,00 % (`S_AA` 0,92 %) | 210 785 (203 640–216 117) | — | калибровка |
+| 1 | `27015f52` | U-TX | CPU TX, нс/кадр | 2,00 % (`S_AA` 0,92 %) | 4 713 (4 580–4 831) | — | калибровка |
+| 1 | `27015f52` | U-TX | `tx_would_block` | 2,00 % (`S_AA` 0) | 0 (0–0) | — | калибровка |
+| 1 | `27015f52` | U-RX | CPU RX, нс/кадр | — | — (все ступени INVALID) | — | сессия не годна: адрес адаптера внутри диапазона пира |
+
+### microbench (ranking only)
+
+`adapter_hot_path_two_threads` (`#[ignore]`, по одному в тестах каждого адаптера: `linux::tests`,
+`macos::tests::adapter_tests`, `windows::tests::adapter_tests`): шов без замков (отправка принимает всё, приём копирует
+заготовленный 60-байтный кадр; у Windows горячие экспорты `pcap_sendpacket`/`pcap_next_ex` подменены, открытие идёт
+через сценарную таблицу), потоки TX и RX стартуют через `Barrier`, по 1 000 000 вызовов, печать нс/кадр каждого
+потока. Запуск `cargo test --locked --release -p rmasscan-net adapter_hot_path -- --ignored --nocapture`, лучше с
+`--test-threads=1`: без него бенчи разных адаптеров идут одновременно и мешают друг другу. Числа только ранжируют:
+результат зависит от того, куда планировщик кладёт потоки TX и RX относительно друг друга (их счётчики делят строки
+кэша, это цель задачи 2), и между запусками на одной машине меняется в разы. Числа Linux-хоста стенда (бенч
+`linux` идёт только там) — в заметках задачи. Mac (aarch64), коммит `27015f52`, нс/кадр, TX / RX, мин–макс трёх
+запусков:
+
+| запуск | macos (шов) | windows (шов) |
+|---|---|---|
+| `--test-threads=1` | 16,8–17,0 / 20,3–20,4 | 34,9–66,5 / 19,1–62,1 |
+| параллельно (без `--test-threads=1`) | 18,4–72,8 / 21,8–74,2 | 36,8–85,1 / 20,7–76,7 |
+
+### Текст скрипта стенда S (`stand-s.sh`)
+
+<!-- stand-s.sh begin -->
+```bash
+#!/usr/bin/env bash
+# Stand S of the rmasscan-net phase-1 plan (rmasscan/BENCHMARKS.md, «rmasscan-net: нативный Rust, фаза 1 (Linux-стенд)»).
+# One session = one bring-up of the stand. Sealed by the rules of scripts/wire-lab.sh: namespaces rnn-a (scanner)
+# and rnn-b (peer), one veth pair rnn-va/rnn-vb created inside rnn-a with the peer end moved straight into rnn-b;
+# no uplink, bridge, NAT or default route; IPv6 off; ip_forward 0; the seal is checked by `rmasscan-lab capture
+# isolation`. Every scanner run is pinned with taskset and bounded by timeout. Root only: sudo -n bash stand-s.sh ...
+#
+#   --out DIR      session directory (must not exist): runs.jsonl, runs/, summary.json, isolation.json, smoke-*.log
+#   --lab-bin BIN  rmasscan-lab (capture isolation)
+#   --cpus SET     taskset CPU set of every scanner run (default 2,3; one set per session)
+#   --qdisc SPEC   root qdisc of rnn-va: noqueue (default, as the matrix) or a tc spec ("tbf rate 1gbit burst 64kb latency 50ms")
+#   --smoke BIN    adapter smoke run first: the linux_io test binary, lab_* as root, then the unprivileged test as nobody
+#   --base BIN     wire_scan of the base commit: calibration "base vs base" of each cell (U-RX: picks R_RX)
+#   --new BIN      wire_scan of the task commit: paired A/B after the calibration, then the U-RX reference ladder
+#   --cells LIST   tx,rx (default), tx or rx
+#   --pairs N      pairs per series (default 5)
+#   --oracle BIN   C masscan: one reference series per cell after A/B (never a gate)
+set -euo pipefail
+export LC_ALL=C
+
+OUT=""; LAB_BIN=""; CPUS=2,3; QDISC=noqueue; SMOKE=""; BASE=""; NEW=""; CELLS=tx,rx; PAIRS=5; ORACLE=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --out) OUT=$2; shift 2 ;;
+    --lab-bin) LAB_BIN=$2; shift 2 ;;
+    --cpus) CPUS=$2; shift 2 ;;
+    --qdisc) QDISC=$2; shift 2 ;;
+    --smoke) SMOKE=$2; shift 2 ;;
+    --base) BASE=$2; shift 2 ;;
+    --new) NEW=$2; shift 2 ;;
+    --cells) CELLS=$2; shift 2 ;;
+    --pairs) PAIRS=$2; shift 2 ;;
+    --oracle) ORACLE=$2; shift 2 ;;
+    *) echo "unknown argument: $1" >&2; exit 64 ;;
+  esac
+done
+fatal() { echo "FATAL: $*" >&2; exit 2; }
+[ "$(uname -s)" = Linux ] || fatal "Linux only"
+[ "$(id -u)" = 0 ] || fatal "run as root (sudo -n bash $0 ...)"
+[ -n "$OUT" ] && [ -x "$LAB_BIN" ] || fatal "--out and an executable --lab-bin are required"
+[ ! -e "$OUT" ] || fatal "$OUT exists: every session gets a new --out"
+[ -n "$NEW" ] && [ -z "$BASE" ] && fatal "--new needs --base"
+for b in "$SMOKE" "$BASE" "$NEW" "$ORACLE"; do [ -z "$b" ] || [ -x "$b" ] || fatal "not executable: $b"; done
+case ",$CELLS," in *,tx,*|*,rx,*) ;; *) fatal "--cells must name tx and/or rx" ;; esac
+for t in ip tc ethtool taskset timeout python3 setpriv; do command -v "$t" >/dev/null || fatal "missing $t"; done
+for ns in rnn-a rnn-b; do [ ! -e "/run/netns/$ns" ] || fatal "namespace $ns exists: another stand is up or an old one was not torn down"; done
+mkdir -p "$OUT/runs"; OUT=$(readlink -f "$OUT")
+log() { echo "[stand-s] $*" | tee -a "$OUT/session.log"; }
+
+# ---- the cells (fixed; the text in BENCHMARKS.md names the same values) --------------------------------------
+NS_A=rnn-a; NS_B=rnn-b; IF_A=rnn-va; IF_B=rnn-vb
+MAC_A=02:aa:00:00:00:01; MAC_B=02:aa:00:00:00:02; IP_A=10.200.0.1; IP_ADAPTER=10.200.0.100
+SCAN=(--iface "$IF_A" --src-ip "$IP_ADAPTER" --src-mac "$MAC_A" --router-mac "$MAC_B" --seed 1 --source-port 40000 --wait 1)
+TX_RATE=100000000; TX_TARGETS=10.200.0.0/16; TX_PORTS=1-64; TX_PROBES=4194304; TX_EXPECT=20
+RX_TARGETS=10.200.0.2-10.200.0.129; RX_LADDER="400000 300000 200000 150000 100000"
+rx_ports() { echo $(( (11 * $1 + 127) / 128 )); }   # P = ceil(11 * R_RX / 128): >= 10 s steady plus the ramp
+
+# ---- topology ----------------------------------------------------------------------------------------------
+cleanup() {
+  local rc=$?
+  trap - EXIT INT TERM HUP
+  set +e
+  ip netns del "$NS_A" 2>/dev/null; ip netns del "$NS_B" 2>/dev/null
+  local left; left=$(ip netns list | grep -cE "^rnn-(a|b)( |\$)")
+  [ -n "${SUDO_UID:-}" ] && chown -R "$SUDO_UID:${SUDO_GID:-$SUDO_UID}" "$OUT" 2>/dev/null
+  echo "[stand-s] teardown: rc=$rc namespaces_left=$left" | tee -a "$OUT/session.log"
+  [ "$rc" = 0 ] && [ "$left" != 0 ] && rc=1
+  exit "$rc"
+}
+trap cleanup EXIT
+trap 'exit 130' INT; trap 'exit 143' TERM; trap 'exit 129' HUP
+ip -o link | awk -F': ' '{print $2}' | sort >"$OUT/host-links-before.txt"
+ip netns add "$NS_A"; ip netns add "$NS_B"
+ip -n "$NS_A" link add "$IF_A" type veth peer name "$IF_B" netns "$NS_B"
+for ns in "$NS_A" "$NS_B"; do
+  ip netns exec "$ns" sysctl -qw net.ipv6.conf.all.disable_ipv6=1 net.ipv6.conf.default.disable_ipv6=1 net.ipv4.ip_forward=0
+done
+ip netns exec "$NS_A" sysctl -qw "net.ipv6.conf.$IF_A.disable_ipv6=1"
+ip netns exec "$NS_B" sysctl -qw "net.ipv6.conf.$IF_B.disable_ipv6=1"
+ip -n "$NS_A" link set "$IF_A" address "$MAC_A"
+ip -n "$NS_B" link set "$IF_B" address "$MAC_B"
+ip -n "$NS_A" addr add "$IP_A/24" dev "$IF_A"              # the adapter IP 10.200.0.100 is assigned to nothing
+for i in $(seq 2 129); do echo "addr add 10.200.0.$i/24 dev $IF_B"; done | ip -n "$NS_B" -batch -   # no listeners: RST
+ip -n "$NS_B" neigh add "$IP_ADAPTER" lladdr "$MAC_A" dev "$IF_B" nud permanent   # no ARP on the lab wire
+for ns in "$NS_A" "$NS_B"; do ip -n "$ns" link set lo up; done
+ip -n "$NS_A" link set "$IF_A" up; ip -n "$NS_B" link set "$IF_B" up
+# veth hands CHECKSUM_PARTIAL frames to AF_PACKET readers; the engine verifies checksums (as in wire-lab.sh)
+ip netns exec "$NS_A" ethtool -K "$IF_A" tx off >/dev/null; ip netns exec "$NS_B" ethtool -K "$IF_B" tx off >/dev/null
+[ "$QDISC" = noqueue ] || ip netns exec "$NS_A" tc qdisc replace dev "$IF_A" root $QDISC
+for ns in "$NS_A" "$NS_B"; do
+  [ -z "$(ip -n "$ns" route show default)" ] || fatal "$ns has a default route"
+  ! ip netns exec "$ns" ip route get 8.8.8.8 >/dev/null 2>&1 || fatal "$ns can route to 8.8.8.8"
+done
+"$LAB_BIN" capture isolation --out "$OUT/isolation.json" --ns-a "$NS_A" --ns-b "$NS_B" --host-links-before "$OUT/host-links-before.txt"
+{ echo "kernel $(uname -r); cpus $CPUS of $(nproc); qdisc $QDISC"; ip netns exec "$NS_A" tc qdisc show dev "$IF_A"
+  echo "base $(sha256sum "${BASE:-/dev/null}" | cut -c1-16) new $(sha256sum "${NEW:-/dev/null}" | cut -c1-16)"; } >"$OUT/stand.txt"
+log "stand up: $(head -n1 "$OUT/stand.txt")"
+
+# ---- smoke run of the adapter --------------------------------------------------------------------------------
+libtest_ok() {  # every `running N tests` has its `test result:` and N >= 1 in total
+  local ran res n
+  ran=$(grep -cE '^running [0-9]+ tests?$' "$1" || true); res=$(grep -cE '^test result: ' "$1" || true)
+  n=$(grep -E '^running [0-9]+ tests?$' "$1" | awk '{s+=$2} END {print s+0}')
+  [ "$ran" -ge 1 ] && [ "$ran" = "$res" ] && [ "$n" -ge 1 ]
+}
+if [ -n "$SMOKE" ]; then
+  LAB_ENV=(RMASSCAN_LAB_IFACE="$IF_A" RMASSCAN_LAB_IP="$IP_ADAPTER" RMASSCAN_LAB_MAC="$MAC_A" RMASSCAN_LAB_PEER_MAC="$MAC_B")
+  rc=0; ip netns exec "$NS_A" env "${LAB_ENV[@]}" timeout -k 10 600 "$SMOKE" --ignored --test-threads=1 \
+    --skip lab_open_without_privilege_is_permission_denied lab_ >"$OUT/smoke-root.log" 2>&1 || rc=$?
+  { [ "$rc" = 0 ] && libtest_ok "$OUT/smoke-root.log"; } || fatal "smoke (root) failed rc=$rc: $OUT/smoke-root.log"
+  rc=0; ip netns exec "$NS_A" setpriv --reuid=nobody --regid=nogroup --clear-groups env "${LAB_ENV[@]}" \
+    timeout -k 10 600 "$SMOKE" --ignored --exact lab_open_without_privilege_is_permission_denied >"$OUT/smoke-nobody.log" 2>&1 || rc=$?
+  { [ "$rc" = 0 ] && libtest_ok "$OUT/smoke-nobody.log"; } || fatal "smoke (nobody) failed rc=$rc: $OUT/smoke-nobody.log"
+  log "smoke: $(grep -hE '^test result: ' "$OUT/smoke-root.log" "$OUT/smoke-nobody.log" | tr '\n' ' ')"
+fi
+
+# ---- one run -------------------------------------------------------------------------------------------------
+IDX=0
+vb_rx() { ip -n "$NS_B" -s -j link show "$IF_B" | python3 -c 'import json,sys; print(json.load(sys.stdin)[0]["stats64"]["rx"]["packets"])'; }
+judge() {  # judge FILE CELL VERSION SERIES PAIR RATE PROBES RC VB_DELTA SECONDS : one JSON line to runs.jsonl, a short line to stdout
+  python3 - "$@" "$OUT/runs.jsonl" <<'PY'
+import json, sys
+path, cell, version, series, pair, rate, probes, rc, delta, secs, sink = sys.argv[1:]
+rec = {"cell": cell, "version": version, "series": series, "pair": int(pair), "rate": int(rate),
+       "probes": int(probes), "rc": int(rc), "vb_rx_delta": int(delta), "seconds": float(secs),
+       "file": path.rsplit("/", 1)[-1]}
+why = []
+if rec["rc"] in (124, 137):
+    why.append("timeout")
+try:
+    j = json.load(open(path))
+    net, w = j["net"], j["workers"]
+    rec.update(reason=j["reason"], tx_sent=net["tx_sent"], rx_packets=net["rx_packets"],
+               tx_would_block=net["tx_would_block"], kernel_drops=j["rx_health"]["kernel_drops"],
+               reply_unique=j["reply_unique"], steady_pps=j["timing"]["steady_pps"],
+               tx_cpu_ns=w.get("tx_cpu_ns"), rx_cpu_ns=w.get("rx_cpu_ns"))
+except Exception as e:  # no JSON, a failure JSON or a missing field: never a valid run
+    why.append(f"no summary JSON ({type(e).__name__}: {e})")
+    j = None
+if j is not None and version != "oracle":
+    if rec["reason"] != "Completed": why.append(f"reason {rec['reason']}")
+    if rec["rc"] != 0: why.append(f"exit {rec['rc']}")
+    if not rec["tx_cpu_ns"] or not rec["rx_cpu_ns"]: why.append("engine thread CPU null or 0")
+    if rec["kernel_drops"] != 0: why.append(f"kernel_drops {rec['kernel_drops']}")
+    if cell == "tx":
+        if rec["tx_sent"] != rec["probes"]: why.append(f"tx_sent {rec['tx_sent']} != {rec['probes']}")
+        if rec["vb_rx_delta"] < rec["tx_sent"]: why.append(f"peer rx {rec['vb_rx_delta']} < tx_sent")
+        if not why:
+            rec["metrics"] = {"steady_pps": rec["steady_pps"],
+                              "tx_cpu_ns_per_frame": rec["tx_cpu_ns"] / rec["tx_sent"],
+                              "tx_would_block": rec["tx_would_block"]}
+    else:
+        if rec["reply_unique"] < rec["probes"]: why.append(f"reply_unique {rec['reply_unique']} < {rec['probes']}")
+        if not why:
+            rec["metrics"] = {"rx_cpu_ns_per_frame": rec["rx_cpu_ns"] / rec["rx_packets"]}
+rec["valid"] = version != "oracle" and not why
+rec["invalid_why"] = why
+open(sink, "a").write(json.dumps(rec) + "\n")
+m = " ".join(f"{k}={v:.1f}" for k, v in rec.get("metrics", {}).items())
+print(f"{rec['file']}: {'VALID' if rec['valid'] else ('REFERENCE' if version == 'oracle' else 'INVALID')} {m} {'; '.join(why)}")
+PY
+}
+run_u() {  # run_u CELL VERSION SERIES PAIR BIN RATE : one scanner run of cell U; prints the judge line
+  local cell=$1 version=$2 series=$3 pair=$4 bin=$5 rate=$6 targets ports probes expect f rc=0 v0 v1 t0 t1
+  if [ "$cell" = tx ]; then targets=$TX_TARGETS; ports=$TX_PORTS; probes=$TX_PROBES; expect=$TX_EXPECT
+  else ports=1-$(rx_ports "$rate"); targets=$RX_TARGETS; probes=$((128 * $(rx_ports "$rate"))); expect=$(( probes / rate + 4 )); fi
+  IDX=$((IDX + 1)); f="$OUT/runs/$(printf %03d "$IDX")-$cell-$series-$version-$rate.json"
+  sleep 1   # the previous run's tail (replies, backlog) is over before the next starts
+  v0=$(vb_rx); t0=$(date +%s.%N)
+  if [ "$version" = oracle ]; then
+    timeout -k 10 $((3 * expect)) ip netns exec "$NS_A" taskset -c "$CPUS" "$bin" "$targets" -p"$ports" \
+      --rate "$rate" --interface "$IF_A" --adapter-ip "$IP_ADAPTER" --adapter-mac "$MAC_A" \
+      --router-mac "$MAC_B" --source-port 40000 --seed 1 --wait 1 >"$f.out" 2>"$f.err" || rc=$?
+    printf '{"reason":"oracle","net":{"tx_sent":null,"rx_packets":null,"tx_would_block":null},"rx_health":{"kernel_drops":null},"reply_unique":null,"timing":{"steady_pps":null},"workers":{}}\n' >"$f"
+  else
+    timeout -k 10 $((3 * expect)) ip netns exec "$NS_A" taskset -c "$CPUS" "$bin" "${SCAN[@]}" \
+      --rate "$rate" --targets "$targets" --ports "$ports" 2>"$f.err" \
+      | sed -E 's/"replies":\[[^]]*\]/"replies":"(dropped by stand-s)"/' >"$f" || rc=${PIPESTATUS[0]}
+  fi
+  t1=$(date +%s.%N); v1=$(vb_rx)
+  judge "$f" "$cell" "$version" "$series" "$pair" "$rate" "$probes" "$rc" "$((v1 - v0))" "$(python3 -c "print(round($t1 - $t0, 3))")" \
+    | tee -a "$OUT/session.log"
+}
+valid_of() { python3 -c 'import json,sys; print("1" if json.loads(open(sys.argv[1]).read().splitlines()[-1])["valid"] else "0")' "$OUT/runs.jsonl"; }
+
+# ---- the session: calibration, A/B, reference ladder, oracle ------------------------------------------------
+RRX=""
+if [ -n "$BASE" ]; then
+  for cell in tx rx; do
+    case ",$CELLS," in *",$cell,"*) ;; *) continue ;; esac
+    if [ "$cell" = tx ]; then
+      for p in $(seq 1 "$PAIRS"); do for v in base1 base2; do
+        run_u tx "$v" cal "$p" "$BASE" "$TX_RATE"
+        [ "$(valid_of)" = 1 ] || fatal "U-TX calibration run INVALID: the session is not valid (start a new session)"
+      done; done
+    else
+      for r in $RX_LADDER; do
+        ok=1
+        for p in $(seq 1 "$PAIRS"); do for v in base1 base2; do
+          [ "$ok" = 1 ] || continue
+          run_u rx "$v" cal "$p" "$BASE" "$r"; [ "$(valid_of)" = 1 ] || ok=0
+        done; done
+        if [ "$ok" = 1 ]; then RRX=$r; break; fi
+        log "U-RX calibration at $r pps has an INVALID base run: one step down the ladder"
+      done
+      [ -n "$RRX" ] || fatal "U-RX: no ladder step with every calibration run valid"
+      log "U-RX: R_RX = $RRX pps (ports 1-$(rx_ports "$RRX"))"
+    fi
+  done
+fi
+if [ -n "$NEW" ]; then
+  for cell in tx rx; do
+    case ",$CELLS," in *",$cell,"*) ;; *) continue ;; esac
+    rate=$TX_RATE; [ "$cell" = tx ] || rate=$RRX
+    for p in $(seq 1 "$PAIRS"); do run_u "$cell" base ab "$p" "$BASE" "$rate"; run_u "$cell" new ab "$p" "$NEW" "$rate"; done
+  done
+  case ",$CELLS," in *,rx,*)
+    for r in $RX_LADDER; do run_u rx base ladder 0 "$BASE" "$r"; run_u rx new ladder 0 "$NEW" "$r"; done ;; esac
+fi
+if [ -n "$ORACLE" ]; then
+  [ ! -e /etc/masscan/masscan.conf ] || fatal "/etc/masscan/masscan.conf exists: the oracle would read it"
+  case ",$CELLS," in *,tx,*) for p in $(seq 1 "$PAIRS"); do run_u tx oracle oracle "$p" "$ORACLE" "$TX_RATE"; done ;; esac
+  case ",$CELLS," in *,rx,*) for p in $(seq 1 "$PAIRS"); do run_u rx oracle oracle "$p" "$ORACLE" "${RRX:-100000}"; done ;; esac
+fi
+
+# ---- statistics ----------------------------------------------------------------------------------------------
+[ -s "$OUT/runs.jsonl" ] || { log "no cell runs requested"; exit 0; }
+python3 - "$OUT/runs.jsonl" "$OUT/summary.json" "${RRX:-}" <<'PY' | tee -a "$OUT/session.log"
+import json, statistics, sys
+runs = [json.loads(l) for l in open(sys.argv[1])]
+rrx = int(sys.argv[3]) if sys.argv[3] else None
+HIGHER = {"steady_pps"}   # every other metric: lower is better
+def better_ratio(metric, new, base):
+    """new relative to base in the direction "better" (1.0 = equal, > 1 better)."""
+    if new == base: return 1.0
+    if metric in HIGHER: return new / base if base else float("inf")
+    return base / new if new else float("inf")
+out = {"r_rx": rrx, "cells": {}}
+for cell in ("tx", "rx"):
+    rate = None if cell == "tx" else rrx
+    cal = [r for r in runs if r["cell"] == cell and r["series"] == "cal" and r["valid"] and (rate is None or r["rate"] == rate)]
+    if not cal: continue
+    c = out["cells"][cell] = {"rate": cal[0]["rate"], "metrics": {}}
+    for m in cal[0]["metrics"]:
+        a = [r["metrics"][m] for r in cal if r["version"] == "base1"]
+        b = [r["metrics"][m] for r in cal if r["version"] == "base2"]
+        allv = a + b
+        med = statistics.median(allv)
+        s_aa = abs(statistics.median(a) - statistics.median(b)) / med if med else 0.0
+        t = max(0.02, s_aa)
+        e = c["metrics"][m] = {"cal_median": med, "cal_min": min(allv), "cal_max": max(allv),
+                               "median_1": statistics.median(a), "median_2": statistics.median(b),
+                               "S_AA": s_aa, "T": t}
+        ab = [r for r in runs if r["cell"] == cell and r["series"] == "ab"]
+        if not ab: continue
+        base = {r["pair"]: r for r in ab if r["version"] == "base"}
+        new = {r["pair"]: r for r in ab if r["version"] == "new"}
+        e["ab_invalid"] = {"base": sum(not r["valid"] for r in base.values()), "new": sum(not r["valid"] for r in new.values())}
+        if e["ab_invalid"]["base"] or e["ab_invalid"]["new"]:
+            e["verdict"] = "INVALID base: session not valid" if e["ab_invalid"]["base"] else "FAIL: INVALID run of the new version"
+            continue
+        bv = [base[p]["metrics"][m] for p in sorted(base)]
+        nv = [new[p]["metrics"][m] for p in sorted(new)]
+        bm, nm = statistics.median(bv), statistics.median(nv)
+        ratio = better_ratio(m, nm, bm)
+        pairs_ok = sum(better_ratio(m, new[p]["metrics"][m], base[p]["metrics"][m]) >= 1 - t for p in sorted(new))
+        beats_base_median = sum(better_ratio(m, x, bm) > 1 for x in nv)
+        e.update(ab_base_median=bm, ab_base_min=min(bv), ab_base_max=max(bv), ab_new_median=nm,
+                 ab_new_min=min(nv), ab_new_max=max(nv), ratio_better=ratio, pairs_not_worse_than_T=pairs_ok,
+                 new_runs_better_than_base_median=beats_base_median,
+                 no_regression=ratio >= 1 - t and ratio >= 0.97 and pairs_ok >= len(nv) - 1,
+                 speedup=ratio > 1 + t and beats_base_median >= len(nv) - 1)
+lad = [r for r in runs if r["series"] == "ladder"]
+if lad:
+    out["ladder_highest_valid"] = {v: max([r["rate"] for r in lad if r["version"] == v and r["valid"]], default=None)
+                                   for v in ("base", "new")}
+out["oracle"] = [{k: r[k] for k in ("cell", "rate", "rc", "seconds", "vb_rx_delta")} for r in runs if r["version"] == "oracle"]
+json.dump(out, open(sys.argv[2], "w"), indent=1)
+for cell, c in out["cells"].items():
+    for m, e in c["metrics"].items():
+        line = f"U-{cell.upper()} @{c['rate']} {m}: base median {e['cal_median']:.3f} ({e['cal_min']:.3f}-{e['cal_max']:.3f}) S_AA {100*e['S_AA']:.2f}% T {100*e['T']:.2f}%"
+        if "ratio_better" in e:
+            line += f" | A/B base {e['ab_base_median']:.3f} new {e['ab_new_median']:.3f} ratio {e['ratio_better']:.4f} pairs {e['pairs_not_worse_than_T']}/5 no_regression={e['no_regression']} speedup={e['speedup']}"
+        elif "verdict" in e:
+            line += " | " + e["verdict"]
+        print(line)
+if lad: print("ladder (highest valid step):", out["ladder_highest_valid"])
+PY
+```
+<!-- stand-s.sh end -->

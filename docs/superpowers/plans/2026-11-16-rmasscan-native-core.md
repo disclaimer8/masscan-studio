@@ -25,16 +25,21 @@
 
 - **Файлы.** Меняются только `rmasscan/crates/rmasscan-core/**`, `rmasscan/BENCHMARKS.md` и этот план. Никогда:
   `src/config.rs`, `src/stack.rs` (их меняет 4c), `studio/`, `rmasscan/tests/golden/`, `Cargo.lock`, другие крейты.
-- **4c.** Перед каждой задачей:
+- **4c.** Перед каждой задачей — пересечение файлов, которые 4c меняет в ядре, с Files задачи. Печатаются оба списка;
+  непустое пересечение — отказ: остановиться и сверить с владельцем 4c.
   ```sh
-  git fetch origin
+  git fetch -q origin; T=$(mktemp -d)
   B=origin/feat/rmasscan-banners-4c; git rev-parse -q --verify "$B" >/dev/null || B=feat/rmasscan-banners-4c
-  git diff --stat origin/main..."$B" -- rmasscan/crates/rmasscan-core
+  if git rev-parse -q --verify "$B" >/dev/null; then
+    git diff --name-only origin/main..."$B" -- rmasscan/crates/rmasscan-core | sort >"$T/4c"
+  else echo "4c branch not found (merged into main?)"; : >"$T/4c"; fi
+  printf '%s\n' <пути из Files задачи от корня репозитория> | sort >"$T/task"
+  echo "4c changes in core:"; cat "$T/4c"; echo "task files:"; cat "$T/task"
+  test -z "$(comm -12 "$T/4c" "$T/task")" || { echo "FAIL: overlap with 4c:"; comm -12 "$T/4c" "$T/task"; false; }
   ```
-  На момент плана (вершина 4c `2fdca358`, ветка только локальная) вывод пуст. План 4c меняет в ядре `src/stack.rs`
-  (`TableParams`, аддитивно) и `src/config.rs` и использует `cookie::siphash24`, `syn_cookie_ipv4/ipv6`, параметр окна в
-  `tcp_frame.rs` (`SegmentOut.window`) и поля `probe::NicBinding`. Файлов, которые меняют и 4c, и этот план, нет. Если
-  проверка покажет в ядре файл из списка Files задачи — остановиться и сверить с владельцем 4c.
+  4c законно меняет `src/stack.rs` (по своему плану ещё `src/config.rs`); этот план их не трогает. 4c использует
+  `cookie::siphash24`, `syn_cookie_ipv4/ipv6`, параметр окна в `tcp_frame.rs` (`SegmentOut.window`) и поля
+  `probe::NicBinding` — их сигнатуры этот план сохраняет.
 - **API заморожен.** Сигнатуры существующих `pub`-элементов не меняются; новое — аддитивный `pub` или `pub(crate)`. Это
   держит `tests/api_freeze.rs` (задача 1): каждый `pub`-элемент меняемых файлов с полной сигнатурой; смена ломает
   компиляцию в G-core. Добавленные поля и варианты он пропускает (их могут добавить main и 4c), поэтому переживает
@@ -84,7 +89,8 @@
   git diff --exit-code origin/main...HEAD -- rmasscan/Cargo.lock studio rmasscan/tests/golden \
     rmasscan/crates/rmasscan-core/src/config.rs rmasscan/crates/rmasscan-core/src/stack.rs
   test -z "$(git diff --name-only origin/main...HEAD -- . ':(exclude)rmasscan/crates/rmasscan-core' \
-    ':(exclude)rmasscan/BENCHMARKS.md' ':(exclude)docs/superpowers/plans/2026-11-16-rmasscan-native-core.md')"
+    ':(exclude)rmasscan/BENCHMARKS.md' ':(exclude)docs/superpowers/plans/2026-11-16-rmasscan-native-core.md' \
+    ':(exclude)docs/superpowers/specs/2026-11-16-rmasscan-native-rust-design.md')"   # дизайн — коммит самой ветки
   test ! -e rmasscan/target && test ! -e studio/target
   # с задачи 3: страховка не правилась после записи базы
   git diff --exit-code "$GUARD" HEAD -- rmasscan/crates/rmasscan-core/tests/common/expected_digests.rs \
@@ -95,31 +101,53 @@
   записывается и разбирается в ревью.
 - **G-bench** (обязательные ворота задачи на скорость): парный замер в одной сессии на хосте стенда. A — последний
   принятый коммит кода (для задачи 3 — коммит кода задачи 2), B — проверяемый HEAD. Деревья из `git archive` в разных
-  каталогах, свои каталоги сборки, прогоны чередуются A B A B A B. Скрипт падает громко: ошибка сборки, упавший тест,
-  `SKIP` (`tests/offline_gen.rs:54`) или нехватка строк `OFFLINE_` печатают журнал и выходят с кодом 1; полный вывод
-  каждого прогона лежит в журналах, ничего не скрыто за `grep`.
+  каталогах, свои каталоги сборки, прогоны чередуются A B A B A B. Скрипт лежит в файле вне дерева и запускается
+  `bash <файл>` (не через stdin: `ssh` без `-n` съел бы остаток скрипта); у каждого `ssh`, кроме `git archive | ssh`,
+  стоит `-n`. Он падает громко: ошибка сборки, упавший тест, `SKIP` (`tests/offline_gen.rs:54`), хост занят дольше
+  30 минут, число замеров не равно ожидаемому (по 3 у A и у B на каждую строку) — печатает журнал и выходит с кодом 1.
+  Успех — последняя строка `BENCH OK`; без неё ворота не пройдены. Полный вывод каждого прогона лежит в журналах.
   ```sh
-  export A=… B=$(git rev-parse --short HEAD) LOG=$(mktemp -d)   # журналы вне дерева
-  bash -euo pipefail <<'EOF'
+  export A=… B=$(git rev-parse --short HEAD) MODE=test LOG=$(mktemp -d)   # MODE=bench — только задача 6
+  cat >"$LOG/bench-gate.sh" <<'EOF'
+  set -euo pipefail
+  : "${A:?}" "${B:?}" "${LOG:?}" "${BENCH_HOST:?}" "${MODE:?}"
+  if [ "$MODE" = test ]; then
+    BUILD='test --locked --release -p rmasscan-core --test offline_gen --no-run'
+    RUN='test --locked --release -p rmasscan-core --test offline_gen -- --ignored --nocapture --test-threads=1'
+    KEYS='OFFLINE_GEN OFFLINE_CURSOR'; SUF=' packets='; PER_LOG=1
+  else
+    BUILD='bench --locked -p rmasscan-core --no-run'
+    RUN='bench --locked -p rmasscan-core'
+    KEYS='offline_gen cursor_1port cursor_16port cursor_mapped'; SUF=' run '; PER_LOG=3
+  fi
   for t in a b; do
     c=$A; [ "$t" = b ] && c=$B; d=rmasscan-bench-$t
     git archive "$c:rmasscan" | ssh "$BENCH_HOST" "rm -rf ~/$d && mkdir ~/$d && tar -x -C ~/$d"
-    ssh "$BENCH_HOST" "cd ~/$d && CARGO_TARGET_DIR=~/$d-target ~/.cargo/bin/cargo test --locked --release \
-      -p rmasscan-core --test offline_gen --no-run" >"$LOG/build-$t.log" 2>&1 \
+    ssh -n "$BENCH_HOST" "cd ~/$d && CARGO_TARGET_DIR=~/$d-target ~/.cargo/bin/cargo $BUILD" >"$LOG/build-$t.log" 2>&1 \
       || { cat "$LOG/build-$t.log"; echo "FAIL: build $t"; exit 1; }
   done
   for i in 1 2 3; do for t in a b; do
     d=rmasscan-bench-$t; f="$LOG/$t.$i.log"
-    ssh "$BENCH_HOST" 'until awk "{exit !(\$1 < 0.3)}" /proc/loadavg; do sleep 10; done'
-    ssh "$BENCH_HOST" "uptime; cd ~/$d && CARGO_TARGET_DIR=~/$d-target ~/.cargo/bin/cargo test --locked --release \
-      -p rmasscan-core --test offline_gen -- --ignored --nocapture --test-threads=1; s=\$?; uptime; exit \$s" \
+    ssh -n "$BENCH_HOST" 'for n in $(seq 180); do awk "{exit !(\$1 < 0.3)}" /proc/loadavg && exit 0; sleep 10; done; echo "FAIL: host busy for 30 min, load $(cut -d" " -f1-3 /proc/loadavg)"; exit 1' \
+      || { echo "FAIL: no quiet window before $t.$i, nothing measured"; exit 1; }
+    ssh -n "$BENCH_HOST" "uptime; cd ~/$d && CARGO_TARGET_DIR=~/$d-target ~/.cargo/bin/cargo $RUN; s=\$?; uptime; exit \$s" \
       >"$f" 2>&1 || { cat "$f"; echo "FAIL: run $t.$i"; exit 1; }
     if grep -n SKIP "$f"; then echo "FAIL: SKIP in $t.$i"; exit 1; fi
-    [ "$(grep -c '^OFFLINE_' "$f")" = 2 ] || { cat "$f"; echo "FAIL: OFFLINE_ lines missing in $t.$i"; exit 1; }
+    for k in $KEYS; do
+      [ "$(grep -c "$k$SUF" "$f")" = "$PER_LOG" ] || { cat "$f"; echo "FAIL: $t.$i: want $PER_LOG '$k' lines"; exit 1; }
+    done
   done; done
-  grep -H -e '^OFFLINE_' -e 'load average' "$LOG"/[ab].*.log
+  for t in a b; do for k in $KEYS; do
+    n=$(cat "$LOG/$t".[123].log | grep -c "$k$SUF" || true)
+    [ "$n" = $((3 * PER_LOG)) ] || { echo "FAIL: $t has $n '$k' measurements, want $((3 * PER_LOG))"; exit 1; }
+  done; done
+  grep -H -e 'OFFLINE_' -e ' run ' -e 'load average' "$LOG"/[ab].[123].log
+  echo "BENCH OK"
   EOF
+  bash "$LOG/bench-gate.sh"
   ```
+  Строки `OFFLINE_` ищутся без якоря `^`: при `--nocapture --test-threads=1` libtest печатает их в строке
+  `test <имя> ... OFFLINE_GEN packets=…`.
   `--test-threads=1` обязателен (два прогона 2^28 параллельно на 4 ядрах портят оба числа); перед каждым прогоном
   load average за минуту ниже 0,3, `uptime` до и после — в журнале. По каждой строке (`OFFLINE_GEN`, `OFFLINE_CURSOR`):
   медианы `mA`, `mB`, отношение `mB/mA` и три парных отношения `B_i/A_i`. `sink` A и B совпадают (иначе изменились
@@ -453,8 +481,9 @@ udp_ipv4_checksum, sctp_crc32c}`, `PayloadEntry::with_cookie`. Всё, что п
     `ProbeBuild(PortDoesNotFit { port_them: 196870, port_me: 40000 })`. Размеры пачки между собой не сравниваются: на
     базе позиция после отказа зависит от пачки (см. «Кандидаты»);
   - `advance_pass_refused_while_lookahead_holds_pairs` (Review Focus 3): `--infinite`, `/26` × p80, retries 1, rate 102
-    (128 пар на проход); подтверждать по одному (`preload(1)` + `advance_sent_n(1)`) и после каждого подтверждения, кроме
-    последнего, `advance_pass() == false`; после последнего — `true`, проход 1 совпадает с дайджестом `infinite`.
+    (256 зондов на проход: индексы 0..128, по два на индекс; проверено на базе); подтверждать по одному
+    (`preload(1)` + `advance_sent_n(1)`) и после каждого подтверждения, кроме последнего, `advance_pass() == false`;
+    после последнего — `true`, проход 1 совпадает с дайджестом `infinite`.
 - [ ] **Step 2:** реализация; **PASS** G-core (дайджесты `cursor1`/`cursor64`/`infinite`/`v46_no_src6`/`bad_*`), G-ws
   (движок и CLI шлют через курсор).
 - [ ] **Step 3: чувствительность (обязательно).** Временно заставить `Shuffled::peek_index` возвращать только
@@ -491,9 +520,8 @@ udp_ipv4_checksum, sctp_crc32c}`, `PayloadEntry::with_cookie`. Всё, что п
 - [ ] **Step 3: чувствительность.** Временно убрать `out.clear()` из `build_udp`: падают
   `recycled_buffers_leave_no_stale_tail` и дайджесты `mixed_*`; вернуть.
 - [ ] **Step 4:** G-frozen; **коммит** `perf(rmasscan-core): ProbeCursor reuses probe buffers and a sorted delivery table`.
-- [ ] **Step 5:** G-mac; G-bench. Таблица доставки отдельно: тот же парный скрипт, команда `cargo bench --locked -p
-  rmasscan-core` вместо `cargo test … --ignored …` и проверка «12 строк ` run `» вместо двух `OFFLINE_`; значение вызова —
-  медиана трёх `cursor_mapped run k`. Таблица остаётся только при выигрыше по `cursor_mapped`; иначе её часть
+- [ ] **Step 5:** G-mac; G-bench. Таблица доставки отдельно: тот же скрипт с `MODE=bench` (`cargo bench`, по три строки
+  ` run ` на каждый из четырёх циклов в журнале); значение вызова — медиана трёх `cursor_mapped run k`. Таблица остаётся только при выигрыше по `cursor_mapped`; иначе её часть
   откатывается отдельным коммитом, решение — в запись.
 
 ### Задача 7: `ip_header_checksum` срезом

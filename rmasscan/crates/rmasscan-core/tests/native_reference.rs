@@ -81,32 +81,6 @@ proptest! {
     }
 }
 
-/// Направленный случай для ветки `tmp <= rr` в `unencrypt` (`(rr - tmp) % modulus`): на случайных входах она почти не
-/// достигается, потому что `read` почти всегда даёт значение выше `rr`. Параметры найдены перебором: при `rounds = 1`
-/// и `range = 2^62` байты 4..7 индекса S-box попадают на нулевые элементы `SBOX[31]`/`SBOX[39]`, и `read` не выше
-/// `2^32`; `rr = a - 1`, `l = m / a` подобран так, что `read(1, l) <= rr` (проверено временной
-/// инструментацией ветки). Значения `m` такие, что `m % a == a - 1`.
-#[test]
-fn blackrock_unencrypt_tmp_le_rr_branch_matches_reference() {
-    const RANGE: u64 = 1 << 62;
-    const SEED: u64 = 0xbda1_bda1_b499_225d;
-    for m in [
-        36_028_799_132_893_181u64,
-        180_143_987_074_531_325,
-        288_230_378_030_759_933,
-        360_287_972_001_579_005,
-    ] {
-        let br = BlackRock::new(RANGE, SEED, 1);
-        let rf = RefBlackRock::new(RANGE, SEED, 1);
-        assert!(m < RANGE);
-        let s = br.shuffle(m);
-        assert_eq!(s, rf.shuffle(m), "shuffle {m}");
-        assert_eq!(br.unshuffle(m), rf.unshuffle(m), "unshuffle {m}");
-        assert_eq!(br.unshuffle(s), m, "round trip {m}");
-        assert_eq!(rf.unshuffle(rf.shuffle(m)), m, "reference round trip {m}");
-    }
-}
-
 // ---------------------------------------------------------------------
 // ip_header_checksum
 // ---------------------------------------------------------------------

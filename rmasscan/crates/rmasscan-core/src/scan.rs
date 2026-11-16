@@ -966,4 +966,74 @@ mod tests {
             .unwrap();
         assert_eq!(n, 8);
     }
+
+    /// `Break` at every position `p` of a full flow: the flow returns `Ok(Break(p))` at once, `emit` ran exactly
+    /// `p + 1` times and saw the prefix of the full run. The full run itself is the scalar order: `transmit_index_stream`,
+    /// one `BlackRock::shuffle` per index, `pick_transmit` (main.c:280-373).
+    #[test]
+    fn transmit_flow_break_at_every_position() {
+        type Sent = (u64, u64, u64, TargetIp, u32);
+        let (seed, rounds, rate) = (42u64, 14u32, 7.0f64);
+        let mut positions = 0usize;
+        for n in 1..=40u32 {
+            let t = massip(&format!("10.0.0.1-10.0.0.{n}"), "80");
+            let range = t.try_range().unwrap();
+            assert_eq!(range, u64::from(n));
+            let br = BlackRock::try_new(range, seed, rounds).unwrap();
+            for retries in [0u32, 2] {
+                for shard in [ONE, Shard { one: 2, of: 3 }] {
+                    for (nic_count, nic_index) in [(1u32, 0u32), (2, 1)] {
+                        let run = |stop: Option<usize>| {
+                            let mut got: Vec<Sent> = Vec::new();
+                            let flow = transmit_scan_flow_v46(
+                                &t,
+                                seed,
+                                rounds,
+                                shard,
+                                nic_count,
+                                nic_index,
+                                0,
+                                None,
+                                retries,
+                                rate,
+                                |i, rep, xxx, tg, port| {
+                                    got.push((i, rep, xxx, tg, port));
+                                    match stop {
+                                        Some(p) if p + 1 == got.len() => ControlFlow::Break(p),
+                                        _ => ControlFlow::Continue(()),
+                                    }
+                                },
+                            )
+                            .unwrap();
+                            (flow, got)
+                        };
+                        let ctx = format!(
+                            "n {n} retries {retries} shard {shard:?} nic {nic_index}/{nic_count}"
+                        );
+                        let (flow, full) = run(None);
+                        assert_eq!(flow, ControlFlow::Continue(()), "{ctx}");
+                        let want: Vec<Sent> = transmit_index_stream(
+                            range, shard, nic_count, nic_index, 0, None, retries, rate,
+                        )
+                        .map(|(i, x)| {
+                            let (tg, port, xxx) = t.pick_transmit(br.shuffle(x));
+                            (i, 0, xxx, tg, port)
+                        })
+                        .collect();
+                        assert_eq!(full, want, "{ctx}");
+                        for p in 0..full.len() {
+                            let (flow, got) = run(Some(p));
+                            assert_eq!(flow, ControlFlow::Break(p), "{ctx} p {p}");
+                            assert_eq!(got.len(), p + 1, "{ctx} p {p}");
+                            assert_eq!(got[..], full[..=p], "{ctx} p {p}");
+                        }
+                        positions += full.len();
+                    }
+                }
+            }
+        }
+        // 40 sizes x 8 configurations: the count of `i` in `start..end` by `increment` (main.c:269-280), times
+        // `retries + 1`, summed over the configurations; shard 2/3 and the second NIC start past the smallest ranges.
+        assert_eq!(positions, 16326);
+    }
 }

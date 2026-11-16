@@ -71,12 +71,39 @@ pub(crate) enum SessionAction {
     Close,
 }
 
+/// Поток порта (`struct ProtocolParserStream`, `src/proto-banner1.h`): hello и его флаги. `hello: None` это
+/// поток NULL (hello не шлётся никогда), `Some` с пустым буфером — поток с пустым hello (`hello_length == 0`,
+/// справка B5). `next` — hello второго соединения (`stream->next`, справка 4c §A1, §D1); исполняет его слой
+/// приложения и таблица в задаче 7, как и `close_after_hello` (`SF__close`) и `small_window` (heartbleed).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct StreamDesc {
+    pub hello: Option<Arc<[u8]>>,
+    pub close_after_hello: bool,
+    pub next: Option<Arc<[u8]>>,
+    pub small_window: bool,
+    pub is_tls: bool,
+}
+
+impl StreamDesc {
+    /// Поток только с hello, без флагов TLS.
+    pub(crate) fn plain(hello: Option<Arc<[u8]>>) -> StreamDesc {
+        StreamDesc {
+            hello,
+            ..StreamDesc::default()
+        }
+    }
+}
+
 /// Сессия баннера одного соединения: поток hello порта (`tcb->stream`, `src/stack-tcp-core.c:1043-1048`) и разбор
 /// байтов сервера (`banner_parse`, `src/stack-tcp-app.c:126`).
 pub(crate) trait Session: Send {
-    /// Hello порта: `None` это поток NULL (hello не шлётся никогда), `Some(&[])` поток с пустым hello
-    /// (`hello_length == 0`, справка B5).
-    fn hello(&self) -> Option<&[u8]>;
+    /// Поток порта этой сессии.
+    fn stream(&self) -> &StreamDesc;
+    /// Отправка TLS hello состоялась (`banner_set_sslhello`, `src/stack-tcp-app.c:157-163`): классификатор
+    /// после этого принимает совпадение SSL3. Ставят слой приложения (SendFirst, задача 7) и передача
+    /// STARTTLS (задача 6); до них вызовов нет.
+    #[allow(dead_code)]
+    fn note_tls_hello_sent(&mut self) {}
     /// Байты сервера по порядку; ответы и закрытие в `acts`.
     fn parse(&mut self, px: &[u8], budget: &mut ByteBudget, acts: &mut Vec<SessionAction>);
     /// `banner_flush` (`src/stack-tcp-core.c:800-830`): записи `(app, байты)` в порядке C, буферы освобождаются, их
@@ -153,7 +180,7 @@ impl AppLayer<'_> {
     /// и C шлёт FIN за hello и переподключается с TLS 1.2 (`:56-62`); здесь только hello, отличие 4b названо в README и
     /// справке B6.
     fn send_first(&mut self, ctl: &mut TcbCtl<'_>) {
-        if let Some(hello) = self.session.hello()
+        if let Some(hello) = self.session.stream().hello.as_deref()
             && !hello.is_empty()
         {
             let buf = self.hellos.shared(self.remote_port, hello);
@@ -178,7 +205,7 @@ impl App for AppLayer<'_> {
             }
             // `:90-99`: без потока (NULL) ничего, и так до конца соединения.
             (A::ReceiveHello, E::RecvTimeout) => {
-                if self.session.hello().is_some() {
+                if self.session.stream().hello.is_some() {
                     self.send_first(ctl);
                 }
             }

@@ -5,7 +5,7 @@ use std::io::Read as _;
 
 use rmasscan_core::config::{ScanConfig, apply_core_kv, hello_port_index};
 use rmasscan_proto::base64::decode_hello_base64;
-use rmasscan_proto::{HelloSet, HttpRequestOptions, TcpBannerSettings, http_request};
+use rmasscan_proto::{HelloSet, HttpRequestOptions, TcpBannerSettings, TlsSettings, http_request};
 
 /// Самый длинный hello из файла: C кодирует в буфер 16383 байта и молча обрезает на 12285
 /// (`src/main-conf.c:1246-1247`); здесь длиннее это отказ (E1.14).
@@ -40,6 +40,16 @@ pub fn tcp_banner_settings(cfg: &ScanConfig) -> Result<TcpBannerSettings, String
             .map(|c| c.as_bytes().to_vec())
             .collect(),
     })?;
+    // Hello TLS строятся один раз на скан на текущем времени (`ssl_hello` в `tcpcon_set_parameter`,
+    // справка 4c §A2); режимы проверок добавит задача 9, захват уже разобран в 4a.
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let mut tls = TlsSettings::new(now);
+    tls.capture_cert = cfg.capture.cert;
+    tls.capture_heartbleed = cfg.capture.heartbleed;
+    tls.capture_ticketbleed = cfg.capture.ticketbleed;
     Ok(TcpBannerSettings {
         hello: HelloSet {
             http: cfg.hello_http,
@@ -49,6 +59,7 @@ pub fn tcp_banner_settings(cfg: &ScanConfig) -> Result<TcpBannerSettings, String
         hello_strings,
         http_request: request,
         capture_html: cfg.capture.html,
+        tls,
     })
 }
 

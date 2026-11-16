@@ -36,8 +36,8 @@ use super::telnet::Telnet;
 use super::tls::TlsFlags;
 use super::vnc::Vnc;
 
-/// Парсер, который выбрал классификатор (ветки `switch (tcb_state->app_proto)`, `src/proto-banner1.c:187-316`), в
-/// границах 4b: SMB, TLS и всё после STARTTLS это [`AppProto::Unported`] (справка B6).
+/// Парсер, который выбрал классификатор (ветки `switch (tcb_state->app_proto)`, `src/proto-banner1.c:187-316`).
+/// SMB это [`AppProto::Unported`] до 4d.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum AppProto {
     Ftp,
@@ -52,6 +52,7 @@ pub(crate) enum AppProto {
     Telnet,
     Rdp,
     Minecraft,
+    Tls,
     /// Ещё не перенесённый протокол: каждый байт в `unknown` (app 1).
     Unported,
 }
@@ -177,7 +178,7 @@ impl Parser for Unported {
     }
 }
 
-/// Парсер приложения: одиннадцать перенесённых, SSL3 и SMB это [`Unported`] (справка B6).
+/// Парсер приложения: перенесённые протоколы; SMB это [`Unported`] до 4d.
 pub(crate) fn parser_for(p: AppProto) -> Box<dyn Parser> {
     match p {
         AppProto::Ftp => Box::<Ftp>::default(),
@@ -191,6 +192,7 @@ pub(crate) fn parser_for(p: AppProto) -> Box<dyn Parser> {
         AppProto::Rdp => Box::<Rdp>::default(),
         AppProto::Memcached => Box::<Memcached>::default(),
         AppProto::Minecraft => Box::<Minecraft>::default(),
+        AppProto::Tls => Box::<super::tls::Tls>::default(),
         AppProto::Unported => Box::new(Unported),
     }
 }
@@ -239,7 +241,7 @@ impl BannerConfig {
             scan: Arc::new(Scan {
                 hellos: HelloTable::new(s),
                 capture_html: s.capture_html,
-                tls_flags: TlsFlags::default(),
+                tls_flags: s.tls.flags(),
                 parsers,
                 classifier: Classifier::banner1(),
             }),
@@ -249,12 +251,14 @@ impl BannerConfig {
     /// Новая сессия порта `port` (`tcpcon_create_tcb`, `src/stack-tcp-core.c:1043-1049`).
     pub(crate) fn session(&self, port: u16) -> Banner1Session {
         Banner1Session {
+            stream_desc: Arc::new(self.scan.hellos.stream(port)),
             scan: Arc::clone(&self.scan),
             port,
             app_proto: None,
             stage: Stage::Classify { state: 0, seen: 0 },
             banout: Banout::default(),
             base64: Base64Stream::default(),
+            tls_hello_sent: false,
         }
     }
 
@@ -268,8 +272,8 @@ impl BannerConfig {
     }
 }
 
-/// Номер приложения C (`patterns[x].id` после поправки порта) в парсер 4b: ветки `switch (tcb_state->app_proto)`
-/// (`src/proto-banner1.c:187-316`); SSL3 (TLS, 4c), SMB (4d) и прочие номера без ветки это [`AppProto::Unported`].
+/// Номер приложения C (`patterns[x].id` после поправки порта) в парсер: ветки `switch (tcb_state->app_proto)`
+/// (`src/proto-banner1.c:187-316`); SMB (4d) и прочие номера без ветки это [`AppProto::Unported`].
 fn app_proto_for(app: u16, extra: u8) -> AppProto {
     match app {
         app_id::FTP => AppProto::Ftp,
@@ -283,6 +287,7 @@ fn app_proto_for(app: u16, extra: u8) -> AppProto {
         app_id::TELNET => AppProto::Telnet,
         app_id::RDP => AppProto::Rdp,
         app_id::MC => AppProto::Minecraft,
+        app_id::SSL3 => AppProto::Tls,
         _ => AppProto::Unported,
     }
 }
@@ -315,6 +320,9 @@ enum Stage {
 /// Сессия баннера одного соединения (`tcb->stream`, `tcb->banner1_state`, `tcb->banout`): общая часть скана, порт и
 /// своё состояние.
 pub(crate) struct Banner1Session {
+    /// Поток порта на это соединение (`tcb->stream` после `--hello`/`--hello-string`); за `Arc`, чтобы сессия
+    /// не копировала дескриптор в пол памяти соединения.
+    stream_desc: Arc<crate::tcp::app::StreamDesc>,
     scan: Arc<Scan>,
     port: u16,
     /// `tcb_state->app_proto`; `None` это PROTO_NONE.
@@ -323,11 +331,10 @@ pub(crate) struct Banner1Session {
     banout: Banout,
     /// `tcb_state->base64`.
     base64: Base64Stream,
+    /// `tcb_state->is_sent_sslhello` (`src/proto-banner1.h:249`): ставится отправкой TLS hello
+    /// (`banner_set_sslhello`) и передачей STARTTLS; до неё совпадение SSL3 отвергается (справка B1.2).
+    tls_hello_sent: bool,
 }
-
-/// `is_sent_sslhello` (`src/proto-banner1.h:249`): его ставит только отправка TLS hello (`banner_set_sslhello`,
-/// `src/stack-tcp-app.c:157-163`), а его в 4b нет, поэтому совпадение SSL3 всегда отвергается (справка B1.2, B6).
-const SSL_HELLO_SENT: bool = false;
 
 impl Banner1Session {
     pub(crate) fn app_proto(&self) -> Option<u16> {
@@ -406,9 +413,13 @@ impl Banner1Session {
 }
 
 impl Session for Banner1Session {
-    /// Hello порта из общей таблицы скана.
-    fn hello(&self) -> Option<&[u8]> {
-        self.scan.hellos.hello(self.port).map(|h| &h[..])
+    /// Поток порта из общей таблицы скана, вычисленный при создании сессии.
+    fn stream(&self) -> &crate::tcp::app::StreamDesc {
+        &self.stream_desc
+    }
+
+    fn note_tls_hello_sent(&mut self) {
+        self.tls_hello_sent = true;
     }
 
     /// `banner1_parse` одного сегмента. Пустой сегмент это отсутствие данных (у C `banner1_parse` пустым не зовут:
@@ -427,7 +438,7 @@ impl Session for Banner1Session {
                     Some(id)
                         if PATTERNS
                             .get(id)
-                            .is_some_and(|p| p.app != app_id::SSL3 || SSL_HELLO_SENT) =>
+                            .is_some_and(|p| p.app != app_id::SSL3 || self.tls_hello_sent) =>
                     {
                         self.classified(id, px, budget, acts);
                     }
@@ -701,7 +712,7 @@ mod tests {
         assert_eq!(app, Some(33));
         assert_eq!(recs, [(42, b"Vnc(0)|x".to_vec())]);
         for (force, tag) in [
-            (9u16, &b"Unported|"[..]),
+            (9u16, &b"Tls|"[..]),
             (10, b"Unported|"),
             (3, b"Ssh|"),
             (2, b"Ssh|"),
@@ -765,17 +776,52 @@ mod tests {
         assert_eq!((app, recs), (None, Vec::new()));
     }
 
-    /// Hello сессии это hello порта конфигурации.
+    /// Совпадение SSL3 классификатором принимается только после отправленного TLS hello (B1.2): до неё поток
+    /// целиком `unknown` с номером NONE, после — парсер TLS и запись `ssl`.
+    #[test]
+    fn ssl3_classifier_gate_follows_sent_hello() {
+        const SH: &[u8] = &[
+            0x16, 0x03, 0x03, 0x00, 0x2a, 0x02, 0x00, 0x00, 0x26, 0x03, 0x03, 0x00, 0x01, 0x02,
+            0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10,
+            0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e,
+            0x1f, 0x00, 0xc0, 0x2f, 0x00,
+        ];
+        let cfg = BannerConfig::new(&TcpBannerSettings::default());
+        let mut budget = ByteBudget::new(usize::MAX);
+        let mut acts = Vec::new();
+
+        let mut s = cfg.session(443);
+        s.parse(SH, &mut budget, &mut acts);
+        assert_eq!(s.app_proto(), None);
+        assert_eq!(s.flush(&mut budget), [(app_id::HEUR, SH.to_vec())]);
+
+        let mut s = cfg.session(443);
+        s.note_tls_hello_sent();
+        s.parse(SH, &mut budget, &mut acts);
+        assert_eq!(s.app_proto(), Some(app_id::SSL3));
+        assert_eq!(
+            s.flush(&mut budget),
+            [(app_id::SSL3, b"TLS/1.2 cipher:0xc02f".to_vec())]
+        );
+    }
+
+    /// Поток сессии это поток порта конфигурации; 443 — TLS с FIN за hello и вторым hello (справка §A1).
     #[test]
     fn session_hello_is_the_port_hello() {
         let cfg = BannerConfig::new(&TcpBannerSettings {
             hello_strings: vec![(7, b"seven".to_vec())],
             ..TcpBannerSettings::default()
         });
-        assert_eq!(cfg.session(7).hello(), Some(&b"seven"[..]));
-        assert_eq!(cfg.session(23).hello(), Some(&b"\xff\xf6"[..]));
-        assert_eq!(cfg.session(443).hello(), None);
-        assert_eq!(cfg.forced(23, 29).hello(), Some(&b"\xff\xf6"[..]));
+        fn hello(s: &Banner1Session) -> Option<&[u8]> {
+            s.stream().hello.as_deref()
+        }
+        assert_eq!(hello(&cfg.session(7)), Some(&b"seven"[..]));
+        assert_eq!(hello(&cfg.session(23)), Some(&b"\xff\xf6"[..]));
+        let tls = cfg.session(443);
+        assert!(tls.stream().is_tls && tls.stream().close_after_hello);
+        assert_eq!(tls.stream().hello.as_ref().map(|h| h.len()), Some(198));
+        assert_eq!(tls.stream().next.as_ref().map(|h| h.len()), Some(287));
+        assert_eq!(hello(&cfg.forced(23, 29)), Some(&b"\xff\xf6"[..]));
     }
 
     /// I1 ревью задачи 8: бюджет, отказавший записи HEUR в байте, делает её неполной, и такая запись в парсер не
@@ -952,17 +998,21 @@ mod tests {
         let (a, b) = (cfg.session(80), cfg.forced(80, app_id::HTTP));
         assert!(Arc::ptr_eq(&a.scan, &b.scan));
         assert_eq!(Arc::strong_count(&cfg.scan), 3);
-        let table = cfg.scan.hellos.hello(80).map(|h| &h[..]);
+        let table = cfg.scan.hellos.stream(80).hello;
         assert!(table.is_some());
         assert!(
-            a.hello()
-                .zip(table)
-                .is_some_and(|(x, y)| std::ptr::eq(x, y))
+            a.stream()
+                .hello
+                .as_ref()
+                .zip(table.as_ref())
+                .is_some_and(|(x, y)| std::ptr::eq(&x[..], &y[..]))
         );
         assert!(
-            b.hello()
-                .zip(table)
-                .is_some_and(|(x, y)| std::ptr::eq(x, y))
+            b.stream()
+                .hello
+                .as_ref()
+                .zip(table.as_ref())
+                .is_some_and(|(x, y)| std::ptr::eq(&x[..], &y[..]))
         );
         drop((a, b));
         assert_eq!(Arc::strong_count(&cfg.scan), 1);
@@ -1065,7 +1115,7 @@ mod tests {
             for seg in &segs {
                 s.parse(seg, &mut budget, &mut acts);
             }
-            let _ = s.hello();
+            let _ = s.stream();
             let recs = s.flush(&mut budget);
             assert_eq!(budget.left(), budget_bytes, "round {round}: budget");
             let held: usize = recs.iter().map(|r| r.1.len()).sum();

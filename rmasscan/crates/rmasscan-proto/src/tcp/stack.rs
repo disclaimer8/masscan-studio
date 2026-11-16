@@ -147,7 +147,7 @@ impl TcpStack for TcpBannerStack {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tcp::app::{ByteBudget, Session, SessionAction};
+    use crate::tcp::app::{ByteBudget, Session, SessionAction, StreamDesc};
     use crate::tcp::tcb::{SEND_QUEUE_MAX_SEGMENTS, TcpState};
     use rmasscan_core::banner::BannerRecord;
     use rmasscan_core::stack::ConnAddrs;
@@ -218,13 +218,14 @@ mod tests {
 
     struct Stub {
         script: Script,
+        desc: StreamDesc,
         banner: Vec<u8>,
         parsed: usize,
     }
 
     impl Session for Stub {
-        fn hello(&self) -> Option<&[u8]> {
-            self.script.hello.as_deref()
+        fn stream(&self) -> &StreamDesc {
+            &self.desc
         }
 
         fn parse(&mut self, px: &[u8], budget: &mut ByteBudget, acts: &mut Vec<SessionAction>) {
@@ -251,6 +252,7 @@ mod tests {
     impl Sessions for Script {
         fn new_session(&self, _remote_port: u16) -> Box<dyn Session> {
             Box::new(Stub {
+                desc: StreamDesc::plain(self.hello.as_deref().map(Arc::from)),
                 script: self.clone(),
                 banner: Vec::new(),
                 parsed: 0,
@@ -971,8 +973,8 @@ mod tests {
 
     /// Нижняя граница памяти соединения: запись карты с TCB, запись таймера и сама сессия баннера (её `Box` в
     /// соединении указывает на `Banner1Session`). Значения скана сессия не копирует, а держит одним `Arc` (M4 ревью
-    /// задачи 8): сессия не больше 72 байт (было 80 с копиями hello, `--capture html` и выбора парсера; в 4c
-    /// добавилось состояние кодера base64, одно на соединение как `StreamState.base64` у C).
+    /// задачи 8): сессия не больше 80 байт (было 80 с копиями hello, `--capture html` и выбора парсера; в 4c
+    /// добавились состояние кодера base64 и `Arc` дескриптора потока, по одному на соединение).
     #[test]
     fn memory_floor_counts_table_entry_tcb_and_session() {
         let floor = connection_memory_floor();
@@ -985,7 +987,7 @@ mod tests {
             floor >= size_of::<crate::tcp::tcb::Tcb>() + session,
             "{floor}"
         );
-        assert!((48..=72).contains(&session), "{session}");
+        assert!((48..=80).contains(&session), "{session}");
         assert!(floor < 1024, "{floor}");
     }
 
@@ -1023,7 +1025,7 @@ mod tests {
 
     struct ChaosSession {
         rng: Rng,
-        hello: Option<Vec<u8>>,
+        desc: StreamDesc,
         banner: Vec<u8>,
         held: Arc<AtomicUsize>,
     }
@@ -1039,7 +1041,7 @@ mod tests {
             };
             Box::new(ChaosSession {
                 rng: Rng((self.seed ^ n.wrapping_mul(0x9E37_79B9_7F4A_7C15)) | 1),
-                hello,
+                desc: StreamDesc::plain(hello.map(|h| Arc::from(h.as_slice()))),
                 banner: Vec::new(),
                 held: Arc::clone(&self.held),
             })
@@ -1047,8 +1049,8 @@ mod tests {
     }
 
     impl Session for ChaosSession {
-        fn hello(&self) -> Option<&[u8]> {
-            self.hello.as_deref()
+        fn stream(&self) -> &StreamDesc {
+            &self.desc
         }
 
         fn parse(&mut self, px: &[u8], budget: &mut ByteBudget, acts: &mut Vec<SessionAction>) {

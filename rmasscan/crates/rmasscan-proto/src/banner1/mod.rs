@@ -34,7 +34,8 @@ use rmasscan_core::stack::{TableParams, TcpStack, TcpStackFactory};
 use crate::tcp::stack::new_stack;
 
 pub use driver::{StreamAction, StreamResult, banner_stream, tls_stream, x509_stream};
-pub use hello::{HelloSet, TcpBannerSettings};
+pub use hello::{HelloSet, TcpBannerSettings, TlsSettings};
+pub use tls_hello::TlsHelloKind;
 
 use session::BannerConfig;
 
@@ -249,7 +250,7 @@ mod tests {
     }
 
     /// Фабрика строит таблицу с сессиями баннеров: hello порта через 2 с (запрос HTTP C на 80), ответ сервера после
-    /// подтверждения разбирается и сбрасывается на FIN; поток NULL (порт 443 в 4b) hello не шлёт.
+    /// подтверждения разбирается и сбрасывается на FIN; на 443 уходит ClientHello по умолчанию (4c).
     #[test]
     fn factory_sends_port_hello_and_flushes_the_reply() {
         let mut st = table(1 << 20);
@@ -278,7 +279,14 @@ mod tests {
         let k = key(2, 443);
         let mut out = StackOutput::default();
         st.on_segment(T0, &seg(k, SYNACK, R0, S, b""), &mut out);
-        for t in 1..=10 {
+        let mut out = StackOutput::default();
+        st.on_tick(T0 + 2 * SEC, &mut out);
+        assert_eq!(out.segments.len(), 1, "TLS hello at +2s");
+        assert_eq!(
+            out.segments[0].payload,
+            super::tls_hello::tls_hello(super::tls_hello::TlsHelloKind::Default, 0)
+        );
+        for t in 2..=10 {
             let mut out = StackOutput::default();
             st.on_tick(T0 + 2 * t * SEC, &mut out);
             assert!(

@@ -104,6 +104,11 @@ pub enum ConfigError {
     /// (`CONF_ERR` отбрасывается), здесь это отказ с кодом 1 (Р17).
     #[error("FAIL: {value}: unknown hello type")]
     UnknownHello { value: String },
+    /// `--vuln` не heartbleed/ticketbleed/poodle/sslv3 (`src/main-conf.c:2943-2946`): C печатает строку с
+    /// подсказкой и `exit(1)`; здесь отказ с той же первой строкой. Скриптовые проверки (`ntp-monlist`, Lua)
+    /// не переносятся (не-цель этапа) и отказывают так же.
+    #[error("FAIL: vuln check '{value}' does not exist")]
+    UnknownVuln { value: String },
     /// `--http-header` без скобок в набранном имени и без двоеточия в значении: две строки C и `exit(1)`
     /// (`src/main-conf.c:1388-1390`).
     #[error(
@@ -204,6 +209,14 @@ pub struct ScanConfig {
     /// (`:1546-1554`), ставит и `--rawudp` (`:1118-1130`). Без него баннеров нет (`src/output.c:898-899`); в 4a
     /// баннеры только UDP. На зонды и `job_digest` не влияет.
     pub banners: bool,
+    /// `--heartbleed` (`is_heartbleed`, `src/main-conf.c:2810-2814`): ставит баннеры и снимает захват `cert` и
+    /// `heartbleed` в порядке argv; hello heartbeat на все порты. В `--echo` и `paused.conf` не печатается.
+    pub heartbleed: bool,
+    /// `--ticketbleed` (`is_ticketbleed`, `src/main-conf.c:2815-2819`): как heartbleed, захват `ticketbleed`.
+    pub ticketbleed: bool,
+    /// `--vuln poodle`/`--vuln sslv3` (`is_poodle_sslv3`, `src/main-conf.c:2936-2940`): ставит баннеры и снимает
+    /// захват `cert`; hello SSLv3 с `TLS_FALLBACK_SCSV` на все порты.
+    pub poodle_sslv3: bool,
     /// `--rawudp` (`is_banners_rawudp`, `src/main-conf.c:1118-1130`): сырой баннер за каждым UDP-ответом
     /// (`src/proto-udp.c:120`).
     pub rawudp: bool,
@@ -299,6 +312,9 @@ impl Default for ScanConfig {
             pcap_payloads: None,
             banner_types: BTreeSet::new(),
             banners: false,
+            heartbleed: false,
+            ticketbleed: false,
+            poodle_sslv3: false,
             rawudp: false,
             capture: Capture::default(),
             hello_timeout: 0,
@@ -1775,6 +1791,36 @@ pub fn apply_core_kv(cfg: &mut ScanConfig, key: &str, val: &str) -> Result<bool,
                 cfg.banners = true;
             }
         }
+        // --heartbleed / --ticketbleed (`src/main-conf.c:2810-2819`): singleton, значение игнорируется; побочные
+        // эффекты в порядке C: свой флаг, `no-capture cert`, `no-capture` своего захвата, `banners`.
+        "heartbleed" => {
+            cfg.heartbleed = true;
+            cfg.capture.cert = false;
+            cfg.capture.heartbleed = false;
+            cfg.banners = true;
+        }
+        "ticketbleed" => {
+            cfg.ticketbleed = true;
+            cfg.capture.cert = false;
+            cfg.capture.ticketbleed = false;
+            cfg.banners = true;
+        }
+        // --vuln (`src/main-conf.c:2929-2941`): heartbleed и ticketbleed пересылаются в те же ветки;
+        // poodle|sslv3 ставят свой флаг и снимают только захват cert; остальное отказ со строкой C.
+        "vuln" => match normalize_key(value).as_str() {
+            "heartbleed" => return apply_core_kv(cfg, "heartbleed", "true"),
+            "ticketbleed" => return apply_core_kv(cfg, "ticketbleed", "true"),
+            "poodle" | "sslv3" => {
+                cfg.poodle_sslv3 = true;
+                cfg.capture.cert = false;
+                cfg.banners = true;
+            }
+            _ => {
+                return Err(ConfigError::UnknownVuln {
+                    value: value.to_string(),
+                });
+            }
+        },
         // `SET_hello_timeout` (`src/main-conf.c:1288-1298`): `(unsigned)parseInt(value)`; принимается и не действует
         // (Р1). Не число или больше `u32` это отказ (Р17), у C 0 или усечение.
         "hellotimeout" => cfg.hello_timeout = parse_u32(name, value)?,

@@ -3,7 +3,7 @@
 //! :2434) из masscan © Robert David Graham
 //! (github.com/robertdavidgraham/masscan, HEAD 8e6b3b0).
 //!
-//! Любая опция вне подмножества (например `--heartbleed` или `--script`) - ошибка clap,
+//! Любая опция вне подмножества (например `--script`) - ошибка clap,
 //! а не молчаливый пропуск (Review Focus №5).
 //!
 //! Опции вывода (`SET_output_*`, main-conf.c:1616–1806, `-o<буква>` :3401–3459) разбираются с семантикой C:
@@ -474,13 +474,45 @@ pub struct Cli {
         help = "Also report every UDP reply as a raw banner (the whole datagram); implies --banners"
     )]
     pub rawudp: Vec<String>,
+    // `heartbleed` (singleton, `src/main-conf.c:2810-2814`, значение игнорируется, как у C): hello heartbeat на все
+    // порты, ставит баннеры, снимает захват cert и heartbleed (явный --capture после него побеждает).
+    #[arg(
+        long = "heartbleed",
+        num_args = 0..=1,
+        require_equals = true,
+        default_missing_value = "",
+        action = clap::ArgAction::Append,
+        value_name = "BOOL",
+        help = "Scan for Heartbleed on every TCP port (heartbeat ClientHello and probe; implies --banners, turns cert and heartbleed capture off at this point)"
+    )]
+    pub heartbleed: Vec<String>,
+    // `ticketbleed` (singleton, `src/main-conf.c:2815-2819`).
+    #[arg(
+        long = "ticketbleed",
+        num_args = 0..=1,
+        require_equals = true,
+        default_missing_value = "",
+        action = clap::ArgAction::Append,
+        value_name = "BOOL",
+        help = "Scan for Ticketbleed on every TCP port (implies --banners, turns cert and ticketbleed capture off at this point)"
+    )]
+    pub ticketbleed: Vec<String>,
+    // `vuln NAME` (`src/main-conf.c:2929-2941`): heartbleed и ticketbleed это те же опции, poodle и sslv3 —
+    // проверка SSLv3; прочие значения отказывают со строкой C (скриптовые проверки Lua не переносятся).
+    #[arg(
+        long = "vuln",
+        value_name = "NAME",
+        action = clap::ArgAction::Append,
+        help = "Vulnerability check by name: heartbleed, ticketbleed, poodle or sslv3"
+    )]
+    pub vuln: Vec<String>,
     // `capture` и `nocapture`/`no-capture` (`src/main-conf.c:1132-1180`, :2402-2403): значение следующим словом или
     // после `=`. В 4b действует только `html` (`banner1->is_capture_html`); остальные читают баннеры TLS (4c).
     #[arg(
         long = "capture",
         value_name = "TYPE",
         action = clap::ArgAction::Append,
-        help = "TCP banner capture: cert (default on), servername, html, heartbleed or ticketbleed; html adds the whole page to HTTP banners, the others act with TLS banners (not in this version)"
+        help = "TCP banner capture: cert (default on), servername, html, heartbleed or ticketbleed"
     )]
     pub capture: Vec<String>,
     #[arg(
@@ -820,10 +852,13 @@ const POSITIONAL_KEYS: [&str; 29] = [
 
 /// Опции баннеров: идентификатор clap и ключ `masscan_set_parameter` (`src/main-conf.c:2377-2403`,
 /// `connection-timeout` старого стиля `:2765-2767`).
-const BANNER_KEYS: [(&str, &str); 15] = [
+const BANNER_KEYS: [(&str, &str); 18] = [
     ("banners", "banners"),
     ("nobanners", "nobanners"),
     ("rawudp", "rawudp"),
+    ("heartbleed", "heartbleed"),
+    ("ticketbleed", "ticketbleed"),
+    ("vuln", "vuln"),
     ("capture", "capture"),
     ("nocapture", "nocapture"),
     ("hello_timeout", "hello-timeout"),

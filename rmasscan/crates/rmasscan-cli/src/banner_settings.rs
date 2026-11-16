@@ -50,6 +50,9 @@ pub fn tcp_banner_settings(cfg: &ScanConfig) -> Result<TcpBannerSettings, String
     tls.capture_cert = cfg.capture.cert;
     tls.capture_heartbleed = cfg.capture.heartbleed;
     tls.capture_ticketbleed = cfg.capture.ticketbleed;
+    tls.heartbleed = cfg.heartbleed;
+    tls.ticketbleed = cfg.ticketbleed;
+    tls.poodle_sslv3 = cfg.poodle_sslv3;
     Ok(TcpBannerSettings {
         hello: HelloSet {
             http: cfg.hello_http,
@@ -257,6 +260,39 @@ mod tests {
         let mut bad = ScanConfig::default();
         bad.hello_strings.push((80, "Q".to_string()));
         assert!(tcp_banner_settings(&bad).is_err());
+    }
+
+    /// Флаги захвата и режимов TLS доходят до настроек каркаса; hello режима выбирает последний по порядку
+    /// `src/main.c:645-654`, флаги парсера накапливаются (справка §E2).
+    #[test]
+    fn tls_settings_capture_flags_reach_proto() {
+        let plain = tcp_banner_settings(&ScanConfig::default()).unwrap();
+        assert!(plain.tls.capture_cert);
+        assert_eq!(
+            plain.tls.hello_kind(),
+            rmasscan_proto::TlsHelloKind::Default
+        );
+
+        let cfg = cfg_with(&[("heartbleed", "true")]);
+        let s = tcp_banner_settings(&cfg).unwrap();
+        assert!(s.tls.heartbleed && !s.tls.capture_cert && !s.tls.capture_heartbleed);
+        assert_eq!(s.tls.hello_kind(), rmasscan_proto::TlsHelloKind::Heartbeat);
+
+        let cfg = cfg_with(&[("vuln", "poodle"), ("capture", "cert")]);
+        let s = tcp_banner_settings(&cfg).unwrap();
+        assert!(s.tls.poodle_sslv3 && s.tls.capture_cert);
+        assert_eq!(
+            s.tls.hello_kind(),
+            rmasscan_proto::TlsHelloKind::Sslv3Poodle
+        );
+
+        let cfg = cfg_with(&[("heartbleed", "true"), ("vuln", "sslv3")]);
+        let s = tcp_banner_settings(&cfg).unwrap();
+        assert!(s.tls.heartbleed && s.tls.poodle_sslv3);
+        assert_eq!(
+            s.tls.hello_kind(),
+            rmasscan_proto::TlsHelloKind::Sslv3Poodle
+        );
     }
 
     /// `--capture html` (`banner1->is_capture_html`) доходит до `TcpBannerSettings`; опции `--http-*` строят

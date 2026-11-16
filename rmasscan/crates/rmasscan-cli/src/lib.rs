@@ -75,6 +75,11 @@ fn is_capture_refusal(msg: &str) -> bool {
         && (msg.ends_with(": unknown capture type") || msg.ends_with(": unknown nocapture type"))
 }
 
+/// `FAIL: vuln check '...' does not exist` (`src/main-conf.c:2944`): строка C как есть.
+fn is_vuln_refusal(msg: &str) -> bool {
+    msg.starts_with("FAIL: vuln check '") && msg.ends_with("' does not exist")
+}
+
 /// `FAIL: <значение>: unknown hello type` (`src/main-conf.c:1201`) и пустой файл `--hello-file`
 /// (`[FAILED] could not read hello file`, `:1239`): строки C.
 fn is_hello_refusal(msg: &str) -> bool {
@@ -129,6 +134,7 @@ pub fn error_text(msg: &str) -> String {
         || msg.starts_with(conf::BAD_BANNER_APP)
         || is_capture_refusal(msg)
         || is_hello_refusal(msg)
+        || is_vuln_refusal(msg)
         || msg == ARP_PORTSCAN_REFUSAL
     {
         msg.to_string()
@@ -563,7 +569,7 @@ mod tests {
     #[test]
     fn unsupported_option_errors() {
         assert!(
-            Cli::try_parse_masscan(["rmasscan", "--heartbleed", "10.0.0.0/24", "-p80"]).is_err()
+            Cli::try_parse_masscan(["rmasscan", "--heartbleed", "10.0.0.0/24", "-p80"]).is_ok()
         );
         assert!(Cli::try_parse_masscan(["rmasscan", "--nonsense"]).is_err());
         // `-oX FILE` разбирается; без целей `run` отказывает раньше, чем тронет файл.
@@ -655,6 +661,64 @@ mod tests {
             .unwrap()
             .to_config()
             .unwrap()
+    }
+
+    /// `--heartbleed` (`src/main-conf.c:2810-2814`): свой флаг, баннеры включены, захват cert и heartbleed
+    /// снят в точке argv; явный `--capture` после режима побеждает, до него — нет.
+    #[test]
+    fn heartbleed_enables_banners_and_tls_mode() {
+        let cfg = scan_config(&["--heartbleed"]);
+        assert!(cfg.heartbleed && cfg.banners);
+        assert!(!cfg.capture.cert && !cfg.capture.heartbleed && !cfg.capture.ticketbleed);
+        let cfg = scan_config(&["--heartbleed", "--capture", "cert"]);
+        assert!(cfg.capture.cert, "explicit capture after the mode wins");
+        let cfg = scan_config(&["--capture", "cert", "--heartbleed"]);
+        assert!(!cfg.capture.cert, "the mode after capture wins");
+        let cfg = scan_config(&["--vuln", "heartbleed"]);
+        assert!(cfg.heartbleed && cfg.banners && !cfg.capture.cert);
+    }
+
+    /// `--ticketbleed`, `--vuln poodle` и `--vuln sslv3`: флаги и побочные эффекты по C; чужое значение
+    /// `--vuln` отказывает строкой C без обёртки и с кодом 1.
+    #[test]
+    fn ticketbleed_and_poodle_modes() {
+        let cfg = scan_config(&["--ticketbleed"]);
+        assert!(cfg.ticketbleed && cfg.banners && !cfg.capture.cert && !cfg.capture.ticketbleed);
+        assert!(cfg.capture.heartbleed == ScanConfig::default().capture.heartbleed);
+        for v in ["poodle", "sslv3"] {
+            let cfg = scan_config(&["--vuln", v]);
+            assert!(cfg.poodle_sslv3 && cfg.banners && !cfg.capture.cert, "{v}");
+            assert!(cfg.capture.heartbleed == ScanConfig::default().capture.heartbleed);
+        }
+        let e =
+            run_args(&["rmasscan", "--vuln", "ntp-monlist", "10.0.0.0/30", "-p80"]).unwrap_err();
+        assert_eq!(e, "FAIL: vuln check 'ntp-monlist' does not exist");
+    }
+
+    /// Режимы не печатаются в `--echo` (нет ключей таблицы): видны только побочные эффекты — `banners = true`
+    /// и `nocapture = cert`.
+    #[test]
+    fn modes_echo_as_c() {
+        let out = echo_of(&["--heartbleed"]);
+        assert!(out.contains("banners = true\n"), "{out}");
+        assert!(out.contains("nocapture = cert\n"), "{out}");
+        assert!(!out.contains("heartbleed ="), "{out}");
+    }
+
+    /// Режимы из файла `-c` разбираются как argv; в `paused.conf` режима нет, остаются побочные эффекты.
+    #[test]
+    fn tls_modes_in_config_file_and_paused_conf() {
+        let scratch = Scratch::new();
+        let conf = scratch.path("modes.conf");
+        std::fs::write(&conf, "10.0.0.0/30\nports = 443\nvuln = poodle\n").unwrap();
+        let cli = Cli::try_parse_masscan(["rmasscan", "-c", conf.to_str().unwrap()]).unwrap();
+        let cfg = cli.to_config().unwrap();
+        assert!(cfg.poodle_sslv3 && cfg.banners && !cfg.capture.cert);
+        let paused = echo_of(&["--vuln", "poodle"]);
+        assert!(
+            !paused.contains("poodle") && !paused.contains("vuln"),
+            "{paused}"
+        );
     }
 
     /// `--banners`/`--banner` (`src/main-conf.c:1106-1116`) и `--rawudp` (`:1118-1130`, ставит и `banners`) в `--echo`

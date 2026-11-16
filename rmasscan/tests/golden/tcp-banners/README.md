@@ -84,6 +84,11 @@ at the pin or is dirty and copies the sources before compiling (the clone is nev
   `hellos.out` is about the hellos rmasscan 4b sends from the port table, and it does not send this one.
 - `banout.in.txt`, `banout.out`: direct `banout_append` scripts (`append APP LEN SEED`, byte `k` is
   `(SEED + 131 * k) & 0xFF`) and per script the node list (`node protocol=0xP length=L`, head first) and the records.
+- `tls-hellos.out` (4c task 2): the eight ClientHello dumps of oracle mode `tls-hellos` — the two registered
+  streams, the three vuln templates raw, and the three built hellos (`ssl_hello()` dynamicization with
+  `time()` fixed at the `now` of the first line, plus the POODLE SCSV) as `tls-hello kind=K len=L HEX`.
+  Provenance is in the file's `#` header; the default and AddressSanitizer builds agreed byte for byte.
+  Read by the unit tests in `banner1/tls_hello.rs`.
 - `manifest.json`: the oracle block above, `host` (OS and kernel only), `captured_at`, the three tables and per case
   `about`, `expect`, `declared`, `port`, `capture`, `segments`, `bytes`, input and output sha256, C's `app_proto` of each
   run, and the AddressSanitizer result.

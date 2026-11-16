@@ -21,6 +21,7 @@ pub(crate) mod session;
 mod smtp;
 mod ssh;
 mod telnet;
+pub(crate) mod tls_hello;
 mod vnc;
 
 use std::fmt;

@@ -20,7 +20,7 @@ use rmasscan_core::banner::MAX_BANNER_BYTES;
 use crate::app::app_id;
 use crate::tcp::app::{ByteBudget, Session, SessionAction, Sessions};
 
-use super::banout::Banout;
+use super::banout::{Banout, Base64Stream};
 use super::classify::{Classifier, PATTERNS, SearchState};
 use super::ftp::Ftp;
 use super::hello::{HelloTable, TcpBannerSettings};
@@ -85,6 +85,8 @@ pub(crate) struct ParseCx<'a> {
     pub(crate) banout: &'a mut Banout,
     pub(crate) budget: &'a mut ByteBudget,
     pub(crate) acts: &'a mut Vec<SessionAction>,
+    /// `pstate->base64`: один кодер на соединение (захват сертификатов и heartbleed делят его, справка 4c §B4).
+    pub(crate) base64: &'a mut Base64Stream,
     pub(crate) capture_html: bool,
     pub(crate) starttls: bool,
 }
@@ -94,6 +96,31 @@ impl ParseCx<'_> {
     /// отказали предел Р5 или бюджет, в неё больше ничего не пишется ([`Banout::append`]).
     pub(crate) fn append(&mut self, app: u16, px: &[u8]) {
         self.banout.append(self.budget, app, px);
+    }
+
+    /// `banout_init_base64(&pstate->base64)`.
+    // Потребитель — парсер TLS (задача 4 подэтапа 4c).
+    #[allow(dead_code)]
+    pub(crate) fn init_base64(&mut self) {
+        self.base64.reset();
+    }
+
+    /// `banout_append_base64(banout, app, px, length, &pstate->base64)`.
+    #[allow(dead_code)]
+    pub(crate) fn append_base64(&mut self, app: u16, px: &[u8]) {
+        self.banout.append_base64(self.budget, self.base64, app, px);
+    }
+
+    /// `banout_finalize_base64(banout, app, &pstate->base64)`.
+    #[allow(dead_code)]
+    pub(crate) fn finalize_base64(&mut self, app: u16) {
+        self.banout.finalize_base64(self.budget, self.base64, app);
+    }
+
+    /// `banout_end(banout, app)`.
+    #[allow(dead_code)]
+    pub(crate) fn end_banner(&mut self, app: u16) {
+        self.banout.end(app);
     }
 
     /// `tcpapi_send(socket, bytes, length, 0)` парсера.
@@ -216,6 +243,7 @@ impl BannerConfig {
             app_proto: None,
             stage: Stage::Classify { state: 0, seen: 0 },
             banout: Banout::default(),
+            base64: Base64Stream::default(),
         }
     }
 
@@ -282,6 +310,8 @@ pub(crate) struct Banner1Session {
     app_proto: Option<u16>,
     stage: Stage,
     banout: Banout,
+    /// `tcb_state->base64`.
+    base64: Base64Stream,
 }
 
 /// `is_sent_sslhello` (`src/proto-banner1.h:249`): его ставит только отправка TLS hello (`banner_set_sslhello`,
@@ -315,6 +345,7 @@ impl Banner1Session {
             banout: &mut self.banout,
             budget,
             acts,
+            base64: &mut self.base64,
             capture_html: self.scan.capture_html,
             starttls: false,
         };
@@ -413,6 +444,7 @@ impl Session for Banner1Session {
                 banout: &mut self.banout,
                 budget,
                 acts: &mut Vec::new(),
+                base64: &mut self.base64,
                 capture_html: self.scan.capture_html,
                 starttls: false,
             });

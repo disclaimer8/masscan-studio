@@ -971,7 +971,8 @@ mod tests {
 
     /// Нижняя граница памяти соединения: запись карты с TCB, запись таймера и сама сессия баннера (её `Box` в
     /// соединении указывает на `Banner1Session`). Значения скана сессия не копирует, а держит одним `Arc` (M4 ревью
-    /// задачи 8): сессия не больше 64 байт (было 80 с копиями hello, `--capture html` и выбора парсера).
+    /// задачи 8): сессия не больше 72 байт (было 80 с копиями hello, `--capture html` и выбора парсера; в 4c
+    /// добавилось состояние кодера base64, одно на соединение как `StreamState.base64` у C).
     #[test]
     fn memory_floor_counts_table_entry_tcb_and_session() {
         let floor = connection_memory_floor();
@@ -984,7 +985,7 @@ mod tests {
             floor >= size_of::<crate::tcp::tcb::Tcb>() + session,
             "{floor}"
         );
-        assert!((48..=64).contains(&session), "{session}");
+        assert!((48..=72).contains(&session), "{session}");
         assert!(floor < 1024, "{floor}");
     }
 

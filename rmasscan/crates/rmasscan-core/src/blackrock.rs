@@ -140,19 +140,25 @@ impl BlackRock {
     }
 }
 
-/// `READ`, crypto-blackrock.c:164.
-fn read(r: u64, big_r: u64, seed: u64) -> u64 {
-    // :171. r in 1..64, так что оба сдвига < 64.
-    let big_r = big_r ^ (seed.wrapping_shl(r as u32) ^ seed.wrapping_shr((64 - r) as u32));
-    let byte = |n: u32| -> usize { ((((big_r >> (n * 8)) ^ seed ^ r) & 0xFF) as u8) as usize };
+/// Маска раунда `r` (1..=63) для `READ`, crypto-blackrock.c:164-178. В C `R ^= rot(seed, r)`, затем байт `n` индекса
+/// S-box равен `((R >> 8n) ^ seed ^ r) & 0xFF`; значит индекс байта `n` есть байт `n` числа `R ^ mask`, где `mask`
+/// складывает вращение и повторенный во всех байтах младший байт `seed ^ r`.
+fn round_mask(seed: u64, r: u64) -> u64 {
+    // r in 1..64, так что оба сдвига < 64.
+    let rot = seed.wrapping_shl(r as u32) ^ seed.wrapping_shr((64 - r) as u32);
+    rot ^ ((seed ^ r) & 0xFF).wrapping_mul(0x0101_0101_0101_0101)
+}
+
+/// Смешивание S-box из `READ` (:171-178) по байтам `x = R ^ round_mask(seed, r)`.
+fn sbox_mix(x: u64) -> u64 {
+    let s = |n: u32| -> u64 { SBOX[((x >> (n * 8)) & 0xFF) as usize] as u64 };
     // В C `sbox[..]<<24UL` имеет тип int (сдвиг берёт тип левого операнда);
     // gcc даёт знаковое значение, которое затем расширяется и маскируется
     // `& 0x0ffffFFFF`, т.е. результат равен вычислению в u32/u64 с маской.
-    let s = |n: u32| -> u32 { SBOX[byte(n)] as u32 };
-    let r0 = (s(0) as u64) | ((s(1) as u64) << 8);
-    let r1 = (((s(2) as u64) << 16) | ((s(3) as u64) << 24)) & 0xffff_ffff;
-    let r2 = (s(4) as u64) | ((s(5) as u64) << 8);
-    let r3 = (((s(6) as u64) << 16) | ((s(7) as u64) << 24)) & 0xffff_ffff;
+    let r0 = s(0) | (s(1) << 8);
+    let r1 = ((s(2) << 16) | (s(3) << 24)) & 0xffff_ffff;
+    let r2 = s(4) | (s(5) << 8);
+    let r3 = ((s(6) << 16) | (s(7) << 24)) & 0xffff_ffff;
     // :178. `r2<<23UL ^ r3<<33UL`: старшие биты отбрасываются, как в C.
     r0 ^ r1 ^ r2.wrapping_shl(23) ^ r3.wrapping_shl(33)
 }
@@ -162,7 +168,7 @@ fn encrypt(r: u32, a: u64, b: u64, m: u64, seed: u64) -> u64 {
     let mut l = m % a;
     let mut rr = m / a;
     for j in 1..=r {
-        let t = l.wrapping_add(read(j as u64, rr, seed));
+        let t = l.wrapping_add(sbox_mix(rr ^ round_mask(seed, j as u64)));
         let tmp = if j & 1 != 0 { t % a } else { t % b };
         l = rr;
         rr = tmp;
@@ -186,7 +192,7 @@ fn unencrypt(r: u32, a: u64, b: u64, m: u64, seed: u64) -> u64 {
     }
     for j in (1..=r).rev() {
         let modulus = if j & 1 != 0 { a } else { b };
-        let mut tmp = read(j as u64, l, seed);
+        let mut tmp = sbox_mix(l ^ round_mask(seed, j as u64));
         if tmp > rr {
             tmp -= rr;
             tmp = modulus - (tmp % modulus);
@@ -205,6 +211,48 @@ fn unencrypt(r: u32, a: u64, b: u64, m: u64, seed: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn splitmix(state: &mut u64) -> u64 {
+        *state = state.wrapping_add(0x9e37_79b9_7f4a_7c15);
+        let mut z = *state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        z ^ (z >> 31)
+    }
+
+    /// Прежний `READ` (crypto-blackrock.c:164) дословно: эталон для `round_mask` + `sbox_mix`.
+    fn read(r: u64, big_r: u64, seed: u64) -> u64 {
+        // :171. r in 1..64, так что оба сдвига < 64.
+        let big_r = big_r ^ (seed.wrapping_shl(r as u32) ^ seed.wrapping_shr((64 - r) as u32));
+        let byte = |n: u32| -> usize { ((((big_r >> (n * 8)) ^ seed ^ r) & 0xFF) as u8) as usize };
+        // В C `sbox[..]<<24UL` имеет тип int (сдвиг берёт тип левого операнда);
+        // gcc даёт знаковое значение, которое затем расширяется и маскируется
+        // `& 0x0ffffFFFF`, т.е. результат равен вычислению в u32/u64 с маской.
+        let s = |n: u32| -> u32 { SBOX[byte(n)] as u32 };
+        let r0 = (s(0) as u64) | ((s(1) as u64) << 8);
+        let r1 = (((s(2) as u64) << 16) | ((s(3) as u64) << 24)) & 0xffff_ffff;
+        let r2 = (s(4) as u64) | ((s(5) as u64) << 8);
+        let r3 = (((s(6) as u64) << 16) | ((s(7) as u64) << 24)) & 0xffff_ffff;
+        // :178. `r2<<23UL ^ r3<<33UL`: старшие биты отбрасываются, как в C.
+        r0 ^ r1 ^ r2.wrapping_shl(23) ^ r3.wrapping_shl(33)
+    }
+
+    #[test]
+    fn round_mask_matches_c_read() {
+        let mut st = 0x1234_5678u64;
+        let mut seeds = vec![0u64, 1, u64::MAX, 0x0123_4567_89ab_cdef];
+        seeds.extend((0..1000).map(|_| splitmix(&mut st)));
+        for &seed in &seeds {
+            for r in 1..=63u64 {
+                let big_r = splitmix(&mut st);
+                assert_eq!(
+                    read(r, big_r, seed),
+                    sbox_mix(big_r ^ round_mask(seed, r)),
+                    "seed {seed:#x} r {r}"
+                );
+            }
+        }
+    }
 
     #[test]
     fn shuffle_bounded_is_exact_for_small_ranges() {

@@ -18,6 +18,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 #[cfg(any(windows, target_os = "macos", test))]
 use std::sync::atomic::Ordering::Release;
 
+#[cfg(any(not(windows), test))]
 use rmasscan_engine::SendStatus;
 
 use crate::NetStats;

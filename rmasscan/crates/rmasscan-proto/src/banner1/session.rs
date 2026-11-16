@@ -33,6 +33,7 @@ use super::rdp::Rdp;
 use super::smtp::Smtp;
 use super::ssh::Ssh;
 use super::telnet::Telnet;
+use super::tls::TlsFlags;
 use super::vnc::Vnc;
 
 /// Парсер, который выбрал классификатор (ветки `switch (tcb_state->app_proto)`, `src/proto-banner1.c:187-316`), в
@@ -88,6 +89,8 @@ pub(crate) struct ParseCx<'a> {
     /// `pstate->base64`: один кодер на соединение (захват сертификатов и heartbleed делят его, справка 4c §B4).
     pub(crate) base64: &'a mut Base64Stream,
     pub(crate) capture_html: bool,
+    /// Флаги TLS скана (`Banner1.is_capture_*`/`is_heartbleed`/…), значение на сессию.
+    pub(crate) tls_flags: TlsFlags,
     pub(crate) starttls: bool,
 }
 
@@ -121,6 +124,11 @@ impl ParseCx<'_> {
     #[allow(dead_code)]
     pub(crate) fn end_banner(&mut self, app: u16) {
         self.banout.end(app);
+    }
+
+    /// `banout_is_contains(banout, app, needle)`.
+    pub(crate) fn banner_contains(&self, app: u16, needle: &[u8]) -> bool {
+        self.banout.contains(app, needle)
     }
 
     /// `tcpapi_send(socket, bytes, length, 0)` парсера.
@@ -193,6 +201,8 @@ pub(crate) fn parser_for(p: AppProto) -> Box<dyn Parser> {
 struct Scan {
     hellos: HelloTable,
     capture_html: bool,
+    /// Флаги TLS; настоящие настройки придут в задаче 5, до неё — умолчания C (захват сертификатов включён).
+    tls_flags: TlsFlags,
     parsers: fn(AppProto) -> Box<dyn Parser>,
     classifier: &'static Classifier,
 }
@@ -229,6 +239,7 @@ impl BannerConfig {
             scan: Arc::new(Scan {
                 hellos: HelloTable::new(s),
                 capture_html: s.capture_html,
+                tls_flags: TlsFlags::default(),
                 parsers,
                 classifier: Classifier::banner1(),
             }),
@@ -347,6 +358,7 @@ impl Banner1Session {
             acts,
             base64: &mut self.base64,
             capture_html: self.scan.capture_html,
+            tls_flags: self.scan.tls_flags,
             starttls: false,
         };
         parser.parse(&mut cx, px);
@@ -446,6 +458,7 @@ impl Session for Banner1Session {
                 acts: &mut Vec::new(),
                 base64: &mut self.base64,
                 capture_html: self.scan.capture_html,
+                tls_flags: self.scan.tls_flags,
                 starttls: false,
             });
         }

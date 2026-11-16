@@ -1,0 +1,606 @@
+{
+ "oracle": {
+  "masscan_git_head": "8e6b3b0c07a81e8ea61d557c06134a21a6881614",
+  "harness": "tcp_oracle.c modes tls/x509-vectors + build.sh (kept off the repository, R14)",
+  "driver_sha256": "58f6bf3113b5db9a95da7eb2590520179f0baf7c01e0106c03b0175626e3af8d",
+  "build_script_sha256": "65592e4476d5afeb8aaf4d78acc5198622e04b3eff77cedcd064283e01fc4962",
+  "compiler": "Apple clang version 21.0.0 (clang-2100.4.1.1)",
+  "builds": {
+   "default": "-std=gnu99 -g -O2 (masscan Makefile CFLAGS)",
+   "asan": "-std=gnu99 -g -O1 -fno-omit-frame-pointer -fsanitize=address,undefined -fsanitize-recover=address"
+  },
+  "calls": "x509_init and banner1_create once, banner flags from the case; per run (forked, 2s alarm) banner_ssl.parse over the stream whole, byte by byte, and per given segment; actions from the tcpapi stubs, records as banner_flush reports them",
+  "streams": "case1/case2/case3 streams and the chain DERs come from oracle mode x509-vectors linked against src/proto-ssl-test.c at the pin; the rest are synthetic records built for these cases"
+ },
+ "host": "Darwin 27.2.0, arm64",
+ "expected": {
+  "cases": 39
+ },
+ "cases": [
+  {
+   "name": "case1-capture",
+   "about": "ssl_test_case_1 whole stream, capture on",
+   "flags": "cert",
+   "bytes": 24992,
+   "segments": 1,
+   "input": "cases/case1-capture.in.txt",
+   "input_sha256": "f09703c24ba7dc1cca21d9fca2a4d133d8db7bd24de19bdc77d392a88fc83ede",
+   "output": "cases/case1-capture.out",
+   "output_sha256": "271a29aae64a507e48e2236c419d6c83ae7cf13ce58c9bdf4f29d78b4d05b28e",
+   "asan": {
+    "same_output": true,
+    "reports": 0
+   }
+  },
+  {
+   "name": "case1-nocapture",
+   "about": "same, capture off",
+   "flags": "nocert",
+   "bytes": 24992,
+   "segments": 1,
+   "input": "cases/case1-nocapture.in.txt",
+   "input_sha256": "a0e864ea5f88cb16711950c4fe2683f850e527ef9bf0928855eb8b66d848878b",
+   "output": "cases/case1-nocapture.out",
+   "output_sha256": "be279c38e7ceb08efffd009563d41a7027409e54ab5b659eacaa27f3b87c8d2e",
+   "asan": {
+    "same_output": true,
+    "reports": 0
+   }
+  },
+  {
+   "name": "case2-capture",
+   "about": "ssl_test_case_2 (alert after cert)",
+   "flags": "cert",
+   "bytes": 1471,
+   "segments": 1,
+   "input": "cases/case2-capture.in.txt",
+   "input_sha256": "bf2fc87efabb81a30ae874f9030478d0cbb1d50e2c155d1dec469147d21d2671",
+   "output": "cases/case2-capture.out",
+   "output_sha256": "56eaf0c1864ed87abb0729fe448ceb7be57af775f0c8f8793f4a8e4e56537446",
+   "asan": {
+    "same_output": true,
+    "reports": 0
+   }
+  },
+  {
+   "name": "case3-capture",
+   "about": "ssl_test_case_3 two-cert chain",
+   "flags": "cert",
+   "bytes": 3672,
+   "segments": 1,
+   "input": "cases/case3-capture.in.txt",
+   "input_sha256": "a84ca891b38f200b4c367f4990be4726e14c39441974e2095a6977b07ac52325",
+   "output": "cases/case3-capture.out",
+   "output_sha256": "ffc733e19c5c6205dc2241c5cdf79c03d8049178229f8e98df4e00a322f34b21",
+   "asan": {
+    "same_output": true,
+    "reports": 0
+   }
+  },
+  {
+   "name": "case3-nocapture",
+   "about": "same, capture off",
+   "flags": "nocert",
+   "bytes": 3672,
+   "segments": 1,
+   "input": "cases/case3-nocapture.in.txt",
+   "input_sha256": "1ee90ea0ebd595642ccd893a106a37a12181fd9021981d1beade03b344571a0d",
+   "output": "cases/case3-nocapture.out",
+   "output_sha256": "2fe8e94374c19f6ed8b0b582521cea3f88a9a58f86832b2a5b2b38eab54a2d68",
+   "asan": {
+    "same_output": true,
+    "reports": 0
+   }
+  },
+  {
+   "name": "case3-segments",
+   "about": "case3 in 100-byte segments",
+   "flags": "cert",
+   "bytes": 3672,
+   "segments": 37,
+   "input": "cases/case3-segments.in.txt",
+   "input_sha256": "36a6e0e16bca1e6d26d9ecab196ef523d65d22374c6d9ac76f5700669e7acd04",
+   "output": "cases/case3-segments.out",
+   "output_sha256": "ee3609f650f5bc4ddfc40767fe4977bd30134ad7f84dd6e41f5b022483f6caf2",
+   "asan": {
+    "same_output": true,
+    "reports": 0
+   }
+  },
+  {
+   "name": "hello-noext",
+   "about": "ServerHello ending after compression",
+   "flags": "cert",
+   "bytes": 47,
+   "segments": 1,
+   "input": "cases/hello-noext.in.txt",
+   "input_sha256": "eac9ae8c08d4bade1de49ed4b60ce748bf14bd1b075517a6f569c511be64fd64",
+   "output": "cases/hello-noext.out",
+   "output_sha256": "474a02984d10fdca87ffdfeae6e1b29950d9913a67857a4084509ac2bb25342c",
+   "asan": {
+    "same_output": true,
+    "reports": 0
+   }
+  },
+  {
+   "name": "hello-sslv3-version",
+   "about": "SSLv3 ServerHello: vuln SSL[v3] in normal mode",
+   "flags": "cert",
+   "bytes": 47,
+   "segments": 1,
+   "input": "cases/hello-sslv3-version.in.txt",
+   "input_sha256": "60835a3951fe14977b5f2fc3e16768563c72ba60f270c1529aa5993148a1bd6c",
+   "output": "cases/hello-sslv3-version.out",
+   "output_sha256": "cf2332847c479f6b2caf5d585b0923d76559a5ec909baa4b105a4f88b48f9252",
+   "asan": {
+    "same_output": true,
+    "reports": 0
+   }
+  },
+  {
+   "name": "hello-bad-version",
+   "about": "version (3,5): token then UNKNOWN",
+   "flags": "cert",
+   "bytes": 47,
+   "segments": 1,
+   "input": "cases/hello-bad-version.in.txt",
+   "input_sha256": "8e82861d4d7434ad728f015337f46fe3ad09ac30e5d33e1d757423a36740d222",
+   "output": "cases/hello-bad-version.out",
+   "output_sha256": "a40dbd6f792c3d9a3aff9b083ba86d8032edae40977408c129f56e7bb994943b",
+   "asan": {
+    "same_output": true,
+    "reports": 0
+   }
+  },
+  {
+   "name": "hello-heartbeat-ext-on",
+   "about": "heartbeat extension byte 1",
+   "flags": "cert",
+   "bytes": 54,
+   "segments": 1,
+   "input": "cases/hello-heartbeat-ext-on.in.txt",
+   "input_sha256": "2fda7d4857ec7626c8694a2445827e609767b764e1fe901bd375943e6d8af06b",
+   "output": "cases/hello-heartbeat-ext-on.out",
+   "output_sha256": "86fe35d428aeaaf5272ba5eb7814a8c7484e92981e92f68233fdadeffd924698",
+   "asan": {
+    "same_output": true,
+    "reports": 0
+   }
+  },
+  {
+   "name": "hello-heartbeat-ext-off",
+   "about": "heartbeat extension byte 0",
+   "flags": "cert",
+   "bytes": 54,
+   "segments": 1,
+   "input": "cases/hello-heartbeat-ext-off.in.txt",
+   "input_sha256": "19fa67088d6664655962a47fda6df2e5edef300372ebf9a99c0070bd7ed7f3ff",
+   "output": "cases/hello-heartbeat-ext-off.out",
+   "output_sha256": "baef5919d12c91199e4c993900daf868759b577548b771fa4ca5204727655b92",
+   "asan": {
+    "same_output": true,
+    "reports": 0
+   }
+  },
+  {
+   "name": "hello-heartbeat-ext-empty",
+   "about": "heartbeat extension empty",
+   "flags": "cert",
+   "bytes": 53,
+   "segments": 1,
+   "input": "cases/hello-heartbeat-ext-empty.in.txt",
+   "input_sha256": "746489824202257bcd14ec33608fc5d2ff0706d07f98e4c2690189bae2c8c978",
+   "output": "cases/hello-heartbeat-ext-empty.out",
+   "output_sha256": "697ba1a8018e6781758adb6c7e18ba89802b3e9bcb2dbe011605f90da7342523",
+   "asan": {
+    "same_output": true,
+    "reports": 0
+   }
+  },
+  {
+   "name": "ticketbleed-sid16",
+   "about": "session id of exactly 16",
+   "flags": "nocert ticketbleed",
+   "bytes": 63,
+   "segments": 1,
+   "input": "cases/ticketbleed-sid16.in.txt",
+   "input_sha256": "f6df091dd34e579503c1854bb226e122b24574ecba34a754a3c798986d4f0e0b",
+   "output": "cases/ticketbleed-sid16.out",
+   "output_sha256": "0fb522dca90c30ae1f20a29b820d4fc81c193f273559048a11ae78203c36e84b",
+   "asan": {
+    "same_output": true,
+    "reports": 0
+   }
+  },
+  {
+   "name": "ticketbleed-sid17",
+   "about": "session id 17: vuln",
+   "flags": "nocert ticketbleed",
+   "bytes": 64,
+   "segments": 1,
+   "input": "cases/ticketbleed-sid17.in.txt",
+   "input_sha256": "f621bbe488a9d82df5733aafdb5a7e241b4049136af2ca14016db5e5d3d676db",
+   "output": "cases/ticketbleed-sid17.out",
+   "output_sha256": "741acc59c497d1606981efae14bb55e75816e6d205204b1ccf83da61c454efa9",
+   "asan": {
+    "same_output": true,
+    "reports": 0
+   }
+  },
+  {
+   "name": "ticketbleed-sid32",
+   "about": "session id 32: vuln",
+   "flags": "nocert ticketbleed",
+   "bytes": 79,
+   "segments": 1,
+   "input": "cases/ticketbleed-sid32.in.txt",
+   "input_sha256": "632503df34ff0469c73ac37b4a8a66eb52cb494986ef320e8b9ef6027a873a42",
+   "output": "cases/ticketbleed-sid32.out",
+   "output_sha256": "f99f8cfcebdecc412e9edb8fd92287598ac959f20873c9c291fd6675ad8df2c5",
+   "asan": {
+    "same_output": true,
+    "reports": 0
+   }
+  },
+  {
+   "name": "alert-plain",
+   "about": "fatal handshake_failure without poodle",
+   "flags": "cert",
+   "bytes": 7,
+   "segments": 1,
+   "input": "cases/alert-plain.in.txt",
+   "input_sha256": "7e7c4a7939f5d294ca00d7afb2123403937e138e506df822744e53ffaec9351c",
+   "output": "cases/alert-plain.out",
+   "output_sha256": "b3146da3740c07d20b908ec3849e8c272437db449a5d54116c11433d603c6a36",
+   "asan": {
+    "same_output": true,
+    "reports": 0
+   }
+  },
+  {
+   "name": "alert-poodle-scsv",
+   "about": "poodle: inappropriate_fallback",
+   "flags": "nocert poodle",
+   "bytes": 7,
+   "segments": 1,
+   "input": "cases/alert-poodle-scsv.in.txt",
+   "input_sha256": "4072890c069fb741938c440cace1eab71bbf4dcd4ce79919bf456ee5b6d268e8",
+   "output": "cases/alert-poodle-scsv.out",
+   "output_sha256": "aadaaa08b740f645924bfbeb226b24b0b09b36111626778f5f38400022c1906f",
+   "asan": {
+    "same_output": true,
+    "reports": 0
+   }
+  },
+  {
+   "name": "alert-poodle-hs40",
+   "about": "poodle: handshake_failure",
+   "flags": "nocert poodle",
+   "bytes": 7,
+   "segments": 1,
+   "input": "cases/alert-poodle-hs40.in.txt",
+   "input_sha256": "74216c68e57e132740aaff2d168336c39293deda1afbaee820e4783f71483168",
+   "output": "cases/alert-poodle-hs40.out",
+   "output_sha256": "30944efa7c9e5a5a9b636b07ba474a7f2a23a0da78dbb114b35eeefad9619c45",
+   "asan": {
+    "same_output": true,
+    "reports": 0
+   }
+  },
+  {
+   "name": "alert-poodle-other",
+   "about": "poodle: other fatal also writes ALERT",
+   "flags": "nocert poodle",
+   "bytes": 7,
+   "segments": 1,
+   "input": "cases/alert-poodle-other.in.txt",
+   "input_sha256": "86c7aec0c14d108fa678028123bb5f5ee22e3973d6b2e17b0b1abf120c9fca6f",
+   "output": "cases/alert-poodle-other.out",
+   "output_sha256": "c56c7870523c48bac3dc3f16bfa5490d0cf37c2654060f3a8b864ef81387310b",
+   "asan": {
+    "same_output": true,
+    "reports": 0
+   }
+  },
+  {
+   "name": "alert-poodle-warning",
+   "about": "poodle: warning level is a plain ALERT",
+   "flags": "nocert poodle",
+   "bytes": 7,
+   "segments": 1,
+   "input": "cases/alert-poodle-warning.in.txt",
+   "input_sha256": "a22abd394e3d6278c5ec1226d64b286eda1c978e5d41c57c46da525e4ad9be2f",
+   "output": "cases/alert-poodle-warning.out",
+   "output_sha256": "55b27afeb4016378e48ca216adb82f6e4e29cb1f909ed95469a4f297bdae7c8b",
+   "asan": {
+    "same_output": true,
+    "reports": 0
+   }
+  },
+  {
+   "name": "poodle-hello-sslv3",
+   "about": "poodle: SSLv3 ServerHello gets SSL[v3] and POODLE",
+   "flags": "nocert poodle",
+   "bytes": 47,
+   "segments": 1,
+   "input": "cases/poodle-hello-sslv3.in.txt",
+   "input_sha256": "d52d4a033bc75e6a468902de8fdcf67803969d0fe94727e02bf48008ffaebf8e",
+   "output": "cases/poodle-hello-sslv3.out",
+   "output_sha256": "f5211f147094d92c21279502e622646e3dd50786774477021afb6370067c2ebc",
+   "asan": {
+    "same_output": true,
+    "reports": 0
+   }
+  },
+  {
+   "name": "alert-poodle-two-records",
+   "about": "poodle dedup quirk across two records",
+   "flags": "nocert poodle",
+   "bytes": 14,
+   "segments": 1,
+   "input": "cases/alert-poodle-two-records.in.txt",
+   "input_sha256": "d7f50a91b0d35ac75b03342dccc951a5261e5ef1ed82bc21dff7a460c15891e2",
+   "output": "cases/alert-poodle-two-records.out",
+   "output_sha256": "7d76d028ddbae9c81ade530c68768df661cf19eb862e0b15ce4e68e5b283a1a8",
+   "asan": {
+    "same_output": true,
+    "reports": 0
+   }
+  },
+  {
+   "name": "heartbeat-15",
+   "about": "declared 15: no vuln, capture record exists",
+   "flags": "nocert heartbleed cap-hb",
+   "bytes": 23,
+   "segments": 1,
+   "input": "cases/heartbeat-15.in.txt",
+   "input_sha256": "9059f22f385a2988cf86da354c48569bb50f28f28b26f568210daf0223a5d033",
+   "output": "cases/heartbeat-15.out",
+   "output_sha256": "8a2ae7a1c287a213afc237f3b4532aed19b32748b5fa9ab6f471070e88106507",
+   "asan": {
+    "same_output": true,
+    "reports": 0
+   }
+  },
+  {
+   "name": "heartbeat-16",
+   "about": "declared 16: vuln",
+   "flags": "nocert heartbleed cap-hb",
+   "bytes": 24,
+   "segments": 1,
+   "input": "cases/heartbeat-16.in.txt",
+   "input_sha256": "194c323ffb66f8d49f1ef60a8b91795c6743e26178f18bfb3422e63b8346aa1a",
+   "output": "cases/heartbeat-16.out",
+   "output_sha256": "54b78884bf887dc1e7f12d37e0afd15c5d432829e094fea6a668af06b07b1271",
+   "asan": {
+    "same_output": true,
+    "reports": 0
+   }
+  },
+  {
+   "name": "heartbeat-declared-only",
+   "about": "declared 0x4000, 10 bytes arrive: vuln on the declaration",
+   "flags": "nocert heartbleed cap-hb",
+   "bytes": 18,
+   "segments": 1,
+   "input": "cases/heartbeat-declared-only.in.txt",
+   "input_sha256": "30d3b3d8d8a4f2a46a0993477abd43c63be89098a21ac31b979d441e44797151",
+   "output": "cases/heartbeat-declared-only.out",
+   "output_sha256": "6b67df0900c362e3a50fd82723b640e9f7d9dc15f6b018e1e33b0f21a7567c69",
+   "asan": {
+    "same_output": true,
+    "reports": 0
+   }
+  },
+  {
+   "name": "heartbeat-capture-partial",
+   "about": "capture of 17 bytes loses the partial group (no finalize)",
+   "flags": "nocert heartbleed cap-hb",
+   "bytes": 25,
+   "segments": 1,
+   "input": "cases/heartbeat-capture-partial.in.txt",
+   "input_sha256": "e6d44f5566e32eee5e8989ffbbe175b77bac745523c6edfcf3cfe507a47b03bf",
+   "output": "cases/heartbeat-capture-partial.out",
+   "output_sha256": "2d3132357020c55b7301f2b0756e52a03b37052adc897f2f25bc1c9ef34ecdb6",
+   "asan": {
+    "same_output": true,
+    "reports": 0
+   }
+  },
+  {
+   "name": "heartbleed-probe",
+   "about": "probe sent at the ServerHello header",
+   "flags": "nocert heartbleed",
+   "bytes": 47,
+   "segments": 1,
+   "input": "cases/heartbleed-probe.in.txt",
+   "input_sha256": "7bb658200003a1b0a3b5c960dc0deb1cb9e9c1e19190491c320791d03765a0c9",
+   "output": "cases/heartbleed-probe.out",
+   "output_sha256": "1c0139b71e6c418d522b8344d77d6905d125f06937a4280b7cc890d45f3556ea",
+   "asan": {
+    "same_output": true,
+    "reports": 0
+   }
+  },
+  {
+   "name": "heartbleed-probe-twice",
+   "about": "probe per ServerHello record",
+   "flags": "nocert heartbleed",
+   "bytes": 94,
+   "segments": 1,
+   "input": "cases/heartbleed-probe-twice.in.txt",
+   "input_sha256": "fb2d2a6d1065b28b3ee93aa089b34ea9d2f617f21b3c70d63b78bdf116d85682",
+   "output": "cases/heartbleed-probe-twice.out",
+   "output_sha256": "75370a0e09fba04f1544c9977d53adf15a3c0ebb6edc46a4a872bda10a147ef8",
+   "asan": {
+    "same_output": true,
+    "reports": 0
+   }
+  },
+  {
+   "name": "record-type-highbit",
+   "about": "type with high bit: UNKNOWN eats the stream",
+   "flags": "cert",
+   "bytes": 52,
+   "segments": 1,
+   "input": "cases/record-type-highbit.in.txt",
+   "input_sha256": "5d380d3845346e38e5783a9f7372f619535295218900e51962d05e87d9c4b799",
+   "output": "cases/record-type-highbit.out",
+   "output_sha256": "b0157e318f97f6b7317a082365d198497d6712875972ca3fe2e97f399d665679",
+   "asan": {
+    "same_output": true,
+    "reports": 0
+   }
+  },
+  {
+   "name": "record-version-major4",
+   "about": "record version major not 3",
+   "flags": "cert",
+   "bytes": 47,
+   "segments": 1,
+   "input": "cases/record-version-major4.in.txt",
+   "input_sha256": "624baf54eb6d6d9d6815a3fa193c6b9bd6a86e301811b503d4a530db422fa9d5",
+   "output": "cases/record-version-major4.out",
+   "output_sha256": "f38300a2953d96c1ec7ae43fe067eb18698cc7a44828d11a2f624bdbb7a11a83",
+   "asan": {
+    "same_output": true,
+    "reports": 0
+   }
+  },
+  {
+   "name": "record-ccs-appdata-then-hello",
+   "about": "CCS and app-data ignored, hello after",
+   "flags": "cert",
+   "bytes": 66,
+   "segments": 1,
+   "input": "cases/record-ccs-appdata-then-hello.in.txt",
+   "input_sha256": "814e78090ad1c0447fcf7c17e768217f4336842d3e24a411eda317e0dfc2c674",
+   "output": "cases/record-ccs-appdata-then-hello.out",
+   "output_sha256": "05aa929d15ddc42786e5d1bc6b61916ffae0e6c6298679d4607fc64a040881b4",
+   "asan": {
+    "same_output": true,
+    "reports": 0
+   }
+  },
+  {
+   "name": "record-unknown-type",
+   "about": "unknown record type skipped whole",
+   "flags": "cert",
+   "bytes": 57,
+   "segments": 1,
+   "input": "cases/record-unknown-type.in.txt",
+   "input_sha256": "7e4f8dcf5947588b428d5a975cc73d50f05c0b02b041adcd131195e596837ea3",
+   "output": "cases/record-unknown-type.out",
+   "output_sha256": "5096596c7f0d321dbc9de7a95ce2bdd2c902584a0627a8cc82b7bc82a4b8ebdc",
+   "asan": {
+    "same_output": true,
+    "reports": 0
+   }
+  },
+  {
+   "name": "handshake-two-in-one",
+   "about": "ServerHello and ServerHelloDone in one record",
+   "flags": "nocert",
+   "bytes": 51,
+   "segments": 1,
+   "input": "cases/handshake-two-in-one.in.txt",
+   "input_sha256": "d28dbe74df00133f26d839f8d691d5f5188212ae1de5e9de021e3dca37881f7d",
+   "output": "cases/handshake-two-in-one.out",
+   "output_sha256": "0d942c9cf0fb0021c7d181c5490fee6dfbdc50cab4bf47a68932a340ff004f7b",
+   "asan": {
+    "same_output": true,
+    "reports": 0
+   }
+  },
+  {
+   "name": "handshake-split-records",
+   "about": "handshake fragmented across records: sub-parser restarts (B1)",
+   "flags": "nocert",
+   "bytes": 52,
+   "segments": 1,
+   "input": "cases/handshake-split-records.in.txt",
+   "input_sha256": "14246d73bef20620574504d3989e010bf10ef9d703f933654651f71c0955ae74",
+   "output": "cases/handshake-split-records.out",
+   "output_sha256": "6458945af20d14cea3c16b751b0a59d47b5d15cee4a4b62f6c82620019319a80",
+   "asan": {
+    "same_output": true,
+    "reports": 0
+   }
+  },
+  {
+   "name": "cert-three-chain",
+   "about": "three certificates: two X509CA records",
+   "flags": "cert",
+   "bytes": 3998,
+   "segments": 1,
+   "input": "cases/cert-three-chain.in.txt",
+   "input_sha256": "cb88919cf73f8082dd2273b90804550755758d1e8f016ca363ad3bb096f2db49",
+   "output": "cases/cert-three-chain.out",
+   "output_sha256": "8e46a21111619b8878043f378ace289cc13da830b5cb3a60ea29fc6f71cfea46",
+   "asan": {
+    "same_output": true,
+    "reports": 0
+   }
+  },
+  {
+   "name": "cert-empty-list",
+   "about": "certificate list of total length 0",
+   "flags": "cert",
+   "bytes": 54,
+   "segments": 1,
+   "input": "cases/cert-empty-list.in.txt",
+   "input_sha256": "9ee754f9124c378156a05b2a1eb41f3852ac4023a331bd97c60865575bd83678",
+   "output": "cases/cert-empty-list.out",
+   "output_sha256": "baef5919d12c91199e4c993900daf868759b577548b771fa4ca5204727655b92",
+   "asan": {
+    "same_output": true,
+    "reports": 0
+   }
+  },
+  {
+   "name": "cert-zero-then-real",
+   "about": "zero-length first certificate, then a real one",
+   "flags": "cert",
+   "bytes": 1206,
+   "segments": 1,
+   "input": "cases/cert-zero-then-real.in.txt",
+   "input_sha256": "99ef478fc77128caad0bc84ee7c91164bdbc893a6b9fff26396e1f6032685f23",
+   "output": "cases/cert-zero-then-real.out",
+   "output_sha256": "a0471705c34c066ad0ee5d4e607c0c097779cf178eb0beb5d02158c56f9a9f47",
+   "asan": {
+    "same_output": true,
+    "reports": 0
+   }
+  },
+  {
+   "name": "truncated-header",
+   "about": "two bytes only",
+   "flags": "cert",
+   "bytes": 2,
+   "segments": 1,
+   "input": "cases/truncated-header.in.txt",
+   "input_sha256": "92d62ab815ac2a57217504b618a53a21e13d48367f80cdeaa42917a766fc3ef1",
+   "output": "cases/truncated-header.out",
+   "output_sha256": "5da33aaf93673bee34058da0d98b3bf80366e4d77a3e14af889c37393774a491",
+   "asan": {
+    "same_output": true,
+    "reports": 0
+   }
+  },
+  {
+   "name": "cert-early-subject",
+   "about": "certificate without ServerHello, subject early: record order is split-dependent in C (E2.10)",
+   "flags": "cert",
+   "bytes": 763,
+   "segments": 1,
+   "input": "cases/cert-early-subject.in.txt",
+   "input_sha256": "09a9714504b1dc9c2e18845901169a235cf00f840a19a119690fa48844525e50",
+   "output": "cases/cert-early-subject.out",
+   "output_sha256": "769c419e9f18c6247c3545af1f2c696e1e2c4656c921f68a11a8319d1226eb8f",
+   "asan": {
+    "same_output": true,
+    "reports": 0
+   }
+  }
+ ]
+}

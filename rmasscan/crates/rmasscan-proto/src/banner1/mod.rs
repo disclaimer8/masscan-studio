@@ -21,6 +21,7 @@ pub(crate) mod session;
 mod smtp;
 mod ssh;
 mod telnet;
+pub(crate) mod tls;
 pub(crate) mod tls_hello;
 mod vnc;
 pub(crate) mod x509;
@@ -32,7 +33,7 @@ use rmasscan_core::stack::{TableParams, TcpStack, TcpStackFactory};
 
 use crate::tcp::stack::new_stack;
 
-pub use driver::{StreamAction, StreamResult, banner_stream, x509_stream};
+pub use driver::{StreamAction, StreamResult, banner_stream, tls_stream, x509_stream};
 pub use hello::{HelloSet, TcpBannerSettings};
 
 use session::BannerConfig;

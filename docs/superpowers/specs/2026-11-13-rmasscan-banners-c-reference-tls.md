@@ -396,6 +396,13 @@ reference A3) — the lab verifier in task 12 confirms the record TTL against th
   `x509_decode` calls: sticky across calls, invisible within one. Р13 golden = whole-stream run; the Rust
   walk gives that result in every split. Task 3 evidence: case `google-trunc-half` (C whole emits the CN,
   C bytewise emits nothing) and a 240-case mutation differential with zero mismatches against the whole run.
+- **E2.10 (4c) `ssl` vs `X509*` record order under capture.** `parse_server_cert` appends a chunk's base64
+  before feeding the same chunk to X.509, and chunks are bounded by the segment, so when the certificate
+  record is the banout head and crosses the 200-byte head move while the first name is still ahead in the
+  same chunk, C's flush order of `ssl` and `X509` records flips between whole and bytewise runs (task 4 case
+  `cert-early-subject`). Р13 golden = whole-stream order; rmasscan buffers each record's Certificate body and
+  processes it at the record boundary (record boundaries are a property of the stream, not of segmentation),
+  giving the whole-stream order in every split. Record contents are identical either way.
 
 ### F3. E3 — kept quirks (deterministic, reproduced)
 - SSLv3 ServerHello emits `vuln "SSL[v3] "` in every mode (B3 step 1).

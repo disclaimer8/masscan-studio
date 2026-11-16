@@ -181,9 +181,9 @@ impl Banout {
     }
 
     /// `banout_append_base64(banout, app, px, length, base64)` (`src/proto-banout.c:386-415`): каждая полная
-    /// тройка — 4 знака, хвост тройки живёт в `b64` между фрагментами. Знаки идут через [`Banout::append`]
-    /// кусками со стека; у C дописывание посимвольное, но порядок списка от размера куска не зависит: переезд
-    /// головы решает только `length` записи, а другое приложение внутри одного вызова не дописывается.
+    /// тройка — 4 знака, хвост тройки живёт в `b64` между фрагментами. Знаки дописываются по одному, как
+    /// `banout_append_char` у C: переезд головы на 200 байтах зависит от размера каждого дописывания, и
+    /// кусковая подача давала бы другой порядок записей на разрезанном потоке.
     pub(crate) fn append_base64(
         &mut self,
         budget: &mut ByteBudget,
@@ -191,8 +191,6 @@ impl Banout {
         app: u16,
         px: &[u8],
     ) {
-        let mut out = [0u8; 2048];
-        let mut n = 0usize;
         for &byte in px {
             match b64.state {
                 0 => {
@@ -208,18 +206,10 @@ impl Banout {
                     b64.state = 0;
                     let x = b64.temp;
                     for shift in [18, 12, 6, 0] {
-                        if n == out.len() {
-                            self.append(budget, app, &out[..n]);
-                            n = 0;
-                        }
-                        out[n] = B64[((x >> shift) & 0x3F) as usize];
-                        n += 1;
+                        self.append(budget, app, &[B64[((x >> shift) & 0x3F) as usize]]);
                     }
                 }
             }
-        }
-        if n != 0 {
-            self.append(budget, app, &out[..n]);
         }
     }
 
@@ -262,6 +252,15 @@ impl Banout {
         {
             rec.ended = true;
         }
+    }
+
+    /// Есть ли `needle` в сохранённых байтах записи `app` (`banout_is_contains`, `src/proto-banout.c:100-128`;
+    /// у C поиск по всей записи, здесь — по сохранённому префиксу, как у всех записей под пределом Р5).
+    pub(crate) fn contains(&self, app: u16, needle: &[u8]) -> bool {
+        self.recs
+            .iter()
+            .filter(|r| r.app == app)
+            .any(|r| r.bytes.windows(needle.len().max(1)).any(|w| w == needle))
     }
 
     /// Запись `app` неполная: предел Р5 или бюджет отказали ей в байте.

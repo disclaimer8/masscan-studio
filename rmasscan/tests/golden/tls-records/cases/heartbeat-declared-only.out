@@ -1,0 +1,9 @@
+tls-oracle v1 segments=1 bytes=18
+run whole calls=1
+record 20 16 "SSL[HEARTBLEED] "
+record 21 12 "MDEyMzQ1Njc4"
+end
+run bytewise calls=18
+record 20 16 "SSL[HEARTBLEED] "
+record 21 12 "MDEyMzQ1Njc4"
+end

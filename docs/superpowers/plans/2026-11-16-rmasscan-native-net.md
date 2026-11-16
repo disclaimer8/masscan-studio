@@ -1,8 +1,8 @@
 # rmasscan-net: нативный Rust, фаза 1 — план реализации
 
 > **ОБЯЗАТЕЛЬНЫЙ САБ-СКИЛЛ:** `superpowers:subagent-driven-development` (рекомендуется) или `superpowers:executing-plans`.
-> Шаги в чекбоксах (`- [ ]`). Цикл задачи: RED (тест) → FAIL → минимальная правка → PASS на названных ОС → замер (если
-> задача о скорости) → коммит.
+> Шаги в чекбоксах (`- [ ]`). Цикл задачи: RED (тест) → FAIL → минимальная правка → коммит → ворота на SHA этого
+> коммита → замер (если задача о скорости).
 
 **Goal:** `rmasscan-net` пишется идиоматичным Rust и становится быстрее на горячем пути, каждое ускорение подтверждено
 замером; поведение не меняется, кроме трёх решённых пользователем изменений P1–P3 и удаления тестового спайка BPF.
@@ -22,14 +22,15 @@ Windows; P1–P3 последними, у каждой своя ячейка с�
 **Опора (строки на базе `a275ea9e`):** `lib.rs` — контракт времени :19-29, `NetStats` :247, доки
 `tx_batches`/`tx_batch_max` :265-275, `Counters` :279-304, `snapshot` :322, `TxMode` :357, `OpenedAdapter` :364;
 `linux/mod.rs` — шов `PacketIo` :52, `TxHalf::step` :139, `Tx for TxHalf` :176, `RxHalf::step` :251, `Rx for RxHalf`
-:303, `tx_mode` :424; `linux/socket.rs` — `open` :38, `send` :100, `recv` :114; `linux/route.rs` — `Netlink` :71-173;
-`macos/adapter.rs` — `parse_record` :293, `RxHalf::step` :379, дедлайн `recv` :478; `macos/ifinfo.rs` — разбор
-`sockaddr` :145-200, `prefix_from_sockaddr` :399; `windows/adapter.rs` — `send_batch` :176, `RxHalf::wait` :254,
-`Rx for RxHalf` :282, проверка nonblock :420-424; `windows/ffi.rs` — `pcap_api!` и `REQUIRED_SYMBOLS` :232-314;
-`windows/loader.rs` — необязательный `pcap_init` :204-215. Движок: `Err` из `send_batch` → `FailReason::TxError(текст)`,
-`Uncertain` → `TxUncertain` без текста, `kernel_drops > 0` → `RxLoss` и остановка (`engine.rs:764-773`, `1255-1263`).
-Потребители: `rmasscan-lab`, `rmasscan-cli`, `studio/` (`studio-runner` зовёт `open_explicit`, `os_route_table`,
-`plan_physical`) — все только через публичный API.
+:303, `tx_mode` :424; `linux/socket.rs` — `open` :38, `send` :100, `recv` :114, сокет ioctl `hw_addr` :230;
+`linux/route.rs` — `Netlink` :71-173, `IfSock` :340; `macos/adapter.rs` — `parse_record` :293, `RxHalf::step` :379,
+дедлайн `recv` :478; `macos/ifinfo.rs` — разбор `sockaddr` :145-200, `prefix_from_sockaddr` :399;
+`windows/adapter.rs` — `send_batch` :176, `RxHalf::wait` :254, `Rx for RxHalf` :282, проверка nonblock :420-424;
+`windows/ffi.rs` — `pcap_api!` и `REQUIRED_SYMBOLS` :232-314; `windows/loader.rs` — необязательный `pcap_init`
+:204-215. Движок: `Err` из `send_batch` → `FailReason::TxError(текст)`, `Uncertain` → `TxUncertain` без текста,
+`kernel_drops > 0` → `RxLoss` и остановка (`engine.rs:764-773`, `1255-1263`); `flush_replies` и `send_stack_frames`
+зовут `tx.send` и игнорируют его `Err` (`engine.rs:989`, `1032`). Потребители: `rmasscan-lab`, `rmasscan-cli`,
+`studio/` (`studio-runner` зовёт `open_explicit`, `os_route_table`, `plan_physical`) — все только через публичный API.
 
 ## Global Constraints
 
@@ -60,6 +61,13 @@ Windows; P1–P3 последними, у каждой своя ячейка с�
   (`unsafe_count`, раздел «Команды»; база 199; тестовые файлы `*_tests.rs` не считаются) в конце каждой задачи не
   больше, чем в конце предыдущей. Исключения только названные: задача 15 (P1) +1 — вызов `sendmmsg`; задача 16 (P2)
   +3 — `transmute` символа `pcap_getevent`, вызов `pcap_getevent`, вызов функции ожидания. Число пишется в заметки.
+- **Порядок задачи и ворота.** Ворота проверяют закоммиченное дерево, а не рабочее: задача сначала коммитит, затем
+  `SHA` берётся с этого коммита (рабочее дерево чистое), и `M-gate`, `L-gate`, `W-gate` идут на нём; `L-gate` и
+  `W-gate` архивируют именно этот `SHA`. Провал ворот исправляется новым коммитом в той же задаче, ворота повторяются
+  на новом `SHA`. RED для кода только Linux или только Windows — отдельным коммитом теста (`test(…)`) и прогоном
+  `l_red`/`w_red` на его `SHA`. Любой прогон тестов (с фильтром и без) годен, только если libtest напечатал итог для
+  каждой строки `running N tests` и в сумме выполнено N ≥ 1 тестов; фильтр, не нашедший ни одного теста, — провал.
+  Каждая команда ворот и стенда идёт под таймаутом; зависание — провал.
 - **Сборки.** Каждая команда задаёт `CARGO_TARGET_DIR` вне дерева; `rmasscan/target` не создаётся. Фоновые процессы в
   zsh: `trap 'trap - EXIT INT TERM; kill 0' EXIT INT TERM` (не `trap 'kill 0' …`: крутит CPU); по окончании
   `ps -Ao pid,%cpu,etime,command | awk '$2>80'` и остановка только своих процессов.
@@ -67,14 +75,16 @@ Windows; P1–P3 последними, у каждой своя ячейка с�
   компилируется. Такая задача проверяется сборкой и тестами на Linux-хосте стенда (`L-gate`) и в Windows-госте стенда
   (`W-gate`); ворота повторяют шаги CI (`clippy --workspace`, `--features lab`). CI — только после push, а push и PR —
   только с согласия пользователя. Скрипты Windows копируются файлом и запускаются
-  `pwsh -NoProfile -ExecutionPolicy Bypass -File …`, никогда `-Command "…"`.
+  `pwsh -NoProfile -ExecutionPolicy Bypass -File …`, никогда `-Command "…"`; `ssh` без полезной нагрузки на stdin
+  запускается с `-n`, код возврата проверяется.
 - **Скорость.** Числа с Mac только ранжируют. Задача о скорости в `rmasscan-net` доказывается ячейкой `U` на
   Linux-стенде по протоколу раздела «Замеры» (калибровка «база против базы» и парные A/B в одной сессии), а
   существующая матрица 4×5 остаётся 40/40 VALID без потерь RX. Физические NIC не используются: скан реальной сети —
   внешнее действие.
-- **Гигиена публичного репозитория.** Ни локальных путей, ни имён пользователей, хостов и LAN-адресов: хосты
-  называются по роли (`$LINUX_HOST` — Linux-хост стенда, CPU оракула; `$WIN_GUEST` — Windows-гость стенда). Перед
-  каждым коммитом `git diff --cached -U0 | grep '^+' | hygiene` (раздел «Команды») печатает пустоту.
+- **Гигиена публичного репозитория.** Ни локальных путей, ни имён пользователей, хостов и LAN-адресов: хосты и учётки
+  называются по роли (`$LINUX_HOST` — Linux-хост стенда, CPU оракула; `$VM_HOST` — хост Windows VM; `$WIN_PORT`,
+  `$WIN_USER` — проброшенный порт ssh гостя и его учётка; `$ORACLE` — путь к C-оракулу на хосте стенда). Перед каждым
+  коммитом `git diff --cached -U0 | grep '^+' | hygiene` (раздел «Команды») печатает пустоту.
 - **Коммиты.** `git add` только явных путей; сообщение через `git commit -F -` с последней строкой
   `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`. Ветка `refactor/rmasscan-native-net` от `a275ea9e`.
 - **Заметки.** Исполнитель пишет решения, находки и числа по ходу в
@@ -87,69 +97,139 @@ Windows; P1–P3 последними, у каждой своя ячейка с�
 
 ## Команды
 
+Помощники лежат в `$EVID/rnn-gates.sh` (в репозиторий не кладётся) и подключаются `source` из корня worktree;
+`M-gate`, `L-gate`, `W-gate` в тексте задач — это функции `m_gate`, `l_gate`, `w_gate` ниже. На Mac
+нужен GNU `timeout` (coreutils; `timeout` или `gtimeout`); без него ворота не запускаются. На хосте стенда — системный
+`timeout`. GNU `timeout` посылает сигнал всей группе процессов, поэтому вместе с `cargo` гибнут и тестовые бинарники.
+
 ```bash
-# Общие переменные (Mac, корень worktree)
+# rnn-gates.sh
 export CARGO_TARGET_DIR="${TMPDIR:-/tmp}/rmasscan-native-net-target"
-EVID=$(mktemp -d "${TMPDIR:-/tmp}/rmasscan-native-net.XXXXXX")   # доказательства задачи, вне репозитория
-SHA=$(git rev-parse --short HEAD)
+EVID=${EVID:-$(mktemp -d "${TMPDIR:-/tmp}/rmasscan-native-net.XXXXXX")}   # доказательства, вне репозитория
+TO=$(command -v timeout || command -v gtimeout)
+LIMIT=5400   # секунд на одну команду ворот
+hygiene() { grep -nE '/Use''rs/|mini''pc|home''-pc|192\.168|den''ys'; }   # шаблон собран из частей
 
-# M-gate (Mac)
-(cd rmasscan && cargo fmt --all --check \
-  && cargo clippy --locked --workspace --all-targets -- -D warnings \
-  && cargo clippy --locked -p rmasscan-net --all-targets --features lab -- -D warnings \
-  && cargo test --locked -p rmasscan-net \
-  && cargo test --locked -p rmasscan-net --features lab --lib lab_io \
-  && cargo test --locked -p rmasscan-net --example wire_scan) \
-  && git diff --exit-code a275ea9e -- rmasscan/Cargo.lock studio/Cargo.lock
-
-# L-gate (Linux-хост стенда): всё дерево HEAD, сборка вне дерева
-git archive --format=tar --prefix="rnn-$SHA/" HEAD | ssh "$LINUX_HOST" 'mkdir -p ~/rnn && tar -x -C ~/rnn'
-ssh "$LINUX_HOST" "cd ~/rnn/rnn-$SHA/rmasscan && export CARGO_TARGET_DIR=/tmp/rnn-target \
-  && ~/.cargo/bin/cargo clippy --locked --workspace --all-targets -- -D warnings \
-  && ~/.cargo/bin/cargo clippy --locked -p rmasscan-net --all-targets --features lab -- -D warnings \
-  && ~/.cargo/bin/cargo test --locked -p rmasscan-net \
-  && ~/.cargo/bin/cargo test --locked -p rmasscan-net --features lab --lib lab_io \
-  && ~/.cargo/bin/cargo test --locked -p rmasscan-net --example wire_scan"
-
-# W-gate (Windows-гость): zip дерева HEAD; копирование в гостя — путём из rmasscan/docs/rust-lab.md
-git archive --format=zip -o "$EVID/rnn-$SHA.zip" HEAD
-#   в госте: pwsh -NoProfile -ExecutionPolicy Bypass -File rnn-test.ps1 -Zip rnn-<sha>.zip
-```
-
-`rnn-test.ps1` (файл в `$EVID`, в репозиторий не кладётся):
-
-```powershell
-param([Parameter(Mandatory)][string]$Zip)
-[Console]::OutputEncoding = [Text.Encoding]::UTF8
-$ErrorActionPreference = 'Stop'
-$root = Join-Path $env:TEMP ([IO.Path]::GetFileNameWithoutExtension($Zip))
-Expand-Archive -Path $Zip -DestinationPath $root -Force
-$env:CARGO_TARGET_DIR = Join-Path $env:TEMP 'rnn-target'
-Set-Location (Join-Path $root 'rmasscan')
-foreach ($a in @('clippy --locked --workspace --all-targets -- -D warnings',
-                 'clippy --locked -p rmasscan-net --all-targets --features lab -- -D warnings',
-                 'test --locked -p rmasscan-net',
-                 'test --locked -p rmasscan-net --features lab --lib lab_io',
-                 'test --locked -p rmasscan-net --example wire_scan')) {
-  & cargo @($a -split ' '); if ($LASTEXITCODE) { exit 1 }
+gate_sha() {   # ворота только на закоммиченном дереве
+  [ -n "$TO" ] || { echo "STOP: no GNU timeout" >&2; return 1; }
+  [ -z "$(git status --porcelain)" ] || { echo "STOP: commit first" >&2; return 1; }
+  git rev-parse --short HEAD
 }
-```
+libtest_ok() {   # каждая строка `running N tests` имеет итог `test result:`, и в сумме N >= 1
+  local ran res n
+  ran=$(grep -cE '^running [0-9]+ tests?$' "$1"); res=$(grep -cE '^test result: ' "$1")
+  n=$(grep -E '^running [0-9]+ tests?$' "$1" | awk '{s+=$2} END {print s+0}')
+  [ "$ran" -ge 1 ] && [ "$ran" -eq "$res" ] && [ "$n" -ge 1 ] \
+    || { echo "STOP: no test ran or a summary is missing: $1" >&2; return 1; }
+}
+run() {   # run LOG cmd... : таймаут, лог; прогон тестов ещё и через libtest_ok
+  local log=$1; shift
+  "$TO" -k 30 "$LIMIT" "$@" >"$log" 2>&1; local rc=$?
+  [ "$rc" -eq 124 ] && echo "STOP: timeout: $*" >&2
+  case " $* " in *" test "*) libtest_ok "$log" || return 1 ;; esac
+  return "$rc"
+}
+red() {   # red LOG cmd... : RED засчитан, если команда упала и либо выполнен >= 1 тест, либо ошибка компиляции
+  local log=$1; shift
+  "$TO" -k 30 "$LIMIT" "$@" >"$log" 2>&1 && { echo "STOP: expected FAIL: $*" >&2; return 1; }
+  libtest_ok "$log" 2>/dev/null || grep -qE '^error(\[E[0-9]+\])?: ' "$log" \
+    || { echo "STOP: neither a test run nor a compile error: $log" >&2; return 1; }
+}
 
-```bash
-# Гигиена: шаблон (локальные пути, имена хостов и учётки, LAN) собран из частей, чтобы его не содержал сам план
-hygiene() { grep -nE '/Use''rs/|mini''pc|home''-pc|192\.168|den''ys'; }
+m_gate() {   # Mac
+  local sha; sha=$(gate_sha) || return 1
+  (cd rmasscan \
+    && run "$EVID/m-$sha-fmt.log" cargo fmt --all --check \
+    && run "$EVID/m-$sha-clippy.log" cargo clippy --locked --workspace --all-targets -- -D warnings \
+    && run "$EVID/m-$sha-clippy-lab.log" cargo clippy --locked -p rmasscan-net --all-targets --features lab -- -D warnings \
+    && run "$EVID/m-$sha-test.log" cargo test --locked -p rmasscan-net \
+    && run "$EVID/m-$sha-lab.log" cargo test --locked -p rmasscan-net --features lab --lib lab_io \
+    && run "$EVID/m-$sha-example.log" cargo test --locked -p rmasscan-net --example wire_scan) \
+    && git diff --exit-code a275ea9e -- rmasscan/Cargo.lock studio/Cargo.lock
+}
 
-# Число блоков unsafe в рабочем коде (из rmasscan/crates/rmasscan-net; база 199)
-unsafe_count() {
+l_ship() {   # архив SHA на хост (stdin — полезная нагрузка, поэтому без -n)
+  git archive --format=tar --prefix="rnn-$1/" "$1" | "$TO" 600 ssh "$LINUX_HOST" 'mkdir -p ~/rnn && tar -x -C ~/rnn'
+}
+l_cargo() {   # l_cargo LOG SHA args... : cargo на хосте под таймаутом на обеих сторонах
+  local log=$1 sha=$2; shift 2
+  run "$log" ssh -n "$LINUX_HOST" "cd ~/rnn/rnn-$sha/rmasscan && CARGO_TARGET_DIR=/tmp/rnn-target \
+    timeout -k 30 $LIMIT ~/.cargo/bin/cargo $*"
+}
+l_gate() {
+  local sha; sha=$(gate_sha) || return 1
+  l_ship "$sha" \
+    && l_cargo "$EVID/l-$sha-clippy.log" "$sha" clippy --locked --workspace --all-targets -- -D warnings \
+    && l_cargo "$EVID/l-$sha-clippy-lab.log" "$sha" clippy --locked -p rmasscan-net --all-targets --features lab -- -D warnings \
+    && l_cargo "$EVID/l-$sha-test.log" "$sha" test --locked -p rmasscan-net \
+    && l_cargo "$EVID/l-$sha-lab.log" "$sha" test --locked -p rmasscan-net --features lab --lib lab_io \
+    && l_cargo "$EVID/l-$sha-example.log" "$sha" test --locked -p rmasscan-net --example wire_scan
+}
+l_red() {   # l_red FILTER : коммит теста уже сделан
+  local sha; sha=$(gate_sha) || return 1
+  l_ship "$sha" && red "$EVID/l-$sha-red.log" ssh -n "$LINUX_HOST" "cd ~/rnn/rnn-$sha/rmasscan && \
+    CARGO_TARGET_DIR=/tmp/rnn-target timeout -k 30 $LIMIT ~/.cargo/bin/cargo test --locked -p rmasscan-net $1"
+}
+
+# W: путь до гостя — ssh через хост VM на проброшенный порт (см. «Транспорт W-gate» ниже)
+wssh() { ssh -n -J "$VM_HOST" -p "$WIN_PORT" "$WIN_USER@127.0.0.1" "$@"; }
+wscp() { "$TO" 600 scp -q -J "$VM_HOST" -P "$WIN_PORT" "$@" "$WIN_USER@127.0.0.1:"; }
+w_ship() { git archive --format=zip -o "$EVID/rnn-$1.zip" "$1" && wscp "$EVID/rnn-$1.zip" "$EVID/rnn-test.ps1"; }
+w_gate() {   # w_gate [-Workspace]
+  local sha; sha=$(gate_sha) || return 1
+  w_ship "$sha" && run "$EVID/w-$sha-test.log" wssh \
+    "pwsh -NoProfile -ExecutionPolicy Bypass -File rnn-test.ps1 -Zip rnn-$sha.zip -Limit $LIMIT $*" \
+    && libtest_ok "$EVID/w-$sha-test.log"
+}
+w_red() {   # w_red FILTER
+  local sha; sha=$(gate_sha) || return 1
+  w_ship "$sha" && red "$EVID/w-$sha-red.log" wssh \
+    "pwsh -NoProfile -ExecutionPolicy Bypass -File rnn-test.ps1 -Zip rnn-$sha.zip -Limit $LIMIT -Filter $1"
+}
+
+unsafe_count() {   # из rmasscan/crates/rmasscan-net; база 199
   find src -name '*.rs' ! -name '*_tests.rs' ! -name 'tests.rs' ! -path '*/tests/*' ! -name 'spike.rs' ! -name 'live.rs' \
     | xargs sed -E 's://.*$::' | grep -oE '\bunsafe[[:space:]]*\{' | wc -l
 }
 ```
 
-Фильтр одного теста: `cargo test --locked -p rmasscan-net <имя>`. Любая команда на хосте идёт из дерева архива
-`~/rnn/rnn-<sha>/rmasscan` с `CARGO_TARGET_DIR=/tmp/rnn-target`, в госте — из распакованного дерева с
-`CARGO_TARGET_DIR=$env:TEMP\rnn-target`; RED для кода только Linux или только Windows подтверждается там же с фильтром
-теста.
+`rnn-test.ps1` (в `$EVID`, в репозиторий не кладётся). Каждая команда `cargo` идёт отдельным процессом с ожиданием не
+дольше `-Limit` секунд; по истечении дерево процессов убивается и скрипт выходит с кодом 124. Весь вывод идёт в stdout
+ssh, и `run`/`red` на Mac проверяют его через `libtest_ok`.
+
+```powershell
+param([Parameter(Mandatory)][string]$Zip, [int]$Limit = 5400, [string]$Filter = '', [switch]$Workspace)
+[Console]::OutputEncoding = [Text.Encoding]::UTF8
+$ErrorActionPreference = 'Stop'
+$zipPath = (Resolve-Path $Zip).Path
+$root = Join-Path $env:TEMP ([IO.Path]::GetFileNameWithoutExtension($zipPath))
+Expand-Archive -Path $zipPath -DestinationPath $root -Force
+$env:CARGO_TARGET_DIR = Join-Path $env:TEMP 'rnn-target'
+Set-Location (Join-Path $root 'rmasscan')
+function Invoke-Cargo([string]$a) {
+  $log = Join-Path $env:TEMP 'rnn-cargo.log'
+  $p = Start-Process cargo -ArgumentList $a -NoNewWindow -PassThru -RedirectStandardOutput $log -RedirectStandardError "$log.err"
+  if (-not $p.WaitForExit($Limit * 1000)) { taskkill /T /F /PID $p.Id | Out-Null; Get-Content $log, "$log.err"; exit 124 }
+  Get-Content $log, "$log.err"; return $p.ExitCode
+}
+$steps = if ($Filter) { @("test --locked -p rmasscan-net $Filter") } else {
+  @('clippy --locked --workspace --all-targets -- -D warnings',
+    'clippy --locked -p rmasscan-net --all-targets --features lab -- -D warnings',
+    'test --locked -p rmasscan-net',
+    'test --locked -p rmasscan-net --features lab --lib lab_io',
+    'test --locked -p rmasscan-net --example wire_scan') }
+if ($Workspace) { $steps += 'test --locked --workspace' }
+foreach ($a in $steps) { $rc = Invoke-Cargo $a; if ($rc) { exit $rc } }
+exit 0
+```
+
+**Транспорт W-gate.** Документы лаборатории не описывают общего копирования файлов в гостя: `rmasscan/docs/rust-lab.md`
+(«Deployment», шаг 4) велит собирать `wire_scan.exe` в госте из `git archive` того же коммита и запрещает руками
+копировать семь скриптов набора, а путь до гостя в документах один — ssh через хост VM на проброшенный порт
+(`rust-lab.md`, раздел о приватности доказательств: `ssh -J <хост VM> -p <порт> <учётка гостя>@127.0.0.1`). Самый узкий
+путь, который это допускает и который используют `w_ship`/`w_gate`: тем же ssh (`scp` с теми же `-J`/`-P`) в домашний
+каталог учётки гостя кладутся только `rnn-<sha>.zip` и `rnn-test.ps1` — не скрипты набора и не в его каталог; запуск —
+`ssh -n` с `pwsh -NoProfile -ExecutionPolicy Bypass -File rnn-test.ps1 …`; код возврата ssh — код скрипта.
 
 ## Замеры на стенде
 
@@ -158,61 +238,71 @@ unsafe_count() {
 `sudo -n` он поднимает изоляцию по правилам `scripts/wire-lab.sh`: две netns `rnn-a`/`rnn-b`, пара veth
 `rnn-va`/`rnn-vb` (qdisc по умолчанию, `noqueue`, как в матрице), без uplink, моста и NAT, IPv6 выключен на обоих
 концах, маршрута по умолчанию нет; MAC `02:aa:00:00:00:01`/`02:aa:00:00:00:02`, сканер `10.200.0.1/24` (адрес адаптера
-`10.200.0.100` не назначен), у пира `10.200.0.2-5/24` без слушателей (ядро пира отвечает RST на каждый SYN); проверка
-изоляции — `rmasscan-lab capture isolation`, как в `wire-lab.sh`; снятие —
+`10.200.0.100` не назначен), у пира 128 адресов `10.200.0.2-10.200.0.129/24` без слушателей (ядро пира отвечает RST на
+каждый SYN); проверка изоляции — `rmasscan-lab capture isolation`, как в `wire-lab.sh`; снятие —
 `trap 'trap - EXIT INT TERM; ip netns del rnn-a; ip netns del rnn-b' EXIT INT TERM`. Сканер всегда запускается под
-`taskset -c <набор>`; набор один на сессию и записан в тексте ячейки.
+`taskset -c <набор>`; набор один на сессию и записан в тексте ячейки. Каждый прогон — под
+`timeout -k 10 <3 × ожидаемая длительность>`; срыв по таймауту — INVALID. Сессия целиком запускается из Mac как
+`"$TO" -k 60 7200 ssh -n "$LINUX_HOST" "sudo -n bash <скрипт> …"`.
 
 **Ячейка U.** `wire_scan` (release) из `ip netns exec rnn-a` с `--iface rnn-va --src-ip 10.200.0.100
 --src-mac 02:aa:00:00:00:01 --router-mac 02:aa:00:00:00:02 --seed 1 --source-port 40000 --wait 1`. CPU потоков движка
-берётся из `workers.tx_cpu_ns`/`rx_cpu_ns` JSON (задача 1), а не из CPU всего процесса.
+берётся из `workers.tx_cpu_ns`/`rx_cpu_ns` JSON (задача 1), а не из CPU всего процесса; значение `null` или `0`
+(`schedstat` печатает `0 0 0`, когда учёт выключен) делает прогон INVALID.
 
-- `U-TX` — `--rate 100000000 --targets 10.200.0.0/16 --ports 1-64` (4 194 304 пробы, отвечают только `.2-.5`).
-  Метрики: `timing.steady_pps`; CPU потока TX на отправленный кадр; `net.tx_would_block`. Годный прогон:
-  `reason == "Completed"`, `net.tx_sent` равен числу проб, прирост RX-пакетов `rnn-vb` по `ip -s -j link` не меньше
-  `net.tx_sent`, `rx_health.kernel_drops == 0`.
-- `U-RX` — CPU потока RX на принятый кадр при фиксированной скорости `R_RX`, `--targets 10.200.0.2-10.200.0.5
-  --ports 1-65535` (262 140 проб, на каждую RST). `R_RX` выбирается в калибровке сессии: наибольшая из лестницы
-  400 000, 300 000, 200 000, 150 000, 100 000 pps, на которой все прогоны базы в калибровке годны. Годный прогон:
-  `reason == "Completed"`, `rx_health.kernel_drops == 0`, ответов не меньше числа проб. Движок обрывает скан на первой
-  потере ядра (`RxLoss`), поэтому прогон без ограничения скорости здесь не годен по определению.
+- `U-TX` — `--rate 100000000 --targets 10.200.0.0/16 --ports 1-64` (4 194 304 пробы). Метрики: `timing.steady_pps`;
+  CPU потока TX на отправленный кадр; `net.tx_would_block`. Годный прогон: `reason == "Completed"`, `net.tx_sent`
+  равен числу проб, прирост RX-пакетов `rnn-vb` по `ip -s -j link` не меньше `net.tx_sent`,
+  `rx_health.kernel_drops == 0`.
+- `U-RX` — CPU потока RX на принятый кадр при фиксированной скорости `R_RX`, `--targets 10.200.0.2-10.200.0.129
+  --ports 1-P`, `P = ⌈11 · R_RX / 128⌉` (не меньше 10 с установившегося режима плюс разгон). `R_RX` выбирается в
+  калибровке сессии: наибольшая из лестницы 400 000, 300 000, 200 000, 150 000, 100 000 pps, на которой все прогоны
+  базы в калибровке годны. Годный прогон: `reason == "Completed"`, `rx_health.kernel_drops == 0`, `reply_unique` JSON
+  не меньше числа проб (на каждую пробу ровно один RST, адреса и порты различны). Движок обрывает скан на первой
+  потере ядра (`RxLoss`), поэтому прогон без ограничения скорости здесь не годен по определению. Для справки (не
+  ворота) после A/B по одному прогону каждой версии на каждой ступени лестницы сверху вниз; наибольшая ступень с
+  годным прогоном у каждой версии пишется в `BENCHMARKS.md`.
 - Негодный прогон — INVALID: никогда не PASS, в медианы не идёт. INVALID базы в калибровке — сессия не годна (для
   `U-RX` — шаг вниз по лестнице, для `U-TX` — новая сессия). INVALID новой версии при годной базе — FAIL задачи.
 - **Протокол сессии** (одна сессия = один подъём стенда S, без перезапуска хоста): (1) калибровка «база против базы» —
   5 пар чередованием (база, база); разброс `S_AA = |медиана₁ − медиана₂| / медиана` по каждой метрике; порог
   `T = max(2 %, S_AA)`; (2) парные A/B — 5 пар чередованием (база, новая) в той же сессии; (3) C-оракул — отдельной
-  серией после A/B, только для справки. База — коммит ветки до первой правки задачи (sha в заметках), сборка из
-  `git archive`, как `L-gate`.
-- Ворота «без регрессии»: медиана новой версии хуже медианы базы не больше чем на `T` по каждой метрике ячейки.
+  серией после A/B, только для справки. База — коммит ветки до первой правки задачи, новая — последний коммит задачи
+  (оба sha в заметках), сборка из `git archive` этих sha, как `L-gate`.
+- Ворота «без регрессии» (каждая метрика ячейки): отношение медиан новая/база (в сторону «лучше») не ниже `1 − T` и не
+  ниже 0,97, какой бы ни вышла `S_AA`; и не меньше чем в 4 из 5 пар новая версия не хуже своей пары больше чем на `T`.
   Ворота «ускорение»: по целевой метрике задачи медиана новой версии лучше медианы базы больше чем на `T`, и не меньше
   4 из 5 повторов новой версии лучше медианы базы; прочие метрики — «без регрессии». Если ворота «ускорение» не
-  пройдены, продуктовая правка не коммитится, отрицательный замер с `T` пишется в `BENCHMARKS.md`, решение за
-  пользователем.
+  пройдены, продуктовые коммиты задачи отменяются `git revert` (история не переписывается), отрицательный замер с `T`
+  пишется в `BENCHMARKS.md`, решение за пользователем.
 
-**Матрица** (существующая, 40 ячеек) и полный набор Rust на том же дереве; `ORACLE` — путь к закреплённому C-оракулу
-на хосте (переменная окружения хоста):
+**Матрица** (существующая, 40 ячеек) и полный набор Rust на коммите задачи; `$ORACLE` (путь на хосте) подставляется в
+команду на Mac:
 
 ```bash
-ssh "$LINUX_HOST" "cd ~/rnn/rnn-$SHA/rmasscan && export CARGO_TARGET_DIR=/tmp/rnn-target \
+SHA=$(gate_sha) && l_ship "$SHA" && "$TO" -k 60 30000 ssh -n "$LINUX_HOST" \
+  "cd ~/rnn/rnn-$SHA/rmasscan && export CARGO_TARGET_DIR=/tmp/rnn-target \
   RMASSCAN_LAB_BIN=/tmp/rnn-target/release/rmasscan-lab OUT=\$(mktemp -d /tmp/rmasscan-native-net.XXXX) \
-  && ~/.cargo/bin/cargo build --locked --release -p rmasscan-lab \
-  && ~/.cargo/bin/cargo build --locked --release -p rmasscan-net --example wire_scan \
-  && scripts/wire-lab.sh --oracle \"\$ORACLE\" --out \$OUT/perf --suite perf --reps 5 \
+  && timeout -k 30 5400 ~/.cargo/bin/cargo build --locked --release -p rmasscan-lab \
+  && timeout -k 30 5400 ~/.cargo/bin/cargo build --locked --release -p rmasscan-net --example wire_scan \
+  && timeout -k 60 14400 scripts/wire-lab.sh --oracle '$ORACLE' --out \$OUT/perf --suite perf --reps 5 \
        --rust-bin /tmp/rnn-target/release/examples/wire_scan \
-  && scripts/wire-lab.sh --oracle \"\$ORACLE\" --out \$OUT/rust --suite rust \
+  && timeout -k 60 7200 scripts/wire-lab.sh --oracle '$ORACLE' --out \$OUT/rust --suite rust \
        --rust-bin /tmp/rnn-target/release/examples/wire_scan --fixtures tests/golden/wire \
   && RMASSCAN_WIRE_RESULTS=\$OUT/rust RMASSCAN_WIRE_PERF_RESULTS=\$OUT/perf \
-       ~/.cargo/bin/cargo test --locked -p rmasscan-net --test linux_wire -- --ignored"
+       timeout -k 30 1800 ~/.cargo/bin/cargo test --locked -p rmasscan-net --test linux_wire -- --ignored" \
+  >"$EVID/matrix-$SHA.log" 2>&1 && libtest_ok "$EVID/matrix-$SHA.log"
 ```
 
-Ожидается: матрица 40/40 VALID, `rust_kernel_drops_per_run` и `rust_rx_incomplete_runs` нули, набор `rust` без FAIL и
-NOT RUN, все `linux_wire --ignored` ok. `--suite rust` нужен задачам 13, 15 и 17 и приёмке; матрица — каждой задаче
-о скорости.
+Вывод сохраняется в `$EVID`, итог `cargo test` проверяется `libtest_ok`. Ожидается: матрица 40/40 VALID,
+`rust_kernel_drops_per_run` и `rust_rx_incomplete_runs` нули, набор `rust` без FAIL и NOT RUN, все `linux_wire
+--ignored` ok. `--suite rust` нужен задачам 13, 15 и 17 и приёмке; матрица — каждой задаче о скорости.
 
 **Дымовой прогон адаптера** (задачи 1, 6, 13, 15, 17): `cargo test --locked --release -p rmasscan-net --test linux_io
 --no-run`, затем бинарник из вывода под `sudo -n ip netns exec rnn-a env RMASSCAN_LAB_IFACE=rnn-va
-RMASSCAN_LAB_IP=10.200.0.100 RMASSCAN_LAB_MAC=02:aa:00:00:00:01 RMASSCAN_LAB_PEER_MAC=02:aa:00:00:00:02 <bin> --ignored
---test-threads=1 lab_`; `lab_open_without_privilege_is_permission_denied` — под `setpriv --reuid=nobody --regid=nogroup
+RMASSCAN_LAB_IP=10.200.0.100 RMASSCAN_LAB_MAC=02:aa:00:00:00:01 RMASSCAN_LAB_PEER_MAC=02:aa:00:00:00:02 timeout -k 10
+600 <bin> --ignored --test-threads=1 --skip lab_open_without_privilege_is_permission_denied lab_` (итог —
+`libtest_ok`); `lab_open_without_privilege_is_permission_denied` отдельно под `setpriv --reuid=nobody --regid=nogroup
 --clear-groups`, иначе он записывается NOT RUN.
 
 ## Review Focus
@@ -225,8 +315,9 @@ RMASSCAN_LAB_IP=10.200.0.100 RMASSCAN_LAB_MAC=02:aa:00:00:00:01 RMASSCAN_LAB_PEE
    `tx_batch_lost_error_is_resolved_by_reissue_within_one_deadline` (задача 15).
 3. **Старый wpcap без `pcap_getevent` или NULL-событие:** RX работает прежним опросом 1 мс, без `MissingCapability`.
    Тест `missing_or_null_event_falls_back_to_one_ms_polling` (задача 16).
-4. **Событие Npcap, которое остаётся сигнальным при пустом буфере:** RX не крутится вхолостую, число пробуждений за
-   бюджет ограничено. Тест `signalled_but_empty_event_does_not_spin` (задача 16).
+4. **Событие Npcap, которое остаётся сигнальным при пустом буфере:** RX не крутится вхолостую — вызовов `pcap_next_ex`
+   и ожиданий лишь на малую константу больше, чем у опроса без события. Тест `signalled_but_empty_event_does_not_spin`
+   (задача 16).
 5. **`health` между пачками RX:** при кадрах, лежащих во внутреннем кольце, `health` делает свежее чтение
    `PACKET_STATISTICS`, а кадры кольца выдаются после него без потерь и без повторного счёта. Тест
    `health_between_batches_reads_fresh_drops_and_keeps_buffered_frames` (задача 13).
@@ -251,7 +342,8 @@ RMASSCAN_LAB_IP=10.200.0.100 RMASSCAN_LAB_MAC=02:aa:00:00:00:01 RMASSCAN_LAB_PEE
 ### Задача 1: страховка — раскладка ABI, флаги сокетов, точные тексты, счётчики, микробенч, стенд
 
 Проверяет: Mac (macOS и переносимые фейки Windows), Linux-хост (`L-gate`), Windows-гость (`W-gate`); стенд S
-(дымовой прогон, первая калибровка). Продуктовый код не меняется, кроме видимости констант, которые сверяют тесты.
+(дымовой прогон, первая калибровка). Продуктовый код не меняется, кроме видимости констант, которые сверяют тесты, и
+одного выноса функции без изменения поведения (ниже).
 
 **Files:**
 - Create: `src/linux/layout_tests.rs` (`#[cfg(all(test, target_os = "linux"))] mod layout_tests;` в `linux/mod.rs`),
@@ -260,8 +352,10 @@ RMASSCAN_LAB_IP=10.200.0.100 RMASSCAN_LAB_MAC=02:aa:00:00:00:01 RMASSCAN_LAB_PEE
   `src/linux/route_observation_tests.rs`, `src/linux/tests.rs`, `src/macos/route.rs` (модуль `bounded_tests`),
   `src/macos/tests/adapter_tests.rs`, `src/windows/tests/adapter_tests.rs`, `src/windows/tests.rs`,
   `tests/linux_io.rs`
-- Modify (видимость): приватные константы `route_parse::{rtsock::{SDL_DATA, SIN6_LEN, SIN6_ADDR}, netlink::RTA_HDRLEN}`
-  → `pub(crate)`
+- Modify (продукт): видимость приватных констант `route_parse::{rtsock::{SDL_DATA, SIN6_LEN, SIN6_ADDR},
+  netlink::RTA_HDRLEN}` → `pub(crate)`; в `src/linux/socket.rs` создание сокета ioctl из `OsIface::hw_addr` выносится
+  в `fn ioctl_socket() -> Result<OwnedFd, Errno>` (тот же `socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0)`, тот же
+  errno), чтобы его флаги можно было проверить
 - Modify (harness): `examples/wire_scan.rs`; `rmasscan/BENCHMARKS.md` (текст стенда S и ячейки U, первая калибровка)
 
 **Interfaces:**
@@ -297,12 +391,14 @@ RMASSCAN_LAB_IP=10.200.0.100 RMASSCAN_LAB_MAC=02:aa:00:00:00:01 RMASSCAN_LAB_PEE
     константам `Win32::NetworkManagement::IpHelper`.
 - [ ] **Step 2: флаги сокетов в местах вызова** (через `fd_flags` на возвращённом fd, без подсчёта fd процесса):
   `netlink_sockets_keep_their_flags` (`route_tests.rs`, Linux): `Netlink::open()` — `FD_CLOEXEC` есть, `O_NONBLOCK`
-  нет; сокет ioctl `IfSock::open()` — `FD_CLOEXEC` есть, `O_NONBLOCK` нет; `observation_socket_keeps_its_flags`
-  (`route_observation_tests.rs`): `Socket::open()` — оба есть; `route_socket_keeps_its_flags` (`macos/route.rs`,
-  `bounded_tests`): `route_socket(AF_INET)` — `O_NONBLOCK` есть, `FD_CLOEXEC` нет. AF_PACKET (нужны привилегии):
-  `#[ignore] lab_packet_sockets_are_nonblocking_and_cloexec` в `tests/linux_io.rs` — множество `/proc/self/fd` до и
-  после `open_explicit`, у каждого нового сокета в `/proc/self/fdinfo/<fd>` есть `O_NONBLOCK` и `O_CLOEXEC`; идёт только
-  в дымовом прогоне (`--test-threads=1`).
+  нет; `IfSock::open()` — `FD_CLOEXEC` есть, `O_NONBLOCK` нет; `hw_addr_ioctl_socket_keeps_its_flags`
+  (`linux/tests.rs` или тесты `socket`, Linux): `ioctl_socket()` — `FD_CLOEXEC` есть, `O_NONBLOCK` нет;
+  `observation_socket_keeps_its_flags` (`route_observation_tests.rs`): `Socket::open()` — оба есть;
+  `route_socket_keeps_its_flags` (`macos/route.rs`, `bounded_tests`): `route_socket(AF_INET)` — `O_NONBLOCK` есть,
+  `FD_CLOEXEC` нет. AF_PACKET (нужны привилегии): `#[ignore] lab_packet_sockets_are_nonblocking_and_cloexec` в
+  `tests/linux_io.rs` — множество `/proc/self/fd` до и после `open_explicit`; новых сокетов не меньше двух (TX и RX),
+  у каждого в `/proc/self/fdinfo/<fd>` есть `O_NONBLOCK` и `O_CLOEXEC`; идёт только в дымовом прогоне
+  (`--test-threads=1`).
 - [ ] **Step 3: точные тексты.** `error_texts_are_byte_identical` в каждом адаптере сравнивает `to_string()` каждого
   `NetError` и `IoError::message`, который фейк умеет вызвать, с литералом; часть errno ожидание строит тем же
   `std::io::Error::from_raw_os_error(e)`. Linux (`linux/tests.rs`): тексты `verify_binding` (тип канала, имя, «no such
@@ -324,18 +420,18 @@ RMASSCAN_LAB_IP=10.200.0.100 RMASSCAN_LAB_MAC=02:aa:00:00:00:01 RMASSCAN_LAB_PEE
   меньше, чем в предыдущем; в итоге `tx_sent == 20_000`, `rx_packets == 20_000`, прочие счётчики 0.
 - [ ] **Step 5: микробенч.** `#[ignore] adapter_hot_path_two_threads` в тех же трёх модулях: свой фейк без замков
   (`send`/`write` → `Ok(len)`, приём копирует заготовленный кадр), потоки TX и RX стартуют через `Barrier`, по
-  1 000 000 вызовов, печать `ns/frame` каждого потока. Запуск: `cargo test --locked --release -p rmasscan-net
-  adapter_hot_path -- --ignored --nocapture` на Mac (macOS и Windows) и на хосте (Linux); числа — в заметки.
+  1 000 000 вызовов, печать `ns/frame` каждого потока. Запуск: `run LOG cargo test --locked --release -p rmasscan-net
+  adapter_hot_path -- --ignored --nocapture` на Mac (macOS и Windows) и `l_cargo` на хосте (Linux); числа — в заметки.
 - [ ] **Step 6: harness.** Тест `wire_scan` `success_json_reports_engine_thread_cpu` (ключи `tx_cpu_ns`, `rx_cpu_ns` в
-  `workers`, значение — число или `null`); FAIL → реализация → PASS.
-- [ ] **Step 7: PASS.** `M-gate`, `L-gate`, `W-gate` зелёные (страховка проходит на неизменённом продукте);
-  `unsafe_count` = 199 записан.
-- [ ] **Step 8: стенд.** Скрипт стенда S и ячейки U написан; дымовой прогон (все `lab_*` ok, включая флаги AF_PACKET);
+  `workers`, значение — число или `null`); FAIL → реализация → PASS на Mac.
+- [ ] **Step 7: коммит** путей из Files: `test(rmasscan-net): safety net for the native-Rust refactor`.
+- [ ] **Step 8: ворота** `m_gate`, `l_gate`, `w_gate` на SHA коммита зелёные (страховка проходит на неизменённом
+  продукте); `unsafe_count` = 199 записан.
+- [ ] **Step 9: стенд.** Скрипт стенда S и ячейки U написан; дымовой прогон (все `lab_*` ok, включая флаги AF_PACKET);
   первая сессия калибровки «база против базы» для `U-TX` и `U-RX` (с выбором `R_RX`). В `BENCHMARKS.md` новый раздел
   «rmasscan-net: нативный Rust, фаза 1 (Linux-стенд)»: полный текст скрипта, протокол сессии, правила годности и
   ворот, `T` первой калибровки, таблица «задача | коммит | ячейка | метрика | `T` | база (медиана, мин–макс) | новая |
-  вердикт».
-- [ ] **Step 9: коммит** путей из Files: `test(rmasscan-net): safety net for the native-Rust refactor`.
+  вердикт»; коммит `docs(rmasscan): bench stand and noise calibration for rmasscan-net`.
 
 ### Задача 2: счётчики TX и RX на разных строках кэша, один писатель — по построению
 
@@ -370,12 +466,12 @@ RMASSCAN_LAB_IP=10.200.0.100 RMASSCAN_LAB_MAC=02:aa:00:00:00:01 RMASSCAN_LAB_PEE
   `align_of::<RxCounters>() == 128`, `offset_of!(Counters, rx).abs_diff(offset_of!(Counters, tx)) >= 128` (порядок
   полей `repr(Rust)` не задан). FAIL (модуля нет).
 - [ ] **Step 2: реализация** по Interfaces; три адаптера пишут через свою сторону; Linux копит `kernel_drops` через
-  `add_kernel_drops`; Windows `tx_batch_max` — `batch(n)`.
-- [ ] **Step 3: PASS** `M-gate`, `L-gate`, `W-gate`; тексты и конкурентные тесты задачи 1 зелёные.
-- [ ] **Step 4: замер.** Микробенч задачи 1 до/после (Mac, хост) — строка Mac «ранжирование, не ворота»; стенд —
+  `add_kernel_drops`; Windows `tx_batch_max` — `batch(n)`. Тесты на Mac зелёные.
+- [ ] **Step 3: коммит**: `perf(rmasscan-net): TX and RX counters on separate cache lines, one writer by construction`.
+- [ ] **Step 4: ворота** `m_gate`, `l_gate`, `w_gate` на его SHA; тексты и конкурентные тесты задачи 1 зелёные.
+- [ ] **Step 5: замер.** Микробенч задачи 1 до/после (Mac, хост) — строка Mac «ранжирование, не ворота»; стенд —
   сессия по протоколу (`U-TX`: pps и CPU TX на кадр; `U-RX`: CPU RX на кадр при `R_RX`), матрица; строка в
-  `BENCHMARKS.md`.
-- [ ] **Step 5: коммит**: `perf(rmasscan-net): TX and RX counters on separate cache lines, one writer by construction`.
+  `BENCHMARKS.md`, коммит `docs(rmasscan): …` этой строки.
 
 ### Задача 3: переносимый разбор netlink без двойников
 
@@ -410,9 +506,9 @@ RMASSCAN_LAB_IP=10.200.0.100 RMASSCAN_LAB_MAC=02:aa:00:00:00:01 RMASSCAN_LAB_PEE
   `NLMSG_ERROR` даёт `Malformed`, `NLMSG_ERROR` перед искажённым телом — `Kernel`. PASS на базе.
 - [ ] **Step 2: реализация** по Interfaces. IPv4 потребляет `NlAttrs` по ходу, IPv6 и адреса IPv6 сначала
   `collect::<Result<Vec<_>, _>>()` — так сохраняется порядок ошибок каждого. IPv4 по-прежнему не читает `RTA_PREFSRC`
-  (`V4::PREFSRC = false`).
-- [ ] **Step 3: PASS** весь `route_parse*` на Mac, `M-gate`, `L-gate`.
-- [ ] **Step 4: коммит**: `refactor(rmasscan-net): one netlink request and reply walker for both families`.
+  (`V4::PREFSRC = false`). Весь `route_parse*` на Mac зелёный.
+- [ ] **Step 3: коммит**: `refactor(rmasscan-net): one netlink request and reply walker for both families`.
+- [ ] **Step 4: ворота** `m_gate`, `l_gate` на его SHA.
 
 ### Задача 4: переносимый разбор route socket Darwin и IP Helper
 
@@ -436,9 +532,9 @@ RMASSCAN_LAB_IP=10.200.0.100 RMASSCAN_LAB_MAC=02:aa:00:00:00:01 RMASSCAN_LAB_PEE
 - [ ] **Step 1: тесты до правки** `rt_requests_are_byte_identical_to_base` (hex на базе, оба семейства, `seq`/`pid`
   0 и `i32::MAX`) и `win_name_lookup_matches_iface_list` (имя по ifindex из `&[WinAdapter]` совпадает со старым
   результатом на тех же данных, в том числе для отсутствующего индекса). PASS на базе.
-- [ ] **Step 2: реализация** по Interfaces; тексты и порядок результатов прежние.
-- [ ] **Step 3: PASS** `M-gate`, `W-gate`.
-- [ ] **Step 4: коммит**: `refactor(rmasscan-net): shared Darwin and IP Helper route decoding`.
+- [ ] **Step 2: реализация** по Interfaces; тексты и порядок результатов прежние; тесты на Mac зелёные.
+- [ ] **Step 3: коммит**: `refactor(rmasscan-net): shared Darwin and IP Helper route decoding`.
+- [ ] **Step 4: ворота** `m_gate`, `w_gate` на его SHA.
 
 ### Задача 5: курсор записей BPF и мелкие идиомы переносимого кода
 
@@ -463,9 +559,9 @@ RMASSCAN_LAB_IP=10.200.0.100 RMASSCAN_LAB_MAC=02:aa:00:00:00:01 RMASSCAN_LAB_PEE
 - [ ] **Step 3: идиомы.** `iflist_text` пишет через `write!`/`writeln!` в `String` (точный текст охраняет
   `iflist_text_marks_masked_macs_and_lists_ipv4s_and_defaults`); в `neighbours` числа микросекунд — именованные
   константы рядом с `NEIGHBOUR_BUDGET` (`35_000_000` выводится из него); `ifinfo::merge` берёт `&[RawAddr]`,
-  `observations` больше не клонирует вектор.
-- [ ] **Step 4: PASS** `M-gate`, `L-gate`, `W-gate`.
-- [ ] **Step 5: коммит**: `refactor(rmasscan-net): BPF record cursor and small portable idioms`.
+  `observations` больше не клонирует вектор. Тесты на Mac зелёные.
+- [ ] **Step 4: коммит**: `refactor(rmasscan-net): BPF record cursor and small portable idioms`.
+- [ ] **Step 5: ворота** `m_gate`, `l_gate`, `w_gate` на его SHA.
 
 ### Задача 6: общие примитивы Unix
 
@@ -499,24 +595,26 @@ RMASSCAN_LAB_IP=10.200.0.100 RMASSCAN_LAB_MAC=02:aa:00:00:00:01 RMASSCAN_LAB_PEE
   нет `FD_CLOEXEC`), `socket_error_is_errno` (неверный домен → `Err(EAFNOSUPPORT)`; fd не возвращается, подсчёта
   fd процесса нет), `poll_one_times_out_on_an_idle_udp_socket` (`(0, 0)` за 0 мс),
   `poll_one_reports_pollout_on_a_fresh_udp_socket`, `setsockopt_int_reports_enoprotoopt`,
-  Linux `nl_kernel_addr_is_the_kernel`, `mac_from_c_chars_copies_six_bytes`. FAIL (модуля нет).
+  Linux `nl_kernel_addr_is_the_kernel`, `mac_from_c_chars_copies_six_bytes`. FAIL на Mac (модуля нет); Linux-часть —
+  коммит теста `test(rmasscan-net): unix primitive tests` и `l_red unix_sys`.
 - [ ] **Step 2: реализация** `unix_sys`; затем по одному модулю перевод вызовов: сокеты и `OwnedFd`, одиночный `poll`,
   `last_errno`, `sockaddr_nl`, два `sigaction` (`interrupt`, `lab_io`; `lab_io` строит `io::Error` из errno, текст
   `sigaction(SIGINT): …` прежний). В `linux/socket.rs`: `sockaddr_ll` литералом структуры (все поля публичны, два
   блока `zeroed` уходят), `SLL_MIN_LEN = offset_of!(libc::sockaddr_ll, sll_addr)`, `libc::PACKET_IGNORE_OUTGOING`
   вместо своей `23`, копии MAC через `mac_from_c_chars`; `PACKET_IGNORE_OUTGOING` идёт через `setsockopt_int`,
   результат по-прежнему игнорируется. Флаги каждого места вызова прежние: AF_PACKET `SOCK_NONBLOCK | SOCK_CLOEXEC`,
-  блокирующий netlink и сокет ioctl — только `SOCK_CLOEXEC`, netlink наблюдения — оба; их держат тесты флагов задачи 1.
+  блокирующий netlink и оба сокета ioctl (`IfSock`, `ioctl_socket`) — только `SOCK_CLOEXEC`, netlink наблюдения —
+  оба; их держат тесты флагов задачи 1.
 - [ ] **Step 3: ловушки (не менять).** Сокет `PF_ROUTE` macOS открывается без `CLOEXEC`, а `O_NONBLOCK` ставится
   `fcntl` после; `ready()` macOS и наблюдение Linux округляют остаток вниз до мс (последняя миллисекунда — неблокирующий
   `poll`), TX/RX Linux — вверх (`div_ceil`), macOS-адаптер — вверх по наносекундам: округление остаётся у вызывающих.
   `retry_until` Linux (не больше 4096 попыток; `network preparation cancelled`, `network observation deadline
   expired`, `netlink observation retry limit exceeded`) и macOS (без предела; `network observation cancelled`,
   `route observation deadline expired`) не объединяются. Обработка EINTR у каждого места своя.
-- [ ] **Step 4: PASS** `M-gate`, `L-gate`; `unsafe_count` меньше, чем после задачи 5 (ожидается около −17: около −25 в
-  местах вызова, +8 в `unix_sys`).
-- [ ] **Step 5: дымовой прогон** адаптера на стенде S: все `lab_*` из `tests/linux_io.rs` ok.
-- [ ] **Step 6: коммит**: `refactor(rmasscan-net): one audited set of Unix syscall primitives`.
+- [ ] **Step 4: коммит**: `refactor(rmasscan-net): one audited set of Unix syscall primitives`.
+- [ ] **Step 5: ворота** `m_gate`, `l_gate` на его SHA; `unsafe_count` меньше, чем после задачи 5 (ожидается около
+  −17: около −25 в местах вызова, +8 в `unix_sys`).
+- [ ] **Step 6: дымовой прогон** адаптера на стенде S на том же SHA: все `lab_*` из `tests/linux_io.rs` ok.
 
 ### Задача 7: FFI macOS через std, безопасный разбор `sockaddr`, удаление спайка
 
@@ -550,13 +648,12 @@ RMASSCAN_LAB_IP=10.200.0.100 RMASSCAN_LAB_MAC=02:aa:00:00:00:01 RMASSCAN_LAB_PEE
   0 и 1 → `Other`; та же запись с невыровненного смещения 1 в `Vec<u8>` даёт тот же результат. FAIL.
 - [ ] **Step 3: реализация** по Interfaces. Ловушка: текст ошибки строится только `errno_msg(op, errno)`, а не
   `Display` у `io::Error` из std; разница std — повтор EINTR внутри `open` (`cvt_r`), для узла `/dev/bpfN` не наблюдаемо,
-  записать в заметки.
-- [ ] **Step 4: PASS** `M-gate`; `unsafe_count` меньше, чем после задачи 6 (−4 в `sys`, −4 в `ifinfo`).
-- [ ] **Step 5: коммит** правок `sys` и `ifinfo`: `refactor(rmasscan-net): std file I/O for BPF and safe sockaddr
-  decoding`.
-- [ ] **Step 6: спайк** — отдельный коммит: удалить `spike.rs` и `mod spike` в `macos/mod.rs`, упоминания в
-  документации модулей, строку `macos-feth-lab.md:72`. Число тестов падает на 2 обычных и 9 `#[ignore]`. `M-gate`;
-  коммит (`git rm` и явные пути): `chore(rmasscan-net): drop the closed BPF spike`.
+  записать в заметки. Тесты на Mac зелёные.
+- [ ] **Step 4: коммит** правок `sys` и `ifinfo`: `refactor(rmasscan-net): std file I/O for BPF and safe sockaddr
+  decoding`; `m_gate` на его SHA; `unsafe_count` меньше, чем после задачи 6 (−4 в `sys`, −4 в `ifinfo`).
+- [ ] **Step 5: спайк** — отдельный коммит: удалить `spike.rs` и `mod spike` в `macos/mod.rs`, упоминания в
+  документации модулей, строку `macos-feth-lab.md:72`; коммит (`git rm` и явные пути): `chore(rmasscan-net): drop the
+  closed BPF spike`; `m_gate` на его SHA; число тестов упало на 2 обычных и 9 `#[ignore]`.
 
 ### Задача 8: macOS RX — дедлайн по первой нужде
 
@@ -581,8 +678,8 @@ RMASSCAN_LAB_IP=10.200.0.100 RMASSCAN_LAB_MAC=02:aa:00:00:00:01 RMASSCAN_LAB_PEE
 - [ ] **Step 2: реализация** и строка контракта в `lib.rs`; существующие `rx_empty_poll_times_out_within_the_deadline`,
   `rx_garbage_stream_cannot_extend_the_deadline`, `rx_eintr_backs_off_bounded_and_keeps_deadline` зелёные (новые
   утверждения о времени — только верхние границы).
-- [ ] **Step 3: PASS** `M-gate`; микробенч задачи 1 до/после → строка Mac в `BENCHMARKS.md` («ранжирование»).
-- [ ] **Step 4: коммит**: `perf(rmasscan-net): macOS RX reads the clock only when it needs a deadline`.
+- [ ] **Step 3: коммит**: `perf(rmasscan-net): macOS RX reads the clock only when it needs a deadline`; `m_gate` на
+  его SHA; микробенч задачи 1 до/после → строка Mac в `BENCHMARKS.md` («ранжирование»), коммит этой строки.
 
 ### Задача 9: общие помощники трёх адаптеров
 
@@ -606,9 +703,9 @@ RMASSCAN_LAB_IP=10.200.0.100 RMASSCAN_LAB_MAC=02:aa:00:00:00:01 RMASSCAN_LAB_PEE
   `rx_truncated`, Linux отдаёт любой). Копия `mac_text` в `examples/support` остаётся (пример видит только `pub`).
 
 - [ ] **Step 1: тесты** `adapter_common_errnos_match_every_os` и `check_binding_texts_name_the_adapter`. FAIL.
-- [ ] **Step 2: реализация** и перевод трёх адаптеров и `ifinfo::verify_binding`.
-- [ ] **Step 3: PASS** `M-gate`, `L-gate`, `W-gate`; `error_texts_are_byte_identical` ×3 зелёные.
-- [ ] **Step 4: коммит**: `refactor(rmasscan-net): shared adapter helpers, one text per error`.
+- [ ] **Step 2: реализация** и перевод трёх адаптеров и `ifinfo::verify_binding`; тесты на Mac зелёные.
+- [ ] **Step 3: коммит**: `refactor(rmasscan-net): shared adapter helpers, one text per error`.
+- [ ] **Step 4: ворота** `m_gate`, `l_gate`, `w_gate` на его SHA; `error_texts_are_byte_identical` ×3 зелёные.
 
 ### Задача 10: касты `as` — по бэкенду
 
@@ -628,13 +725,13 @@ RMASSCAN_LAB_IP=10.200.0.100 RMASSCAN_LAB_MAC=02:aa:00:00:00:01 RMASSCAN_LAB_PEE
   `#[allow(clippy::cast_possible_truncation, reason = "…")]`. Два стиля одного перевода (`arp_resolve.rs:191`,
   `ndp_resolve.rs:184`) сводятся к одному.
 
-- [ ] **Step 1:** переносимый код и macOS; `M-gate`; коммит `refactor(rmasscan-net): explicit casts in portable and
-  macOS code`.
-- [ ] **Step 2:** Linux; `L-gate`; коммит `refactor(rmasscan-net): explicit casts in the Linux backend`.
-- [ ] **Step 3:** Windows; `W-gate`; коммит `refactor(rmasscan-net): explicit casts in the Windows backend`.
+- [ ] **Step 1:** переносимый код и macOS; коммит `refactor(rmasscan-net): explicit casts in portable and macOS code`;
+  `m_gate` на его SHA.
+- [ ] **Step 2:** Linux; коммит `refactor(rmasscan-net): explicit casts in the Linux backend`; `l_gate` на его SHA.
+- [ ] **Step 3:** Windows; коммит `refactor(rmasscan-net): explicit casts in the Windows backend`; `w_gate` на его SHA.
 - [ ] **Step 4:** в `lib.rs` `#![cfg_attr(not(test), deny(clippy::cast_possible_truncation, clippy::cast_possible_wrap))]`
-  (тесты свободны); clippy на трёх ОС чистый (`M-gate`, `L-gate`, `W-gate`); коммит `chore(rmasscan-net): deny lossy
-  casts in product code`.
+  (тесты свободны); коммит `chore(rmasscan-net): deny lossy casts in product code`; `m_gate`, `l_gate`, `w_gate` на
+  его SHA.
 
 ### Задача 11: один разбор netlink
 
@@ -666,15 +763,16 @@ RMASSCAN_LAB_IP=10.200.0.100 RMASSCAN_LAB_MAC=02:aa:00:00:00:01 RMASSCAN_LAB_PEE
 
 - [ ] **Step 1:** перенести тесты разбора (`network_plan_keeps_all_alias_prefixes_…`, `…prefix_extremes…`,
   `…rejects_truncated_link_and_address_attributes`, `…kernel_*_route_kinds…`) в `route_parse_tests.rs`; там они
-  FAIL (функций в `route_parse` нет). Добавить `legacy_netlink_texts_are_byte_identical` (через `BlockingNl`, литералы
-  с базы `linux/route.rs:86-173`): `netlink: short send`, `netlink: no reply within 1 s` (EAGAIN по `SO_RCVTIMEO`),
-  `netlink: reply of N bytes truncated`, `netlink: dump did not end within 4096 datagrams`,
-  `sendto(NETLINK_ROUTE): …`, `recvfrom(NETLINK_ROUTE): …`; чужой отправитель пропускается, EINTR повторяется.
+  FAIL на Mac (функций в `route_parse` нет). Добавить `legacy_netlink_texts_are_byte_identical` (через `BlockingNl`,
+  литералы с базы `linux/route.rs:86-173`): `netlink: short send`, `netlink: no reply within 1 s` (EAGAIN по
+  `SO_RCVTIMEO`), `netlink: reply of N bytes truncated`, `netlink: dump did not end within 4096 datagrams`,
+  `sendto(NETLINK_ROUTE): …`, `recvfrom(NETLINK_ROUTE): …`; чужой отправитель пропускается, EINTR повторяется;
+  коммит теста и `l_red legacy_netlink_texts` (не компилируется: шва ещё нет).
 - [ ] **Step 2: реализация** переноса, `NlSocket` и `BlockingNl`; тесты флагов задачи 1 переходят на `NlSocket::open`
   с теми же утверждениями. Ловушка: `sys("netlink dump", e)` печатает errno таблицей хоста — перенесённые тесты на Mac
   сверяют подстроку операции и вид ошибки, не текст ОС.
-- [ ] **Step 3: PASS** `M-gate`, `L-gate`; `unsafe_count` не больше, чем после задачи 10.
-- [ ] **Step 4: коммит**: `refactor(rmasscan-net): one netlink decoder and one netlink socket`.
+- [ ] **Step 3: коммит**: `refactor(rmasscan-net): one netlink decoder and one netlink socket`.
+- [ ] **Step 4: ворота** `m_gate`, `l_gate` на его SHA; `unsafe_count` не больше, чем после задачи 10.
 
 ### Задача 12: переносимый адаптер Linux
 
@@ -698,9 +796,9 @@ RMASSCAN_LAB_IP=10.200.0.100 RMASSCAN_LAB_MAC=02:aa:00:00:00:01 RMASSCAN_LAB_PEE
   errno сверяются только под `#[cfg(target_os = "linux")]`, переносимые тесты — по виду (тест `error_texts_…` Linux
   строит ожидание той же функцией хоста и поэтому идёт везде). Существующие нижние границы времени
   (`e >= 19 мс` и подобные, `linux/tests.rs` :189, :405, :432 и рядом) оборачиваются в `#[cfg(target_os = "linux")]`;
-  верхние границы идут везде.
-- [ ] **Step 3: PASS** `M-gate`, `L-gate`, `W-gate`; число тестов на Mac растёт на тесты Linux-адаптера.
-- [ ] **Step 4: коммит**: `refactor(rmasscan-net): portable Linux adapter logic, tested on every OS`.
+  верхние границы идут везде. Тесты на Mac зелёные, их число выросло на тесты Linux-адаптера.
+- [ ] **Step 3: коммит**: `refactor(rmasscan-net): portable Linux adapter logic, tested on every OS`.
+- [ ] **Step 4: ворота** `m_gate`, `l_gate`, `w_gate` на его SHA.
 
 ### Задача 13: пакетный приём Linux `recvmmsg`
 
@@ -742,11 +840,11 @@ RMASSCAN_LAB_IP=10.200.0.100 RMASSCAN_LAB_MAC=02:aa:00:00:00:01 RMASSCAN_LAB_PEE
   `batch_len_never_asks_for_more_slots_than_fit` (ноль слотов или метаданных → `EINVAL`; больше `RX_BATCH` →
   `RX_BATCH`), `rx_batch_partial_fill_then_eagain_waits_until_the_deadline`,
   `health_between_batches_reads_fresh_drops_and_keeps_buffered_frames` (Review Focus 5). FAIL.
-- [ ] **Step 2: реализация**; вся группа RX и `kernel_drops_*` зелёные без правки сценариев.
-- [ ] **Step 3: PASS** `M-gate`, `L-gate`; `unsafe_count` не больше, чем после задачи 12.
-- [ ] **Step 4: стенд** — сессия `U-RX` и `U-TX` по протоколу, матрица, `--suite rust`, дымовой прогон; строка в
-  `BENCHMARKS.md`.
-- [ ] **Step 5: коммит**: `perf(rmasscan-net): Linux RX drains bursts with one recvmmsg`.
+- [ ] **Step 2: реализация**; вся группа RX и `kernel_drops_*` зелёные на Mac без правки сценариев.
+- [ ] **Step 3: коммит**: `perf(rmasscan-net): Linux RX drains bursts with one recvmmsg`.
+- [ ] **Step 4: ворота** `m_gate`, `l_gate` на его SHA; `unsafe_count` не больше, чем после задачи 12.
+- [ ] **Step 5: стенд** на том же SHA — сессия `U-RX` и `U-TX` по протоколу, матрица, `--suite rust`, дымовой прогон;
+  строка в `BENCHMARKS.md`, коммит этой строки.
 
 ### Задача 14: чистка Windows — таблица маршрутов, телеметрия процесса, мелочи sendqueue
 
@@ -757,13 +855,15 @@ RMASSCAN_LAB_IP=10.200.0.100 RMASSCAN_LAB_MAC=02:aa:00:00:00:01 RMASSCAN_LAB_PEE
   `src/windows/loader.rs`, `src/windows/tests.rs`, `src/windows/tests/adapter_tests.rs`
 
 **Interfaces:**
-- `sys`: `fn iphlp_error(label: &str, e: u32) -> NetError` — единственное место текста `{label} error {e}`;
-  `fn forward_rows<T>(family: ADDRESS_FAMILY, label: &str, decode: fn(&MIB_IPFORWARD_ROW2) -> T) ->
-  Result<Vec<T>, NetError>` — один `slice::from_raw_parts(base, NumEntries)` вместо цикла по индексу;
-  `fn best_route_raw(to: &SOCKADDR_INET, label: &str) -> Result<Option<(MIB_IPFORWARD_ROW2, SOCKADDR_INET)>, NetError>`;
-  метки `GetIpForwardTable2`, `GetIpForwardTable2(AF_INET6)`, `GetBestRoute2`, `GetBestRoute2(AF_INET6)`;
-  `fwd_from_row`/`fwd6_from_row` берут `&MIB_IPFORWARD_ROW2` и держат `unsafe` только вокруг чтений объединения;
-  `HMODULE` хранится через `expose_provenance`/`ptr::with_exposed_provenance_mut`; `os_version` без лишнего `clone`.
+- `sys`: `fn iphlp_error(label: &str, e: u32) -> NetError` — единственное место текста `{label} error {e}`; четыре
+  места вызова берут каждое свою константу метки: `FWD4_LABEL = "GetIpForwardTable2"`,
+  `FWD6_LABEL = "GetIpForwardTable2(AF_INET6)"`, `BEST4_LABEL = "GetBestRoute2"`,
+  `BEST6_LABEL = "GetBestRoute2(AF_INET6)"`; `fn forward_rows<T>(family: ADDRESS_FAMILY, label: &str,
+  decode: fn(&MIB_IPFORWARD_ROW2) -> T) -> Result<Vec<T>, NetError>` — один `slice::from_raw_parts(base, NumEntries)`
+  вместо цикла по индексу; `fn best_route_raw(to: &SOCKADDR_INET, label: &str) -> Result<Option<(MIB_IPFORWARD_ROW2,
+  SOCKADDR_INET)>, NetError>`; `fwd_from_row`/`fwd6_from_row` берут `&MIB_IPFORWARD_ROW2` и держат `unsafe` только вокруг
+  чтений объединения; `HMODULE` хранится через `expose_provenance`/`ptr::with_exposed_provenance_mut`; `os_version` без
+  лишнего `clone`.
 - `process`: снимок Toolhelp и токен — `OwnedHandle` (`HandleOrInvalid` для снимка), без ручного `CloseHandle`; один
   итератор идентификаторов потоков; `thread_count() = thread_ids().map(|v| v.len())` — один снимок, оба `None` на
   пустом.
@@ -774,16 +874,18 @@ RMASSCAN_LAB_IP=10.200.0.100 RMASSCAN_LAB_MAC=02:aa:00:00:00:01 RMASSCAN_LAB_PEE
   пишет `write!`; устаревшие `cfg_attr(not(test), allow(dead_code))` на трёх аксессорах `NpcapApi` и их комментарий
   удаляются.
 
-- [ ] **Step 1: маршруты.** Тесты (Windows) `iphlp_error_texts_are_byte_identical` (четыре метки, литералы с базы
-  `windows/sys.rs`: `GetIpForwardTable2 error 5`, `GetIpForwardTable2(AF_INET6) error 5`, `GetBestRoute2 error 5`,
-  `GetBestRoute2(AF_INET6) error 5`) и `forward_rows_decode_a_synthetic_table_for_both_families` (буфер `#[repr(C)]` с
-  заголовком и двумя строками каждой семьи); FAIL → реализация → `W-gate`; коммит `refactor(rmasscan-net): one IP
-  Helper route table walk`.
+- [ ] **Step 1: маршруты.** Тесты (Windows) `iphlp_labels_are_byte_identical` (каждая из четырёх констант равна
+  литералу выше, и `iphlp_error(константа, 5).to_string()` равен литералу `system error: GetIpForwardTable2 error 5`,
+  `system error: GetIpForwardTable2(AF_INET6) error 5`, `system error: GetBestRoute2 error 5`,
+  `system error: GetBestRoute2(AF_INET6) error 5` — тексты с базы `windows/sys.rs`) и
+  `forward_rows_decode_a_synthetic_table_for_both_families` (буфер `#[repr(C)]` с заголовком и двумя строками каждой
+  семьи); коммит теста, `w_red iphlp_`; реализация; коммит `refactor(rmasscan-net): one IP Helper route table walk`;
+  `w_gate` на его SHA.
 - [ ] **Step 2: процесс.** Тесты (Windows, один снимок на утверждение) `thread_ids_contain_the_current_thread` и
-  `thread_count_is_at_least_one`; реализация → `W-gate`; коммит `refactor(rmasscan-net): owned handles for Windows
-  process probes`.
-- [ ] **Step 3: sendqueue и загрузчик** — мелочи `handle`/`adapter`/`loader`; `M-gate` (фейк) и `W-gate`;
-  `unsafe_count` меньше, чем после задачи 13; коммит `refactor(rmasscan-net): Windows sendqueue and loader tidy-up`.
+  `thread_count_is_at_least_one`; реализация; коммит `refactor(rmasscan-net): owned handles for Windows process
+  probes`; `w_gate` на его SHA.
+- [ ] **Step 3: sendqueue и загрузчик** — мелочи `handle`/`adapter`/`loader`; коммит `refactor(rmasscan-net): Windows
+  sendqueue and loader tidy-up`; `m_gate` (фейк) и `w_gate` на его SHA; `unsafe_count` меньше, чем после задачи 13.
 
 ### Задача 15: P1 — пакетная отправка Linux `sendmmsg`
 
@@ -800,16 +902,23 @@ RMASSCAN_LAB_IP=10.200.0.100 RMASSCAN_LAB_MAC=02:aa:00:00:00:01 RMASSCAN_LAB_PEE
 идентичность Linux-прогонов `wire_scan` — `"tx_mode":"sendqueue","tx_batch_cap":64`, `net.tx_batches`/`tx_batch_max`
 ненулевые, пауза и остановка — с точностью до пачки. Studio и CLI `tx_mode` не читают.
 
+**Известное ограничение (исправление — фаза 2, движок; движок здесь не меняется).** Отложенная фатальная ошибка
+отдаётся следующим вызовом адаптера. Если Pause или Stop приходит в ту 1 мс, что движок спит после
+`WouldBlockUnsent`, следующим вызовом оказывается `tx.send` из linger или стека (`flush_replies`,
+`send_stack_frames`), а движок игнорирует его `Err`: запуск кончается `Paused`/`Stopped` вместо `Failed(TxError)`, текст
+теряется. Checkpoint при этом верен: принят ровно префикс. Это пишется в doc-комментарии `TxHalf` и в README рядом с
+описанием пачек.
+
 **Files:**
 - Modify: `src/linux/mod.rs`, `src/linux/socket.rs`, `src/linux/tests.rs`, `src/lib.rs` (доки: `TxMode::SendQueue` —
   «Windows — Npcap sendqueue, Linux — `sendmmsg`»; `tx_batches` — «Linux: вызовы `send_batch` с n ≥ 2, дошедшие до
   ядра (выполнен хотя бы один `sendmmsg`); macOS — 0»; `tx_uncertain` — «при исходе `Uncertain` пачки Windows
   прибавляет все неподтверждённые кадры (`n − sent`), Linux — единицу, как одиночный путь»; `tx_over_budget` на Linux
   не измеряется), `rmasscan/README.md` (раздел «Лабораторная приёмка Linux (2B)»: Linux шлёт пачками до 64 кадров
-  одним `sendmmsg`, пауза и остановка — с точностью до пачки), `rmasscan/docs/rust-lab.md` (раздел о sendqueue:
-  `tx_mode` `sendqueue` теперь и у Linux через `sendmmsg`; `tx_over_budget` у Linux не измеряется, правило бюджета к
-  Linux не применяется), `rmasscan/docs/windows-wire-lab.md` (строка 141: «`single` adapters (Linux, macOS)» → macOS
-  `single`, Linux `sendqueue` через `sendmmsg`, оба бюджет не измеряют),
+  одним `sendmmsg`, пауза и остановка — с точностью до пачки, известное ограничение выше), `rmasscan/docs/rust-lab.md`
+  (раздел о sendqueue: `tx_mode` `sendqueue` теперь и у Linux через `sendmmsg`; `tx_over_budget` у Linux не
+  измеряется, правило бюджета к Linux не применяется), `rmasscan/docs/windows-wire-lab.md` (строка 141: «`single`
+  adapters (Linux, macOS)» → macOS `single`, Linux `sendqueue` через `sendmmsg`, оба бюджет не измеряют),
   `docs/experiments/2026-10-25-rmasscan-windows-sendqueue-acceptance.md` (строка 239: датированная пометка «позже,
   2026-11: Linux шлёт пачками `sendmmsg`, см. `rmasscan/BENCHMARKS.md`»; исторический текст не переписывается),
   `rmasscan/BENCHMARKS.md`
@@ -824,20 +933,22 @@ RMASSCAN_LAB_IP=10.200.0.100 RMASSCAN_LAB_MAC=02:aa:00:00:00:01 RMASSCAN_LAB_PEE
   `Send`); `SAFETY` опирается на проверенное `n` и на то, что срезы кадров живы весь вызов, ядро их только читает и
   пишет `msg_len`.
 - `TxHalf { io: Option<I>, side: TxSide, deferred: Option<String> }`; `max_batch() = TX_BATCH_FRAMES`.
-  `send_batch(frames, timeout)`:
-  - `deferred` есть → `Err(IoError::new(deferred.take()))` без нового счёта; после него — прежний «adapter closed…»;
-  - пусто или больше `TX_BATCH_FRAMES` → `Err` с текстами Windows (`send_batch called with no frames; nothing was
-    sent`, `send_batch called with N frames, more than 64; nothing was sent`); n == 1 → прежний `send`;
+  - `deferred` есть → и `send`, и `send_batch` сразу возвращают `Err(IoError::new(deferred.take()))`, без системного
+    вызова и без нового счёта; после него — прежний «adapter closed…».
+  - `send_batch(frames, timeout)`: пусто или больше `TX_BATCH_FRAMES` → `Err` с текстами Windows (`send_batch called
+    with no frames; nothing was sent`, `send_batch called with N frames, more than 64; nothing was sent`); n == 1 →
+    прежний `send`;
   - один `Deadline` на весь вызов (контракт движка для `max_batch > 1`); цикл с первого неотправленного кадра i:
     `send_many(&frames[i..])` → k ≥ 1: если `lens[j] != len` при j < k → `TxBatch { sent: i + j, rest: Uncertain }`
     (как короткая запись одиночного пути); иначе i += k, при i == n → `Sent`, иначе повтор с i (ядро теряет errno при
     k ≥ 1, повтор возвращает настоящий). `Ok(0)` — фатальная ошибка `EIO` (не цикл);
   - ошибка на кадре i получает ровно исход одиночного пути: `EAGAIN` — `poll(POLLOUT)` до дедлайна вызова, по
     истечении `TxBatch { sent: i, rest: WouldBlockUnsent }` (движок предложит кадр i снова со свежим дедлайном, как
-    сегодня); EINTR — пауза ≤ 1 мс и повтор; фатальная — текст `errno_msg("send", e)`, `side.error()`, fd закрывается;
-    при i == 0 это `Err(текст)`, при i > 0 — `Ok(TxBatch { sent: i, rest: WouldBlockUnsent })` с текстом в `deferred`:
-    движок засчитывает ровно префикс, следующий вызов получает `Err` с тем же текстом → `TxError("send: …")`, как
-    сегодня;
+    сегодня); EINTR — пауза ≤ 1 мс и повтор; фатальная — со своим текстом одиночного пути (`send: …`,
+    `poll(POLLOUT): socket error`, `poll(POLLOUT): …`), `side.error()`, fd закрывается. При i == 0 это `Err(текст)`,
+    при i > 0 — `Ok(TxBatch { sent: i, rest: WouldBlockUnsent })` с текстом в `deferred`: движок засчитывает ровно
+    префикс, следующий вызов получает `Err` с тем же текстом → `TxError(текст)`, как сегодня. Фатальный `poll(POLLOUT)`
+    при i > 0 обрабатывается так же, как фатальный `send`;
   - счётчики (задача 2): `side.sent(sent)`; исход `WouldBlockUnsent` по `EAGAIN` — `side.would_block()`; `Uncertain` —
     `side.uncertain(1)`; отложенная фатальная — только `side.error()`, без `would_block`; `side.batch(n)` на каждый
     вызов с n ≥ 2, в котором выполнен хотя бы один `sendmmsg`; `tx_over_budget` на Linux по-прежнему 0.
@@ -848,21 +959,25 @@ RMASSCAN_LAB_IP=10.200.0.100 RMASSCAN_LAB_MAC=02:aa:00:00:00:01 RMASSCAN_LAB_PEE
   `EAGAIN` навсегда → `TxBatch { sent: 3, rest: WouldBlockUnsent }`, сумма `poll_ms` ≤ 50),
   `tx_batch_fatal_error_keeps_the_single_path_outcome` (ENETDOWN на позиции 0 → `Err("send: …")`; на позициях 1 и
   n − 1 → `TxBatch { sent: позиция, WouldBlockUnsent }`, следующий вызов → `Err` с тем же текстом, затем «adapter
-  closed…»; `tx_errors` 1, `tx_would_block` 0, `tx_sent` = позиция), `tx_batch_zero_accepted_is_fatal_not_a_spin`
-  (`send_many` → `Ok(0)` без errno: фатальная `EIO`, один вызов шва), `tx_batch_short_message_is_uncertain_at_that_frame`,
-  `tx_batch_whole_call_respects_one_deadline`, `tx_batch_rejects_empty_and_oversized`,
-  `send_many_count_is_bounded` (`min(frames, lens, 64)`, ноль → `EINVAL`), `tx_batch_invariant_sent_eq_n_iff_sent`
-  (перебор сценариев), `tx_batch_counters_match_the_single_path_accounting`. FAIL.
-- [ ] **Step 2: реализация**, доки `lib.rs`; `unsafe_count` = значение после задачи 14 + 1.
-- [ ] **Step 3: PASS** `M-gate`, `L-gate`; `examples/wire_scan.rs` тесты зелёные.
-- [ ] **Step 4: стенд** — сессия `U-TX` по протоколу, C-оракул отдельной серией, матрица, `--suite rust`, дымовой
-  прогон; README, `rust-lab.md`, `windows-wire-lab.md`, пометка в отчёте sendqueue, строка в `BENCHMARKS.md`. При
-  провале ворот — правило раздела «Замеры».
-- [ ] **Step 5: коммит**: `perf(rmasscan-net): Linux TX sends batches of up to 64 frames with sendmmsg (P1)`.
+  closed…»; `tx_errors` 1, `tx_would_block` 0, `tx_sent` = позиция), `tx_batch_fatal_poll_after_a_prefix_is_deferred`
+  (`poll(POLLOUT)` → `Failed` на позиции 1: тот же исход с текстом `poll(POLLOUT): socket error`),
+  `send_returns_the_deferred_error_at_once` (после отложенной ошибки `send` → тот же `Err`, ни одного вызова шва),
+  `tx_batch_zero_accepted_is_fatal_not_a_spin` (`send_many` → `Ok(0)` без errno: фатальная `EIO`, один вызов шва),
+  `tx_batch_short_message_is_uncertain_at_that_frame`, `tx_batch_whole_call_respects_one_deadline`,
+  `tx_batch_rejects_empty_and_oversized`, `send_many_count_is_bounded` (`min(frames, lens, 64)`, ноль → `EINVAL`),
+  `tx_batch_invariant_sent_eq_n_iff_sent` (перебор сценариев), `tx_batch_counters_match_the_single_path_accounting`.
+  FAIL.
+- [ ] **Step 2: реализация**, доки `lib.rs`; тесты на Mac и `examples/wire_scan.rs` тесты зелёные.
+- [ ] **Step 3: коммит**: `perf(rmasscan-net): Linux TX sends batches of up to 64 frames with sendmmsg (P1)`.
+- [ ] **Step 4: ворота** `m_gate`, `l_gate` на его SHA; `unsafe_count` = значение после задачи 14 + 1.
+- [ ] **Step 5: стенд** на том же SHA — сессия `U-TX` по протоколу, C-оракул отдельной серией, матрица,
+  `--suite rust`, дымовой прогон. Затем коммит документов: README, `rust-lab.md`, `windows-wire-lab.md`, пометка в
+  отчёте sendqueue, строка в `BENCHMARKS.md`. При провале ворот — правило раздела «Замеры».
 
 ### Задача 16: P2 — ожидание события Npcap на Windows
 
-Проверяет: Mac (переносимый фейк), `W-gate`; спайк на Windows VM стенда (по образцу спайка sendqueue).
+Проверяет: Mac (переносимый фейк с виртуальными часами), `W-gate`; спайк на Windows VM стенда (по образцу спайка
+sendqueue).
 
 **Files:**
 - Modify: `src/windows/ffi.rs`, `src/windows/loader.rs`, `src/windows/sys.rs`, `src/windows/handle.rs`,
@@ -882,6 +997,11 @@ RMASSCAN_LAB_IP=10.200.0.100 RMASSCAN_LAB_MAC=02:aa:00:00:00:01 RMASSCAN_LAB_PEE
 - `handle`: `PcapHandle::wait_readable(&mut self, ms: u32) -> EventWait`, `enum EventWait { Signaled, TimedOut,
   Unavailable, Failed(u32) }`; событие берётся у `pcap_t` при первом ожидании и не закрывается (им владеет `pcap_t`;
   `SAFETY` у `unsafe impl Send for PcapHandle` дополняется).
+- `adapter`: шов часов RX — `trait RxClock: Send { fn now(&mut self) -> Instant; fn sleep(&mut self, d: Duration);
+  fn yield_now(&mut self); }`, настоящий `SysClock` (`Instant::now`, `thread::sleep`, `thread::yield_now`; путь опроса
+  с ним тот же, что сегодня) и в тестах `FakeClock` на виртуальном времени из `Scenario` фейка: `sleep` сдвигает его на
+  `d`, `yield_now` — на 0,1 мс, `f_wait` без сигнала — на запрошенное время; после 100 000 обращений `FakeClock`
+  паникует («spin»), поэтому зацикленная реализация падает, а не виснет. `RxHalf<C: RxClock = SysClock>`.
 - `adapter`: `const EVENT_SLACK: Duration = Duration::from_millis(16)` (такт таймера Windows по умолчанию 15,625 мс) и
   `const EVENT_WAIT_SLICE: Duration = Duration::from_millis(10)` (спайк может уменьшить оба). `RxHalf::wait`: если
   событие есть и остаток `left > EVENT_SLACK` — ждать `min(left - EVENT_SLACK, EVENT_WAIT_SLICE)` в мс вниз (потерянное
@@ -892,24 +1012,27 @@ RMASSCAN_LAB_IP=10.200.0.100 RMASSCAN_LAB_MAC=02:aa:00:00:00:01 RMASSCAN_LAB_PEE
 - Новые блоки `unsafe` (ровно 3): `transmute` адреса `pcap_getevent` в `loader`, вызов `pcap_getevent` и вызов
   `WaitFn` в `handle`.
 
-- [ ] **Step 1: тесты** (фейк, Mac) `pcap_getevent_is_optional_not_required`,
+- [ ] **Step 1: тесты** (фейк и `FakeClock`, Mac) `pcap_getevent_is_optional_not_required`,
   `missing_or_null_event_falls_back_to_one_ms_polling` (Review Focus 3: без символа и с NULL-событием — ни одного
-  вызова ожидания, `recv` как раньше), `event_wait_never_asks_past_the_slack_or_the_slice` (таймауты 50, 42, 20, 5 мс:
-  запрошено ≤ `min(left - EVENT_SLACK, EVENT_WAIT_SLICE)`, при остатке ≤ `EVENT_SLACK` ожиданий нет),
-  `signalled_but_empty_event_does_not_spin` (Review Focus 4: событие всегда сигнально, кадров нет — за один
-  `recv(50 мс)` не больше трёх ожиданий, затем событие выключено, вызовов `pcap_next_ex` не больше 50, время < 50 мс),
+  вызова ожидания, число `pcap_next_ex` и снов то же, что у опроса), `event_wait_never_asks_past_the_slack_or_the_slice`
+  (таймауты 50, 42, 20, 5 мс: запрошено ≤ `min(left - EVENT_SLACK, EVENT_WAIT_SLICE)`, при остатке ≤ `EVENT_SLACK`
+  ожиданий нет), `signalled_but_empty_event_does_not_spin` (Review Focus 4: в одном тесте на одном фейке (а) опрос без
+  события и (б) событие, всегда сигнальное при пустом буфере, по одному `recv(50 мс)`; (б) делает не больше чем на 3
+  вызова `pcap_next_ex` и на 3 ожидания больше, чем (а); виртуальное время обоих ≤ 42 мс бюджета, настоящее < 50 мс),
   `signalled_event_delivers_the_frame_without_sleeping`, `wait_failure_disables_the_event_for_this_half`,
-  `idle_recv_with_event_returns_within_the_budget` (только верхняя граница: < 50 мс). FAIL.
-- [ ] **Step 2: реализация**; `unsafe_count` = значение после задачи 15 + 3.
-- [ ] **Step 3: PASS** `M-gate`, `W-gate`.
-- [ ] **Step 4: спайк на VM** (`#[ignore] live_rx_event_wait_budget_latency_and_idle_cpu` в `src/windows/live.rs`,
+  `idle_recv_with_event_returns_within_the_budget` (только верхние границы: виртуальное ≤ 42 мс, настоящее < 50 мс).
+  FAIL.
+- [ ] **Step 2: реализация**; тесты на Mac зелёные.
+- [ ] **Step 3: коммит**: `perf(rmasscan-net): Windows RX waits on the Npcap read event (P2)`.
+- [ ] **Step 4: ворота** `m_gate`, `w_gate` на его SHA; `unsafe_count` = значение после задачи 15 + 3.
+- [ ] **Step 5: спайк на VM** (`#[ignore] live_rx_event_wait_budget_latency_and_idle_cpu` в `src/windows/live.rs`,
   окружение и стенд — как у живых тестов этого файла): длительность пустого `recv(50 мс)` и задержка выдачи кадра от
   его прихода, не меньше 2000 значений каждой величины на условие; CPU RX-потока за 10 с простоя; режимы «опрос» и
   «событие»; условия «тихо» и «поток мусора» (свои кадры); 3 повтора. Ворота — по хвосту, не по медиане: длительность
   пустого `recv` — p99 ≤ 43 мс и max < 50 мс; задержка выдачи — p99 и max не хуже опроса больше чем на 2 мс; CPU
   простоя ниже опроса; всё в обоих условиях и во всех повторах. `EVENT_SLACK` — наименьшее из 16/8/4/2 мс, прошедшее
-  ворота. Итог в `BENCHMARKS.md`. Провал при 16 мс — правило раздела «Замеры».
-- [ ] **Step 5: коммит**: `perf(rmasscan-net): Windows RX waits on the Npcap read event (P2)`.
+  ворота; если оно меньше 16, — коммит константы и повтор `w_gate`. Итог в `BENCHMARKS.md`, коммит. Провал при 16 мс —
+  правило раздела «Замеры».
 
 ### Задача 17: P3 — настройка TX-сокета Linux
 
@@ -938,25 +1061,27 @@ RMASSCAN_LAB_IP=10.200.0.100 RMASSCAN_LAB_MAC=02:aa:00:00:00:01 RMASSCAN_LAB_PEE
   Физический NIC не используется.
 - [ ] **Step 2: `ENOBUFS`** (если выполним): тесты `tx_enobufs_storm_backs_off_and_ends_unsent_at_the_deadline`
   (каждая пауза ≤ 1 мс, сумма ≤ таймаута, исход `WouldBlockUnsent`, `tx_would_block` 1) и
-  `tx_batch_enobufs_after_a_prefix_is_retried_like_eagain`; FAIL → реализация → PASS (`M-gate`, `L-gate`); на стенде в
-  (б) скан больше не обрывается, в (а) матрица прежняя. README: `ENOBUFS` больше не обрывает скан. Коммит
-  `fix(rmasscan-net): ENOBUFS on Linux TX is unsent, not fatal (P3)`.
+  `tx_batch_enobufs_after_a_prefix_is_retried_like_eagain`; FAIL → реализация; README: `ENOBUFS` больше не обрывает
+  скан; коммит `fix(rmasscan-net): ENOBUFS on Linux TX is unsent, not fatal (P3)`; `m_gate`, `l_gate` на его SHA; на
+  стенде в (б) скан больше не обрывается, в (а) матрица прежняя.
 - [ ] **Step 3: `SO_SNDBUF`** (если выполним): TX-сокет просит 4 МиБ (`setsockopt_int`, отказ игнорируется, ядро режет
-  до `wmem_max`); сессия `U-TX` в (а), ворота «ускорение»; коммит `perf(rmasscan-net): larger Linux TX socket buffer
-  (P3)` или отрицательный замер.
+  до `wmem_max`); коммит `perf(rmasscan-net): larger Linux TX socket buffer (P3)`; `m_gate`, `l_gate` на его SHA;
+  сессия `U-TX` в (а), ворота «ускорение» (провал — `git revert` и отрицательный замер).
 - [ ] **Step 4: `PACKET_QDISC_BYPASS`** (если выполним и шаг 2 сделан): на TX-сокете (`setsockopt_int`, отказ
-  игнорируется); сессия `U-TX`, ворота «ускорение», матрица, `--suite rust`; README: «qdisc интерфейса скана
-  обходится, шейпинг `tc` на нём не действует»; коммит `perf(rmasscan-net): Linux TX bypasses the qdisc (P3)` или
-  отрицательный замер.
+  игнорируется); README: «qdisc интерфейса скана обходится, шейпинг `tc` на нём не действует»; коммит
+  `perf(rmasscan-net): Linux TX bypasses the qdisc (P3)`; `m_gate`, `l_gate` на его SHA; сессия `U-TX`, ворота
+  «ускорение», матрица, `--suite rust` (провал — `git revert` и отрицательный замер).
 
 ### Задача 18: приёмка ветки
 
 Проверяет: все три ОС, стенд, Studio.
 
-- [ ] **Step 1:** `M-gate` плюс `cargo test --locked --workspace` на Mac; `L-gate` и `W-gate` плюс
-  `cargo test --locked --workspace` на хосте и в госте.
+- [ ] **Step 1:** на HEAD ветки (чистое дерево, `SHA=$(gate_sha)`) `m_gate`, `l_gate`, `w_gate -Workspace`, плюс
+  `(cd rmasscan && run "$EVID/m-$SHA-ws.log" cargo test --locked --workspace)` на Mac и
+  `l_cargo "$EVID/l-$SHA-ws.log" "$SHA" test --locked --workspace` на хосте.
 - [ ] **Step 2: Studio** без правок: `cd studio && CARGO_TARGET_DIR="${TMPDIR:-/tmp}/rmasscan-native-net-studio"
-  cargo check --locked && CARGO_TARGET_DIR="${TMPDIR:-/tmp}/rmasscan-native-net-studio" cargo xtask test`.
+  "$TO" -k 30 5400 cargo check --locked && CARGO_TARGET_DIR="${TMPDIR:-/tmp}/rmasscan-native-net-studio"
+  "$TO" -k 30 5400 cargo xtask test` (итог `cargo xtask test` — `libtest_ok` по его выводу).
 - [ ] **Step 3: границы правок:** `git diff --stat a275ea9e -- . ':!rmasscan/crates/rmasscan-net'
   ':!rmasscan/README.md' ':!rmasscan/BENCHMARKS.md' ':!rmasscan/docs/macos-feth-lab.md' ':!rmasscan/docs/rust-lab.md'
   ':!rmasscan/docs/windows-wire-lab.md' ':!docs/experiments/2026-10-25-rmasscan-windows-sendqueue-acceptance.md'
@@ -965,7 +1090,8 @@ RMASSCAN_LAB_IP=10.200.0.100 RMASSCAN_LAB_MAC=02:aa:00:00:00:01 RMASSCAN_LAB_PEE
 - [ ] **Step 4: стенд** — сессия ячейки `U` HEAD против коммита задачи 1 (продукт тот же, что на `a275ea9e`, а harness
   уже даёт CPU потоков), C-оракул отдельной серией, матрица, `--suite rust`, дымовой прогон; итоговая строка в
   `BENCHMARKS.md`.
-- [ ] **Step 5:** удалить деревья `~/rnn/*` и `/tmp/rnn-target` на хосте, распакованные деревья и `rnn-target` в
-  госте, `CARGO_TARGET_DIR` на Mac; `ps -Ao pid,%cpu,etime,command | awk '$2>80'` — своих процессов нет.
+- [ ] **Step 5:** удалить деревья `~/rnn/*` и `/tmp/rnn-target` на хосте, `rnn-*.zip`, `rnn-test.ps1`, распакованные
+  деревья и `rnn-target` в госте, `CARGO_TARGET_DIR` на Mac; `ps -Ao pid,%cpu,etime,command | awk '$2>80'` — своих
+  процессов нет.
 - [ ] **Step 6:** коммит `BENCHMARKS.md`: `docs(rmasscan): native-Rust phase 1 results for rmasscan-net`; финальное
   ревью ветки; push и PR — только с согласия пользователя.

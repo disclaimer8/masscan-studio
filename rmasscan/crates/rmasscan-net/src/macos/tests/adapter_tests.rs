@@ -1679,7 +1679,7 @@ fn error_texts_are_byte_identical() {
             over_read: true,
         },
         OUR_MAC,
-        Arc::new(crate::Counters::default()),
+        crate::counters::counters().1,
         0,
     );
     assert_eq!(
@@ -1804,9 +1804,9 @@ fn adapter_hot_path_two_threads() {
         batch: record(SIZEOF_BPF_HDR, &peer_frame(60)),
         over_read: false,
     };
-    let c = Arc::new(crate::Counters::default());
-    let mut t = crate::macos::adapter::TxHalf::new(seam(), Arc::clone(&c));
-    let mut r = crate::macos::adapter::RxHalf::new(seam(), OUR_MAC, Arc::clone(&c), 0);
+    let (tx_side, rx_side, c) = crate::counters::counters();
+    let mut t = crate::macos::adapter::TxHalf::new(seam(), tx_side);
+    let mut r = crate::macos::adapter::RxHalf::new(seam(), OUR_MAC, rx_side, 0);
     let start = std::sync::Barrier::new(2);
     let (tx_time, rx_time) = std::thread::scope(|s| {
         let tx_thread = s.spawn(|| {

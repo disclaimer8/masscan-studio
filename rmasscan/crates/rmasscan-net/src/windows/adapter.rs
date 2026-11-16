@@ -43,7 +43,6 @@
 //!   ограничение.
 
 use std::sync::Arc;
-use std::sync::atomic::Ordering::{Relaxed, Release};
 use std::time::{Duration, Instant};
 
 use rmasscan_core::packet::LinkType;
@@ -55,8 +54,9 @@ use rmasscan_engine::{
 use super::ffi::SENDQUEUE_RECORD_HEADER;
 use super::handle::{OpenParams, PcapHandle, Polled, SendQueue, resolve_device};
 use super::loader::NpcapApi;
+use crate::counters::{RxSide, TxSide, counters};
 use crate::drop_counter::DropCounter;
-use crate::{Counters, NetError, NetStatsHandle, OpenedAdapter, TxMode};
+use crate::{NetError, NetStatsHandle, OpenedAdapter, TxMode};
 
 /// Внутренний бюджет одного вызова адаптера (решение контролёра по спайку).
 pub(crate) const IO_BUDGET: Duration = Duration::from_millis(42);
@@ -89,11 +89,6 @@ fn closed_error() -> IoError {
     IoError::new("adapter closed after an earlier fatal error")
 }
 
-fn publish_drops(counters: &Counters, total: u64) {
-    counters.kernel_drops.store(total, Relaxed);
-    counters.kernel_drops_known.store(true, Release);
-}
-
 /// Исход пачки из `n` кадров по числу байт, принятых `pcap_sendqueue_transmit`.
 /// Только `bytes_sent == queued` означает «принято всё». Любое другое число
 /// (меньше, больше, 0) даёт `sent: 0, rest: Uncertain`: спайк показал, что при
@@ -120,11 +115,11 @@ pub(crate) fn batch_outcome(n: usize, queued: u32, bytes_sent: u32) -> TxBatch {
 pub(crate) struct TxHalf {
     queue: SendQueue,
     handle: PcapHandle,
-    counters: Arc<Counters>,
+    counters: TxSide,
 }
 
 impl TxHalf {
-    pub(crate) fn new(handle: PcapHandle, queue: SendQueue, counters: Arc<Counters>) -> Self {
+    pub(crate) fn new(handle: PcapHandle, queue: SendQueue, counters: TxSide) -> Self {
         Self {
             queue,
             handle,
@@ -133,17 +128,17 @@ impl TxHalf {
     }
 
     /// Длительность вызова в счётчик бюджета.
-    fn note_duration(&self, dur: Duration) {
+    fn note_duration(&mut self, dur: Duration) {
         if dur > MAX_IO_TIMEOUT {
-            Counters::bump(&self.counters.tx_over_budget);
+            self.counters.over_budget();
         }
     }
 
-    fn check_len(&self, frame: &[u8]) -> Result<(), IoError> {
+    fn check_len(&mut self, frame: &[u8]) -> Result<(), IoError> {
         if (MIN_TX_FRAME..=MAX_TX_FRAME).contains(&frame.len()) {
             return Ok(());
         }
-        Counters::bump(&self.counters.tx_errors);
+        self.counters.error();
         Err(IoError::new(format!(
             "frame length {} is outside {MIN_TX_FRAME}..={MAX_TX_FRAME}; nothing was sent",
             frame.len()
@@ -161,10 +156,10 @@ impl Tx for TxHalf {
         let rc = self.handle.send_raw(frame);
         self.note_duration(t.elapsed());
         if rc == 0 {
-            Counters::bump(&self.counters.tx_sent);
+            self.counters.sent(1);
             Ok(SendStatus::Sent)
         } else {
-            Counters::bump(&self.counters.tx_uncertain);
+            self.counters.uncertain(1);
             Ok(SendStatus::Uncertain)
         }
     }
@@ -202,7 +197,7 @@ impl Tx for TxHalf {
         for frame in frames {
             if self.queue.push(frame).is_err() {
                 self.queue.clear();
-                Counters::bump(&self.counters.tx_errors);
+                self.counters.error();
                 return Err(IoError::new(
                     "sendqueue refused a frame that fits the allocated queue; nothing was sent",
                 ));
@@ -213,16 +208,13 @@ impl Tx for TxHalf {
         let t = Instant::now();
         let bytes = self.handle.transmit_raw(&mut self.queue, false);
         let dur = t.elapsed();
-        Counters::bump(&self.counters.tx_batches);
-        self.counters.tx_batch_max.fetch_max(n as u64, Relaxed);
+        self.counters.batch(n as u64);
         self.note_duration(dur);
         let out = batch_outcome(n, queued, bytes);
         // Очередь не переживает вызов, в любом исходе.
         self.queue.clear();
-        self.counters.tx_sent.fetch_add(out.sent as u64, Relaxed);
-        self.counters
-            .tx_uncertain
-            .fetch_add((n - out.sent) as u64, Relaxed);
+        self.counters.sent(out.sent as u64);
+        self.counters.uncertain((n - out.sent) as u64);
         Ok(out)
     }
 }
@@ -231,7 +223,7 @@ impl Tx for TxHalf {
 pub(crate) struct RxHalf {
     handle: Option<PcapHandle>,
     own_mac: [u8; 6],
-    counters: Arc<Counters>,
+    counters: RxSide,
     drops: DropCounter,
 }
 
@@ -239,7 +231,7 @@ impl RxHalf {
     pub(crate) fn new(
         handle: PcapHandle,
         own_mac: [u8; 6],
-        counters: Arc<Counters>,
+        counters: RxSide,
         baseline_drop: u32,
     ) -> Self {
         Self {
@@ -262,7 +254,7 @@ impl RxHalf {
 
     /// Фатальная ошибка: итог потерь фиксируется, handle закрывается.
     fn fatal(&mut self, msg: String) -> IoError {
-        Counters::bump(&self.counters.rx_errors);
+        self.counters.error();
         self.flush_drops();
         self.handle = None;
         IoError::new(msg)
@@ -274,7 +266,7 @@ impl RxHalf {
         if let Some(h) = self.handle.as_mut()
             && let Ok(st) = h.stats_raw()
         {
-            publish_drops(&self.counters, self.drops.update(st.ps_drop));
+            self.counters.publish_drops(self.drops.update(st.ps_drop));
         }
     }
 }
@@ -290,13 +282,13 @@ impl Rx for RxHalf {
                 Polled::Frame(n) => {
                     // Свой кадр отсекается ДО дорогого разбора движком.
                     if n >= 12 && buffer[6..12] == self.own_mac {
-                        Counters::bump(&self.counters.rx_outgoing);
+                        self.counters.outgoing();
                     } else {
-                        Counters::bump(&self.counters.rx_packets);
+                        self.counters.packet();
                         return Ok(Some(n));
                     }
                 }
-                Polled::Truncated => Counters::bump(&self.counters.rx_truncated),
+                Polled::Truncated => self.counters.truncated(),
                 Polled::Empty => {
                     if Instant::now() >= deadline {
                         return Ok(None);
@@ -328,7 +320,7 @@ impl Rx for RxHalf {
         match h.stats_raw() {
             Ok(st) => {
                 let total = self.drops.update(st.ps_drop);
-                publish_drops(&self.counters, total);
+                self.counters.publish_drops(total);
                 Ok(RxHealth {
                     kernel_drops: Some(total),
                 })
@@ -434,18 +426,18 @@ pub(crate) fn open_with(
         ))
     })?;
 
-    let counters = Arc::new(Counters::default());
+    let (tx_side, rx_side, shared) = counters();
     Ok(OpenedAdapter {
         io: AdapterPair {
-            tx: Box::new(TxHalf::new(tx, queue, Arc::clone(&counters))),
+            tx: Box::new(TxHalf::new(tx, queue, tx_side)),
             rx: Box::new(RxHalf::new(
                 rx,
                 binding.source_mac,
-                Arc::clone(&counters),
+                rx_side,
                 baseline.ps_drop,
             )),
         },
-        stats: NetStatsHandle::new(counters),
+        stats: NetStatsHandle::new(shared),
         tx_mode: TxMode::SendQueue {
             max_batch: TX_BATCH_FRAMES,
         },

@@ -276,3 +276,44 @@ fn lab_missing_interface_still_mismatches_with_privileges() {
         Err(NetError::InterfaceMismatch(_))
     ));
 }
+
+/// Descriptors of this process that are sockets (`/proc/self/fd/<n>` -> `socket:[inode]`).
+fn socket_fds() -> std::collections::BTreeSet<u32> {
+    std::fs::read_dir("/proc/self/fd")
+        .expect("/proc")
+        .filter_map(|e| {
+            let e = e.ok()?;
+            let fd = e.file_name().to_str()?.parse().ok()?;
+            let target = std::fs::read_link(e.path()).ok()?;
+            target.to_str()?.starts_with("socket:").then_some(fd)
+        })
+        .collect()
+}
+
+/// The `flags:` field of `/proc/self/fdinfo/<fd>`: octal, with `O_CLOEXEC` when close-on-exec is set.
+fn fdinfo_flags(fd: u32) -> i32 {
+    let info = std::fs::read_to_string(format!("/proc/self/fdinfo/{fd}")).expect("fdinfo");
+    let flags = info
+        .lines()
+        .find_map(|l| l.strip_prefix("flags:"))
+        .expect("flags line");
+    i32::from_str_radix(flags.trim(), 8).expect("octal flags")
+}
+
+/// The TX and RX AF_PACKET sockets are nonblocking and close-on-exec. Runs only in the adapter smoke run
+/// (`--test-threads=1`), so no other test opens sockets between the two snapshots of `/proc/self/fd`.
+#[test]
+#[ignore = "opens real AF_PACKET sockets: sealed lab only"]
+fn lab_packet_sockets_are_nonblocking_and_cloexec() {
+    let l = lab();
+    let before = socket_fds();
+    let a = open_explicit(&lab_binding(&l)).expect("open");
+    let new: Vec<u32> = socket_fds().difference(&before).copied().collect();
+    assert!(new.len() >= 2, "the TX and RX sockets: {new:?}");
+    for fd in new {
+        let flags = fdinfo_flags(fd);
+        assert_ne!(flags & libc::O_NONBLOCK, 0, "fd {fd}: flags {flags:o}");
+        assert_ne!(flags & libc::O_CLOEXEC, 0, "fd {fd}: flags {flags:o}");
+    }
+    drop(a);
+}

@@ -83,7 +83,7 @@ mod netlink {
     pub(crate) const RTN_UNREACHABLE: u8 = 7;
     pub(crate) const RTN_PROHIBIT: u8 = 8;
     pub(crate) const RT_TABLE_MAIN: u32 = 254;
-    const RTA_HDRLEN: usize = 4;
+    pub(crate) const RTA_HDRLEN: usize = 4;
     /// Биты `NLA_F_NESTED`/`NLA_F_NET_BYTEORDER` в `rta_type`.
     const NLA_TYPE_MASK: u16 = !(0x8000 | 0x4000);
 
@@ -607,7 +607,7 @@ mod rtsock {
     const RTAX_IFP: usize = 4;
     const RTAX_MAX: usize = 8;
     /// `offsetof(struct sockaddr_dl, sdl_data)`.
-    const SDL_DATA: usize = 8;
+    pub(crate) const SDL_DATA: usize = 8;
 
     /// Ответ `RTM_GET` своего запроса.
     #[derive(Debug, Clone, PartialEq, Eq)]
@@ -799,9 +799,9 @@ mod rtsock {
     /// `AF_INET6` Darwin.
     pub(crate) const AF_INET6_DARWIN: u8 = 30;
     /// `sizeof(struct sockaddr_in6)`.
-    const SIN6_LEN: usize = 28;
+    pub(crate) const SIN6_LEN: usize = 28;
     /// `offsetof(struct sockaddr_in6, sin6_addr)`.
-    const SIN6_ADDR: usize = 8;
+    pub(crate) const SIN6_ADDR: usize = 8;
 
     /// Адрес `sockaddr_in6` Darwin (`sin6_len`, `sin6_family` 30, порт, flowinfo, адрес, scope id). Ядро KAME хранит
     /// индекс зоны адресов link-local (`fe80::/10`) и multicast с зоной интерфейса или канала (`ff01::/16`,

@@ -241,6 +241,14 @@ mod bounded_tests {
         time::{Duration, Instant},
     };
     #[test]
+    fn route_socket_keeps_its_flags() {
+        use std::os::fd::AsFd;
+        let fd = route_socket(libc::AF_INET).unwrap();
+        let (status, cloexec) = crate::unix_fd_tests::fd_flags(fd.as_fd());
+        assert_ne!(status & libc::O_NONBLOCK, 0, "route_socket sets O_NONBLOCK");
+        assert!(!cloexec, "route_socket does not set FD_CLOEXEC");
+    }
+    #[test]
     fn network_plan_foreign_replies_and_eintr_keep_original_deadline() {
         let start = Instant::now();
         let time = Cell::new(start);

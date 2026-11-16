@@ -851,6 +851,66 @@ fn rt_msghdr_layout_and_constants_match_libc() {
     assert_eq!(size_of::<libc::ifma_msghdr>(), 16);
 }
 
+/// Every constant of the route socket parser equals the `libc` declaration of the Darwin ABI it encodes
+/// (a later refactor may replace the literals; this pins their values to the system headers).
+#[cfg(target_os = "macos")]
+#[test]
+fn darwin_route_socket_constants_match_libc() {
+    use std::mem::{offset_of, size_of};
+    assert_eq!(RT_MSGHDR_LEN, size_of::<libc::rt_msghdr>());
+    assert_eq!(
+        [
+            OFF_MSGLEN,
+            OFF_VERSION,
+            OFF_TYPE,
+            OFF_INDEX,
+            OFF_FLAGS,
+            OFF_ADDRS,
+            OFF_PID,
+            OFF_SEQ,
+            OFF_ERRNO
+        ],
+        [
+            offset_of!(libc::rt_msghdr, rtm_msglen),
+            offset_of!(libc::rt_msghdr, rtm_version),
+            offset_of!(libc::rt_msghdr, rtm_type),
+            offset_of!(libc::rt_msghdr, rtm_index),
+            offset_of!(libc::rt_msghdr, rtm_flags),
+            offset_of!(libc::rt_msghdr, rtm_addrs),
+            offset_of!(libc::rt_msghdr, rtm_pid),
+            offset_of!(libc::rt_msghdr, rtm_seq),
+            offset_of!(libc::rt_msghdr, rtm_errno)
+        ]
+    );
+    assert_eq!(i32::from(RTM_VERSION), libc::RTM_VERSION);
+    assert_eq!(i32::from(RTM_GET), libc::RTM_GET);
+    assert_eq!(RTA_DST_BIT, libc::RTA_DST);
+    assert_eq!(RTA_IFP_BIT, libc::RTA_IFP);
+    assert_eq!(
+        [
+            RTF_UP,
+            RTF_GATEWAY,
+            RTF_REJECT,
+            RTF_LLINFO,
+            RTF_BLACKHOLE,
+            RTF_LOCAL
+        ],
+        [
+            libc::RTF_UP,
+            libc::RTF_GATEWAY,
+            libc::RTF_REJECT,
+            libc::RTF_LLINFO,
+            libc::RTF_BLACKHOLE,
+            libc::RTF_LOCAL
+        ]
+    );
+    assert_eq!(i32::from(AF_LINK), libc::AF_LINK);
+    assert_eq!(i32::from(AF_INET6_DARWIN), libc::AF_INET6);
+    assert_eq!(SDL_DATA, offset_of!(libc::sockaddr_dl, sdl_data));
+    assert_eq!(SIN6_LEN, size_of::<libc::sockaddr_in6>());
+    assert_eq!(SIN6_ADDR, offset_of!(libc::sockaddr_in6, sin6_addr));
+}
+
 // ---------- macOS: стенд m1 (PF4) ----------
 
 /// Индексы интерфейсов Mac в окне (`if_nameindex`; маршрут подсети в `netstat -rn` это `link#36`, то есть feth4202).

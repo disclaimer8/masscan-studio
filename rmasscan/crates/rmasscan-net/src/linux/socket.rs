@@ -25,7 +25,7 @@ pub(super) const ETH_P_ALL_BE: u16 = (libc::ETH_P_ALL as u16).to_be();
 
 /// Минимальный размер адреса, при котором доступны `sll_ifindex` и
 /// `sll_pkttype` (offsetof(sll_addr) == 12).
-const SLL_MIN_LEN: usize = 12;
+pub(super) const SLL_MIN_LEN: usize = 12;
 
 /// Неблокирующий AF_PACKET SOCK_RAW fd, привязанный к одному ifindex.
 pub(super) struct PacketFd {
@@ -192,6 +192,17 @@ impl PacketIo for PacketFd {
     }
 }
 
+/// Датаграммный сокет AF_INET только для ioctl `SIOCGIFHWADDR` (без привилегий, `SOCK_CLOEXEC`).
+pub(super) fn ioctl_socket() -> Result<OwnedFd, Errno> {
+    // SAFETY: socket() только с целыми аргументами.
+    let raw = unsafe { libc::socket(libc::AF_INET, libc::SOCK_DGRAM | libc::SOCK_CLOEXEC, 0) };
+    if raw < 0 {
+        return Err(last_errno());
+    }
+    // SAFETY: `raw` свежий fd >= 0, единственный владелец теперь OwnedFd.
+    Ok(unsafe { OwnedFd::from_raw_fd(raw) })
+}
+
 /// Проверка интерфейса через ОС (if_nametoindex, SIOCGIFHWADDR).
 /// Не требует привилегий.
 pub(super) struct OsIface;
@@ -226,13 +237,7 @@ impl IfaceInfo for OsIface {
 
     fn hw_addr(&self, name: &str) -> Result<(u16, [u8; 6]), Errno> {
         let mut ifr = ifreq_for(name)?;
-        // SAFETY: socket() только с целыми аргументами.
-        let raw = unsafe { libc::socket(libc::AF_INET, libc::SOCK_DGRAM | libc::SOCK_CLOEXEC, 0) };
-        if raw < 0 {
-            return Err(last_errno());
-        }
-        // SAFETY: `raw` свежий fd >= 0, единственный владелец теперь OwnedFd.
-        let sock = unsafe { OwnedFd::from_raw_fd(raw) };
+        let sock = ioctl_socket()?;
         // SAFETY: `ifr` живой ifreq с NUL-терминированным именем; для
         // SIOCGIFHWADDR ядро читает имя и пишет sockaddr в тот же объект.
         let rc = unsafe { libc::ioctl(sock.as_raw_fd(), libc::SIOCGIFHWADDR as _, &raw mut ifr) };

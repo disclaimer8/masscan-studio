@@ -65,3 +65,16 @@ fn network_plan_read_only_kernel_loopback_observations() {
     );
     assert!(!loopback.iface.ethernet);
 }
+
+#[test]
+fn netlink_sockets_keep_their_flags() {
+    use std::os::fd::AsFd;
+    let netlink = Netlink::open().unwrap();
+    let (status, cloexec) = crate::unix_fd_tests::fd_flags(netlink.fd.as_fd());
+    assert!(cloexec, "Netlink::open must set FD_CLOEXEC");
+    assert_eq!(status & libc::O_NONBLOCK, 0, "Netlink::open must block");
+    let ioctl = IfSock::open().unwrap();
+    let (status, cloexec) = crate::unix_fd_tests::fd_flags(ioctl.0.as_fd());
+    assert!(cloexec, "IfSock::open must set FD_CLOEXEC");
+    assert_eq!(status & libc::O_NONBLOCK, 0, "IfSock::open must block");
+}

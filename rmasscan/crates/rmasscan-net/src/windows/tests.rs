@@ -22,6 +22,8 @@ struct FakeModule {
     missing: Vec<&'static str>,
     null_syms: Vec<&'static str>,
     diag: Vec<DllInfo>,
+    /// Where exports come from: the scripted table (`symbol_addr`) or a test's own table.
+    symbols: fn(&str) -> Option<*const c_void>,
 }
 
 fn good_diag() -> Vec<DllInfo> {
@@ -49,7 +51,7 @@ unsafe impl Module for FakeModule {
         if self.null_syms.contains(&n) {
             return Some(std::ptr::null());
         }
-        symbol_addr(n)
+        (self.symbols)(n)
     }
     fn describe(&self) -> Result<Vec<DllInfo>, NetError> {
         Ok(self.diag.clone())
@@ -66,6 +68,7 @@ struct FakeLoader {
     result: Result<Vec<&'static str>, LoadFailure>,
     null_syms: Vec<&'static str>,
     diag: Option<Vec<DllInfo>>,
+    symbols: fn(&str) -> Option<*const c_void>,
 }
 impl FakeLoader {
     fn ok() -> Self {
@@ -74,6 +77,7 @@ impl FakeLoader {
             result: Ok(vec![]),
             null_syms: vec![],
             diag: None,
+            symbols: symbol_addr,
         }
     }
 }
@@ -86,6 +90,7 @@ impl Loader for FakeLoader {
                 missing: missing.clone(),
                 null_syms: self.null_syms.clone(),
                 diag: self.diag.clone().unwrap_or_else(good_diag),
+                symbols: self.symbols,
             })),
             Err(f) => Err(f.clone()),
         }
@@ -1004,4 +1009,42 @@ fn transmit_sync_true_is_passed_as_one() {
     q.push(&[1u8; 60]).unwrap();
     h.transmit_raw(&mut q, true);
     with(|s| assert_eq!(s.sync_seen, [1]));
+}
+
+/// The IP Helper constants of the portable parser equal the `windows-sys` declarations.
+#[cfg(windows)]
+#[test]
+fn windows_dad_and_iftype_constants_match_windows_sys() {
+    use crate::route_parse::{
+        IF_TYPE_ETHERNET_CSMACD, IF_TYPE_IEEE80211, IF_TYPE_SOFTWARE_LOOPBACK, WIN_DAD_DEPRECATED,
+        WIN_DAD_DUPLICATE, WIN_DAD_PREFERRED, WIN_DAD_TENTATIVE,
+    };
+    use windows_sys::Win32::NetworkManagement::IpHelper as ip;
+    use windows_sys::Win32::Networking::WinSock as ws;
+    assert_eq!(
+        [
+            WIN_DAD_TENTATIVE,
+            WIN_DAD_DUPLICATE,
+            WIN_DAD_DEPRECATED,
+            WIN_DAD_PREFERRED
+        ],
+        [
+            ws::IpDadStateTentative,
+            ws::IpDadStateDuplicate,
+            ws::IpDadStateDeprecated,
+            ws::IpDadStatePreferred
+        ]
+    );
+    assert_eq!(
+        [
+            IF_TYPE_ETHERNET_CSMACD,
+            IF_TYPE_SOFTWARE_LOOPBACK,
+            IF_TYPE_IEEE80211
+        ],
+        [
+            ip::IF_TYPE_ETHERNET_CSMACD,
+            ip::IF_TYPE_SOFTWARE_LOOPBACK,
+            ip::IF_TYPE_IEEE80211
+        ]
+    );
 }

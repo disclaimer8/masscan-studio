@@ -74,6 +74,11 @@ pub mod ndp_resolve;
 // Безопасный переносимый разбор ответов ядра о маршрутах (rtnetlink, route socket Darwin, IP Helper).
 mod route_parse;
 
+// Тестовый помощник: флаги одного fd (`F_GETFL`, `FD_CLOEXEC`) для тестов флагов сокетов.
+#[cfg(all(test, unix))]
+#[allow(unsafe_code)]
+mod unix_fd_tests;
+
 // Смещение местного времени от UTC (`localtime_r`, Win32 `SystemTimeToTzSpecificLocalTime`) для подвала `-oX`.
 #[allow(unsafe_code)]
 pub mod localtime;

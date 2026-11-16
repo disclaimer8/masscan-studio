@@ -335,3 +335,132 @@ fn network_plan_kernel_unicast_and_local_route_kinds_retain_their_meaning() {
         );
     }
 }
+
+#[test]
+fn observation_constants_and_offsets_match_libc() {
+    use std::mem::{offset_of, size_of};
+    assert_eq!(HEADER_LEN, size_of::<libc::nlmsghdr>());
+    assert_eq!(i32::from(NLMSG_ERROR), libc::NLMSG_ERROR);
+    assert_eq!(i32::from(NLMSG_DONE), libc::NLMSG_DONE);
+    assert_eq!(i32::from(NLM_F_DUMP_INTR), libc::NLM_F_DUMP_INTR);
+    assert_eq!(
+        [RTM_NEWLINK, RTM_GETLINK, RTM_NEWADDR, RTM_GETADDR],
+        [
+            libc::RTM_NEWLINK,
+            libc::RTM_GETLINK,
+            libc::RTM_NEWADDR,
+            libc::RTM_GETADDR
+        ]
+    );
+    // `dump_request` and `observations` read these structures at fixed offsets.
+    assert_eq!(size_of::<libc::ifinfomsg>(), 16);
+    assert_eq!(offset_of!(libc::ifinfomsg, ifi_type), 2);
+    assert_eq!(offset_of!(libc::ifinfomsg, ifi_index), 4);
+    assert_eq!(offset_of!(libc::ifinfomsg, ifi_flags), 8);
+    assert_eq!(size_of::<libc::ifaddrmsg>(), 8);
+    assert_eq!(offset_of!(libc::ifaddrmsg, ifa_prefixlen), 1);
+    assert_eq!(offset_of!(libc::ifaddrmsg, ifa_index), 4);
+}
+
+#[test]
+fn observation_socket_keeps_its_flags() {
+    use std::os::fd::AsFd;
+    let socket = Socket::open().unwrap();
+    let (status, cloexec) = crate::unix_fd_tests::fd_flags(socket.0.as_fd());
+    assert!(cloexec, "the observation socket sets FD_CLOEXEC");
+    assert_ne!(
+        status & libc::O_NONBLOCK,
+        0,
+        "the observation socket sets O_NONBLOCK"
+    );
+}
+
+/// The text of errno `e` in the table of the host OS, as `sys` prints it.
+fn os(e: i32) -> String {
+    std::io::Error::from_raw_os_error(e).to_string()
+}
+
+#[test]
+fn error_texts_are_byte_identical() {
+    let text = |io: &mut Fake, dump: bool| exchange(io, dump).unwrap_err().to_string();
+    let mut io = Fake::replies(vec![]);
+    io.sends.push_back(Ok(2));
+    assert_eq!(
+        text(&mut io, false),
+        "system error: netlink observation: short send"
+    );
+    let mut io = Fake::replies(vec![(vec![], true)]);
+    assert_eq!(
+        text(&mut io, true),
+        "system error: netlink observation: malformed empty or truncated datagram"
+    );
+    let mut io = Fake::replies(vec![(message(3, 0x10, 41, &[]), true)]);
+    assert_eq!(
+        text(&mut io, true),
+        "system error: netlink observation: interrupted dump"
+    );
+    // 129 full datagrams of one link message each pass the 8 MiB reply limit.
+    let full = message(RTM_NEWLINK, 0, 41, &vec![0; RECV_BUF - HEADER_LEN]);
+    assert_eq!(full.len(), RECV_BUF);
+    let mut io = Fake::replies(vec![(full, true); MAX_REPLY_BYTES / RECV_BUF + 1]);
+    assert_eq!(
+        text(&mut io, true),
+        "system error: netlink observation reply limit exceeded"
+    );
+    let mut io = Fake::replies(vec![]);
+    io.sends.push_back(Err(libc::EBADF));
+    assert_eq!(
+        text(&mut io, false),
+        format!(
+            "system error: sendto(NETLINK_ROUTE observation): {}",
+            os(libc::EBADF)
+        )
+    );
+    let mut io = Fake::replies(vec![]);
+    io.datagrams.push_back(Err(libc::EBADF));
+    assert_eq!(
+        text(&mut io, false),
+        format!(
+            "system error: recvfrom(NETLINK_ROUTE observation): {}",
+            os(libc::EBADF)
+        )
+    );
+    let mut io = Fake::replies(vec![]);
+    io.readiness = [Err(libc::EBADF)].into();
+    assert_eq!(
+        text(&mut io, false),
+        format!(
+            "system error: poll(NETLINK_ROUTE write): {}",
+            os(libc::EBADF)
+        )
+    );
+    let mut io = Fake::replies(vec![]);
+    io.readiness = [Ok(true), Err(libc::EBADF)].into();
+    assert_eq!(
+        text(&mut io, false),
+        format!(
+            "system error: poll(NETLINK_ROUTE read): {}",
+            os(libc::EBADF)
+        )
+    );
+
+    // retry_until on a virtual clock: cancellation, deadline, attempt budget.
+    let now = Instant::now();
+    let retry = |deadline: Instant, cancelled: bool| {
+        retry_until::<()>(deadline, &|| cancelled, || now, |_| Ok(None))
+            .unwrap_err()
+            .to_string()
+    };
+    assert_eq!(
+        retry(now + Duration::from_secs(1), true),
+        "system error: network preparation cancelled"
+    );
+    assert_eq!(
+        retry(now, false),
+        "system error: network observation deadline expired"
+    );
+    assert_eq!(
+        retry(now + Duration::from_secs(1), false),
+        "system error: netlink observation retry limit exceeded"
+    );
+}

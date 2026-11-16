@@ -1699,3 +1699,305 @@ fn pause_resume_through_batches_has_no_gap_or_duplicate() {
         "batched order differs from the max_batch 1 order"
     );
 }
+
+// ---------- exact texts ----------
+
+const CLOSED: &str = "adapter closed after an earlier fatal error";
+
+#[test]
+fn error_texts_are_byte_identical() {
+    // check_binding
+    let refused = |b: &AdapterBinding| check_binding(b).unwrap_err().to_string();
+    let mut b = binding();
+    b.link_type = LinkType::Raw;
+    assert_eq!(
+        refused(&b),
+        "unsupported link type: Raw (Windows Npcap adapter supports Ethernet only)"
+    );
+    let mut b = binding();
+    b.source_mac = [0x01, 0, 0x5e, 0, 0, 1];
+    assert_eq!(
+        refused(&b),
+        "interface does not match the binding: source MAC 01:00:5e:00:00:01 is not a unicast address"
+    );
+    let mut b = binding();
+    b.next_hop_mac = b.source_mac;
+    assert_eq!(
+        refused(&b),
+        "interface does not match the binding: source MAC equals the next-hop MAC: own transmitted \
+         frames could not be told from replies"
+    );
+
+    // open: nonblocking mode that did not take (error and "still blocking"), the baseline read
+    for nonblock in [-1, 0] {
+        reset(|s| s.getnonblock_override = Some(nonblock));
+        let api = good_api();
+        let e = open_with(&api, &binding()).err().expect("open must fail");
+        assert_eq!(
+            e.to_string(),
+            "system error: pcap_setnonblock did not take effect on the RX handle",
+            "getnonblock {nonblock}"
+        );
+    }
+    reset(|s| s.stats_script.push_back(Err(-5)));
+    let api = good_api();
+    let e = open_with(&api, &binding()).err().expect("open must fail");
+    assert_eq!(
+        e.to_string(),
+        "system error: pcap_stats failed on the new RX handle (code -5): fake driver says no"
+    );
+
+    // TX
+    reset(|s| s.queue_full_at = Some(1));
+    let api = good_api();
+    let mut a = open_pair(&api);
+    assert_eq!(
+        a.io.tx.send(&[0u8; 13], T50).unwrap_err().message,
+        "frame length 13 is outside 14..=1518; nothing was sent"
+    );
+    assert_eq!(
+        a.io.tx.send_batch(&[], T50).unwrap_err().message,
+        "send_batch called with no frames; nothing was sent"
+    );
+    let many = frames_of(TX_BATCH_FRAMES + 1);
+    assert_eq!(
+        a.io.tx.send_batch(&refs(&many), T50).unwrap_err().message,
+        "send_batch called with 65 frames, more than 64; nothing was sent"
+    );
+    let two = frames_of(2);
+    assert_eq!(
+        a.io.tx.send_batch(&refs(&two), T50).unwrap_err().message,
+        "sendqueue refused a frame that fits the allocated queue; nothing was sent"
+    );
+
+    // RX: the driver's error and EOF, the library's contract violations, the closed handle
+    let mut b = buf();
+    for (step, text) in [
+        (
+            NextStep::Err(-1),
+            "pcap_next_ex failed (code -1): fake driver says no",
+        ),
+        (NextStep::Eof, "pcap_next_ex reported EOF on a live capture"),
+        (
+            NextStep::NullHdr,
+            "pcap_next_ex returned a frame with a NULL pointer",
+        ),
+        (
+            NextStep::Raw {
+                caplen: 2049,
+                len: 2049,
+                data: vec![0; 2049],
+            },
+            "pcap_next_ex returned caplen above the snaplen",
+        ),
+    ] {
+        reset(|s| s.next_script.push_back(step));
+        let api = good_api();
+        let mut a = open_pair(&api);
+        assert_eq!(a.io.rx.recv(&mut b, T50).unwrap_err().message, text);
+        assert_eq!(a.io.rx.recv(&mut b, T50).unwrap_err().message, CLOSED);
+        assert_eq!(a.io.rx.health(T50).unwrap_err().message, CLOSED);
+    }
+    reset(|_| {});
+    let api = good_api();
+    let mut a = open_pair(&api);
+    with(|s| s.stats_script.push_back(Err(-3)));
+    assert_eq!(
+        a.io.rx.health(T50).unwrap_err().message,
+        "pcap_stats failed (code -3): fake driver says no"
+    );
+}
+
+// ---------- concurrent counters ----------
+
+/// Frames each thread moves in the concurrent counters test.
+const CONCURRENT_FRAMES: usize = 20_000;
+
+/// Every field of `cur` is at least the same field of `prev` (`kernel_drops`: unknown < known, then by value).
+fn assert_monotonic(prev: &crate::NetStats, cur: &crate::NetStats) {
+    let pairs = [
+        ("tx_sent", prev.tx_sent, cur.tx_sent),
+        ("tx_would_block", prev.tx_would_block, cur.tx_would_block),
+        ("tx_uncertain", prev.tx_uncertain, cur.tx_uncertain),
+        ("tx_errors", prev.tx_errors, cur.tx_errors),
+        ("rx_packets", prev.rx_packets, cur.rx_packets),
+        ("rx_truncated", prev.rx_truncated, cur.rx_truncated),
+        ("rx_outgoing", prev.rx_outgoing, cur.rx_outgoing),
+        (
+            "rx_wrong_interface",
+            prev.rx_wrong_interface,
+            cur.rx_wrong_interface,
+        ),
+        ("rx_errors", prev.rx_errors, cur.rx_errors),
+        ("tx_batches", prev.tx_batches, cur.tx_batches),
+        ("tx_batch_max", prev.tx_batch_max, cur.tx_batch_max),
+        ("tx_over_budget", prev.tx_over_budget, cur.tx_over_budget),
+    ];
+    for (name, p, c) in pairs {
+        assert!(c >= p, "{name} went back: {prev:?} -> {cur:?}");
+    }
+    assert!(
+        cur.kernel_drops >= prev.kernel_drops,
+        "kernel_drops went back: {prev:?} -> {cur:?}"
+    );
+}
+
+#[test]
+fn stats_snapshot_is_monotonic_and_exact_under_concurrent_tx_and_rx() {
+    use std::sync::atomic::AtomicBool;
+    reset(|s| {
+        s.next_script.extend(std::iter::repeat_n(
+            NextStep::Frame(peer_frame(60)),
+            CONCURRENT_FRAMES,
+        ));
+    });
+    let api = good_api();
+    let crate::OpenedAdapter {
+        io: AdapterPair { mut tx, mut rx },
+        stats,
+        ..
+    } = open_pair(&api);
+    let frame = own_frame(60);
+    let tx_done = &AtomicBool::new(false);
+    let rx_done = &AtomicBool::new(false);
+    let last = std::thread::scope(|s| {
+        s.spawn(move || {
+            for _ in 0..CONCURRENT_FRAMES {
+                assert_eq!(tx.send(&frame, T50), Ok(SendStatus::Sent));
+            }
+            tx_done.store(true, Ordering::Release);
+        });
+        s.spawn(move || {
+            let mut b = buf();
+            let mut got = 0;
+            while got < CONCURRENT_FRAMES {
+                if rx.recv(&mut b, T50).unwrap().is_some() {
+                    got += 1;
+                }
+            }
+            drop(rx);
+            rx_done.store(true, Ordering::Release);
+        });
+        let observer = s.spawn(|| {
+            let mut prev = stats.snapshot();
+            loop {
+                let done = tx_done.load(Ordering::Acquire) && rx_done.load(Ordering::Acquire);
+                let cur = stats.snapshot();
+                assert_monotonic(&prev, &cur);
+                prev = cur;
+                if done {
+                    return prev;
+                }
+            }
+        });
+        observer.join().unwrap()
+    });
+    let end = stats.snapshot();
+    assert_monotonic(&last, &end);
+    assert_eq!(
+        end,
+        crate::NetStats {
+            tx_sent: CONCURRENT_FRAMES as u64,
+            rx_packets: CONCURRENT_FRAMES as u64,
+            kernel_drops: Some(0),
+            ..crate::NetStats::default()
+        }
+    );
+}
+
+// ---------- microbenchmark ----------
+
+/// The frame every benchmark `pcap_next_ex` returns (source MAC `5a:..`, not ours).
+static BENCH_FRAME: [u8; 60] = [0x5a; 60];
+static BENCH_HDR: crate::windows::ffi::PcapPkthdr = crate::windows::ffi::PcapPkthdr {
+    ts: crate::windows::ffi::Timeval {
+        tv_sec: 0,
+        tv_usec: 0,
+    },
+    caplen: 60,
+    len: 60,
+};
+
+/// Lock-free `pcap_next_ex`: always one prepared frame.
+unsafe extern "C" fn bench_next_ex(
+    _p: *mut crate::windows::ffi::PcapT,
+    h: *mut *mut crate::windows::ffi::PcapPkthdr,
+    d: *mut *const u8,
+) -> c_int {
+    // SAFETY: the caller passes valid out-pointers; both targets are statics that the adapter only reads.
+    unsafe {
+        *h = (&raw const BENCH_HDR).cast_mut();
+        *d = BENCH_FRAME.as_ptr();
+    }
+    1
+}
+
+/// Lock-free `pcap_sendpacket`: accepts every frame.
+unsafe extern "C" fn bench_sendpacket(
+    _p: *mut crate::windows::ffi::PcapT,
+    _b: *const u8,
+    _n: c_int,
+) -> c_int {
+    0
+}
+
+/// The scripted table with the two hot-path exports replaced by the lock-free ones.
+fn bench_symbols(name: &str) -> Option<*const std::ffi::c_void> {
+    match name {
+        "pcap_next_ex" => Some(bench_next_ex as *const std::ffi::c_void),
+        "pcap_sendpacket" => Some(bench_sendpacket as *const std::ffi::c_void),
+        _ => symbol_addr(name),
+    }
+}
+
+/// Calls per thread in the microbenchmark.
+const BENCH_CALLS: u32 = 1_000_000;
+
+#[test]
+#[ignore = "microbenchmark: cargo test --release -p rmasscan-net adapter_hot_path -- --ignored --nocapture"]
+fn adapter_hot_path_two_threads() {
+    reset(|_| {});
+    let loader = super::FakeLoader {
+        symbols: bench_symbols,
+        ..super::FakeLoader::ok()
+    };
+    let api = NpcapApi::load_with(&loader, GOOD_PATH).unwrap();
+    let crate::OpenedAdapter {
+        io: AdapterPair { mut tx, mut rx },
+        stats,
+        ..
+    } = open_pair(&api);
+    let frame = own_frame(60);
+    let start = std::sync::Barrier::new(2);
+    let (tx_time, rx_time) = std::thread::scope(|s| {
+        let tx_thread = s.spawn(|| {
+            start.wait();
+            let t0 = Instant::now();
+            for _ in 0..BENCH_CALLS {
+                std::hint::black_box(tx.send(std::hint::black_box(&frame), T50)).unwrap();
+            }
+            t0.elapsed()
+        });
+        let rx_thread = s.spawn(|| {
+            let mut b = buf();
+            start.wait();
+            let t0 = Instant::now();
+            for _ in 0..BENCH_CALLS {
+                std::hint::black_box(rx.recv(&mut b, T50)).unwrap();
+            }
+            t0.elapsed()
+        });
+        (tx_thread.join().unwrap(), rx_thread.join().unwrap())
+    });
+    let per = |d: Duration| d.as_nanos() as f64 / f64::from(BENCH_CALLS);
+    println!(
+        "adapter_hot_path windows: tx {:.1} ns/frame, rx {:.1} ns/frame ({BENCH_CALLS} calls per thread)",
+        per(tx_time),
+        per(rx_time)
+    );
+    let s = stats.snapshot();
+    assert_eq!(
+        (s.tx_sent, s.rx_packets),
+        (u64::from(BENCH_CALLS), u64::from(BENCH_CALLS))
+    );
+}

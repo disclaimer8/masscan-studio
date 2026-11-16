@@ -126,10 +126,35 @@ struct StallRx {
     stall: Option<Duration>,
 }
 
-/// RX-декоратор: запоминает ОС-идентификатор RX-потока движка (первый вызов `recv`/`health`).
+/// RX-декоратор: запоминает ОС-идентификатор RX-потока движка (первый вызов `recv`/`health`) и время CPU
+/// этого потока при уничтожении (в `Drop`, который идёт в потоке движка).
 struct IdRx {
     inner: Box<dyn Rx>,
     tid: Arc<OnceLock<u64>>,
+    cpu_ns: Arc<OnceLock<u64>>,
+}
+
+impl Drop for IdRx {
+    fn drop(&mut self) {
+        if let Some(ns) = thread_cpu_ns() {
+            let _ = self.cpu_ns.set(ns);
+        }
+    }
+}
+
+/// Время на CPU текущего потока, нс: первое поле `/proc/thread-self/schedstat` (Linux). `None` вне Linux
+/// или без файла. Ноль значит, что ядро не ведёт учёт (`0 0 0`): стенд считает такой прогон негодным.
+fn thread_cpu_ns() -> Option<u64> {
+    if cfg!(target_os = "linux") {
+        std::fs::read_to_string("/proc/thread-self/schedstat")
+            .ok()?
+            .split_whitespace()
+            .next()?
+            .parse()
+            .ok()
+    } else {
+        None
+    }
 }
 
 impl IdRx {
@@ -386,6 +411,16 @@ struct HarnessTx {
     timing: Arc<TxTiming>,
     /// ОС-идентификатор TX-потока движка (первый вызов `send`): сверяется после join.
     tid: Arc<OnceLock<u64>>,
+    /// Время CPU TX-потока движка, записанное в `Drop` (он идёт в этом потоке).
+    cpu_ns: Arc<OnceLock<u64>>,
+}
+
+impl Drop for HarnessTx {
+    fn drop(&mut self) {
+        if let Some(ns) = thread_cpu_ns() {
+            let _ = self.cpu_ns.set(ns);
+        }
+    }
 }
 
 impl HarnessTx {
@@ -1027,6 +1062,8 @@ because promiscuous mode is not enabled. {}",
     let expected_total = plan.range() - start_index;
     let tx_tid: Arc<OnceLock<u64>> = Arc::default();
     let rx_tid: Arc<OnceLock<u64>> = Arc::default();
+    let tx_cpu: Arc<OnceLock<u64>> = Arc::default();
+    let rx_cpu: Arc<OnceLock<u64>> = Arc::default();
     let timing = Arc::new(TxTiming {
         t0: Instant::now(),
         t0_utc_ms: unix_ms(),
@@ -1046,6 +1083,7 @@ because promiscuous mode is not enabled. {}",
             cancel: cancel.clone(),
             timing: timing.clone(),
             tid: tx_tid.clone(),
+            cpu_ns: tx_cpu.clone(),
         }),
         rx: Box::new(IdRx {
             inner: if a.rx_stall_ms > 0 {
@@ -1057,6 +1095,7 @@ because promiscuous mode is not enabled. {}",
                 rx
             },
             tid: rx_tid.clone(),
+            cpu_ns: rx_cpu.clone(),
         }),
     };
     let mut opts = EngineOptions::new(a.scan_id, a.attempt_id);
@@ -1306,7 +1345,7 @@ because promiscuous mode is not enabled. {}",
 \"resources\":{{\"fds_before_open\":{},\"fds_open\":{},\"fds_after_join\":{},\
 \"threads_before\":{},\"threads_after_join_immediate\":{},\"threads_settle_ms\":{threads_settle_ms:.3},\"threads_after_join\":{},\
 \"working_set_bytes_after_join\":{},\"peak_working_set_bytes\":{},\"cpu_user_ms\":{},\"cpu_kernel_ms\":{}}},\
-\"workers\":{{\"tx_tid\":{},\"rx_tid\":{},\"tx_alive_after_join\":{},\"rx_alive_after_join\":{},\"settle_ms\":{workers_settle_ms:.3}}},\
+\"workers\":{{\"tx_tid\":{},\"rx_tid\":{},\"tx_alive_after_join\":{},\"rx_alive_after_join\":{},\"settle_ms\":{workers_settle_ms:.3},\"tx_cpu_ns\":{},\"rx_cpu_ns\":{}}},\
 \"wall\":{{\"t0_utc_ms\":{},\"started_utc_ms\":{started_utc_ms},\"outcome_utc_ms\":{},\"join_done_utc_ms\":{}}},\
 \"npcap\":{npcap},\"job\":{job},\"identity\":{}}}",
         first as f64 / 1e9,
@@ -1333,6 +1372,8 @@ because promiscuous mode is not enabled. {}",
         json_opt_u64(engine_tids[1]),
         json_opt_bool(alive[0]),
         json_opt_bool(alive[1]),
+        json_opt_u64(tx_cpu.get().copied()),
+        json_opt_u64(rx_cpu.get().copied()),
         t.t0_utc_ms,
         outcome_utc_ms,
         unix_ms(),
@@ -2056,6 +2097,50 @@ mod tests {
     }
 
     #[test]
+    fn success_json_reports_engine_thread_cpu() {
+        let be = Mock {
+            nic: Some(NIC),
+            fake: Some(rmasscan_engine::fake::FakeAdapter::new()),
+            ..Mock::default()
+        };
+        let (code, json) = run(&with(&["--wait", "0"]), &be);
+        assert_eq!(code, 0, "{json}");
+        let open = "\"workers\":{";
+        let start = json
+            .find(open)
+            .unwrap_or_else(|| panic!("no workers: {json}"))
+            + open.len();
+        let len = json[start..]
+            .find('}')
+            .unwrap_or_else(|| panic!("workers not closed: {json}"));
+        let workers = &json[start..start + len];
+        // The two CPU fields close the object, after every older field.
+        let (head, tail) = workers
+            .split_once(",\"tx_cpu_ns\":")
+            .unwrap_or_else(|| panic!("tx_cpu_ns missing: {workers}"));
+        assert!(
+            head.starts_with("\"tx_tid\":") && head.contains(",\"settle_ms\":"),
+            "{workers}"
+        );
+        let (tx, rx) = tail
+            .split_once(",\"rx_cpu_ns\":")
+            .unwrap_or_else(|| panic!("rx_cpu_ns missing or out of order: {workers}"));
+        for v in [tx, rx] {
+            assert!(v == "null" || v.parse::<u64>().is_ok(), "{v:?}: {workers}");
+        }
+        // Linux reads the first field of /proc/thread-self/schedstat; elsewhere there is no source.
+        #[cfg(target_os = "linux")]
+        if std::path::Path::new("/proc/thread-self/schedstat").exists() {
+            assert!(
+                tx.parse::<u64>().is_ok() && rx.parse::<u64>().is_ok(),
+                "{workers}"
+            );
+        }
+        #[cfg(not(target_os = "linux"))]
+        assert_eq!((tx, rx), ("null", "null"), "{workers}");
+    }
+
+    #[test]
     fn success_json_carries_the_tx_mode_and_the_batch_counters() {
         let be = Mock {
             nic: Some(NIC),
@@ -2125,6 +2210,7 @@ mod tests {
             cancel: cancel.clone(),
             timing: timing.clone(),
             tid: Arc::default(),
+            cpu_ns: Arc::default(),
         };
         (tx, cancel, timing)
     }

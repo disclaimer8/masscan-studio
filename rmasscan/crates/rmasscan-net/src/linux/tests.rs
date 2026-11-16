@@ -739,6 +739,10 @@ fn health_after_fatal_error_reports_the_closed_adapter() {
 struct FakeIface {
     index: Option<u32>,
     hw: (u16, [u8; 6]),
+    /// `if_nametoindex` fails with this errno.
+    index_err: Option<Errno>,
+    /// `SIOCGIFHWADDR` fails with this errno.
+    hw_err: Option<Errno>,
     queried: Mutex<Vec<&'static str>>,
 }
 
@@ -747,6 +751,8 @@ impl FakeIface {
         FakeIface {
             index: Some(IFINDEX),
             hw: (ARPHRD_ETHER, MAC),
+            index_err: None,
+            hw_err: None,
             queried: Mutex::new(Vec::new()),
         }
     }
@@ -755,11 +761,11 @@ impl FakeIface {
 impl IfaceInfo for FakeIface {
     fn ifindex(&self, _: &str) -> Result<Option<u32>, Errno> {
         self.queried.lock().unwrap().push("ifindex");
-        Ok(self.index)
+        self.index_err.map_or(Ok(self.index), Err)
     }
     fn hw_addr(&self, _: &str) -> Result<(u16, [u8; 6]), Errno> {
         self.queried.lock().unwrap().push("hw");
-        Ok(self.hw)
+        self.hw_err.map_or(Ok(self.hw), Err)
     }
 }
 
@@ -843,4 +849,335 @@ fn hostile_interface_names_never_reach_the_os() {
         assert!(matches!(r, Err(NetError::InterfaceMismatch(_))), "{name:?}");
         assert!(q.queried.lock().unwrap().is_empty(), "{name:?}");
     }
+}
+
+// ---------------------------------------------------------------- socket flags
+
+#[test]
+fn hw_addr_ioctl_socket_keeps_its_flags() {
+    use std::os::fd::AsFd;
+    let fd = socket::ioctl_socket().unwrap();
+    let (status, cloexec) = crate::unix_fd_tests::fd_flags(fd.as_fd());
+    assert!(cloexec, "the SIOCGIFHWADDR socket sets FD_CLOEXEC");
+    assert_eq!(
+        status & libc::O_NONBLOCK,
+        0,
+        "the SIOCGIFHWADDR socket blocks"
+    );
+}
+
+// ---------------------------------------------------------------- exact texts
+
+/// The text of errno `e` in the table of the host OS, as `errno_msg` prints it.
+fn os(e: Errno) -> String {
+    std::io::Error::from_raw_os_error(e).to_string()
+}
+
+const CLOSED: &str = "adapter closed after an earlier fatal error";
+
+#[test]
+fn error_texts_are_byte_identical() {
+    let text = |q: &FakeIface, b: &AdapterBinding| verify_binding(q, b).unwrap_err().to_string();
+    // verify_binding
+    let mut b = binding();
+    b.link_type = LinkType::Null;
+    assert_eq!(
+        text(&FakeIface::ok(), &b),
+        "unsupported link type: Null (Linux AF_PACKET supports Ethernet only)"
+    );
+    let mut b = binding();
+    b.interface_id = "a b".into();
+    assert_eq!(
+        text(&FakeIface::ok(), &b),
+        "interface does not match the binding: invalid interface name \"a b\""
+    );
+    let mut q = FakeIface::ok();
+    q.index = None;
+    assert_eq!(
+        text(&q, &binding()),
+        "interface does not match the binding: no such interface \"veth-a\""
+    );
+    let mut q = FakeIface::ok();
+    q.hw_err = Some(libc::ENODEV);
+    assert_eq!(
+        text(&q, &binding()),
+        "interface does not match the binding: interface \"veth-a\" disappeared"
+    );
+    let mut q = FakeIface::ok();
+    q.index_err = Some(libc::EIO);
+    assert_eq!(
+        text(&q, &binding()),
+        format!("system error: if_nametoindex: {}", os(libc::EIO))
+    );
+    let mut q = FakeIface::ok();
+    q.hw_err = Some(libc::EIO);
+    assert_eq!(
+        text(&q, &binding()),
+        format!("system error: SIOCGIFHWADDR: {}", os(libc::EIO))
+    );
+    let mut q = FakeIface::ok();
+    q.hw = (772, [0; 6]);
+    assert_eq!(
+        text(&q, &binding()),
+        "unsupported link type: interface \"veth-a\" has ARPHRD type 772, not Ethernet"
+    );
+    // map_open_error: the kind of each errno and the text of each kind.
+    for (e, kind) in [
+        (
+            libc::EPERM,
+            "permission denied (raw packet access needs elevated privileges)",
+        ),
+        (
+            libc::EACCES,
+            "permission denied (raw packet access needs elevated privileges)",
+        ),
+        (libc::ENODEV, "interface does not match the binding"),
+        (libc::ENXIO, "interface does not match the binding"),
+        (libc::EIO, "system error"),
+    ] {
+        assert_eq!(
+            map_open_error("rx socket", e).to_string(),
+            format!("{kind}: rx socket: {}", os(e)),
+            "errno {e}"
+        );
+    }
+
+    // TX
+    let (mut t, _, _, _) = tx(Script {
+        sends: [Err(libc::ENETDOWN)].into(),
+        ..Default::default()
+    });
+    assert_eq!(
+        t.send(&FRAME, MS50).unwrap_err().message,
+        format!("send: {}", os(libc::ENETDOWN))
+    );
+    assert_eq!(t.send(&FRAME, MS50).unwrap_err().message, CLOSED);
+    let (mut t, _, _, _) = tx(Script {
+        sends: [Err(EAGAIN)].into(),
+        polls: [Ok(Readiness::Failed)].into(),
+        ..Default::default()
+    });
+    assert_eq!(
+        t.send(&FRAME, MS50).unwrap_err().message,
+        "poll(POLLOUT): socket error"
+    );
+    let (mut t, _, _, _) = tx(Script {
+        sends: [Err(EAGAIN)].into(),
+        polls: [Err(libc::EBADF)].into(),
+        ..Default::default()
+    });
+    assert_eq!(
+        t.send(&FRAME, MS50).unwrap_err().message,
+        format!("poll(POLLOUT): {}", os(libc::EBADF))
+    );
+
+    // RX
+    let mut buf = [0u8; 16];
+    let (mut r, _, _, _) = rx(Script {
+        recvs: [Err(libc::ENETDOWN)].into(),
+        ..Default::default()
+    });
+    assert_eq!(
+        r.recv(&mut buf, MS50).unwrap_err().message,
+        format!("recvfrom: {}", os(libc::ENETDOWN))
+    );
+    assert_eq!(r.recv(&mut buf, MS50).unwrap_err().message, CLOSED);
+    assert_eq!(r.health(MS50).unwrap_err().message, CLOSED);
+    let (mut r, _, _, _) = rx(Script {
+        polls: [Ok(Readiness::Failed)].into(),
+        ..Default::default()
+    });
+    assert_eq!(
+        r.recv(&mut buf, MS50).unwrap_err().message,
+        "poll(POLLIN): socket error"
+    );
+    let (mut r, _, _, _) = rx(Script {
+        polls: [Err(libc::EBADF)].into(),
+        ..Default::default()
+    });
+    assert_eq!(
+        r.recv(&mut buf, MS50).unwrap_err().message,
+        format!("poll(POLLIN): {}", os(libc::EBADF))
+    );
+    let (mut r, _, _, _) = rx(Script {
+        stats: [Err(libc::ENOPROTOOPT)].into(),
+        ..Default::default()
+    });
+    assert_eq!(
+        r.health(MS50).unwrap_err().message,
+        format!("getsockopt(PACKET_STATISTICS): {}", os(libc::ENOPROTOOPT))
+    );
+}
+
+// ---------------------------------------------------------------- concurrent counters
+
+/// Frames each thread moves in the concurrent counters test.
+const CONCURRENT_FRAMES: usize = 20_000;
+
+/// Every field of `cur` is at least the same field of `prev` (`kernel_drops`: unknown < known, then by value).
+fn assert_monotonic(prev: &NetStats, cur: &NetStats) {
+    let pairs = [
+        ("tx_sent", prev.tx_sent, cur.tx_sent),
+        ("tx_would_block", prev.tx_would_block, cur.tx_would_block),
+        ("tx_uncertain", prev.tx_uncertain, cur.tx_uncertain),
+        ("tx_errors", prev.tx_errors, cur.tx_errors),
+        ("rx_packets", prev.rx_packets, cur.rx_packets),
+        ("rx_truncated", prev.rx_truncated, cur.rx_truncated),
+        ("rx_outgoing", prev.rx_outgoing, cur.rx_outgoing),
+        (
+            "rx_wrong_interface",
+            prev.rx_wrong_interface,
+            cur.rx_wrong_interface,
+        ),
+        ("rx_errors", prev.rx_errors, cur.rx_errors),
+        ("tx_batches", prev.tx_batches, cur.tx_batches),
+        ("tx_batch_max", prev.tx_batch_max, cur.tx_batch_max),
+        ("tx_over_budget", prev.tx_over_budget, cur.tx_over_budget),
+    ];
+    for (name, p, c) in pairs {
+        assert!(c >= p, "{name} went back: {prev:?} -> {cur:?}");
+    }
+    assert!(
+        cur.kernel_drops >= prev.kernel_drops,
+        "kernel_drops went back: {prev:?} -> {cur:?}"
+    );
+}
+
+#[test]
+fn stats_snapshot_is_monotonic_and_exact_under_concurrent_tx_and_rx() {
+    let frame60 = [0x5a_u8; 60];
+    let (tx_io, _, _) = fake(Script {
+        sends: std::iter::repeat_n(Ok(60), CONCURRENT_FRAMES).collect(),
+        ..Default::default()
+    });
+    let (rx_io, _, _) = fake(Script {
+        recvs: std::iter::repeat_n(frame(&frame60), CONCURRENT_FRAMES).collect(),
+        stats: std::iter::repeat_n(ks(0), 64).collect(),
+        ..Default::default()
+    });
+    let c = counters();
+    let mut t = TxHalf::new(tx_io, Arc::clone(&c));
+    let mut r = RxHalf::new(rx_io, IFINDEX, Arc::clone(&c));
+    let handle = NetStatsHandle::new(Arc::clone(&c));
+    let tx_done = &AtomicBool::new(false);
+    let rx_done = &AtomicBool::new(false);
+    let last = std::thread::scope(|s| {
+        s.spawn(|| {
+            for _ in 0..CONCURRENT_FRAMES {
+                assert_eq!(t.send(&frame60, MS50), Ok(SendStatus::Sent));
+            }
+            tx_done.store(true, Ordering::Release);
+        });
+        s.spawn(move || {
+            let mut buf = [0u8; 2048];
+            let mut got = 0;
+            while got < CONCURRENT_FRAMES {
+                if r.recv(&mut buf, MS50).unwrap().is_some() {
+                    got += 1;
+                }
+            }
+            drop(r);
+            rx_done.store(true, Ordering::Release);
+        });
+        let observer = s.spawn(|| {
+            let mut prev = handle.snapshot();
+            loop {
+                let done = tx_done.load(Ordering::Acquire) && rx_done.load(Ordering::Acquire);
+                let cur = handle.snapshot();
+                assert_monotonic(&prev, &cur);
+                prev = cur;
+                if done {
+                    return prev;
+                }
+            }
+        });
+        observer.join().unwrap()
+    });
+    let end = handle.snapshot();
+    assert_monotonic(&last, &end);
+    assert_eq!(
+        end,
+        NetStats {
+            tx_sent: CONCURRENT_FRAMES as u64,
+            rx_packets: CONCURRENT_FRAMES as u64,
+            kernel_drops: Some(0),
+            ..NetStats::default()
+        }
+    );
+}
+
+// ---------------------------------------------------------------- microbenchmark
+
+/// Lock-free seam for the microbenchmark: `send` accepts everything, `recv` copies one prepared frame.
+struct BenchIo {
+    frame: [u8; 60],
+}
+
+impl PacketIo for BenchIo {
+    fn send(&mut self, frame: &[u8]) -> Result<usize, Errno> {
+        Ok(frame.len())
+    }
+    fn recv(&mut self, buf: &mut [u8]) -> Result<RecvMeta, Errno> {
+        let n = self.frame.len().min(buf.len());
+        buf[..n].copy_from_slice(&self.frame[..n]);
+        Ok(RecvMeta {
+            len: self.frame.len(),
+            pkttype: 0,
+            ifindex: IFINDEX as i32,
+        })
+    }
+    fn poll(&mut self, _write: bool, _timeout_ms: i32) -> Result<Readiness, Errno> {
+        Ok(Readiness::Ready)
+    }
+    fn packet_stats(&mut self) -> Result<KernelStats, Errno> {
+        Ok(KernelStats {
+            packets: 0,
+            drops: 0,
+        })
+    }
+    fn backoff(&mut self, _wait: Duration) {}
+}
+
+/// Calls per thread in the microbenchmark.
+const BENCH_CALLS: u32 = 1_000_000;
+
+#[test]
+#[ignore = "microbenchmark: cargo test --release -p rmasscan-net adapter_hot_path -- --ignored --nocapture"]
+fn adapter_hot_path_two_threads() {
+    let frame60 = [0x5a_u8; 60];
+    let c = counters();
+    let mut t = TxHalf::new(BenchIo { frame: frame60 }, Arc::clone(&c));
+    let mut r = RxHalf::new(BenchIo { frame: frame60 }, IFINDEX, Arc::clone(&c));
+    let start = std::sync::Barrier::new(2);
+    let (tx_time, rx_time) = std::thread::scope(|s| {
+        let tx_thread = s.spawn(|| {
+            start.wait();
+            let t0 = Instant::now();
+            for _ in 0..BENCH_CALLS {
+                std::hint::black_box(t.send(std::hint::black_box(&frame60), MS50)).unwrap();
+            }
+            t0.elapsed()
+        });
+        let rx_thread = s.spawn(|| {
+            let mut buf = [0u8; 2048];
+            start.wait();
+            let t0 = Instant::now();
+            for _ in 0..BENCH_CALLS {
+                std::hint::black_box(r.recv(&mut buf, MS50)).unwrap();
+            }
+            t0.elapsed()
+        });
+        (tx_thread.join().unwrap(), rx_thread.join().unwrap())
+    });
+    let per = |d: Duration| d.as_nanos() as f64 / f64::from(BENCH_CALLS);
+    println!(
+        "adapter_hot_path linux: tx {:.1} ns/frame, rx {:.1} ns/frame ({BENCH_CALLS} calls per thread)",
+        per(tx_time),
+        per(rx_time)
+    );
+    let s = snap(&c);
+    assert_eq!(
+        (s.tx_sent, s.rx_packets),
+        (u64::from(BENCH_CALLS), u64::from(BENCH_CALLS))
+    );
 }

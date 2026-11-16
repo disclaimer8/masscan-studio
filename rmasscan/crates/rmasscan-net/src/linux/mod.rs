@@ -427,3 +427,6 @@ pub(crate) fn open(binding: &AdapterBinding) -> Result<OpenedAdapter, NetError> 
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(all(test, target_os = "linux"))]
+mod layout_tests;

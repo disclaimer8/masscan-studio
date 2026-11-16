@@ -117,7 +117,12 @@ State lives in `StreamState` (`src/proto-banner1.h:77-98,253`): record state/rem
 - At the end of LENGTH2, if `handshake.type == 2` (ServerHello — the comment says "server done", the code says
   2) and `is_heartbleed`, the 15-byte probe `15 03 02 00 02 01 80 18 03 02 00 03 01 40 00` is sent with
   `tcpapi_send(..., 0)` (`:583-588`). This fires once per ServerHello header, before its contents are parsed,
-  and also on a zero-length ServerHello.
+  and also on a zero-length ServerHello. Live-stack caveat (task 10): on the first connection the hello went
+  out with `SF__close`, so by parse time the TCB is in FIN_WAIT1_SEND/FIN_WAIT1_RECV/FIN_WAIT2 and
+  `tcpapi_send` refuses ("wrong state", `stack-tcp-core.c:1758-1778`; `seg_send` would also refuse past the
+  queued FIN) — at the pin the probe only reaches the wire on the reconnect connection (`banner_ssl_12`, no
+  `SF__close`) when the ServerHello is parsed after the hello was acked (ESTABLISHED_RECV). The parser action
+  itself is observable offline (oracle cases) and kept as is.
 - CONTENTS dispatches only type 2 → `parse_server_hello` and type 11 → `parse_server_cert`; all other types
   are skipped by length. When the handshake length is exhausted the state returns to START (another handshake
   message may follow in the same record).

@@ -141,6 +141,8 @@ struct FakeBackend {
     /// Сервер HTTP поверх IPv6 с настоящими номерами (задача 14): на наш первый сегмент с данными отвечает этими
     /// байтами и FIN; его порт 80 вместо `open6`.
     http6: Option<Vec<u8>>,
+    /// Порт, на котором отвечает `http6_peer` (80 для HTTP, 443 для TLS).
+    http6_port: u16,
     /// Наши кадры TCP поверх IPv6 после SYN.
     seen6: Arc<Mutex<Vec<Seen6>>>,
 }
@@ -209,6 +211,7 @@ impl FakeBackend {
             opened: Mutex::new(Vec::new()),
             tx: Arc::new(Mutex::new(Vec::new())),
             http6: None,
+            http6_port: 80,
             seen6: Arc::new(Mutex::new(Vec::new())),
         }
     }
@@ -294,6 +297,7 @@ impl Backend for FakeBackend {
         let (o4, o6) = (self.open4.clone(), self.open6.clone());
         let tx = self.tx.clone();
         let (http6, seen6) = (self.http6.clone(), self.seen6.clone());
+        let http6_port = self.http6_port;
         let mut http6_next = None::<u32>;
         let mut ask = self.ns_on_first_syn;
         let mut ask_arp = self.arp_on_first_syn6.clone();
@@ -305,7 +309,7 @@ impl Backend for FakeBackend {
                 return vec![];
             }
             if let Some(body) = http6.as_ref().filter(|_| is_tcp6(f)) {
-                return http6_peer(f, body, &mut http6_next, &seen6);
+                return http6_peer(f, body, http6_port, &mut http6_next, &seen6);
             }
             let mut out = respond(f, &n4, &n6, &o4, &o6);
             if is_syn6(f) {
@@ -948,6 +952,7 @@ fn peer_frame6(ours: &[u8], flags: u8, seq: u32, ack: u32, payload: &[u8]) -> Ve
 fn http6_peer(
     f: &[u8],
     body: &[u8],
+    port: u16,
     next: &mut Option<u32>,
     seen: &Mutex<Vec<Seen6>>,
 ) -> Vec<Vec<u8>> {
@@ -958,7 +963,7 @@ fn http6_peer(
     let (seq, ack) = (be32(58), be32(62));
     let payload = f[54 + doff..54 + plen].to_vec();
     if flags == 0x02 {
-        if u16::from_be_bytes([f[56], f[57]]) != 80 {
+        if u16::from_be_bytes([f[56], f[57]]) != port {
             return reply_to_syn6(f, 0x04).into_iter().collect();
         }
         *next = Some(PEER_ISN.wrapping_add(1));
@@ -971,10 +976,19 @@ fn http6_peer(
     let ours = seq.wrapping_add(payload.len() as u32);
     if first_data {
         *next = Some(n.wrapping_add(body.len() as u32 + 1));
-        return vec![
-            peer_frame6(f, 0x18, n, ours, body),
-            peer_frame6(f, 0x11, n.wrapping_add(body.len() as u32), ours, &[]),
-        ];
+        let mut out: Vec<Vec<u8>> = body
+            .chunks(1200)
+            .enumerate()
+            .map(|(i, c)| peer_frame6(f, 0x18, n.wrapping_add((i * 1200) as u32), ours, c))
+            .collect();
+        out.push(peer_frame6(
+            f,
+            0x11,
+            n.wrapping_add(body.len() as u32),
+            ours,
+            &[],
+        ));
+        return out;
     }
     if flags & 0x01 != 0 {
         return vec![peer_frame6(f, 0x10, n, seq.wrapping_add(1), &[])];
@@ -1061,6 +1075,64 @@ fn live_fake_ipv6_banner() {
     );
     assert!(seen.iter().any(|s| s.0 & 0x01 != 0), "our FIN: {seen:?}");
     assert!(seen.iter().all(|s| s.0 & 0x04 == 0), "{seen:?}");
+}
+
+/// Баннеры TLS по IPv6: ClientHello по умолчанию, ServerHello и цепочка `ssl_test_case_3` сегментами,
+/// записи `ssl` и `X509` с адресом IPv6 в `-oL`.
+#[test]
+fn live_fake_ipv6_tls_banner() {
+    let golden = |rel: &str| {
+        std::fs::read_to_string(format!(
+            "{}/../../tests/golden/tls-records/{rel}",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .unwrap()
+    };
+    let unhex = |s: &str| -> Vec<u8> {
+        (0..s.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+            .collect()
+    };
+    let input = golden("cases/case3-capture.in.txt");
+    let stream: Vec<u8> = input
+        .lines()
+        .filter_map(|l| l.strip_prefix("segment "))
+        .flat_map(unhex)
+        .collect();
+    let mut b = FakeBackend::new();
+    b.http6 = Some(stream);
+    b.http6_port = 443;
+    let (r, out, log) = cli(
+        &b,
+        &[
+            "2001:db8:9::1",
+            "-p443",
+            "--banners",
+            "--wait",
+            "20",
+            "-oL",
+            "-",
+        ],
+    );
+    r.unwrap();
+    assert!(log.contains("finished: Completed"), "{log}");
+    let ip = "2001:db8:9::1";
+    assert!(out.contains(&format!("open tcp 443 {ip} ")), "{out}");
+    assert!(
+        out.contains("banner tcp 443")
+            && out.contains("ssl TLS/1.0 cipher:0x88, ubuntu.localdomain"),
+        "{out}"
+    );
+    assert!(out.contains("X509 MIIF"), "{out}");
+    let seen = b.seen6.lock().unwrap().clone();
+    let hellos: Vec<&Vec<u8>> = seen
+        .iter()
+        .map(|s| &s.3)
+        .filter(|p| p.len() == 198 || p.len() == 287)
+        .collect();
+    assert!(!hellos.is_empty(), "{seen:?}");
+    assert!(hellos[0].starts_with(b"\x16\x03\x01"));
 }
 
 /// Р9 (решение D19): одна строка на скан на любой ОС, если `--banners`, хотя бы один порт TCP и хотя бы один адрес

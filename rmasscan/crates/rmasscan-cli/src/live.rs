@@ -999,6 +999,12 @@ pub fn stack_summary(s: &StackSummary, table_entries: usize, budget_mib: usize) 
             s.stack.banner_bytes_dropped
         ));
     }
+    if s.stack.reconnect_no_port > 0 {
+        out.push_str(&format!(
+            "[-] banners: {} TLS second connections not attempted (single source port)\n",
+            s.stack.reconnect_no_port
+        ));
+    }
     out
 }
 
@@ -1788,7 +1794,7 @@ mod tests {
                 tcbs_live: 0,
                 table_full: 1,
                 banner_bytes_dropped: 65_536,
-                reconnect_no_port: 0,
+                reconnect_no_port: 2,
             },
             frames_sent: 3,
             frames_dropped: 12,
@@ -1799,7 +1805,8 @@ mod tests {
             stack_summary(&all, 1024, 512),
             "[-] banners: 1 SYN-ACKs got no connection (table full, 1024 entries)\n\
              [-] banners: 12 stack frames dropped (transmit queue full)\n\
-             [-] banners: 65536 banner bytes dropped (memory budget 512 MiB)\n"
+             [-] banners: 65536 banner bytes dropped (memory budget 512 MiB)\n\
+             [-] banners: 2 TLS second connections not attempted (single source port)\n"
         );
         let frames = StackSummary {
             frames_dropped: 1,

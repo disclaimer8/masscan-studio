@@ -4621,9 +4621,11 @@ struct PeerScript {
 struct Sent {
     at: u64,
     to: (Ipv4Addr, u16),
+    from_port: u16,
     flags: u8,
     seq: u32,
     ack: u32,
+    window: u16,
     payload: Vec<u8>,
 }
 
@@ -4752,9 +4754,11 @@ fn parse_ours(f: &[u8], at: u64) -> Option<Sent> {
             Ipv4Addr::new(f[30], f[31], f[32], f[33]),
             u16::from_be_bytes([f[tcp + 2], f[tcp + 3]]),
         ),
+        from_port: u16::from_be_bytes([f[tcp], f[tcp + 1]]),
         flags: f[tcp + 13],
         seq: be32(tcp + 4),
         ack: be32(tcp + 8),
+        window: u16::from_be_bytes([f[tcp + 14], f[tcp + 15]]),
         payload: f.get(tcp + doff..14 + total)?.to_vec(),
     })
 }
@@ -5361,6 +5365,338 @@ fn live_fake_keepalive_flushed_at_end_of_wait() {
     assert!(
         ours.iter().all(|s| s.flags & (TCP_RST | TCP_FIN) == 0),
         "the end-of-scan flush sends nothing: {ours:?}"
+    );
+}
+
+/// Поток сервера эталона TLS (`tests/golden/tls-records`) по имени кейса.
+fn tls_stream_of(case: &str) -> Vec<u8> {
+    let text = std::fs::read_to_string(format!(
+        "{}/../../tests/golden/tls-records/cases/{case}.in.txt",
+        env!("CARGO_MANIFEST_DIR")
+    ))
+    .unwrap();
+    text.lines()
+        .filter_map(|l| l.strip_prefix("segment "))
+        .flat_map(unhex)
+        .collect()
+}
+
+/// Поток пира сегментами не длиннее 1200 байт: кадр целиком не влезает в приёмный буфер движка (2048) и
+/// был бы молча обрезан, как на проводе не бывает.
+fn data_acts(stream: &[u8]) -> Vec<PeerAct> {
+    stream
+        .chunks(1200)
+        .map(|c| PeerAct::Data(c.to_vec()))
+        .collect()
+}
+
+/// Баннеры TLS вживую: SYN-ACK, через 2 с ClientHello по умолчанию с FIN за ним (`SF__close`), реконнект со
+/// следующего порта источника шлёт hello TLS 1.3; ServerHello и цепочка `ssl_test_case_3` дают записи `ssl`,
+/// `X509`, `X509CA` в `-oL` (порядок banout как эталон C).
+#[test]
+fn live_fake_tls_banner_end_to_end() {
+    let stream = tls_stream_of("case3-capture");
+    let mut b = FakeBackend::new();
+    b.tcp_peer = Some(TcpPeer::new(vec![(
+        443,
+        PeerScript {
+            on_data: [data_acts(&stream), vec![PeerAct::Fin]].concat(),
+            on_fin: vec![PeerAct::Ack],
+            ..PeerScript::default()
+        },
+    )]));
+    let (r, out, log) = cli(
+        &b,
+        &[
+            "198.51.100.1",
+            "-p443",
+            "--banners",
+            "--wait",
+            "20",
+            "-oL",
+            "-",
+        ],
+    );
+    r.unwrap();
+    // SYN-ACK второго соединения — второй свежий ответ и второй open: дедуп C ключует и по порту источника
+    // (`dedup_is_duplicate(..., ip_me, port_me)`, `src/main-dedup.c:292-300`), как здесь.
+    assert!(
+        log.contains("finished: Completed, sent 1, replies 2, open 2"),
+        "{log}"
+    );
+    let lines = list_banners(&out, 443, T1);
+    assert!(
+        lines.iter().any(|l| l.starts_with(
+            "ssl TLS/1.0 cipher:0x88, ubuntu.localdomain, puppet, puppet.localdomain"
+        )),
+        "{lines:?}"
+    );
+    assert!(
+        lines.iter().any(|l| l.starts_with("X509 MIIF")),
+        "{lines:?}"
+    );
+    assert!(
+        lines.iter().any(|l| l.starts_with("X509CA MIIF")),
+        "{lines:?}"
+    );
+    // Два SYN с разных портов источника пула {p, p+16}: первый по хэшу Builder, второй по _next_IP_port от него.
+    let sent = b.peer_sent();
+    let syns: Vec<&Sent> = sent
+        .iter()
+        .filter(|s| s.flags == TCP_SYN && s.to == (T1, 443))
+        .collect();
+    assert_eq!(syns.len(), 2, "{sent:?}");
+    assert_ne!(syns[0].from_port, syns[1].from_port, "{sent:?}");
+    let expected_next = match syns[0].from_port {
+        p if p == TIME_PORT => TIME_PORT + 1,
+        p => {
+            assert_eq!(p, TIME_PORT + 16);
+            TIME_PORT
+        }
+    };
+    assert_eq!(syns[1].from_port, expected_next);
+    let hello_a = sent
+        .iter()
+        .find(|s| s.from_port == syns[0].from_port && s.payload.len() == 198)
+        .expect("first ClientHello");
+    assert!(hello_a.payload.starts_with(b"\x16\x03\x01\x00\xc1"));
+    let hello_b = sent
+        .iter()
+        .find(|s| s.from_port == syns[1].from_port && s.payload.len() == 287)
+        .expect("TLS 1.3 hello of the second connection");
+    assert!(hello_b.payload.starts_with(b"\x16\x03\x01\x01\x1a"));
+}
+
+/// Сервер говорит первым ServerHello до нашего hello: совпадение SSL3 отвергнуто закрытым гейтом
+/// (`is_sent_sslhello`), записи `ssl` нет; hello всё равно уходит по таймауту (справка B1.2, B5).
+#[test]
+fn live_fake_tls_server_first_no_hello() {
+    let stream = tls_stream_of("case3-capture");
+    let mut b = FakeBackend::new();
+    b.tcp_peer = Some(TcpPeer::new(vec![(
+        443,
+        PeerScript {
+            on_syn: data_acts(&stream),
+            ..PeerScript::default()
+        },
+    )]));
+    let (r, out, _) = cli(
+        &b,
+        &[
+            "198.51.100.1",
+            "-p443",
+            "--banners",
+            "--wait",
+            "20",
+            "-oL",
+            "-",
+        ],
+    );
+    r.unwrap();
+    let lines = list_banners(&out, 443, T1);
+    assert!(
+        lines
+            .iter()
+            .all(|l| !l.starts_with("ssl ") && !l.starts_with("X509")),
+        "{lines:?}"
+    );
+}
+
+/// STARTTLS на SMTP: приветствие, EHLO, 250, STARTTLS, 220 — дальше ClientHello и записи `smtp`, затем `ssl`
+/// с именем сертификата; второго EHLO с хвоста нет (правило E2.8').
+#[test]
+fn live_fake_starttls_smtp_banner() {
+    let stream = tls_stream_of("case3-capture");
+    let mut dialogue = b"250-Hello\r\n250 STARTTLS\r\n220 2.0.0 Ready\r\n".to_vec();
+    dialogue.extend_from_slice(&stream);
+    let mut b = FakeBackend::new();
+    b.tcp_peer = Some(TcpPeer::new(vec![(
+        25,
+        PeerScript {
+            on_syn: vec![PeerAct::Data(b"220 mail.lab ESMTP\r\n".to_vec())],
+            on_data: [data_acts(&dialogue), vec![PeerAct::Fin]].concat(),
+            on_fin: vec![PeerAct::Ack],
+            ..PeerScript::default()
+        },
+    )]));
+    let (r, out, _) = cli(
+        &b,
+        &[
+            "198.51.100.1",
+            "-p25",
+            "--banners",
+            "--wait",
+            "20",
+            "-oL",
+            "-",
+        ],
+    );
+    r.unwrap();
+    let lines = list_banners(&out, 25, T1);
+    assert!(
+        lines.iter().any(|l| l.starts_with("smtp 220 mail.lab")),
+        "{lines:?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.starts_with("ssl TLS/1.0 cipher:0x88")),
+        "{lines:?}"
+    );
+    let sent = b.peer_sent();
+    let ours = after_syn(&sent, (T1, 25));
+    let payloads: Vec<&Vec<u8>> = ours
+        .iter()
+        .map(|s| &s.payload)
+        .filter(|p| !p.is_empty())
+        .collect();
+    assert!(
+        payloads[0].starts_with(b"EHLO ") && payloads[0].ends_with(b"\r\n"),
+        "{:?}",
+        payloads[0]
+    );
+    assert_eq!(payloads[1], b"STARTTLS\r\n");
+    assert_eq!(payloads[2].len(), 198, "ClientHello after the go-ahead");
+    assert!(payloads[2].starts_with(b"\x16\x03\x01"));
+}
+
+/// Режим `--heartbleed`: heartbeat-ответ даёт запись `vuln`, кадры после SendFirst с окном 600. Зонд парсера
+/// на провод не уходит: первое соединение после `SF__close` в FIN_WAIT, и `tcpapi_send` C там отказывает
+/// (wrong state, справка §B2) — паритет, а не потеря.
+#[test]
+fn live_fake_heartbleed_vuln_record() {
+    // ServerHello одной записью и heartbeat-ответ следом в том же ответе пира.
+    let mut sh = vec![0x02, 0x00, 0x00, 0x26, 0x03, 0x03];
+    sh.extend(0u8..32);
+    sh.extend_from_slice(&[0x00, 0xc0, 0x2f, 0x00]);
+    let mut stream = vec![0x16, 0x03, 0x03, 0x00, 0x2a];
+    stream.extend_from_slice(&sh);
+    stream.extend_from_slice(&[0x18, 0x03, 0x03, 0x00, 0x13, 0x02, 0x00, 0x10]);
+    stream.extend_from_slice(b"0123456789abcdef");
+    let mut b = FakeBackend::new();
+    b.tcp_peer = Some(TcpPeer::new(vec![(
+        443,
+        PeerScript {
+            on_data: vec![PeerAct::Data(stream), PeerAct::Fin],
+            on_fin: vec![PeerAct::Ack],
+            ..PeerScript::default()
+        },
+    )]));
+    let (r, out, _) = cli(
+        &b,
+        &[
+            "198.51.100.1",
+            "-p443",
+            "--heartbleed",
+            "--wait",
+            "20",
+            "-oL",
+            "-",
+        ],
+    );
+    r.unwrap();
+    let lines = list_banners(&out, 443, T1);
+    assert!(
+        lines.iter().any(|l| l.starts_with("vuln SSL[HEARTBLEED]")),
+        "{lines:?}"
+    );
+    let sent = b.peer_sent();
+    assert!(
+        !sent
+            .iter()
+            .any(|s| s.payload == b"\x15\x03\x02\x00\x02\x01\x80\x18\x03\x02\x00\x03\x01\x40\x00"),
+        "no probe past the FIN of the first connection, as in C"
+    );
+    let with_payload: Vec<&Sent> = sent.iter().filter(|s| !s.payload.is_empty()).collect();
+    assert!(
+        with_payload.iter().all(|s| s.window == 600),
+        "small window after SendFirst: {:?}",
+        with_payload.iter().map(|s| s.window).collect::<Vec<_>>()
+    );
+}
+
+/// Сервер держит соединение без FIN: баннеры TLS сбрасываются в конце окна ожидания, как HTTP-keepalive.
+#[test]
+fn live_fake_tls_flushed_at_end_of_wait() {
+    let stream = tls_stream_of("case3-capture");
+    let mut b = FakeBackend::new();
+    b.tcp_peer = Some(TcpPeer::new(vec![(
+        443,
+        PeerScript {
+            on_data: data_acts(&stream),
+            ..PeerScript::default()
+        },
+    )]));
+    let (r, out, log) = cli(
+        &b,
+        &[
+            "198.51.100.1",
+            "-p443",
+            "--banners",
+            "--wait",
+            "20",
+            "-oL",
+            "-",
+        ],
+    );
+    r.unwrap();
+    assert!(log.contains("finished: Completed"), "{log}");
+    let lines = list_banners(&out, 443, T1);
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.starts_with("ssl TLS/1.0 cipher:0x88")),
+        "{lines:?}"
+    );
+}
+
+/// Записи TLS в каждом формате: один сценарий, `-oJ`/`-oX`/`-oG` на stdout и `-oB` в файл несут те же байты
+/// баннеров (чтение `-oB` это задача 11).
+#[test]
+fn tls_records_in_all_formats() {
+    let stream = tls_stream_of("case3-capture");
+    let run = |args: &[&str]| {
+        let mut b = FakeBackend::new();
+        b.tcp_peer = Some(TcpPeer::new(vec![(
+            443,
+            PeerScript {
+                on_data: [data_acts(&stream), vec![PeerAct::Fin]].concat(),
+                on_fin: vec![PeerAct::Ack],
+                ..PeerScript::default()
+            },
+        )]));
+        let (r, out, _) = cli(&b, args);
+        r.unwrap();
+        out
+    };
+    for fmt in ["-oJ", "-oX", "-oG"] {
+        let out = run(&[
+            "198.51.100.1",
+            "-p443",
+            "--banners",
+            "--wait",
+            "20",
+            fmt,
+            "-",
+        ]);
+        assert!(out.contains("TLS/1.0 cipher:0x88"), "{fmt}: {out}");
+    }
+    let scratch = Scratch::new();
+    let path = scratch.path("tls.scan");
+    let out = run(&[
+        "198.51.100.1",
+        "-p443",
+        "--banners",
+        "--wait",
+        "20",
+        "-oB",
+        path.to_str().unwrap(),
+    ]);
+    assert!(out.is_empty(), "{out}");
+    let bytes = std::fs::read(&path).unwrap();
+    assert!(
+        bytes.windows(5).any(|w| w == b"X509\x00" || w == b"MIIFl"),
+        "binary output carries the cert record"
     );
 }
 

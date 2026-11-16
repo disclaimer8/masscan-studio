@@ -140,8 +140,18 @@ pub fn generate_cursor(plan: &ReadyPlan, preload: usize) -> (u64, u64) {
             break;
         }
         for p in batch {
-            sink = sink
-                .wrapping_add(u64::from(p.seqno) + u64::from(p.frame[24]) + u64::from(p.frame[53]));
+            // seqno, длина кадра, младший байт MAC назначения, порт назначения, контрольная сумма TCP.
+            let f = &p.frame;
+            sink = sink.wrapping_add(
+                u64::from(p.seqno)
+                    + f.len() as u64
+                    + u64::from(f[5])
+                    + u64::from(f[24])
+                    + u64::from(f[37])
+                    + u64::from(f[50])
+                    + u64::from(f[51])
+                    + u64::from(f[53]),
+            );
         }
         let len = batch.len();
         std::hint::black_box(batch);

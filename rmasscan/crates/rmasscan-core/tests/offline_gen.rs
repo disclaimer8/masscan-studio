@@ -3,7 +3,7 @@
 //!
 //! Сравнение имеет смысл только в release на том же железе, что оракул
 //! (bench host, Pentium Silver N6005):
-//!   cargo test --release -p rmasscan-core --test offline_gen -- --ignored --nocapture
+//!   cargo test --locked --release -p rmasscan-core --test offline_gen -- --ignored --nocapture --test-threads=1
 
 mod common;
 #[path = "common/offline_gen.rs"]
@@ -16,6 +16,22 @@ fn cpu_model() -> Option<String> {
     let t = std::fs::read_to_string("/proc/cpuinfo").ok()?;
     let l = t.lines().find(|l| l.starts_with("model name"))?;
     Some(l.split_once(':')?.1.trim().to_string())
+}
+
+/// Сравнение только на железе оракула (если /proc/cpuinfo есть): иначе печатает `SKIP` и даёт true.
+fn cpu_differs_from_oracle(manifest: &common::Manifest) -> bool {
+    if let (Some(ours), Some(want)) = (
+        cpu_model(),
+        manifest
+            .offline_gen_bench
+            .as_ref()
+            .and_then(|b| b.cpu_model.clone()),
+    ) && ours != want
+    {
+        eprintln!("SKIP: CPU '{ours}' differs from oracle CPU '{want}'; not comparable");
+        return true;
+    }
+    false
 }
 
 #[test]
@@ -52,7 +68,7 @@ fn small_cursor_workload_covers_every_target() {
 }
 
 #[test]
-#[ignore = "release-only, bench host: cargo test --release -p rmasscan-core --test offline_gen -- --ignored --nocapture"]
+#[ignore = "release-only, bench host: cargo test --locked --release -p rmasscan-core --test offline_gen -- --ignored --nocapture --test-threads=1"]
 fn offline_generation_meets_80pct_of_oracle() {
     if cfg!(debug_assertions) {
         panic!("debug build: the 80% comparison is only meaningful with --release");
@@ -61,16 +77,7 @@ fn offline_generation_meets_80pct_of_oracle() {
     let oracle = manifest
         .offline_gen_pps
         .expect("offline_gen_pps in manifest");
-    // Сравнение только на железе оракула (если /proc/cpuinfo есть).
-    if let (Some(ours), Some(want)) = (
-        cpu_model(),
-        manifest
-            .offline_gen_bench
-            .as_ref()
-            .and_then(|b| b.cpu_model.clone()),
-    ) && ours != want
-    {
-        eprintln!("SKIP: CPU '{ours}' differs from oracle CPU '{want}'; not comparable");
+    if cpu_differs_from_oracle(&manifest) {
         return;
     }
     let m = offline_gen::build_massip("0.0.0.0/4", "80");
@@ -87,22 +94,13 @@ fn offline_generation_meets_80pct_of_oracle() {
 }
 
 #[test]
-#[ignore = "release-only, bench host: cargo test --release -p rmasscan-core --test offline_gen -- --ignored --nocapture"]
+#[ignore = "release-only, bench host: cargo test --locked --release -p rmasscan-core --test offline_gen -- --ignored --nocapture --test-threads=1"]
 fn offline_cursor_generation_2_28() {
     if cfg!(debug_assertions) {
         panic!("debug build: the cursor timing is only meaningful with --release");
     }
     let manifest = common::load_manifest();
-    // Та же проверка CPU, что у сравнения с оракулом (порога здесь нет).
-    if let (Some(ours), Some(want)) = (
-        cpu_model(),
-        manifest
-            .offline_gen_bench
-            .as_ref()
-            .and_then(|b| b.cpu_model.clone()),
-    ) && ours != want
-    {
-        eprintln!("SKIP: CPU '{ours}' differs from oracle CPU '{want}'; not comparable");
+    if cpu_differs_from_oracle(&manifest) {
         return;
     }
     let plan = offline_gen::cursor_plan("0.0.0.0/4", "80", (40000, 40000));

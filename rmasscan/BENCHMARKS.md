@@ -46,25 +46,35 @@ Removing it makes C about 2.91-2.94 M pps loop-only (2^28/(94.39-2.3) = 2,914,92
 at the low end), so Rust is at parity.
 
 Commands (the paired G-bench procedure; `$BENCH_HOST` is the ssh name of the
-bench host, `A` and `B` are the two commits compared, `A = B` for a noise check).
-Each tree is shipped with `git archive` into its own directory and built into its
-own target directory; runs alternate A B A B A B, and before every run the
-one-minute load average must be below 0.3:
+bench host, `A` and `B` are the two commits compared, `A = B` for a noise check;
+`$LOG` is a scratch directory). Each tree is shipped with `git archive` into its
+own directory and built into its own target directory. Five pairs run in ABBA
+order (a.1 b.1, b.2 a.2, a.3 b.3, b.4 a.4, a.5 b.5; pair i is a.i and b.i), each
+run pinned to one core with `taskset -c 3`, and before every run the one-minute
+load average must be below 0.3 (waiting at most 30 minutes):
 
 ```
-for t in a b; do   # c = A for a, B for b
+for t in a b; do
+  if [ "$t" = a ]; then c=$A; else c=$B; fi
   git archive "$c:rmasscan" | ssh "$BENCH_HOST" "rm -rf ~/rmasscan-bench-$t && mkdir ~/rmasscan-bench-$t && tar -x -C ~/rmasscan-bench-$t"
   ssh -n "$BENCH_HOST" "cd ~/rmasscan-bench-$t && CARGO_TARGET_DIR=~/rmasscan-bench-$t-target ~/.cargo/bin/cargo test --locked --release -p rmasscan-core --test offline_gen --no-run"
 done
-# run i = 1..3, for t in a b, after the load check:
-ssh -n "$BENCH_HOST" "uptime; cd ~/rmasscan-bench-$t && CARGO_TARGET_DIR=~/rmasscan-bench-$t-target ~/.cargo/bin/cargo test --locked --release \
-  -p rmasscan-core --test offline_gen -- --ignored --nocapture --test-threads=1; uptime"
+for pair in '1 a b' '2 b a' '3 a b' '4 b a' '5 a b'; do
+  set -- $pair; i=$1
+  for t in $2 $3; do
+    ssh -n "$BENCH_HOST" 'for n in $(seq 180); do awk "{exit !(\$1 < 0.3)}" /proc/loadavg && exit 0; sleep 10; done; exit 1'
+    ssh -n "$BENCH_HOST" "uptime; cd ~/rmasscan-bench-$t && CARGO_TARGET_DIR=~/rmasscan-bench-$t-target taskset -c 3 ~/.cargo/bin/cargo test --locked --release -p rmasscan-core --test offline_gen -- --ignored --nocapture --test-threads=1; s=\$?; uptime; exit \$s" > "$LOG/$t.$i.log" 2>&1
+  done
+done
 ```
+
+The reference implementation of this loop, with all failure checks, is the
+`bench-gate.sh` script of the native-core plan (G-bench).
 
 Each run prints `OFFLINE_GEN` (the 2^28 loop above) and `OFFLINE_CURSOR` (the same
 2^28 workload through `ProbeCursor`: `preload(64)`, `advance_sent_n`, no throttler).
-Per row: medians `mA`, `mB`, the ratio `mB/mA` and the three paired ratios
-`B_i/A_i`; the `sink` values of A and B must be equal. `cargo bench --locked -p
+Per row: medians `mA`, `mB` of the five runs, the ratio `mB/mA` and the five paired
+ratios `B_i/A_i`; the `sink` values of A and B must be equal. `cargo bench --locked -p
 rmasscan-core` adds the rows `offline_gen`, `cursor_1port`, `cursor_16port` and
 `cursor_mapped` (`/10` x port 80, 4,194,304 probes, or `10.0.0.0/16` x `1-64` with a
 65,536-entry destination map), three runs each, for the Mac ranking (G-mac).
@@ -96,13 +106,15 @@ reading compares the reviewer's C user time (92.26 s) with the Rust loop time
 
 ### Other
 
-- `cargo bench -p rmasscan-core` runs a plain timed loop (3 runs of `/10`, 2^22
-  packets), not criterion: criterion =0.8.2 pulls `alloca` -> `cc` into the dev
+- `cargo bench --locked -p rmasscan-core` runs plain timed loops, not criterion (four loops, three
+  runs each: `offline_gen`, `cursor_1port`, `cursor_16port`, `cursor_mapped`):
+  criterion =0.8.2 pulls `alloca` -> `cc` into the dev
   graph (`cargo tree -e normal,build,dev -p rmasscan-core`), which breaks the
-  no-C rule. The /10 workload is not comparable to the oracle; on an Apple
-  arm64 Mac it gives about 5.7 M pps (informational only, different hardware).
-- The ordinary `cargo test` runs only `small_workload_generates_every_target`
-  (/24, 256 packets) to keep the pipeline compiled and correct.
+  no-C rule. The workloads are not comparable to the oracle; on an Apple
+  arm64 Mac `offline_gen` gives about 5.7 M pps in earlier measurements (informational only,
+  different hardware).
+- The ordinary `cargo test` runs only `small_workload_generates_every_target` and
+  `small_cursor_workload_covers_every_target` (/24, 256 packets each) to keep the pipelines compiled and correct.
 
 ### Native-Rust phase 1, rmasscan-core
 

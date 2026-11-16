@@ -101,10 +101,10 @@
   записывается и разбирается в ревью.
 - **G-bench** (обязательные ворота задачи на скорость): парный замер в одной сессии на хосте стенда. A — последний
   принятый коммит кода (для задачи 3 — коммит кода задачи 2), B — проверяемый HEAD. Деревья из `git archive` в разных
-  каталогах, свои каталоги сборки, прогоны чередуются A B A B A B. Скрипт лежит в файле вне дерева и запускается
+  каталогах, свои каталоги сборки, 5 пар в порядке ABBA (A B | B A | A B | B A | A B; пара `i` — `a.i` и `b.i`), каждый прогон под `taskset -c 3`. Скрипт лежит в файле вне дерева и запускается
   `bash <файл>` (не через stdin: `ssh` без `-n` съел бы остаток скрипта); у каждого `ssh`, кроме `git archive | ssh`,
-  стоит `-n`. Он падает громко: ошибка сборки, упавший тест, `SKIP` (`tests/offline_gen.rs:54`), хост занят дольше
-  30 минут, число замеров не равно ожидаемому (по 3 у A и у B на каждую строку) — печатает журнал и выходит с кодом 1.
+  стоит `-n`. Он падает громко: ошибка сборки, упавший тест, `SKIP` (`cpu_differs_from_oracle` в `tests/offline_gen.rs`), хост занят дольше
+  30 минут, число замеров не равно ожидаемому (по 5 у A и у B на каждую строку) — печатает журнал и выходит с кодом 1.
   Успех — последняя строка `BENCH OK`; без неё ворота не пройдены. Полный вывод каждого прогона лежит в журналах.
   ```sh
   export A=… B=$(git rev-parse --short HEAD) MODE=test LOG=$(mktemp -d)   # MODE=bench — только задача 6
@@ -126,11 +126,11 @@
     ssh -n "$BENCH_HOST" "cd ~/$d && CARGO_TARGET_DIR=~/$d-target ~/.cargo/bin/cargo $BUILD" >"$LOG/build-$t.log" 2>&1 \
       || { cat "$LOG/build-$t.log"; echo "FAIL: build $t"; exit 1; }
   done
-  for i in 1 2 3; do for t in a b; do
+  for pair in '1 a b' '2 b a' '3 a b' '4 b a' '5 a b'; do set -- $pair; i=$1; for t in $2 $3; do
     d=rmasscan-bench-$t; f="$LOG/$t.$i.log"
     ssh -n "$BENCH_HOST" 'for n in $(seq 180); do awk "{exit !(\$1 < 0.3)}" /proc/loadavg && exit 0; sleep 10; done; echo "FAIL: host busy for 30 min, load $(cut -d" " -f1-3 /proc/loadavg)"; exit 1' \
       || { echo "FAIL: no quiet window before $t.$i, nothing measured"; exit 1; }
-    ssh -n "$BENCH_HOST" "uptime; cd ~/$d && CARGO_TARGET_DIR=~/$d-target ~/.cargo/bin/cargo $RUN; s=\$?; uptime; exit \$s" \
+    ssh -n "$BENCH_HOST" "uptime; cd ~/$d && CARGO_TARGET_DIR=~/$d-target taskset -c 3 ~/.cargo/bin/cargo $RUN; s=\$?; uptime; exit \$s" \
       >"$f" 2>&1 || { cat "$f"; echo "FAIL: run $t.$i"; exit 1; }
     if grep -n SKIP "$f"; then echo "FAIL: SKIP in $t.$i"; exit 1; fi
     for k in $KEYS; do
@@ -138,24 +138,25 @@
     done
   done; done
   for t in a b; do for k in $KEYS; do
-    n=$(cat "$LOG/$t".[123].log | grep -c "$k$SUF" || true)
-    [ "$n" = $((3 * PER_LOG)) ] || { echo "FAIL: $t has $n '$k' measurements, want $((3 * PER_LOG))"; exit 1; }
+    n=$(cat "$LOG/$t".[12345].log | grep -c "$k$SUF" || true)
+    [ "$n" = $((5 * PER_LOG)) ] || { echo "FAIL: $t has $n '$k' measurements, want $((5 * PER_LOG))"; exit 1; }
   done; done
-  grep -H -e 'OFFLINE_' -e ' run ' -e 'load average' "$LOG"/[ab].[123].log
+  grep -H -e 'OFFLINE_' -e ' run ' -e 'load average' "$LOG"/[ab].[12345].log
   echo "BENCH OK"
   EOF
   bash "$LOG/bench-gate.sh"
   ```
   Строки `OFFLINE_` ищутся без якоря `^`: при `--nocapture --test-threads=1` libtest печатает их в строке
   `test <имя> ... OFFLINE_GEN packets=…`.
-  `--test-threads=1` обязателен (два прогона 2^28 параллельно на 4 ядрах портят оба числа); перед каждым прогоном
-  load average за минуту ниже 0,3, `uptime` до и после — в журнале. По каждой строке (`OFFLINE_GEN`, `OFFLINE_CURSOR`):
-  медианы `mA`, `mB`, отношение `mB/mA` и три парных отношения `B_i/A_i`. `sink` A и B совпадают (иначе изменились
-  байты — отказ). **Без регрессии:** `mB/mA ≥ 0,98` по обеим строкам. **Выигрыш:** B быстрее A во всех трёх парах и
-  `mB/mA ≥ 1,02` по строке, ради которой правка, без регрессии другой. Задача на скорость, у которой нет требования
-  выигрыша, при `mB/mA < 1,01` записывается как «нейтрально».
+  `--test-threads=1` обязателен (два прогона 2^28 параллельно на 4 ядрах портят оба числа), `taskset -c 3` держит прогон
+  на одном ядре; перед каждым прогоном load average за минуту ниже 0,3, `uptime` до и после — в журнале. По каждой
+  строке (`OFFLINE_GEN`, `OFFLINE_CURSOR`): медианы `mA`, `mB` из пяти, отношение `mB/mA` и пять парных отношений
+  `B_i/A_i`. `sink` A и B совпадают (иначе изменились байты — отказ). **Без регрессии:** `mB/mA ≥ 0,97` по обеим
+  строкам. **Выигрыш:** `mB/mA ≥ 1,03` по строке, ради которой правка, и B быстрее своей пары A не менее чем в 4 из 5
+  пар, без регрессии другой строки. Задача на скорость, у которой нет требования выигрыша, при `0,97 ≤ mB/mA < 1,03`
+  записывается как «нейтрально»; выигрыш меньше 3 % отклоняется.
 - **Запись замера.** Строка в таблицу раздела «Native-Rust phase 1, rmasscan-core» в `BENCHMARKS.md` (задача 2): задача,
-  sha A и B, `mA` и `mB` по обеим строкам, `mB/mA` и три парных отношения, load average (наименьший и наибольший в
+  sha A и B, `mA` и `mB` по обеим строкам, `mB/mA` и пять парных отношений, load average (наименьший и наибольший в
   журналах), `sink`, медианы Mac, решение (принято / нейтрально / отклонено / откат). Отдельный коммит
   `docs(rmasscan): record native-core task N on the bench host`. Не прошла — строка с решением, правка дорабатывается или
   откатывается `git revert --no-edit <sha>`; A следующей задачи остаётся прежним.
@@ -378,8 +379,8 @@ udp_ipv4_checksum, sctp_crc32c}`, `PayloadEntry::with_cookie`. Всё, что п
   sinks | Mac medians (4 loops) | decision`. После правки `grep -nF "$BENCH_HOST" rmasscan/BENCHMARKS.md` пуст.
 - [ ] **Step 4:** G-core, G-frozen; **коммит** `test(rmasscan-core): ProbeCursor loops in the bench and a 2^28 cursor
   run` (пути выше).
-- [ ] **Step 5: база и шум метода.** G-mac на этом коммите; G-bench с A = B = этот коммит (A/A). Три парных отношения —
-  измеренный шум метода; если хоть одно вне 0,99–1,01, сообщить пользователю и пересмотреть пороги до задачи 3. Строка
+- [ ] **Step 5: база и шум метода.** G-mac на этом коммите; G-bench с A = B = этот коммит (A/A). Пять парных отношений —
+  измеренный шум метода (пороги G-bench заданы пользователем 16.11 после A/A на трёх парах, где шум дошёл до 3 %). Строка
   «2 (base, A/A)»; **коммит** записи; его sha — `GUARD`.
 
 ### Задача 3: BlackRock — маска раунда

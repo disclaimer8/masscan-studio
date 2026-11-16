@@ -1732,8 +1732,13 @@ fn stats_snapshot_is_monotonic_and_exact_under_concurrent_tx_and_rx() {
     });
     let end = stats.snapshot();
     assert_monotonic(&last, &end);
+    // `tx_over_budget` counts driver calls slower than 50 ms: timing-dependent, so only its monotonicity (checked
+    // above on every snapshot) is pinned. Every other field is exact.
     assert_eq!(
-        end,
+        crate::NetStats {
+            tx_over_budget: 0,
+            ..end
+        },
         crate::NetStats {
             tx_sent: CONCURRENT_FRAMES as u64,
             rx_packets: CONCURRENT_FRAMES as u64,

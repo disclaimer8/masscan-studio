@@ -14,9 +14,9 @@ pub mod udp;
 
 pub use app::{app_from_name, app_id, app_name};
 pub use banner::{BannerRecord, MAX_BANNER_BYTES};
-#[doc(hidden)]
-pub use banner1::banner_stream;
 pub use banner1::{HelloSet, StreamAction, StreamResult, TcpBannerSettings, tcp_stack_factory};
+#[doc(hidden)]
+pub use banner1::{banner_stream, x509_stream};
 pub use http_request::{HttpRequestOptions, http_request};
 pub use normalize::{normalize_json_string, normalize_string};
 pub use tcp::TcpBannerStack;

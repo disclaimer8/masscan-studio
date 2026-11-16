@@ -222,9 +222,16 @@ demand `0xa0`.
   crashes; §F E2 leaves their treatment to the oracle data of task 3.
 - `is_der_failure` is set for non-minimal lengths and leading zeros (`:917-932`) and **never read** anywhere.
 - `ASN1_push` (`:304-374`): a length > 0xFFFF, stack depth ≥ 9, or a child length greater than the parent's
-  remaining sets `x->state = 0xFFFFFFFF` (sticky across calls: the save at `:1058-1059` does not overwrite it)
-  and prints to stderr for the first two. On push, the child's length is subtracted from the parent's
-  remaining; the pop-at-zero at the top of the byte loop (`:567-571`) then walks back up.
+  remaining sets `x->state = 0xFFFFFFFF` and returns without pushing (and prints to stderr for the first two).
+  The failure is sticky **across calls** (the save at `:1058-1059` does not overwrite it) but not within one:
+  the local `state` in the running `x509_decode` call is untouched, so the rest of that call keeps parsing
+  without the frame (parent remaining also not reduced). C's result on such input therefore depends on how
+  the stream is split into calls (task 3 oracle case `google-trunc-half`: whole emits the CN, bytewise
+  nothing); per Р13 the golden is the whole-stream run, and the Rust walk reproduces it in every split by
+  simply not pushing on failure. Only the very first push (certificate length in `x509_decode_init`) has no
+  "within the call" life after it, so a certificate over 64 KiB is never parsed. On a successful push, the
+  child's length is subtracted from the parent's remaining; the pop-at-zero at the top of the byte loop
+  (`:567-571`) then walks back up.
 - `x509_decode_init(x, length)` zeroes the state and pushes the certificate length with next-state
   `0xFFFFFFFF` (`:1378-1383`), so a certificate length > 0xFFFF makes the certificate unparseable (nothing is
   emitted) while capture still records its bytes (B4 runs independently).
@@ -385,6 +392,10 @@ reference A3) — the lab verifier in task 12 confirms the record TTL against th
   rmasscan never does.
 - Handshake-across-records re-entry (B1) is a *record*-fragmentation quirk, reproduced as written; the lab
   scenarios use one handshake message per record like real servers.
+- **E2.9 (4c) X.509 push failures.** An `ASN1_push` failure (C3) makes C's own result depend on the split into
+  `x509_decode` calls: sticky across calls, invisible within one. Р13 golden = whole-stream run; the Rust
+  walk gives that result in every split. Task 3 evidence: case `google-trunc-half` (C whole emits the CN,
+  C bytewise emits nothing) and a 240-case mutation differential with zero mismatches against the whole run.
 
 ### F3. E3 — kept quirks (deterministic, reproduced)
 - SSLv3 ServerHello emits `vuln "SSL[v3] "` in every mode (B3 step 1).

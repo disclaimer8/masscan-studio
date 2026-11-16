@@ -3,8 +3,10 @@
 
 use crate::tcp::app::{ByteBudget, Session, SessionAction};
 
+use super::banout::{Banout, Base64Stream};
 use super::hello::TcpBannerSettings;
-use super::session::BannerConfig;
+use super::session::{BannerConfig, ParseCx};
+use super::x509::X509;
 
 /// Действие разбора: `tcpapi_send` (байты) или `tcpapi_close`, в порядке вызова.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -55,4 +57,30 @@ pub fn banner_stream(
             })
             .collect(),
     }
+}
+
+/// Один сертификат DER сегментами `segments` через разбор X.509 (задача 3 подэтапа 4c): `count` как ставит
+/// `parse_server_cert` (1 — лист, 2 и дальше — цепочка), бюджет не ограничен, предел записи 65 536 (Р5)
+/// действует. Возвращает записи сброса в порядке C. Для эталонов `tests/x509_golden.rs` и фаззера `x509`.
+#[doc(hidden)]
+pub fn x509_stream(count: u32, segments: &[&[u8]]) -> Vec<(u16, Vec<u8>)> {
+    let total: usize = segments.iter().map(|s| s.len()).sum();
+    let mut x = X509::default();
+    x.init(total, count);
+    let mut banout = Banout::default();
+    let mut budget = ByteBudget::new(usize::MAX);
+    let mut base64 = Base64Stream::default();
+    let mut acts = Vec::new();
+    for seg in segments {
+        let mut cx = ParseCx {
+            banout: &mut banout,
+            budget: &mut budget,
+            acts: &mut acts,
+            base64: &mut base64,
+            capture_html: false,
+            starttls: false,
+        };
+        x.feed(&mut cx, seg);
+    }
+    banout.flush(&mut budget)
 }

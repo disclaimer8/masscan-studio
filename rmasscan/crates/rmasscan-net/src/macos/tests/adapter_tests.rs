@@ -1540,6 +1540,48 @@ fn error_texts_are_byte_identical() {
             "errno {e}"
         );
     }
+    // Every ioctl label of configure_rx (device 1) and configure_tx (device 2), in their order.
+    for (dev, op) in [
+        (1, "BIOCSBLEN"),
+        (1, "BIOCSETIF"),
+        (1, "BIOCGDLT"),
+        (1, "BIOCIMMEDIATE"),
+        (1, "BIOCSSEESENT"),
+        (1, "BIOCSETF"),
+        (1, "BIOCGBLEN"),
+        (2, "BIOCSBLEN"),
+        (2, "BIOCSETIF"),
+        (2, "BIOCGDLT"),
+        (2, "BIOCSHDRCMPLT"),
+        (2, "BIOCSSEESENT"),
+        (2, "BIOCSETF"),
+    ] {
+        let w = world();
+        lock(&w).setup_fail.push((dev, op, EBUSY));
+        assert_eq!(
+            open_err(&w).to_string(),
+            format!("system error: {op}: {}", os(EBUSY)),
+            "device {dev}"
+        );
+    }
+    // The baseline BIOCGSTATS of the new RX descriptor.
+    let w = world();
+    lock(&w).stats.push_back(Err(EBUSY));
+    assert_eq!(
+        open_err(&w).to_string(),
+        format!("system error: BIOCGSTATS: {}", os(EBUSY))
+    );
+    // No free node left for the TX descriptor (the RX one holds node 0).
+    let w = world();
+    {
+        let mut s = lock(&w);
+        s.node_count = 2;
+        s.open_errors.insert(1, EBUSY);
+    }
+    assert_eq!(
+        open_err(&w).to_string(),
+        "system error: no free /dev/bpf* device (2 busy)"
+    );
     let w = world();
     lock(&w).blen = 100;
     assert_eq!(

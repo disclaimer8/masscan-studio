@@ -1746,6 +1746,120 @@ fn error_texts_are_byte_identical() {
         e.to_string(),
         "system error: pcap_stats failed on the new RX handle (code -5): fake driver says no"
     );
+    // Every open-path text of `handle` that the fake can raise.
+    let open_text = |tweak: &dyn Fn(&mut Scenario), b: &AdapterBinding| {
+        reset(|s| tweak(s));
+        let api = good_api();
+        open_with(&api, b)
+            .err()
+            .expect("open must fail")
+            .to_string()
+    };
+    let none = |_: &mut Scenario| {};
+    assert_eq!(
+        open_text(&|s| s.create_null = true, &binding()),
+        "system error: pcap_create failed: no such device"
+    );
+    for what in [
+        "pcap_set_snaplen",
+        "pcap_set_promisc",
+        "pcap_set_timeout",
+        "pcap_set_immediate_mode",
+        "pcap_set_buffer_size",
+    ] {
+        assert_eq!(
+            open_text(&|s| s.set_fail = Some((what, -1)), &binding()),
+            format!("system error: {what} failed: code -1")
+        );
+    }
+    for (rc, kind) in [
+        (-5, "interface does not match the binding"),
+        (
+            -8,
+            "permission denied (raw packet access needs elevated privileges)",
+        ),
+        (
+            -11,
+            "permission denied (raw packet access needs elevated privileges)",
+        ),
+        (-1, "system error"),
+    ] {
+        // The second handle (RX), after the TX handle opened.
+        assert_eq!(
+            open_text(&|s| s.activate_fail_nth = Some((2, rc)), &binding()),
+            format!("{kind}: pcap_activate failed (code {rc}): fake driver says no")
+        );
+    }
+    for (dlt, text) in [
+        (0, "loopback (DLT_NULL) is not Ethernet"),
+        (127, "802.11/monitor link type 127 is not Ethernet"),
+        (12, "DLT 12 is not Ethernet (DLT_EN10MB)"),
+    ] {
+        assert_eq!(
+            open_text(&|s| s.dlt = dlt, &binding()),
+            format!("unsupported link type: {text}")
+        );
+    }
+    assert_eq!(
+        open_text(&|s| s.findalldevs_rc = -1, &binding()),
+        "system error: pcap_findalldevs failed: enum failed"
+    );
+    assert_eq!(
+        open_text(&|s| s.compile_rc = -1, &binding()),
+        "system error: pcap_compile(\"not ether src 52:54:00:04:80:a9\") failed (code -1): fake driver says no"
+    );
+    assert_eq!(
+        open_text(&|s| s.setfilter_fail_hid = Some((1, -1)), &binding()),
+        "system error: pcap_setfilter(drop-all) failed (code -1): fake driver says no"
+    );
+    assert_eq!(
+        open_text(&|s| s.setfilter_fail_hid = Some((2, -1)), &binding()),
+        "system error: pcap_setfilter failed (code -1): fake driver says no"
+    );
+    assert_eq!(
+        open_text(&|s| s.setnonblock_rc = -1, &binding()),
+        "system error: pcap_setnonblock failed (code -1): "
+    );
+    assert_eq!(
+        open_text(&|s| s.sendqueue_alloc_null = true, &binding()),
+        format!("system error: pcap_sendqueue_alloc({TX_QUEUE_BYTES}) returned NULL")
+    );
+    // resolve_device
+    let named = |name: &str| AdapterBinding {
+        interface_id: name.into(),
+        ..binding()
+    };
+    assert_eq!(
+        open_text(&none, &named("")),
+        "interface does not match the binding: device name length 0 is outside 1..=1024"
+    );
+    assert_eq!(
+        open_text(&none, &named(&"x".repeat(1025))),
+        "interface does not match the binding: device name length 1025 is outside 1..=1024"
+    );
+    assert_eq!(
+        open_text(&none, &named("a\0b")),
+        "interface does not match the binding: device name contains an interior NUL"
+    );
+    assert_eq!(
+        open_text(&none, &named(LOOP)),
+        r#"unsupported link type: "\\Device\\NPF_Loopback" is the Npcap loopback adapter, not Ethernet"#
+    );
+    assert_eq!(
+        open_text(&none, &named("\\Device\\NPF_{none}")),
+        r#"interface does not match the binding: no Npcap device named "\\Device\\NPF_{none}" (3 devices enumerated)"#
+    );
+    assert_eq!(
+        open_text(
+            &|s| s.devices.retain(|(_, _, flags)| *flags != 0),
+            &binding()
+        ),
+        r#"permission denied (raw packet access needs elevated privileges): no Npcap device named "\\Device\\NPF_{11111111-2222-3333-4444-555555555555}": only loopback is visible: Npcap may be installed in Administrators-only mode and this process lacks rights (1 devices enumerated)"#
+    );
+    assert_eq!(
+        open_text(&|s| s.devices.clear(), &binding()),
+        r#"permission denied (raw packet access needs elevated privileges): no Npcap device named "\\Device\\NPF_{11111111-2222-3333-4444-555555555555}": only loopback is visible: Npcap may be installed in Administrators-only mode and this process lacks rights (0 devices enumerated)"#
+    );
 
     // TX
     reset(|s| s.queue_full_at = Some(1));

@@ -780,9 +780,9 @@ fn sendqueue_alloc_null_is_a_system_error() {
     reset(|s| s.sendqueue_alloc_null = true);
     let api = good_api();
     let e = SendQueue::alloc(&api, 4096).err().unwrap();
-    assert!(
-        matches!(e, NetError::System(ref m) if m.contains("pcap_sendqueue_alloc")),
-        "{e:?}"
+    assert_eq!(
+        e,
+        NetError::System("pcap_sendqueue_alloc(4096) returned NULL".into())
     );
     assert_eq!(count("sendqueue_alloc:4096"), 1);
     assert_eq!(count("sendqueue_destroy"), 0);

@@ -25,6 +25,9 @@ pub const SBOX: [u8; 256] = [
     0x74, 0x4a, 0xa6, 0x5e, 0xd2, 0xe2, 0x4d, 0xf3, 0xf4, 0xc6, 0xbc, 0xa2, 0x51, 0x58, 0xe8, 0xae,
 ];
 
+/// Число дорожек [`BlackRock::shuffle_batch`] в `transmit` и `-sL` (`scan.rs`).
+pub(crate) const SHUFFLE_LANES: usize = 8;
+
 /// Ошибки конструктора.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum BlackRockError {
@@ -96,6 +99,21 @@ impl BlackRock {
         let mut c = encrypt(self.rounds, self.a, self.b, m, self.seed);
         while c >= self.range {
             c = encrypt(self.rounds, self.a, self.b, c, self.seed);
+        }
+        c
+    }
+
+    /// `K` независимых [`BlackRock::shuffle`] сразу; результат равен `m.map(|x| self.shuffle(x))`.
+    ///
+    /// Первый `ENCRYPT` идёт по всем дорожкам раунд за раундом (`encrypt_lanes`): цепочка раундов одной дорожки
+    /// ждёт каждое деление, а `K` цепочек рядом прячут эту задержку друг за другом. Cycle-walk (:268-276) нужен
+    /// редко и у каждой дорожки свой, поэтому он скалярный.
+    pub(crate) fn shuffle_batch<const K: usize>(&self, m: [u64; K]) -> [u64; K] {
+        let mut c = encrypt_lanes(self.rounds, self.a, self.b, m, self.seed);
+        for x in &mut c {
+            while *x >= self.range {
+                *x = encrypt(self.rounds, self.a, self.b, *x, self.seed);
+            }
         }
         c
     }
@@ -180,6 +198,35 @@ fn encrypt(r: u32, a: u64, b: u64, m: u64, seed: u64) -> u64 {
     }
 }
 
+/// `encrypt` для `K` индексов сразу: те же раунды, но каждый раунд проходит все дорожки, а маска раунда
+/// считается один раз на пачку. Дорожки друг от друга не зависят, результат каждой равен `encrypt` её индекса.
+fn encrypt_lanes<const K: usize>(r: u32, a: u64, b: u64, m: [u64; K], seed: u64) -> [u64; K] {
+    let mut l = [0u64; K];
+    let mut rr = [0u64; K];
+    for ((lk, rk), x) in l.iter_mut().zip(rr.iter_mut()).zip(m) {
+        *lk = x % a;
+        *rk = x / a;
+    }
+    for j in 1..=r {
+        let mask = round_mask(seed, u64::from(j));
+        let modulus = if j & 1 != 0 { a } else { b };
+        for (lk, rk) in l.iter_mut().zip(rr.iter_mut()) {
+            let t = lk.wrapping_add(sbox_mix(*rk ^ mask));
+            *lk = *rk;
+            *rk = t % modulus;
+        }
+    }
+    let mut out = [0u64; K];
+    for ((o, lk), rk) in out.iter_mut().zip(l).zip(rr) {
+        *o = if r & 1 != 0 {
+            a.wrapping_mul(lk).wrapping_add(rk)
+        } else {
+            a.wrapping_mul(rk).wrapping_add(lk)
+        };
+    }
+    out
+}
+
 /// `UNENCRYPT`, crypto-blackrock.c:220.
 fn unencrypt(r: u32, a: u64, b: u64, m: u64, seed: u64) -> u64 {
     let (mut l, mut rr);
@@ -252,6 +299,49 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// `shuffle_batch` equals `shuffle` lane by lane: windows of `SHUFFLE_LANES` consecutive indices (wrapping at
+    /// the end) at the start, middle and end of the range, plus batches of 1 and 3 lanes.
+    #[test]
+    fn shuffle_batch_equals_scalar() {
+        let ranges = [
+            1u64,
+            2,
+            3,
+            9,
+            40,
+            290_112,
+            1_000_003,
+            1 << 22,
+            (1 << 63) - 1,
+        ];
+        let seeds = [1u64, 2, 0xFFFF_FFFF, u64::MAX];
+        let rounds = [0u32, 1, 2, 3, 4, 14, 63];
+        let mut walked = 0usize;
+        for &range in &ranges {
+            for &seed in &seeds {
+                for &r in &rounds {
+                    let br = BlackRock::new(range, seed, r);
+                    let lanes = SHUFFLE_LANES as u64;
+                    for s in [0, range / 2, range.saturating_sub(lanes), range - 1] {
+                        let m: [u64; SHUFFLE_LANES] =
+                            std::array::from_fn(|k| (s + k as u64) % range);
+                        let want = m.map(|x| br.shuffle(x));
+                        let ctx = format!("range {range} seed {seed:#x} rounds {r} s {s}");
+                        assert_eq!(br.shuffle_batch(m), want, "{ctx}");
+                        assert_eq!(br.shuffle_batch([m[0]]), [want[0]], "{ctx}");
+                        assert_eq!(br.shuffle_batch([m[0], m[1], m[2]]), want[..3], "{ctx}");
+                        // Lanes whose first ENCRYPT lands at or above range take the scalar cycle-walk.
+                        walked += m
+                            .iter()
+                            .filter(|&&x| encrypt(r, br.a, br.b, x, seed) >= range)
+                            .count();
+                    }
+                }
+            }
+        }
+        assert!(walked > 0);
     }
 
     #[test]

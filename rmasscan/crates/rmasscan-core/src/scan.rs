@@ -12,7 +12,7 @@
 use std::net::Ipv4Addr;
 use std::ops::ControlFlow;
 
-use crate::blackrock::{BlackRock, BlackRockError};
+use crate::blackrock::{BlackRock, BlackRockError, SHUFFLE_LANES};
 use crate::massip::{MassIp, RangeOverflow, TargetIp};
 use crate::ranges6::format_ipv6_c;
 
@@ -233,6 +233,30 @@ pub fn transmit_index_stream(
     retries: u32,
     max_rate: f64,
 ) -> impl Iterator<Item = (u64, u64)> {
+    transmit_indices(
+        range,
+        shard,
+        nic_count,
+        nic_index,
+        resume_index,
+        resume_count,
+        retries,
+        max_rate,
+    )
+}
+
+/// Тело [`transmit_index_stream`] с конкретным типом итератора.
+#[allow(clippy::too_many_arguments)]
+fn transmit_indices(
+    range: u64,
+    shard: Shard,
+    nic_count: u32,
+    nic_index: u32,
+    resume_index: u64,
+    resume_count: Option<u64>,
+    retries: u32,
+    max_rate: f64,
+) -> TransmitIndices {
     let (start, end, increment) = transmit_bounds(
         range,
         shard,
@@ -251,6 +275,68 @@ pub fn transmit_index_stream(
         retries,
         r: retries.wrapping_add(1), // :213 `(unsigned)retries + 1`
         increment,
+    }
+}
+
+/// Пары `(tag, m)` внутреннего итератора как `(tag, blackrock.shuffle(m))`, в том же порядке. Пустой буфер
+/// набирается до `SHUFFLE_LANES` пар: полная пачка идёт через `BlackRock::shuffle_batch`, неполная (конец потока)
+/// через скалярный `shuffle`. Буфер набирается лениво, только когда пуст; кто остановился раньше (`Break`),
+/// теряет уже перемешанные дорожки пачки, а внутренний итератор дальше пачки не читается.
+struct Shuffled<I> {
+    inner: I,
+    blackrock: BlackRock,
+    buf: [(u64, u64); SHUFFLE_LANES],
+    head: usize,
+    len: usize,
+}
+
+impl<I> Shuffled<I> {
+    fn new(inner: I, blackrock: BlackRock) -> Self {
+        Shuffled {
+            inner,
+            blackrock,
+            buf: [(0, 0); SHUFFLE_LANES],
+            head: 0,
+            len: 0,
+        }
+    }
+}
+
+impl<I: Iterator<Item = (u64, u64)>> Shuffled<I> {
+    /// Набирает следующую пачку; после конца потока `len == 0`.
+    fn fill(&mut self) {
+        self.head = 0;
+        self.len = 0;
+        while self.len < SHUFFLE_LANES {
+            let Some(pair) = self.inner.next() else { break };
+            self.buf[self.len] = pair;
+            self.len += 1;
+        }
+        if self.len == SHUFFLE_LANES {
+            let shuffled = self.blackrock.shuffle_batch(self.buf.map(|(_, m)| m));
+            for (slot, x) in self.buf.iter_mut().zip(shuffled) {
+                slot.1 = x;
+            }
+        } else {
+            for slot in &mut self.buf[..self.len] {
+                slot.1 = self.blackrock.shuffle(slot.1);
+            }
+        }
+    }
+}
+
+impl<I: Iterator<Item = (u64, u64)>> Iterator for Shuffled<I> {
+    type Item = (u64, u64);
+    fn next(&mut self) -> Option<(u64, u64)> {
+        if self.head == self.len {
+            self.fill();
+            if self.len == 0 {
+                return None;
+            }
+        }
+        let pair = self.buf[self.head];
+        self.head += 1;
+        Some(pair)
     }
 }
 
@@ -341,8 +427,13 @@ pub fn list_scan_v46<F: FnMut(TargetIp, u32)>(
             }
         }
     }
-    for i in list_scan_indices(range, shard, resume_index, resume_count, retries, max_rate) {
-        let x = blackrock.shuffle(i); // :42
+    let indices = ListIndices {
+        i: start,
+        end,
+        increment: inc,
+    };
+    for (_, x) in Shuffled::new(indices.map(|i| (i, i)), blackrock) {
+        // x = blackrock_shuffle(i), :42
         let (target, port) = massip.pick_list(x); // :44
         emit(target, port);
     }
@@ -464,7 +555,7 @@ pub fn transmit_scan_flow_v46<B, F: FnMut(u64, u64, u64, TargetIp, u32) -> Contr
     }
     let blackrock = BlackRock::try_new(range, seed, rounds)?; // main.c:261
     let repeats = 0u64; // main.c:226
-    for (i, x) in transmit_index_stream(
+    let indices = transmit_indices(
         range,
         shard,
         nic_count,
@@ -473,8 +564,9 @@ pub fn transmit_scan_flow_v46<B, F: FnMut(u64, u64, u64, TargetIp, u32) -> Contr
         resume_count,
         retries,
         max_rate,
-    ) {
-        let xxx = blackrock.shuffle(x); // main.c:334
+    );
+    // xxx = blackrock_shuffle(x), main.c:334
+    for (i, xxx) in Shuffled::new(indices, blackrock) {
         let (target, port, xxx) = massip.pick_transmit(xxx);
         if let ControlFlow::Break(b) = emit(i, repeats, xxx, target, port) {
             return Ok(ControlFlow::Break(b));
@@ -965,6 +1057,38 @@ mod tests {
             })
             .unwrap();
         assert_eq!(n, 8);
+    }
+
+    /// `Shuffled` yields `(tag, shuffle(m))` in input order for every length (full batches and a partial tail) and
+    /// pulls the inner iterator only when its buffer is empty, `SHUFFLE_LANES` pairs at a time.
+    #[test]
+    fn shuffled_matches_scalar_and_fills_lazily() {
+        let range = 1_000_003u64;
+        let br = BlackRock::new(range, 0xdead_beef, 14);
+        for len in 0..=3 * SHUFFLE_LANES + 1 {
+            let input: Vec<(u64, u64)> = (0..len as u64)
+                .map(|k| (3 * k + 1, (7919 * k) % range))
+                .collect();
+            let pulled = std::cell::Cell::new(0usize);
+            let inner = input
+                .iter()
+                .copied()
+                .inspect(|_| pulled.set(pulled.get() + 1));
+            let mut it = Shuffled::new(inner, br);
+            assert_eq!(
+                pulled.get(),
+                0,
+                "len {len}: nothing is pulled before the first next"
+            );
+            for (n, &(tag, m)) in input.iter().enumerate() {
+                assert_eq!(it.next(), Some((tag, br.shuffle(m))), "len {len} n {n}");
+                let batch_end = ((n / SHUFFLE_LANES + 1) * SHUFFLE_LANES).min(len);
+                assert_eq!(pulled.get(), batch_end, "len {len} n {n}");
+            }
+            assert_eq!(it.next(), None, "len {len}");
+            assert_eq!(it.next(), None, "len {len}");
+            assert_eq!(pulled.get(), len);
+        }
     }
 
     /// `Break` at every position `p` of a full flow: the flow returns `Ok(Break(p))` at once, `emit` ran exactly

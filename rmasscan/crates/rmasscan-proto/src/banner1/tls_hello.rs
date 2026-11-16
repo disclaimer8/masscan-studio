@@ -14,7 +14,7 @@ use rmasscan_core::cookie::siphash24;
 // Потребитель — задача 5 подэтапа 4c.
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum TlsHelloKind {
+pub enum TlsHelloKind {
     Default,
     Tls13,
     Heartbeat,

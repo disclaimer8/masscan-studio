@@ -286,13 +286,15 @@ mod tests {
             out.segments[0].payload,
             super::tls_hello::tls_hello(super::tls_hello::TlsHelloKind::Default, 0)
         );
+        // Дальше только ретрансмиты неподтверждённого hello на тиках, как у стека C.
+        let hello = super::tls_hello::tls_hello(super::tls_hello::TlsHelloKind::Default, 0);
         for t in 2..=10 {
             let mut out = StackOutput::default();
             st.on_tick(T0 + 2 * t * SEC, &mut out);
             assert!(
                 out.segments
                     .iter()
-                    .all(|s| s.payload.is_empty() && s.flags != PSHACK),
+                    .all(|s| s.payload.is_empty() || s.payload == hello),
                 "tick {t}"
             );
         }
@@ -319,12 +321,12 @@ mod tests {
         assert!(out.banners.is_empty());
     }
 
-    /// Согласие на STARTTLS (FTP 234, SMTP 220, POP3 `+OK`, справка B6): номер C SSL3 (9), как у C, hello TLS не
-    /// шлётся, запись парсера кончается строкой согласия (у FTP и SMTP без LF, у POP3 с LF), а каждый байт после неё в
-    /// одной записи `unknown`, в том же сегменте или в следующем, в любой нарезке. Байты, которые C в том же сегменте
-    /// разобрал бы как новое приветствие со вторым `AUTH TLS` (`src/proto-ftp.c:101`), здесь тоже `unknown`.
+    /// Согласие на STARTTLS (FTP 234, SMTP 220, POP3 `+OK`): номер C SSL3 (9), ClientHello уходит на провод,
+    /// запись парсера кончается строкой согласия (у FTP и SMTP без LF, у POP3 с LF), а каждый байт после неё
+    /// разбирает TLS-парсер в любой нарезке (справка §F E2.8'; у C остаток того же сегмента снова приветствие
+    /// со вторым `AUTH TLS`, `src/proto-ftp.c:101`).
     #[test]
-    fn starttls_success_switches_to_unported_tls() {
+    fn starttls_hands_off_to_tls() {
         let tail: &[u8] = b"\x16\x03\x01\x00\x02\x02\x28220 again\r\n";
         for (port, dialogue, app, rec, cmds) in [
             (
@@ -363,34 +365,34 @@ mod tests {
                 &[b"CAPA\r\n", b"STLS\r\n"],
             ),
         ] {
-            let want_acts: Vec<StreamAction> = cmds
+            let mut want_acts: Vec<StreamAction> = cmds
                 .iter()
                 .map(|c| StreamAction::Send(c.to_vec()))
                 .collect();
-            // Только строка согласия: запись парсера, номер 9, без hello TLS.
+            want_acts.push(StreamAction::Send(super::tls_hello::tls_hello(
+                super::tls_hello::TlsHelloKind::Default,
+                0,
+            )));
+            // Только строка согласия: запись парсера, номер 9, ClientHello.
             let r = stream_in_splits(port, None, dialogue, u64::from(port));
             assert_eq!(r.app_proto, Some(app_id::SSL3), "{dialogue:?}");
             assert_eq!(r.records, [(app, rec.to_vec())], "{dialogue:?}");
             assert_eq!(r.actions, want_acts, "{dialogue:?}");
-            // С хвостом: целиком, по байту, случайно и ровно по строке согласия хвост это одна запись unknown.
+            // С хвостом: целиком, по байту, случайно и ровно по строке согласия хвост разбирает TLS
+            // (текст и обрывок записи записей не дают).
             let stream = [dialogue, tail].concat();
             let r = stream_in_splits(port, None, &stream, u64::from(port) + 1);
             let at = banner_stream(&TcpBannerSettings::default(), port, None, &[dialogue, tail]);
             assert_eq!(r, at, "{dialogue:?}: split at the go-ahead");
             assert_eq!(r.app_proto, Some(app_id::SSL3));
-            assert_eq!(
-                r.records,
-                [(app, rec.to_vec()), (app_id::HEUR, tail.to_vec())],
-                "{dialogue:?}"
-            );
+            assert_eq!(r.records, [(app, rec.to_vec())], "{dialogue:?}");
             assert_eq!(
                 r.actions, want_acts,
-                "{dialogue:?}: no TLS hello, no second command"
+                "{dialogue:?}: TLS hello, no second command"
             );
         }
 
-        // Запись парсера от 200 байт: хвост `unknown` идёт ПЕРЕД ней (порядок списка banout у C, справка B3: голова
-        // списка переезжает, когда запись дорастает до 200 байт). От нарезки порядок не зависит.
+        // Запись парсера от 200 байт: текстовый хвост в TLS-парсере записей не даёт при любом порядке списка.
         let long_greeting = [&b"220-"[..], &[b'x'; 300], b"\r\n220 ok\r\n234 go\r\n"].concat();
         let want_rec = [&b"220-"[..], &[b'x'; 300], b"\n220 ok\n234 go"].concat();
         let stream = [&long_greeting[..], b"TAILTAIL"].concat();
@@ -403,20 +405,15 @@ mod tests {
         );
         assert_eq!(whole, at_go_ahead);
         assert_eq!(whole.app_proto, Some(app_id::SSL3));
-        assert_eq!(
-            whole.records,
-            [
-                (app_id::HEUR, b"TAILTAIL".to_vec()),
-                (app_id::FTP, want_rec)
-            ]
-        );
+        assert_eq!(whole.records, [(app_id::FTP, want_rec)]);
     }
 
     /// Р1 класс б: случайные потоки из обломков диалогов FTP, SMTP, POP3, IMAP4 (коды, разделители, CR, LF, TAB, NUL,
     /// 0x7F, 0x80, точки, звёзды, целые диалоги со STARTTLS), мусора и изредка 66 000 байт текста, на портах 21, 25,
     /// 587, 110, 143, 2525 и других, с классификатором и с принуждением каждого из четырёх парсеров, в случайных
-    /// нарезках: ни паники, записи не длиннее 65 536 байт и не пустые, записи только этих приложений, действия только
-    /// их команды и закрытие, hello TLS нет, записи, номер и действия не зависят от нарезки.
+    /// нарезках: ни паники, записи не длиннее 65 536 байт и не пустые, записи только этих приложений и TLS после
+    /// передачи, действия только их команды, ClientHello передачи и закрытие; записи, номер и действия не
+    /// зависят от нарезки.
     #[test]
     fn text_parsers_never_panic() {
         const FRAGS: &[&[u8]] = &[
@@ -526,7 +523,14 @@ mod tests {
                         app_id::FTP,
                         app_id::SMTP,
                         app_id::POP3,
-                        app_id::IMAP4
+                        app_id::IMAP4,
+                        app_id::SSL3,
+                        app_id::X509_CERT,
+                        app_id::X509_CACERT,
+                        app_id::VULN,
+                        app_id::HEARTBLEED,
+                        app_id::TICKETBLEED,
+                        app_id::SAFE
                     ]
                     .contains(app),
                     "round {round}: app {app}"
@@ -540,7 +544,15 @@ mod tests {
                 match a {
                     StreamAction::Send(b) => {
                         sends += 1;
-                        assert!(commands.contains(&b.as_slice()), "round {round}: {b:?}");
+                        assert!(
+                            commands.contains(&b.as_slice())
+                                || *b
+                                    == super::tls_hello::tls_hello(
+                                        super::tls_hello::TlsHelloKind::Default,
+                                        0
+                                    ),
+                            "round {round}: {b:?}"
+                        );
                     }
                     StreamAction::Close => closes += 1,
                 }

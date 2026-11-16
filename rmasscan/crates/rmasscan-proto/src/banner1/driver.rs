@@ -1,6 +1,8 @@
 //! Офлайн-драйвер каркаса (как [`crate::handle_udp`] подэтапа 4a): одна сессия порта, сегменты сервера по очереди,
 //! затем сброс без бюджета. Для эталонов `tests/tcp_golden.rs` и фаззера `rmasscan-lab fuzz tcp`.
 
+use std::sync::Arc;
+
 use crate::tcp::app::{ByteBudget, Session, SessionAction};
 
 use super::banout::{Banout, Base64Stream};
@@ -80,7 +82,9 @@ pub fn x509_stream(count: u32, segments: &[&[u8]]) -> Vec<(u16, Vec<u8>)> {
             base64: &mut base64,
             capture_html: false,
             tls_flags: TlsFlags::default(),
+            starttls_hello: Arc::from(&[][..]),
             starttls: false,
+            starttls_rest: Vec::new(),
         };
         x.feed(&mut cx, seg);
     }
@@ -122,7 +126,9 @@ pub fn tls_stream(
             base64: &mut base64,
             capture_html: false,
             tls_flags: flags,
+            starttls_hello: Arc::from(&[][..]),
             starttls: false,
+            starttls_rest: Vec::new(),
         };
         parser.parse(&mut cx, seg);
     }

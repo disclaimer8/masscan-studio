@@ -78,11 +78,10 @@ pub(super) fn c_isprint(c: u8) -> bool {
 }
 
 /// Что видит парсер: буферы баннеров и бюджет таблицы, действия (`tcpapi_send` и `tcpapi_close` по порядку),
-/// `--capture html`. Порта нет: ни один парсер 4b его не читает (FTP, SMTP и POP3 только сохраняют и возвращают
-/// `pstate->port` вокруг `memset` передачи STARTTLS, `src/proto-ftp.c:96-100`; порт решает классификатор).
-/// `starttls` ставит передача STARTTLS (у C `app_proto = PROTO_SSL3`, `src/proto-ftp.c:93-104`, `src/proto-smtp.c:139-150`, `src/proto-pop3.c:122-133`): со следующего
-/// сегмента поток идёт в `unknown`; остаток своего сегмента парсер решает сам, текстовые парсеры отдают его в `unknown`
-/// ([`ParseCx::hand_off_starttls`]).
+/// флаги захвата и hello STARTTLS. Порта нет: ни один парсер его не читает (FTP, SMTP и POP3 только
+/// сохраняют и возвращают `pstate->port` вокруг `memset` передачи STARTTLS, `src/proto-ftp.c:96-100`; порт
+/// решает классификатор). Передача STARTTLS ([`ParseCx::hand_off_starttls`]) ставит `starttls` и несёт
+/// остаток сегмента в `starttls_rest`: сессия меняет парсер на TLS и разбирает остаток им.
 pub(crate) struct ParseCx<'a> {
     pub(crate) banout: &'a mut Banout,
     pub(crate) budget: &'a mut ByteBudget,
@@ -92,7 +91,11 @@ pub(crate) struct ParseCx<'a> {
     pub(crate) capture_html: bool,
     /// Флаги TLS скана (`Banner1.is_capture_*`/`is_heartbleed`/…), значение на сессию.
     pub(crate) tls_flags: TlsFlags,
+    /// `banner_ssl.hello` текущего режима: уходит на провод при передаче STARTTLS.
+    pub(crate) starttls_hello: Arc<[u8]>,
     pub(crate) starttls: bool,
+    /// Остаток сегмента после строки согласия STARTTLS: разбирает TLS-парсер после смены.
+    pub(crate) starttls_rest: Vec<u8>,
 }
 
 impl ParseCx<'_> {
@@ -153,19 +156,18 @@ impl ParseCx<'_> {
         self.acts.push(SessionAction::Close);
     }
 
-    /// Согласие сервера на STARTTLS (FTP 234, SMTP 220, POP3 `+OK`). У C `memset` состояния потока, `app_proto =
+    /// Согласие сервера на STARTTLS (FTP 234, SMTP 220, POP3 `+OK`): `memset` состояния потока, `app_proto =
     /// PROTO_SSL3`, `is_sent_sslhello = 1` и `tcpapi_send(banner_ssl.hello)` (`src/proto-ftp.c:93-104`,
-    /// `src/proto-smtp.c:139-150`, `src/proto-pop3.c:122-133`). В 4b hello TLS не шлётся (справка B6): номер C
-    /// становится SSL3 ([`Banner1Session::run`]), а каждый байт после строки согласия, `rest` этого сегмента и все
-    /// следующие сегменты, это одна запись `unknown`. У C цикл парсера на этом не кончается (`state = 0`, затем
-    /// `break` из `switch`): `rest` идёт тем же текстовым парсером с состояния 0, как новое приветствие (с повтором
-    /// `AUTH TLS`, `EHLO` или `CAPA`), а следующий сегмент уже в TLS, так что у C итог тут зависит от нарезки
-    /// (эталоны `*-tail`); правило 4b от неё не зависит.
+    /// `src/proto-smtp.c:139-150`, `src/proto-pop3.c:122-133`). Смену парсера и флага делает сессия
+    /// ([`Banner1Session::run`]); здесь — отправка hello и остаток сегмента для TLS-парсера. У C цикл
+    /// текстового парсера после согласия продолжается с состояния 0 по остатку того же сегмента (вторые
+    /// `AUTH TLS`/`EHLO`/`CAPA`), а следующий сегмент уже в TLS: итог C зависит от нарезки. Правило 4c
+    /// (справка §F E2.8'): остаток в любой нарезке разбирает TLS-парсер.
     pub(crate) fn hand_off_starttls(&mut self, rest: &[u8]) {
         self.starttls = true;
-        if !rest.is_empty() {
-            self.append(app_id::HEUR, rest);
-        }
+        self.starttls_rest = rest.to_vec();
+        let hello = Arc::clone(&self.starttls_hello);
+        self.send_shared(&hello);
     }
 }
 
@@ -203,8 +205,9 @@ pub(crate) fn parser_for(p: AppProto) -> Box<dyn Parser> {
 struct Scan {
     hellos: HelloTable,
     capture_html: bool,
-    /// Флаги TLS; настоящие настройки придут в задаче 5, до неё — умолчания C (захват сертификатов включён).
     tls_flags: TlsFlags,
+    /// Hello режима для передачи STARTTLS (`banner_ssl.hello`).
+    tls_hello: Arc<[u8]>,
     parsers: fn(AppProto) -> Box<dyn Parser>,
     classifier: &'static Classifier,
 }
@@ -242,6 +245,7 @@ impl BannerConfig {
                 hellos: HelloTable::new(s),
                 capture_html: s.capture_html,
                 tls_flags: s.tls.flags(),
+                tls_hello: Arc::clone(s.tls.hello(s.tls.hello_kind())),
                 parsers,
                 classifier: Classifier::banner1(),
             }),
@@ -350,8 +354,8 @@ impl Banner1Session {
         }
     }
 
-    /// Один вызов парсера. Передача STARTTLS (`cx.starttls`) делает номер C SSL3, а парсер заглушкой: дальше
-    /// `unknown`.
+    /// Один вызов парсера. Передача STARTTLS (`cx.starttls`) делает номер C SSL3, меняет парсер на TLS и
+    /// разбирает остаток сегмента им (справка §F E2.8').
     fn run(
         &mut self,
         parser: &mut Box<dyn Parser>,
@@ -366,12 +370,20 @@ impl Banner1Session {
             base64: &mut self.base64,
             capture_html: self.scan.capture_html,
             tls_flags: self.scan.tls_flags,
+            starttls_hello: Arc::clone(&self.scan.tls_hello),
             starttls: false,
+            starttls_rest: Vec::new(),
         };
         parser.parse(&mut cx, px);
         if cx.starttls {
             self.app_proto = Some(app_id::SSL3);
-            *parser = Box::new(Unported);
+            self.tls_hello_sent = true;
+            *parser = Box::<super::tls::Tls>::default();
+            let rest = std::mem::take(&mut cx.starttls_rest);
+            if !rest.is_empty() {
+                drop(cx);
+                self.run(parser, budget, acts, &rest);
+            }
         }
     }
 
@@ -470,7 +482,9 @@ impl Session for Banner1Session {
                 base64: &mut self.base64,
                 capture_html: self.scan.capture_html,
                 tls_flags: self.scan.tls_flags,
+                starttls_hello: Arc::clone(&self.scan.tls_hello),
                 starttls: false,
+                starttls_rest: Vec::new(),
             });
         }
         self.banout.flush(budget)
@@ -736,7 +750,7 @@ mod tests {
     /// `unknown`; остаток своего сегмента парсер решает сам. Передача во время повтора HEUR тоже переключает до
     /// текущего сегмента.
     #[test]
-    fn starttls_hands_the_rest_to_unknown() {
+    fn starttls_hands_the_rest_to_tls() {
         let cfg = tag_config();
         let (app, recs, acts) = feed(
             &cfg,
@@ -745,24 +759,13 @@ mod tests {
             &[b"220-a\r\n", b"234 x!lost", b"\x16\x03\x01", b"more"],
         );
         assert_eq!(app, Some(app_id::SSL3));
-        assert_eq!(
-            recs,
-            [
-                (42, b"Ftp|220-a\r\n234 x".to_vec()),
-                (app_id::HEUR, b"\x16\x03\x01more".to_vec())
-            ]
-        );
+        // Хвост разбирает TLS-парсер: обрывок записи и текст записей не дают.
+        assert_eq!(recs, [(42, b"Ftp|220-a\r\n234 x".to_vec())]);
         assert_eq!(acts, [SessionAction::Send(b"STARTTLS".to_vec())]);
         // Совпадение во втором сегменте, передача в байтах первого (повтор HEUR): текущий сегмент уже unknown.
         let (app, recs, _) = feed(&cfg, 9999, None, &[b"!x", b"\xff\xfb\x01\xff\xfd tail"]);
         assert_eq!(app, Some(app_id::SSL3));
-        assert_eq!(
-            recs,
-            [
-                (42, b"Telnet|".to_vec()),
-                (app_id::HEUR, b"\xff\xfb\x01\xff\xfd tail".to_vec())
-            ]
-        );
+        assert_eq!(recs, [(42, b"Telnet|".to_vec())]);
     }
 
     /// Пустой сегмент это отсутствие данных: ни записи HEUR длины 0, ни шага классификатора.

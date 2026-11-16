@@ -17,10 +17,11 @@ pub enum Expect {
 /// Правило 4b: приложение не перенесено (SMB, справка B6), весь поток одной записью `unknown` (app 1).
 pub const UNKNOWN_STREAM: &str = "unknown-stream";
 
-/// Правило 4b: согласие сервера на STARTTLS (FTP 234, SMTP 220, POP3 `+OK`; справка B6). Первый сегмент кейса
-/// кончается строкой согласия. До неё как C на этом сегменте (записи парсера и действия), hello TLS не шлётся, а каждый
-/// байт после неё (следующий сегмент, если он есть) это одна запись `unknown`; `app_proto` C (9).
-pub const STARTTLS_UNKNOWN: &str = "starttls-unknown";
+/// Правило 4c для согласия на STARTTLS (FTP 234, SMTP 220, POP3 `+OK`; справка 4c §F E2.8'): первый сегмент
+/// кейса кончается строкой согласия. Ожидание — прогон C по заданным сегментам (`given`, без хвоста `whole`):
+/// записи текстового парсера и TLS после передачи, действия по ClientHello включительно; остаток сегмента
+/// согласия и следующие сегменты разбирает TLS-парсер.
+pub const STARTTLS_TLS: &str = "starttls-tls";
 
 impl Expect {
     pub fn name(self) -> &'static str {
@@ -533,6 +534,7 @@ pub fn cases() -> Vec<Case> {
         &[b"\x00\x00", b"\x00\x27\xffSMBr\x00\x00\x00\x00"],
     ));
     v.extend(text_cases());
+    v.extend(starttls_tls_cases());
     v.extend(http_cases());
     v
 }
@@ -664,11 +666,11 @@ fn http_cases() -> Vec<Case> {
 }
 
 /// Кейсы задачи 9: FTP, SMTP, POP3 и IMAP4 (справка D2-D5, B6, E3.3, E3.4; `src/proto-ftp.c`, `src/proto-smtp.c`,
-/// `src/proto-pop3.c`, `src/proto-imap4.c`). Согласие на STARTTLS это правило 4b [`STARTTLS_UNKNOWN`]: у кейса с
+/// `src/proto-pop3.c`, `src/proto-imap4.c`). Согласие на STARTTLS это правило 4c [`STARTTLS_TLS`]: у кейса с
 /// хвостом второй сегмент начинается сразу за строкой согласия.
 fn text_cases() -> Vec<Case> {
     use Expect::{Declared, Records};
-    let tls = Declared(STARTTLS_UNKNOWN);
+    let tls = Declared(STARTTLS_TLS);
     let mut v = Vec::new();
     // --- FTP: строки приветствия, ответ на AUTH TLS (`src/proto-ftp.c:29-121`) ---
     for (name, about, port, stream) in [
@@ -1244,4 +1246,77 @@ fn text_cases() -> Vec<Case> {
         ));
     }
     v
+}
+
+/// Мини-сертификат из эталонов x509 (`mini-cn`, CN `leaf.test`) для кейсов передачи STARTTLS с настоящим TLS.
+fn mini_der() -> Vec<u8> {
+    const HEX: &str = "308190307aa003020102020101300d06092a864886f70d01010b05003015311330110603550403130a497373756572204c6162301e170d3234303130313030303030305a170d3334303130313030303030305a30143112301006035504030c096c6561662e746573743014300d06092a864886f70d01010b05000303000102300d06092a864886f70d01010b0500030300aabb";
+    (0..HEX.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&HEX[i..i + 2], 16).expect("hex"))
+        .collect()
+}
+
+/// Поток TLS после согласия: ServerHello одной записью и Certificate с мини-сертификатом второй.
+fn tls_after_starttls() -> Vec<u8> {
+    fn rec(t: u8, p: &[u8]) -> Vec<u8> {
+        let mut v = vec![t, 3, 3];
+        v.extend_from_slice(&(p.len() as u16).to_be_bytes());
+        v.extend_from_slice(p);
+        v
+    }
+    fn hs(t: u8, b: &[u8]) -> Vec<u8> {
+        let mut v = vec![t];
+        v.extend_from_slice(&(b.len() as u32).to_be_bytes()[1..]);
+        v.extend_from_slice(b);
+        v
+    }
+    let mut hello = vec![3u8, 3];
+    hello.extend(0u8..32);
+    hello.extend_from_slice(&[0, 0xc0, 0x2f, 0]);
+    let der = mini_der();
+    let mut inner = (der.len() as u32).to_be_bytes()[1..].to_vec();
+    inner.extend_from_slice(&der);
+    let mut cert = (inner.len() as u32).to_be_bytes()[1..].to_vec();
+    cert.extend_from_slice(&inner);
+    [rec(22, &hs(2, &hello)), rec(22, &hs(11, &cert))].concat()
+}
+
+/// Кейсы задачи 6 подэтапа 4c: согласие на STARTTLS и настоящий ServerHello+Certificate следом.
+fn starttls_tls_cases() -> Vec<Case> {
+    use Expect::Declared;
+    let tls = Declared(STARTTLS_TLS);
+    let stream = tls_after_starttls();
+    vec![
+        case(
+            "ftp-starttls-tls-stream",
+            tls,
+            "234 на AUTH TLS, дальше ServerHello и сертификат: записи ftp, ssl и X509",
+            21,
+            &[
+                b"220 lab FTP server ready\r\n234 AUTH TLS successful\r\n",
+                &stream,
+            ],
+        ),
+        case(
+            "smtp-starttls-tls-stream",
+            tls,
+            "220 на STARTTLS, дальше ServerHello и сертификат",
+            25,
+            &[
+                b"220 mail.example.test ESMTP\r\n250 STARTTLS\r\n220 2.0.0 Ready\r\n",
+                &stream,
+            ],
+        ),
+        case(
+            "pop3-starttls-tls-stream",
+            tls,
+            "+OK на STLS, дальше ServerHello и сертификат",
+            110,
+            &[
+                b"+OK lab ready\r\n+OK\r\nSTLS\r\n.\r\n+OK Begin TLS\r\n",
+                &stream,
+            ],
+        ),
+    ]
 }

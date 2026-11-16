@@ -17,7 +17,8 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::Arc;
 
 use rmasscan_core::banner::BannerRecord;
-use rmasscan_core::stack::{ConnAddrs, ConnKey, StackOutput, StackStats};
+use rmasscan_core::cookie::{syn_cookie_ipv4, syn_cookie_ipv6};
+use rmasscan_core::stack::{ConnAddrs, ConnKey, SourceRanges, StackOutput, StackStats};
 
 use super::app::{AppLayer, AppState, ByteBudget, Hellos, Session, Sessions};
 use super::tcb::{Tcb, TcbResult, What, incoming};
@@ -49,6 +50,9 @@ pub(crate) struct Table {
     next_id: u64,
     created: u64,
     full: u64,
+    seed: u64,
+    source: SourceRanges,
+    no_port: u64,
 }
 
 impl Table {
@@ -57,6 +61,8 @@ impl Table {
         lifetime_secs: u32,
         capacity: usize,
         banner_byte_budget: usize,
+        seed: u64,
+        source: SourceRanges,
     ) -> Table {
         Table {
             conns: HashMap::new(),
@@ -69,6 +75,9 @@ impl Table {
             next_id: 0,
             created: 0,
             full: 0,
+            seed,
+            source,
+            no_port: 0,
         }
     }
 
@@ -90,6 +99,20 @@ impl Table {
         if self.conns.contains_key(&key) {
             return true;
         }
+        let session = self.sessions.new_session(key.remote_port);
+        self.insert(key, seqno_me, seqno_them, ttl, now, session)
+    }
+
+    /// Вставка нового блока с готовой сессией; полная таблица: `false`, `table_full` растёт.
+    fn insert(
+        &mut self,
+        key: ConnKey,
+        seqno_me: u32,
+        seqno_them: u32,
+        ttl: u8,
+        now: u64,
+        session: Box<dyn Session>,
+    ) -> bool {
         if self.conns.len() >= self.capacity {
             self.full = self.full.saturating_add(1);
             return false;
@@ -106,11 +129,55 @@ impl Table {
                 id,
                 tcb,
                 app: AppState::default(),
-                session: self.sessions.new_session(key.remote_port),
+                session,
             },
         );
         self.created = self.created.saturating_add(1);
         true
+    }
+
+    /// `tcpapi_reconnect` в итоге события Connected (`_do_reconnect`, `src/stack-tcp-core.c:1646-1700`,
+    /// справка §D1): следующий порт/адрес по `_next_IP_port`, cookie нового четырёхкортежа, блок в SYN_SENT
+    /// с сессией второго соединения. Тот же адрес и порт — счётчик без порта; живой блок на новом ключе —
+    /// его `app_state` снова Connect, как перезапись у C.
+    fn reconnect(&mut self, old_key: &ConnKey, now: u64) {
+        let Some((addrs, local_port)) = next_ip_port(old_key, &self.source) else {
+            self.no_port = self.no_port.saturating_add(1);
+            return;
+        };
+        if addrs == old_key.addrs && local_port == old_key.local_port {
+            self.no_port = self.no_port.saturating_add(1);
+            return;
+        }
+        let key = ConnKey {
+            addrs,
+            local_port,
+            remote_port: old_key.remote_port,
+        };
+        if let Some(conn) = self.conns.get_mut(&key) {
+            conn.app = AppState::Connect;
+            return;
+        }
+        let Some(session) = self.sessions.new_reconnect_session(key.remote_port) else {
+            return;
+        };
+        let cookie = match key.addrs {
+            ConnAddrs::V4 { local, remote } => syn_cookie_ipv4(
+                remote,
+                u32::from(key.remote_port),
+                local,
+                u32::from(local_port),
+                self.seed,
+            ),
+            ConnAddrs::V6 { local, remote } => syn_cookie_ipv6(
+                remote,
+                u32::from(key.remote_port),
+                local,
+                u32::from(local_port),
+                self.seed,
+            ),
+        } as u32;
+        let _ = self.insert(key, cookie.wrapping_add(1), 0, 255, now, session);
     }
 
     /// Последний срок блока: `created + lifetime + 2 с`, тик сетки 2 с, на котором автомат даёт RST по сроку жизни.
@@ -177,6 +244,8 @@ impl Table {
             )
         };
         let ttl = conn.tcb.ttl;
+        let want_reconnect = conn.tcb.reconnect_pending;
+        conn.tcb.reconnect_pending = false;
         for set in flushed {
             out.banners.push(records(key, ttl, set));
         }
@@ -205,6 +274,9 @@ impl Table {
                     self.timers.insert((deadline, id), *key);
                 }
             }
+        }
+        if want_reconnect && r == TcbResult::Okay {
+            self.reconnect(key, at);
         }
         Some(r)
     }
@@ -277,6 +349,7 @@ impl Table {
             tcbs_live: u64::try_from(self.conns.len()).unwrap_or(u64::MAX),
             table_full: self.full,
             banner_bytes_dropped: self.budget.dropped(),
+            reconnect_no_port: self.no_port,
         }
     }
 
@@ -327,6 +400,41 @@ impl Table {
     pub(crate) fn keys(&self) -> Vec<ConnKey> {
         self.conns.keys().copied().collect()
     }
+}
+
+/// `_next_IP_port` (`src/stack-tcp-core.c:1603-1644`): следующий порт в диапазоне; обёртка порта двигает
+/// адрес. Диапазоны включительные; незаданный диапазон — только адрес и порт самого соединения. Порт `last`
+/// следующим не бывает (`>= last` оборачивает), у IPv6 сравнение строгое (`last < ip`), как у C.
+pub(crate) fn next_ip_port(key: &ConnKey, source: &SourceRanges) -> Option<(ConnAddrs, u16)> {
+    let (first, last) = if source.ports == (0, 0) {
+        (u32::from(key.local_port), u32::from(key.local_port))
+    } else {
+        (u32::from(source.ports.0), u32::from(source.ports.1))
+    };
+    let mut port = first + (u32::from(key.local_port).wrapping_sub(first) + 1);
+    let mut addrs = key.addrs;
+    if port >= last {
+        port = first;
+        addrs = match key.addrs {
+            ConnAddrs::V4 { local, remote } => {
+                let (f, l) = source.ipv4.unwrap_or((local, local));
+                let mut ip = f.wrapping_add(local.wrapping_sub(f).wrapping_add(1));
+                if ip >= l {
+                    ip = f;
+                }
+                ConnAddrs::V4 { local: ip, remote }
+            }
+            ConnAddrs::V6 { local, remote } => {
+                let (f, l) = source.ipv6.unwrap_or((local, local));
+                let mut ip = f.wrapping_add(local.wrapping_sub(f).wrapping_add(1));
+                if l < ip {
+                    ip = f;
+                }
+                ConnAddrs::V6 { local: ip, remote }
+            }
+        };
+    }
+    Some((addrs, u16::try_from(port).ok()?))
 }
 
 /// Записи одного `banner_flush` (`src/stack-tcp-core.c:810-823`): адрес и порт сервера, `ip_proto` 6, TTL SYN-ACK;

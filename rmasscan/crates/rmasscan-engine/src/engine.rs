@@ -44,7 +44,7 @@ use rmasscan_core::ndp::NDP_FRAME_LEN;
 use rmasscan_core::packet::LinkType;
 use rmasscan_core::probe::{NicBinding, PlanError, ProbeCursor, ReadyPlan};
 use rmasscan_core::receive::{PortStatus, Reply, arp_reply_for, ndp_reply_for, parse_reply};
-use rmasscan_core::stack::{StackOutput, StackStats, TableParams, TcpStack};
+use rmasscan_core::stack::{SourceRanges, StackOutput, StackStats, TableParams, TcpStack};
 use rmasscan_core::tcp_frame::{TcpFrameBuilder, stateless_rst, tcp_segment};
 use rmasscan_core::throttle::{Clock, SystemClock, Throttler};
 
@@ -1894,6 +1894,7 @@ impl Engine {
                         seed: plan.effective().seed(),
                         capacity: (o.table_capacity / count).max(1024),
                         banner_byte_budget: o.banner_byte_budget / count,
+                        source: SourceRanges::default(),
                     })
                 })
             })

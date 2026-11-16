@@ -216,6 +216,7 @@ impl HelloTable {
             next: Some(Arc::clone(&self.tls_next)),
             small_window: self.tls_small_window,
             is_tls: true,
+            sets_ssl_hello: true,
         }
     }
 
@@ -243,12 +244,27 @@ impl HelloTable {
         })
     }
 
+    /// Поток второго соединения: `banner_ssl_12` как зарегистрирован — hello TLS 1.3, без `SF__close` и без
+    /// своего `next` (`src/proto-ssl.c:1435-1440`).
+    pub(crate) fn reconnect_desc(&self) -> StreamDesc {
+        StreamDesc {
+            hello: Some(Arc::clone(&self.tls_next)),
+            close_after_hello: false,
+            next: None,
+            small_window: self.tls_small_window,
+            is_tls: true,
+            sets_ssl_hello: true,
+        }
+    }
+
     /// Поток порта: `--hello-string` заменяет в потоке порта только hello и его длину, флаги и `next`
     /// остаются от потока (`src/stack-tcp-core.c:595-616`, E3.5 справки TCP).
     pub(crate) fn stream(&self, port: u16) -> StreamDesc {
         let mut desc = self.base_stream(port);
         if let Some(h) = self.strings.get(&port) {
             desc.hello = Some(Arc::clone(h));
+            // Копия потока это не `banner_ssl`: кладж SendFirst по указателю её не узнаёт (справка §A1).
+            desc.sets_ssl_hello = false;
         }
         desc
     }

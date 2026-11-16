@@ -174,6 +174,7 @@ mod tests {
             seed: 0x1122_3344_5566_7788,
             capacity: 16,
             banner_byte_budget: budget,
+            source: rmasscan_core::stack::SourceRanges::default(),
         })
     }
 

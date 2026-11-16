@@ -83,7 +83,8 @@ use crate::banners_verify::{
 };
 use rmasscan_core::payloads::PayloadTable;
 use rmasscan_core::stack::{
-    ConnAddrs, ConnKey, SegmentIn, StackOutput, StackStats, TableParams, TcpStack, TcpStackFactory,
+    ConnAddrs, ConnKey, SegmentIn, SourceRanges, StackOutput, StackStats, TableParams, TcpStack,
+    TcpStackFactory,
 };
 use rmasscan_proto::{
     MAX_BANNER_BYTES, StreamAction, StreamResult, TcpBannerSettings, UdpContext, app_id,
@@ -2076,6 +2077,7 @@ fn holds_unsent(t: &Target, plan: &StackPlan, events: &[StackEvent], sent: u32) 
         seed: plan.table_seed,
         capacity: plan.capacity,
         banner_byte_budget: plan.budget,
+        source: SourceRanges::default(),
     });
     let mut last = T0;
     for e in events {
@@ -2372,6 +2374,7 @@ fn drive(t: &Target, plan: &StackPlan, log: &RefCell<Vec<StackEvent>>) -> Driven
         seed: plan.table_seed,
         capacity: plan.capacity,
         banner_byte_budget: plan.budget,
+        source: SourceRanges::default(),
     });
     let mut f = Feeder {
         plan,

@@ -165,5 +165,6 @@ impl StackSummary {
         t.banner_bytes_dropped = t
             .banner_bytes_dropped
             .saturating_add(s.banner_bytes_dropped);
+        t.reconnect_no_port = t.reconnect_no_port.saturating_add(s.reconnect_no_port);
     }
 }

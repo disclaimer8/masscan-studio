@@ -10,7 +10,9 @@ use crate::{
     link::{END_PAYLOAD, START_PAYLOAD},
     pcap,
 };
-use rmasscan_core::stack::{ConnAddrs, ConnKey, SegmentIn, SegmentOut, StackOutput, TableParams};
+use rmasscan_core::stack::{
+    ConnAddrs, ConnKey, SegmentIn, SegmentOut, SourceRanges, StackOutput, TableParams,
+};
 use std::{path::PathBuf, sync::OnceLock};
 
 const T0: f64 = 1_900_000_000.0;
@@ -348,6 +350,7 @@ fn simulate(c: &StandCase) -> (Frames, Vec<Line>) {
         seed: 1,
         capacity: 4096,
         banner_byte_budget: 1 << 29,
+        source: SourceRanges::default(),
     });
     let src = st.scanner_ip;
     let key_of = |port: u16, sport: u16| ConnKey {

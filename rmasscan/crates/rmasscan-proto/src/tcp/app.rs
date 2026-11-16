@@ -82,6 +82,9 @@ pub(crate) struct StreamDesc {
     pub next: Option<Arc<[u8]>>,
     pub small_window: bool,
     pub is_tls: bool,
+    /// Поток и есть `banner_ssl`/`banner_ssl_12`: его отправка ставит `is_sent_sslhello` (кладж по указателю,
+    /// `src/stack-tcp-app.c:157-163`); копия `--hello-string` на TLS-порту этого не делает.
+    pub sets_ssl_hello: bool,
 }
 
 impl StreamDesc {
@@ -114,6 +117,11 @@ pub(crate) trait Session: Send {
 /// Источник сессий таблицы (`banner1->payloads.tcp[port_them]` и классификатор).
 pub(crate) trait Sessions: Send + Sync {
     fn new_session(&self, remote_port: u16) -> Box<dyn Session>;
+    /// Сессия второго соединения (`stream->next`): `None`, если источник вторых сессий не даёт (заглушки тестов
+    /// без реконнекта); таблица тогда соединение не создаёт.
+    fn new_reconnect_session(&self, _remote_port: u16) -> Option<Box<dyn Session>> {
+        None
+    }
 }
 
 /// Состояние приложения, `enum App_*` (`src/stack-tcp-app.c:11-18`) без `App_SendFirst` (переход внутри одного
@@ -174,17 +182,33 @@ impl AppLayer<'_> {
         }
     }
 
-    /// `App_SendFirst` (`src/stack-tcp-app.c:154-195`): hello, если он не пустой, и `App_SendNext`. Подмены TLS и
-    /// heartbleed (`:157-171`) и `SF__close` (`:191-192`) это 4c. Поток с `SF__close` у C бывает и в 4b: `--hello-string`
-    /// на порту TLS (или при `--hello ssl`) копирует поток `banner_ssl` с флагом и `next` (`src/stack-tcp-core.c:595-616`),
-    /// и C шлёт FIN за hello и переподключается с TLS 1.2 (`:56-62`); здесь только hello, отличие 4b названо в README и
-    /// справке B6.
+    /// `App_SendFirst` (`src/stack-tcp-app.c:154-195`): кладжи TLS (`banner_set_sslhello` только настоящему
+    /// потоку `banner_ssl`, не копии `--hello-string`; малое окно heartbleed), hello, если он не пустой, FIN за
+    /// ним при `SF__close`, и `App_SendNext`.
     fn send_first(&mut self, ctl: &mut TcbCtl<'_>) {
-        if let Some(hello) = self.session.stream().hello.as_deref()
+        let (hello, close_after, small, sets_hello) = {
+            let d = self.session.stream();
+            (
+                d.hello.clone(),
+                d.close_after_hello,
+                d.small_window,
+                d.sets_ssl_hello,
+            )
+        };
+        if sets_hello {
+            self.session.note_tls_hello_sent();
+        }
+        if small {
+            ctl.set_small_window();
+        }
+        if let Some(hello) = hello.as_deref()
             && !hello.is_empty()
         {
             let buf = self.hellos.shared(self.remote_port, hello);
             ctl.send_shared(&buf);
+        }
+        if close_after {
+            ctl.close();
         }
         *self.state = AppState::SendNext;
     }
@@ -197,8 +221,12 @@ impl App for AppLayer<'_> {
         // Пары, которых нет в ветке, у C печатают `"TCP.app: unhandled event: state=%s event=%s\n"` и ничего не делают
         // (`_ => {}`); в `App_SendNext` так пропадает и нагрузка сервера (её подтвердил автомат, но не разобрал никто).
         match (*self.state, ev) {
-            // `:56-80`: `stream->next` (переподключение) и `SF__nowait_hello` это 4c, в 4b их нет.
+            // `:56-80`: сначала переподключение по `stream->next`, затем ожидание hello; `SF__nowait_hello` ни у
+            // одного перенесённого потока нет.
             (A::Connect, E::Connected) => {
+                if self.session.stream().next.is_some() {
+                    ctl.reconnect();
+                }
                 ctl.set_timeout(2);
                 ctl.recv();
                 *self.state = A::ReceiveHello;

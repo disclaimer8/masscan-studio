@@ -693,7 +693,9 @@ struct PeerConn {
 /// writes (C's IPv6 ttl stale). Time advances in 1 ms ticks; the stack is ticked every 10 ms.
 fn tcp_wire(c: &TcpCase, who: Who, t0: f64) -> (Frames, Vec<SimRec>, (usize, usize, usize)) {
     use rmasscan_core::{
-        stack::{ConnAddrs, ConnKey, SegmentIn, SegmentOut, StackOutput, TableParams},
+        stack::{
+            ConnAddrs, ConnKey, SegmentIn, SegmentOut, SourceRanges, StackOutput, TableParams,
+        },
         tcp_frame::TcpFrameBuilder,
     };
     let st = stand();
@@ -710,6 +712,7 @@ fn tcp_wire(c: &TcpCase, who: Who, t0: f64) -> (Frames, Vec<SimRec>, (usize, usi
             seed: 1,
             capacity: 4096,
             banner_byte_budget: 1 << 29,
+            source: SourceRanges::default(),
         })
     });
     let isn0: u32 = if who == Who::Oracle {

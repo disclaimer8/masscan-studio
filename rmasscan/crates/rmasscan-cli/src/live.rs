@@ -1735,6 +1735,7 @@ mod tests {
                 tcbs_live: 0,
                 table_full: 1,
                 banner_bytes_dropped: 65_536,
+                reconnect_no_port: 0,
             },
             frames_sent: 3,
             frames_dropped: 12,
@@ -1758,6 +1759,7 @@ mod tests {
         let bytes = StackSummary {
             stack: StackStats {
                 banner_bytes_dropped: 3,
+                reconnect_no_port: 0,
                 ..StackStats::default()
             },
             ..StackSummary::default()

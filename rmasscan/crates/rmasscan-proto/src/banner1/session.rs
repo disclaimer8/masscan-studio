@@ -300,6 +300,13 @@ impl Sessions for BannerConfig {
     fn new_session(&self, remote_port: u16) -> Box<dyn Session> {
         Box::new(self.session(remote_port))
     }
+
+    /// Сессия второго соединения: та же сессия порта, но поток заменён на `banner_ssl_12`.
+    fn new_reconnect_session(&self, remote_port: u16) -> Option<Box<dyn Session>> {
+        let mut s = self.session(remote_port);
+        s.stream_desc = Arc::new(self.scan.hellos.reconnect_desc());
+        Some(Box::new(s))
+    }
 }
 
 /// Окно классификатора: первые 65 536 байт потока (Р5, как предел записи HEUR, в которой они ждут). Шаблон, который

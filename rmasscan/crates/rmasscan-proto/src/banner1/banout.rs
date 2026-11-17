@@ -392,13 +392,24 @@ impl Banout {
     /// Узлы списка `(protocol, length C)`, голова первой.
     #[cfg(test)]
     pub(crate) fn nodes(&self) -> Vec<(u16, usize)> {
-        self.recs.iter().map(|r| (r.app, r.c_len)).collect()
+        let mut open = self.recs.iter();
+        let head = open.next();
+        let mut tail: Vec<_> = open.chain(&self.ended).collect();
+        tail.sort_unstable_by_key(|r| std::cmp::Reverse(r.order));
+        head.into_iter()
+            .chain(tail)
+            .map(|r| (r.app, r.c_len))
+            .collect()
     }
 
     /// Сохранённых байтов во всех записях.
     #[cfg(test)]
     pub(crate) fn held(&self) -> usize {
-        self.recs.iter().map(|r| r.bytes.len()).sum()
+        self.recs
+            .iter()
+            .chain(&self.ended)
+            .map(|r| r.bytes.len())
+            .sum()
     }
 }
 
@@ -767,6 +778,26 @@ mod tests {
                 (16, b"dHdv".to_vec()),
             ]
         );
+    }
+
+    #[test]
+    fn refused_repeated_records_retain_no_nodes_and_refund_every_reservation() {
+        for limit in [0, 3, 4, 127, 132, 136, 1024] {
+            let mut b = Banout::default();
+            let mut budget = ByteBudget::new(limit);
+            for _ in 0..10_000 {
+                b.append(&mut budget, app_id::X509_CACERT, b"YWJj");
+                b.end(app_id::X509_CACERT);
+            }
+            let nodes = b.nodes().len();
+            assert!(nodes <= 1 + limit / REPEATED_BANNER_RECORD_COST);
+            let bytes = b.held();
+            assert_eq!(budget.dropped(), 40_000 - bytes as u64);
+            let out = b.flush(&mut budget);
+            assert_eq!(out.iter().map(|r| r.1.len()).sum::<usize>(), bytes);
+            assert_eq!(budget.left(), limit);
+            assert!(b.nodes().is_empty());
+        }
     }
 
     /// Предел Р5 и бюджет таблицы действуют на base64 так же, как на обычный текст: запись режется с конца,

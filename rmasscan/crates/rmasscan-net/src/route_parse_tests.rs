@@ -2194,3 +2194,137 @@ fn if_type_constants_match_windows_sys() {
     assert_eq!(IF_TYPE_SOFTWARE_LOOPBACK, h::IF_TYPE_SOFTWARE_LOOPBACK);
     assert_eq!(IF_TYPE_IEEE80211, h::IF_TYPE_IEEE80211);
 }
+
+fn hex(b: &[u8]) -> String {
+    b.iter().map(|x| format!("{x:02x}")).collect()
+}
+
+/// Запросы netlink побайтно, как их строила база до слияния построителей IPv4/IPv6: `seq` 7 и `u32::MAX`, lookup и dump,
+/// оба семейства и dump адресов IPv6. Поля заголовка в родном порядке байт (тест для little-endian).
+#[cfg(target_endian = "little")]
+#[test]
+fn netlink_requests_are_byte_identical_to_base() {
+    let a4 = ip(198, 51, 100, 7);
+    let a6: std::net::Ipv6Addr = "2001:db8:9::1".parse().unwrap();
+    let cases: [(u32, [&str; 5]); 2] = [
+        (
+            7,
+            [
+                "240000001a000100070000000000000002200000000000000000000008000100c6336407",
+                "1c0000001a0001030700000000000000020000000000000000000000",
+                "300000001a00010007000000000000000a80000000000000000000001400010020010db8000900000000000000000001",
+                "1c0000001a00010307000000000000000a0000000000000000000000",
+                "180000001600010307000000000000000a00000000000000",
+            ],
+        ),
+        (
+            u32::MAX,
+            [
+                "240000001a000100ffffffff0000000002200000000000000000000008000100c6336407",
+                "1c0000001a000103ffffffff00000000020000000000000000000000",
+                "300000001a000100ffffffff000000000a80000000000000000000001400010020010db8000900000000000000000001",
+                "1c0000001a000103ffffffff000000000a0000000000000000000000",
+                "1800000016000103ffffffff000000000a00000000000000",
+            ],
+        ),
+    ];
+    for (seq, want) in cases {
+        let got = [
+            hex(&netlink_route_request(seq, Some(a4))),
+            hex(&netlink_route_request(seq, None)),
+            hex(&netlink_route_request6(seq, Some(a6))),
+            hex(&netlink_route_request6(seq, None)),
+            hex(&netlink_addr_request6(seq)),
+        ];
+        assert_eq!(got, want.map(String::from), "seq {seq}");
+    }
+}
+
+fn nl_malformed<T>(m: &str) -> Result<T, NlError> {
+    Err(NlError::Malformed(m.to_string()))
+}
+
+/// Какая из двух ошибок побеждает, как на базе: IPv4 проверяет атрибуты по ходу (короткое значение раньше неверного
+/// `rta_len`), IPv6 и адреса IPv6 сначала проверяют все атрибуты; тело сообщения разбирается до перехода к следующему,
+/// а длины всех заголовков датаграммы проверяются до любого тела.
+#[test]
+fn netlink_first_error_wins_as_on_base() {
+    // Короткий OIF (2 байта), затем атрибут с rta_len за границей тела.
+    let bad_len = [64u8, 0, 15, 0];
+    let attrs = [rtattr(RTA_OIF, &[1, 0]), bad_len.to_vec()];
+
+    let v4 = route_msg(RTN_UNICAST, 32, 254, &attrs);
+    assert_eq!(
+        parse_netlink_routes(&v4),
+        nl_malformed("short route attribute")
+    );
+
+    let mut b6 = vec![10u8, 128, 0, 0, 254, 3, 0, RTN_UNICAST];
+    b6.extend(0u32.to_ne_bytes());
+    b6.extend(attrs.iter().flatten());
+    let v6 = nlmsg(RTM_NEWROUTE, 0, 1, &b6);
+    assert_eq!(
+        parse_netlink_routes6(&v6),
+        nl_malformed("rta_len out of bounds")
+    );
+
+    // Адреса IPv6: как маршруты IPv6, сначала все атрибуты.
+    let mut ba = vec![10u8, 64, 0, 0];
+    ba.extend(2u32.to_ne_bytes());
+    ba.extend(rtattr(IFA_ADDRESS, &[1, 2]));
+    ba.extend(bad_len);
+    let addr = nlmsg(super::netlink::RTM_NEWADDR, 0, 1, &ba);
+    assert_eq!(
+        parse_netlink_addrs6(&addr),
+        nl_malformed("rta_len out of bounds")
+    );
+
+    // Искажённое тело перед NLMSG_ERROR: Malformed; NLMSG_ERROR перед искажённым телом: Kernel.
+    let bad_body = route_msg(RTN_UNICAST, 32, 254, &[bad_len.to_vec()]);
+    let mut body_first = bad_body.clone();
+    body_first.extend(error_msg(-101));
+    assert_eq!(
+        parse_netlink_routes(&body_first),
+        nl_malformed("rta_len out of bounds")
+    );
+    let mut error_first = error_msg(-101);
+    error_first.extend(bad_body);
+    assert_eq!(
+        parse_netlink_routes(&error_first),
+        Err(NlError::Kernel(101))
+    );
+
+    // То же для IPv6 и адресов IPv6.
+    let bad6 = nlmsg(RTM_NEWROUTE, 0, 1, &{
+        let mut b = vec![10u8, 128, 0, 0, 254, 3, 0, RTN_UNICAST];
+        b.extend(0u32.to_ne_bytes());
+        b.extend(bad_len);
+        b
+    });
+    let mut e6 = error_msg(-101);
+    e6.extend(bad6.clone());
+    assert_eq!(parse_netlink_routes6(&e6), Err(NlError::Kernel(101)));
+    let mut b6e = bad6;
+    b6e.extend(error_msg(-101));
+    assert_eq!(
+        parse_netlink_routes6(&b6e),
+        nl_malformed("rta_len out of bounds")
+    );
+    let mut ae = error_msg(-101);
+    ae.extend(addr.clone());
+    assert_eq!(parse_netlink_addrs6(&ae), Err(NlError::Kernel(101)));
+    let mut ea = addr;
+    ea.extend(error_msg(-101));
+    assert_eq!(
+        parse_netlink_addrs6(&ea),
+        nl_malformed("rta_len out of bounds")
+    );
+
+    // Заголовок за NLMSG_ERROR обрезан: границы всех заголовков проверяются до разбора тел, побеждает Malformed.
+    let mut cut = error_msg(-101);
+    cut.extend([0u8; 3]);
+    assert_eq!(
+        parse_netlink_routes(&cut),
+        nl_malformed("truncated nlmsghdr")
+    );
+}

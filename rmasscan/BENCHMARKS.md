@@ -121,18 +121,25 @@ reading compares the reviewer's C user time (92.26 s) with the Rust loop time
 
 ### Native-Rust phase 1, rmasscan-core
 
-Summary. On the oracle host (the N6005 bench host above), from the task 2 base
-(A dcacd335) to the task 12 head (B 47df646f): OFFLINE_GEN 2,820,742 -> 5,518,271 pps
-(x1.96) and OFFLINE_CURSOR 2,297,714 -> 4,816,459 pps (x2.10). The two ends come from
-different sessions (the task 2 row's `mA` and the task 12 row's `mB`), not from one
-paired run; a closing end-to-end A/B on the oracle host is planned and gets its own
-row. Kept as speed-ups (принято): tasks 3, 4, 5, 6a, 8, 10b and 10c (10c by the G-bench
-rule on the oracle host). Kept without a speed-up as idiom changes (нейтрально / без
+Summary. On the oracle host (the N6005 bench host above), one closing end-to-end A/B
+in a single session (the last row of the table: A dcacd335, the task 2 base, B 08954c24,
+the branch head before the closing docs commit; five ABBA pairs, the canonical gate, no
+CPU patch) gives OFFLINE_GEN 2,830,277 -> 5,536,934 pps (x1.96, pairs 1.938-1.975, 5 of 5)
+and OFFLINE_CURSOR 2,303,352 -> 4,838,099 pps (x2.10, pairs 2.088-2.130, 5 of 5), sinks
+equal. B includes tasks 13-17. The earlier cross-session end points, kept as a note, agree
+within 0.5 %: from the task 2 row's `mA` to the task 12 row's `mB` (B 47df646f),
+OFFLINE_GEN 2,820,742 -> 5,518,271 pps and OFFLINE_CURSOR 2,297,714 -> 4,816,459 pps.
+Kept as speed-ups (принято): tasks 3, 4, 5, 6a, 8, 10b and 10c (10c by the user's
+decision of 2026-11-17, taken after cross-CPU data: it gains on the oracle host, GEN x1.256
+and CURSOR x1.224, and loses 5-7 % on a Ryzen 9 7900X3D and on an Apple M Mac, because
+generation is the bottleneck on slow CPUs, while on fast CPUs it already runs at about
+13.7 M pps, far above what the network path takes, so the loss is not felt; see the note
+under the table). Kept without a speed-up as idiom changes (нейтрально / без
 регрессии): tasks 7, 9, 12 and 14. Reverted (отклонено / откат): tasks 6b and 10a.
 Task 14 ran on a second host (AMD Ryzen 9 7900X3D), so its row is not comparable with
 the others. Tasks 0-1 (safety net), 11, 13 and 15-17 have no bench row by plan (receive
 path, stack frames, IPv6 excludes and parsers, none of them in the probe generation
-loop). Tasks 13-17 come after 47df646f and are not in the two numbers above.
+loop). Tasks 13-17 come after 47df646f and are covered by the closing end-to-end row.
 
 Paired measurements on the bench host, one row per task (method above). `A` is the
 last accepted code commit, `B` the commit under test; load average is the lowest
@@ -154,6 +161,20 @@ cursor_mapped).
 | 9 (one-shot SipHash for cookies) | 6949f51a | bcd8efc8 | 4,391,825 / 4,376,236 | 0.996 (1.013, 0.990, 0.996, 1.003, 0.988; B faster in 2 of 5) | 3,844,402 / 3,851,174 | 1.002 (0.997, 1.001, 1.003, 1.005, 1.008; B faster in 4 of 5) | 0.24-1.32 (all uptime lines in the logs; each run waited for under 0.3 first) | equal (gen 34223905032, cursor 576472178750522997) | 27,022,100 / 20,523,304 / 17,226,727 / 9,859,111 pps (median of 9 runs per loop; cursor_16port, two cookies per probe, is 17,241,445 at task 8) | нейтрально — оставлено как идиома (без ускорения) |
 | 10a (transmit index reduced without a division when it is in range) | bcd8efc8 | 100f99ee | 4,390,271 / 4,440,158 | 1.011 (1.012, 0.997, 1.011, 1.020, 1.012; B faster in 4 of 5) | 3,870,266 / 3,883,636 | 1.003 (1.000, 1.009, 1.006, 0.989, 1.003; B faster in 3 of 5) | 0.23-1.37 (all uptime lines in the logs; each run waited for under 0.3 first) | equal (gen 34223905032, cursor 576472178750522997) | 27,298,454 / 20,554,680 / 17,250,456 / 10,004,821 pps (median of 9 runs per loop) | нет выигрыша, откат (`git revert`; GEN 1,011 при 4 из 5 пар ниже правила выигрыша, CURSOR 1,003; обе строки ≥ 0,97) |
 | 10b (single-port pick without a division) | bcd8efc8 | 3a42756f | 4,383,447 / 4,394,160 | 1.002 (1.005, 1.002, 1.052, 1.002, 0.986; B faster in 4 of 5) | 3,849,487 / 3,914,320 | 1.017 (1.005, 1.021, 1.026, 1.012, 1.015; B faster in 5 of 5) | 0.24-2.34 (all uptime lines in the logs; each run waited for under 0.3 first; 2.34 after a.3, whose OFFLINE_GEN 4,177,624 makes pair 3 1.052) | equal (gen 34223905032, cursor 576472178750522997) | 27,034,568 / 21,475,180 / 17,608,511 / 10,030,221 pps (median of 9 runs per loop) | принято (CURSOR: 5/5 пар и mB/mA ≥ 1,015; GEN без регрессии ≥ 0,97) |
-| 10c (invariant-divisor rounds in the batched shuffle) | 3a42756f | 443e5d06 | 4,384,112 / 5,506,611 | 1.256 (1.223, 1.290, 1.261, 1.221, 1.262; B faster in 5 of 5) | 3,922,279 / 4,800,735 | 1.224 (1.236, 1.272, 1.216, 1.220, 1.205; B faster in 5 of 5) | 0.23-1.78 (all uptime lines in the logs; each run waited for under 0.3 first) | equal (gen 34223905032, cursor 576472178750522997) | 24,987,538 / 20,786,400 / 17,248,712 / 9,885,834 pps (median of 9 runs per loop; slower than 10b on the Mac, whose hardware division is fast) | принято (обе строки: 5/5 пар и mB/mA ≥ 1,03) |
+| 10c (invariant-divisor rounds in the batched shuffle) | 3a42756f | 443e5d06 | 4,384,112 / 5,506,611 | 1.256 (1.223, 1.290, 1.261, 1.221, 1.262; B faster in 5 of 5) | 3,922,279 / 4,800,735 | 1.224 (1.236, 1.272, 1.216, 1.220, 1.205; B faster in 5 of 5) | 0.23-1.78 (all uptime lines in the logs; each run waited for under 0.3 first) | equal (gen 34223905032, cursor 576472178750522997) | 24,987,538 / 20,786,400 / 17,248,712 / 9,885,834 pps (median of 9 runs per loop; slower than 10b on the Mac, whose hardware division is fast) | принято (обе строки: 5/5 пар и mB/mA ≥ 1,03). Решение пользователя 2026-11-17: 10c оставить, данные по трём CPU в заметке под таблицей |
 | 12 (`Builder::fill` classifies the port index once) | e4c8c4b1 (code-identical to the pin-test commit 03b6726b) | 47df646f | 5,478,627 / 5,518,271 | 1.007 (0.978, 1.009, 1.005, 1.007, 1.035; B faster in 4 of 5) | 4,781,467 / 4,816,459 | 1.007 (1.000, 1.015, 1.001, 1.012, 0.995; B faster in 4 of 5) | 0.16-1.52 (all uptime lines in the logs; before runs 0.16-0.42) | equal (gen 34223905032, cursor 576472178750522997) | 24,807,138 / 20,814,875 / 17,263,334 / 9,973,853 pps (median of 9 runs per loop) | без регрессии (обе строки ≥ 0,97, sinks равны; ниже правила выигрыша 1,015/1,03) — оставлено как идиома |
 | 14 (partition_point not introduced; typed throttle state, Display wrappers, Builder without a payload table) | 89bab932 (code-identical to the pin-test commit 527ff2a6) | 0dc27a34 | 13,743,061 / 13,721,955 | 0.998 (1.001, 0.998, 0.999, 0.999, 0.998; B faster in 1 of 5) | 11,718,826 / 11,785,679 | 1.006 (1.007, 1.002, 0.989, 1.005, 1.003; B faster in 4 of 5) | 1.17-1.91 (all uptime lines in the logs; quiet window LOAD_MAX=1.5, not 0.3) | equal (gen 34223905032, cursor 576472178750522997) | 24,624,853 / 20,795,821 / 17,167,446 / 9,828,545 pps (median of 9 runs per loop) | без регрессии (обе строки ≥ 0,97, sinks равны; ниже правила выигрыша) — оставлено как идиомы. Хост замера другой: bench host with an AMD Ryzen 9 7900X3D, `taskset -c 3`, the lab VM keeps the one-minute load near 1.1; the oracle-CPU gate in `tests/offline_gen.rs` (`) && ours != want` made `&& false`) is disabled identically in both bench copies (sha256 equal) and guards only the 80 % oracle ratio; the printed oracle ratio means nothing here. Rows above are from the earlier bench host: not comparable with this row. Two earlier attempts (cancelled on the first host, stopped by the CPU gate on this one) are not used |
+| closing end-to-end (task 2 base against the branch head) | dcacd335 | 08954c24 | 2,830,277 / 5,536,934 | 1.956 (1.938, 1.973, 1.953, 1.975, 1.956; B faster in 5 of 5) | 2,303,352 / 4,838,099 | 2.100 (2.102, 2.097, 2.092, 2.130, 2.088; B faster in 5 of 5) | 0.25-1.55 (all uptime lines in the logs; each run waited for under 0.3 first) | equal (gen 34223905032, cursor 576472178750522997) | not measured | запись итога, ничего не решает: одна сессия, пять пар ABBA, канонический bench-gate без патча CPU-ворот, `taskset -c 3`; `tests/offline_gen.rs` и `tests/common/offline_gen.rs` у A и B одинаковы (`git diff dcacd335 08954c24` по этим двум файлам пуст) |
+
+Task 10c, the user's decision (2026-11-17): keep it. The rounds with an invariant divisor
+(InvariantDiv) were measured on three CPUs:
+
+| CPU | OFFLINE_GEN | OFFLINE_CURSOR | source |
+|-----|-------------|----------------|--------|
+| Pentium Silver N6005 (oracle host) | x1.256 | x1.224 | the 10c row above, 5 of 5 pairs |
+| AMD Ryzen 9 7900X3D, `taskset -c 3` | x0.927 (pairs 0.925-0.931; B faster in 0 of 5) | x0.951 (pairs 0.936-0.954; B faster in 0 of 5) | A 3a42756f, B 443e5d06, five ABBA pairs, sinks equal; quiet window one-minute load below 1.5 (load lines 1.21-2.22); the same one-line oracle-CPU-gate patch in both bench copies, as in the task 14 row |
+| Apple M (arm64 Mac) | -7.6 % | -1.4 ... -3.2 % | the Mac medians in the 10c row (nine `cargo bench` runs per loop) |
+
+The reason: on slow CPUs generation is the bottleneck, and there the gain is real. On fast CPUs
+generation already runs at about 13.7 M pps (Ryzen, B 13,734,417), far above what the network
+path takes, so the loss of 5-7 % is not felt.

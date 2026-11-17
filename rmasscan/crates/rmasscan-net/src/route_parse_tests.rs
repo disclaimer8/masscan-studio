@@ -450,6 +450,8 @@ mod observation {
     use super::*;
     use crate::NetError;
     use crate::network_plan::Ipv4Prefix;
+    // The Darwin section of this file declares its own `RTM_NEWADDR` (u8); rtnetlink's is meant here.
+    use crate::route_parse::RTM_NEWADDR;
 
     fn message(kind: u16, flags: u16, seq: u32, body: &[u8]) -> Vec<u8> {
         let mut out = Vec::new();

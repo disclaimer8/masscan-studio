@@ -56,11 +56,16 @@ mod bytes {
 /// Linux rtnetlink: `nlmsghdr` + `rtmsg` + `rtattr` (linux/netlink.h, linux/rtnetlink.h).
 #[cfg(any(target_os = "linux", test))]
 mod netlink {
+    use std::collections::BTreeMap;
+    use std::ffi::CStr;
     use std::net::{Ipv4Addr, Ipv6Addr};
 
     use super::AF_INET;
     use super::bytes::{i32_at, ipv4_at, ipv6_at, u16_at, u32_at};
-    use crate::discover::{Route, RouteV6};
+    use crate::NetError;
+    use crate::adapter_common::errno_msg;
+    use crate::discover::{Iface, Route, RouteV6};
+    use crate::network_plan::{InterfaceObservation, Ipv4Prefix};
 
     /// `sizeof(struct nlmsghdr)`.
     pub(crate) const NLMSG_HDRLEN: usize = 16;
@@ -516,7 +521,7 @@ mod netlink {
     pub(crate) const IFA_LOCAL: u16 = 2;
     pub(crate) const IFA_FLAGS: u16 = 8;
     /// `sizeof(struct ifaddrmsg)`.
-    const IFADDRMSG_LEN: usize = 8;
+    pub(crate) const IFADDRMSG_LEN: usize = 8;
 
     /// Ответ lookup IPv6 → [`RouteV6`] (правила [`route_target`]); `RTA_PREFSRC` становится `source`.
     pub(crate) fn route6_from_nl(
@@ -592,6 +597,288 @@ mod netlink {
             .collect();
         v.sort_by_key(|a| a.flags.contains(IFA_F_DEPRECATED));
         v.into_iter().map(|a| a.addr).collect()
+    }
+
+    // ------------------------------------------------------------------------------------- наблюдение (`observation_*`)
+    //
+    // Разбор неблокирующего наблюдения интерфейсов и маршрута (`linux::route::observation`; повторы, дедлайн, сокет и
+    // предел ответа остаются там). Обходчики сообщений и атрибутов свои, не `split_messages`/`NlAttrs`: у них другие
+    // тексты ошибок (`netlink observation: malformed …`). Общие с разбором маршрутов модуль, константы и чтения полей
+    // (`bytes::*`).
+
+    pub(crate) const RTM_NEWLINK: u16 = 16;
+    pub(crate) const RTM_GETLINK: u16 = 18;
+    /// `nlmsg_flags`: dump прерван изменением таблицы ядра.
+    pub(crate) const NLM_F_DUMP_INTR: u16 = 0x10;
+    /// `ifi_type` Ethernet.
+    pub(crate) const ARPHRD_ETHER: u16 = 1;
+    /// `ifi_flags`: интерфейс поднят.
+    pub(crate) const IFF_UP: u32 = 1;
+    /// `AF_UNSPEC` как байт семейства `ifinfomsg`.
+    pub(crate) const AF_UNSPEC: u8 = 0;
+    pub(crate) const IFLA_ADDRESS: u16 = 1;
+    pub(crate) const IFLA_IFNAME: u16 = 3;
+    /// Смещения полей `struct nlmsghdr`.
+    pub(crate) const OFF_NLMSG_LEN: usize = 0;
+    pub(crate) const OFF_NLMSG_TYPE: usize = 4;
+    pub(crate) const OFF_NLMSG_FLAGS: usize = 6;
+    pub(crate) const OFF_NLMSG_SEQ: usize = 8;
+    /// `sizeof(struct ifinfomsg)` и смещения его полей.
+    pub(crate) const IFINFOMSG_LEN: usize = 16;
+    pub(crate) const OFF_IFI_FAMILY: usize = 0;
+    pub(crate) const OFF_IFI_TYPE: usize = 2;
+    pub(crate) const OFF_IFI_INDEX: usize = 4;
+    pub(crate) const OFF_IFI_FLAGS: usize = 8;
+    /// Смещения полей `struct ifaddrmsg` (длина [`IFADDRMSG_LEN`]).
+    pub(crate) const OFF_IFA_FAMILY: usize = 0;
+    pub(crate) const OFF_IFA_PREFIXLEN: usize = 1;
+    pub(crate) const OFF_IFA_INDEX: usize = 4;
+
+    /// `netlink observation: malformed {message}`.
+    pub(crate) fn observation_malformed(message: &str) -> NetError {
+        NetError::System(format!("netlink observation: malformed {message}"))
+    }
+
+    fn observation_u16(bytes: &[u8], at: usize) -> Result<u16, NetError> {
+        u16_at(bytes, at).ok_or_else(|| observation_malformed("u16"))
+    }
+
+    fn observation_u32(bytes: &[u8], at: usize) -> Result<u32, NetError> {
+        u32_at(bytes, at).ok_or_else(|| observation_malformed("u32"))
+    }
+
+    /// Ошибка ядра `e` (положительный errno) операции `op`: текст errno по таблице ОС.
+    fn observation_sys(op: &str, e: i32) -> NetError {
+        NetError::System(errno_msg(op, e))
+    }
+
+    /// Dump `RTM_GETLINK` (`ifinfomsg`, `AF_UNSPEC`) или `RTM_GETADDR` (`ifaddrmsg`, `AF_INET`) с флагами
+    /// `NLM_F_REQUEST | NLM_F_DUMP`.
+    pub(crate) fn observation_dump_request(kind: u16, seq: u32) -> Vec<u8> {
+        // ifinfomsg is 16 bytes, ifaddrmsg 8 bytes; family is the first field of both.
+        let (payload_len, family_at) = if kind == RTM_GETLINK {
+            (IFINFOMSG_LEN, OFF_IFI_FAMILY)
+        } else {
+            (IFADDRMSG_LEN, OFF_IFA_FAMILY)
+        };
+        let mut payload = vec![0; payload_len];
+        payload[family_at] = if kind == RTM_GETADDR {
+            AF_INET
+        } else {
+            AF_UNSPEC
+        };
+        nl_message(kind, NLM_F_REQUEST | NLM_F_DUMP, seq, &payload)
+    }
+
+    /// Messages for this request only, validated before any are consumed. A fresh
+    /// socket is also used for each query, but sequence matching remains mandatory.
+    pub(crate) fn observation_messages(bytes: &[u8], seq: u32) -> Result<Vec<&[u8]>, NetError> {
+        let mut out = Vec::new();
+        let mut offset = 0;
+        while offset < bytes.len() {
+            let rest = &bytes[offset..];
+            if rest.len() < NLMSG_HDRLEN {
+                return Err(observation_malformed("netlink header"));
+            }
+            let len = usize::try_from(observation_u32(rest, OFF_NLMSG_LEN)?).unwrap_or(usize::MAX);
+            if len < NLMSG_HDRLEN || len > rest.len() {
+                return Err(observation_malformed("netlink length"));
+            }
+            if observation_u32(rest, OFF_NLMSG_SEQ)? == seq {
+                out.push(&rest[..len]);
+            }
+            // A final message need not carry padding beyond its declared length.
+            offset += align4(len).min(rest.len());
+        }
+        Ok(out)
+    }
+
+    /// Завершает ли сообщение ответа (одно из [`observation_messages`]) запрос: `NLMSG_DONE` (ненулевой код в нём это
+    /// ошибка `netlink dump`), `NLMSG_ERROR` с ненулевым кодом, у не-dump первое сообщение данных. Прерванный dump это
+    /// ошибка.
+    pub(crate) fn observation_message_ends(message: &[u8], dump: bool) -> Result<bool, NetError> {
+        if observation_u16(message, OFF_NLMSG_FLAGS)? & NLM_F_DUMP_INTR != 0 {
+            return Err(NetError::System(
+                "netlink observation: interrupted dump".into(),
+            ));
+        }
+        let kind = observation_u16(message, OFF_NLMSG_TYPE)?;
+        let mut complete = false;
+        if kind == NLMSG_DONE {
+            if message.len() > NLMSG_HDRLEN {
+                let error = observation_u32(message, NLMSG_HDRLEN)?.cast_signed();
+                if error != 0 {
+                    return Err(observation_sys("netlink dump", error.saturating_neg()));
+                }
+            }
+            complete = true;
+        }
+        if kind == NLMSG_ERROR {
+            // An ACK (zero) does not finish a dump or a route lookup.
+            complete |= observation_u32(message, NLMSG_HDRLEN)? != 0;
+        } else if kind >= RTM_NEWLINK && !dump {
+            complete = true;
+        }
+        Ok(complete)
+    }
+
+    fn observation_attributes(mut bytes: &[u8]) -> Result<Vec<(u16, &[u8])>, NetError> {
+        let mut out = Vec::new();
+        while !bytes.is_empty() {
+            let len = usize::from(observation_u16(bytes, 0)?);
+            if len < RTA_HDRLEN || len > bytes.len() {
+                return Err(observation_malformed("attribute length"));
+            }
+            out.push((
+                observation_u16(bytes, 2)? & NLA_TYPE_MASK,
+                &bytes[RTA_HDRLEN..len],
+            ));
+            bytes = &bytes[align4(len).min(bytes.len())..];
+        }
+        Ok(out)
+    }
+
+    fn check_kernel_error(message: &[u8]) -> Result<(), NetError> {
+        if observation_u16(message, OFF_NLMSG_TYPE)? == NLMSG_ERROR {
+            let error = observation_u32(message, NLMSG_HDRLEN)?.cast_signed();
+            if error != 0 {
+                return Err(observation_sys(
+                    "netlink interface dump",
+                    error.saturating_neg(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Интерфейсы из ответов dump `RTM_GETLINK` (`links`, запрос `link_seq`) и `RTM_GETADDR` (`addrs`, `addr_seq`): по
+    /// индексу, с префиксами IPv4 всех адресов (`IFA_LOCAL`, иначе `IFA_ADDRESS`).
+    pub(crate) fn observations(
+        links: &[u8],
+        link_seq: u32,
+        addrs: &[u8],
+        addr_seq: u32,
+    ) -> Result<Vec<InterfaceObservation>, NetError> {
+        let mut interfaces = BTreeMap::new();
+        for message in observation_messages(links, link_seq)? {
+            check_kernel_error(message)?;
+            if observation_u16(message, OFF_NLMSG_TYPE)? != RTM_NEWLINK {
+                continue;
+            }
+            let body = &message[NLMSG_HDRLEN..];
+            if body.len() < IFINFOMSG_LEN {
+                return Err(observation_malformed("ifinfomsg"));
+            }
+            let index = observation_u32(body, OFF_IFI_INDEX)?;
+            if index == 0 || index > i32::MAX.cast_unsigned() {
+                return Err(observation_malformed("interface index"));
+            }
+            let ethernet = observation_u16(body, OFF_IFI_TYPE)? == ARPHRD_ETHER;
+            let mut name = None;
+            let mut mac = None;
+            for (kind, value) in observation_attributes(&body[IFINFOMSG_LEN..])? {
+                match kind {
+                    IFLA_ADDRESS if ethernet && value.len() == 6 => mac = value.try_into().ok(),
+                    IFLA_IFNAME => {
+                        let value = CStr::from_bytes_with_nul(value)
+                            .map_err(|_| observation_malformed("interface name"))?;
+                        if value.to_bytes().is_empty() {
+                            return Err(observation_malformed("empty interface name"));
+                        }
+                        name = Some(value.to_string_lossy().into_owned());
+                    }
+                    _ => {}
+                }
+            }
+            let name = name.ok_or_else(|| observation_malformed("missing interface name"))?;
+            interfaces.insert(
+                index,
+                InterfaceObservation {
+                    iface: Iface {
+                        device_id: name.clone(),
+                        name,
+                        index,
+                        description: None,
+                        mac,
+                        mac_masked: false,
+                        ethernet,
+                        up: observation_u32(body, OFF_IFI_FLAGS)? & IFF_UP != 0,
+                        ipv4: Vec::new(),
+                    },
+                    ipv4_prefixes: Vec::new(),
+                },
+            );
+        }
+        for message in observation_messages(addrs, addr_seq)? {
+            check_kernel_error(message)?;
+            if observation_u16(message, OFF_NLMSG_TYPE)? != RTM_NEWADDR {
+                continue;
+            }
+            let body = &message[NLMSG_HDRLEN..];
+            if body.len() < IFADDRMSG_LEN {
+                return Err(observation_malformed("ifaddrmsg"));
+            }
+            if body[OFF_IFA_FAMILY] != AF_INET {
+                continue;
+            }
+            let length = body[OFF_IFA_PREFIXLEN];
+            if length > 32 {
+                return Err(observation_malformed("IPv4 prefix length"));
+            }
+            let index = observation_u32(body, OFF_IFA_INDEX)?;
+            let mut address = None;
+            let mut local = None;
+            for (kind, value) in observation_attributes(&body[IFADDRMSG_LEN..])? {
+                if matches!(kind, IFA_ADDRESS | IFA_LOCAL) {
+                    let bytes: [u8; 4] = value
+                        .try_into()
+                        .map_err(|_| observation_malformed("IPv4 address"))?;
+                    if kind == IFA_LOCAL {
+                        local = Some(Ipv4Addr::from(bytes));
+                    } else {
+                        address = Some(Ipv4Addr::from(bytes));
+                    }
+                }
+            }
+            // IFA_ADDRESS is the peer on point-to-point interfaces; IFA_LOCAL is ours.
+            if let Some(address) = local.or(address) {
+                let interface = interfaces.get_mut(&index).ok_or_else(|| {
+                    NetError::System("interfaces changed during network observation".into())
+                })?;
+                interface.iface.ipv4.push(address);
+                interface.ipv4_prefixes.push(Ipv4Prefix { address, length });
+            }
+        }
+        for interface in interfaces.values_mut() {
+            interface.iface.ipv4.sort_unstable();
+            interface.iface.ipv4.dedup();
+            interface.ipv4_prefixes.sort_unstable();
+            interface.ipv4_prefixes.dedup();
+        }
+        Ok(interfaces.into_values().collect())
+    }
+
+    /// Ответ lookup наблюдения: `NLMSG_ERROR`, который `no_route` признаёт отсутствием маршрута, это `None`; маршрут
+    /// принимается только `RTN_UNICAST` или `RTN_LOCAL` (правила [`route_from_nl`]), прочие виды это `None`.
+    pub(crate) fn observation_route_reply(
+        bytes: &[u8],
+        no_route: impl Fn(i32) -> bool,
+        ifname: impl FnOnce(u32) -> String,
+    ) -> Result<Option<Route>, NetError> {
+        let routes = match parse_netlink_routes(bytes) {
+            Ok(routes) => routes,
+            Err(NlError::Kernel(e)) if no_route(e) => return Ok(None),
+            Err(e) => return Err(NetError::System(e.to_string())),
+        };
+        let route = routes
+            .first()
+            .ok_or_else(|| observation_malformed("route reply with no route"))?;
+        // Prefix endpoints do not identify custom broadcasts or other kernel route
+        // kinds. Physical preparation admits only unicast or a recognised own address.
+        if !matches!(route.kind, RTN_UNICAST | RTN_LOCAL) {
+            return Ok(None);
+        }
+        Ok(route_from_nl(route, ifname))
     }
 }
 

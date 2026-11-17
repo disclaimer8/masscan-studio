@@ -718,6 +718,45 @@ mod tests {
         );
     }
 
+    /// The base `TransmitIndices::next` verbatim (one `x %= range`): the reference for the reduction in `next`.
+    fn base_next(t: &mut TransmitIndices) -> Option<(u64, u64)> {
+        if t.i >= t.end {
+            return None;
+        }
+        let cur = t.i;
+        let mut x = t.i.wrapping_add(u64::from(t.r).wrapping_mul(t.rate));
+        t.r = t.r.wrapping_sub(1);
+        x %= t.range;
+        if t.r == 0 {
+            t.i = t.i.wrapping_add(t.increment);
+            t.r = t.retries.wrapping_add(1);
+        }
+        Some((cur, x))
+    }
+
+    /// main.c:328: `r * rate` wraps past 2^64 (rate 1.8e19, r up to 3), so every unreduced `xXx` is far above
+    /// `2 * range` and the reduction takes its general branch. The stream equals the base `next` pair by pair.
+    #[test]
+    fn transmit_stream_with_wrapping_rate_term() {
+        let (range, retries, rate) = (40u64, 2u32, 1.8e19);
+        let rate_u = rate as u64;
+        assert!(rate_u.checked_mul(u64::from(retries) + 1).is_none());
+        let mut base = transmit_indices(range, ONE, 1, 0, 0, None, retries, rate);
+        let mut want = Vec::new();
+        while base.i < base.end {
+            let raw = base
+                .i
+                .wrapping_add(u64::from(base.r).wrapping_mul(base.rate));
+            assert!(raw >= 2 * range, "i {} r {}: raw {raw}", base.i, base.r);
+            want.push(base_next(&mut base).unwrap());
+        }
+        assert_eq!(base_next(&mut base), None);
+        assert_eq!(want.len(), 360); // end = range + retries * range = 120 indices, 3 sends each
+        let got: Vec<(u64, u64)> =
+            transmit_index_stream(range, ONE, 1, 0, 0, None, retries, rate).collect();
+        assert_eq!(got, want);
+    }
+
     #[test]
     fn list_scan_indices_retries_use_max_rate_not_range() {
         let n = list_scan_indices(10, ONE, 0, None, 2, 5.0).count();

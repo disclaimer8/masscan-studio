@@ -103,13 +103,19 @@ impl Range6List {
     /// добавляется в конец; список после этого считается неотсортированным
     /// (кроме первого элемента). Отличие от C: устаревший `picker` сбрасывается.
     pub fn add(&mut self, begin: u128, end: u128) {
-        let range = Ipv6Range { begin, end };
         self.picker = None;
-        let Some(last) = self.list.last_mut() else {
+        self.add_after(self.list.len().checked_sub(1), Ipv6Range { begin, end });
+    }
+
+    /// Тело [`Range6List::add`] относительно последнего живого элемента `last` (`None` — живых нет): при
+    /// уплотнении в `remove_range` это не обязательно последний элемент буфера.
+    fn add_after(&mut self, last: Option<usize>, range: Ipv6Range) {
+        let Some(last) = last else {
             self.list.push(range);
             self.is_sorted = true;
             return;
         };
+        let last = &mut self.list[last];
         if is_overlap(*last, range) {
             // :250-257 `range6_combine`
             if range.begin <= last.begin {
@@ -218,47 +224,66 @@ impl Range6List {
     /// заканчивается на `ffff:...:ffff` внутри цели (`PLUS_ONE(MAX)` = 0
     /// воссоздаёт `[0, MAX]`); проверено запуском C. Здесь в этих двух
     /// случаях пустая половина не создаётся.
+    ///
+    /// Один проход с уплотнением на месте вместо `Vec::remove(i)`: `list[..w]` — просмотренные живые диапазоны,
+    /// `list[r]` — текущий (индекс `i` в C равен `w`), `list[r + 1..]` — непросмотренные, `list[w..r]` — мёртвые
+    /// слоты. Живой список (`list[..w]`, затем `list[r..]`) на каждом шаге тот же, что у C: удаление — `r += 1`,
+    /// повторный просмотр того же индекса — итерация без сдвига.
     fn remove_range(&mut self, begin: u128, end: u128) {
         let x = Ipv6Range { begin, end };
         self.picker = None;
-        let mut i = 0usize;
-        while i < self.list.len() {
-            let cur = self.list[i];
-            if !is_overlap(cur, x) {
-                i += 1;
-                continue;
-            }
-            // Исключение целиком накрывает диапазон: удалить (:395-401).
-            if begin <= cur.begin && cur.end <= end {
-                self.list.remove(i);
-                continue;
-            }
-            // Исключение делит диапазон: усечь нижнюю часть, добавить верхнюю
-            // (:405-420). C затем повторно просматривает тот же индекс.
-            if cur.begin <= begin && end <= cur.end {
-                // Порядок как в C (:411-416): сначала усечение, потом добавление,
-                // иначе новый диапазон слился бы с самой целью.
-                if begin == 0 {
-                    self.list.remove(i);
-                } else {
-                    self.list[i].end = begin - 1;
+        let (mut w, mut r) = (0usize, 0usize);
+        while r < self.list.len() {
+            let mut cur = self.list[r];
+            if is_overlap(cur, x) {
+                // Исключение целиком накрывает диапазон: удалить (:395-401).
+                if begin <= cur.begin && cur.end <= end {
+                    r += 1;
+                    continue;
                 }
-                if end != u128::MAX {
-                    self.add(end.wrapping_add(1), cur.end);
+                // Исключение делит диапазон: усечь нижнюю часть, добавить верхнюю
+                // (:405-420). C затем повторно просматривает тот же индекс.
+                if cur.begin <= begin && end <= cur.end {
+                    // Порядок как в C (:411-416): сначала усечение, потом добавление,
+                    // иначе новый диапазон слился бы с самой целью.
+                    if begin == 0 {
+                        r += 1;
+                    } else {
+                        self.list[r].end = begin - 1;
+                    }
+                    if end != u128::MAX {
+                        // `add` к последнему ЖИВОМУ элементу: хвост `list[r..]`, если он есть, иначе `list[w - 1]`
+                        // (не мёртвый слот в конце буфера). Добавленная в конец половина просматривается тем же
+                        // проходом, как в C.
+                        let last = if r < self.list.len() {
+                            Some(self.list.len() - 1)
+                        } else {
+                            w.checked_sub(1)
+                        };
+                        self.add_after(
+                            last,
+                            Ipv6Range {
+                                begin: end.wrapping_add(1),
+                                end: cur.end,
+                            },
+                        );
+                    }
+                    continue;
                 }
-                continue;
+                // Пересечение снизу (:423-425) и сверху (:428-430); второе
+                // условие читает уже обновлённый `begin` цели.
+                if cur.begin <= end && end <= cur.end {
+                    cur.begin = end.wrapping_add(1);
+                }
+                if cur.begin <= begin && begin <= cur.end {
+                    cur.end = begin.wrapping_sub(1);
+                }
             }
-            // Пересечение снизу (:423-425) и сверху (:428-430); второе
-            // условие читает уже обновлённый `begin` цели.
-            if cur.begin <= end && end <= cur.end {
-                self.list[i].begin = end.wrapping_add(1);
-            }
-            let cur = self.list[i];
-            if cur.begin <= begin && begin <= cur.end {
-                self.list[i].end = begin.wrapping_sub(1);
-            }
-            i += 1;
+            self.list[w] = cur;
+            w += 1;
+            r += 1;
         }
+        self.list.truncate(w);
     }
 
     /// massip-rangesv6.c:447-472 `range6list_exclude`: удаляет каждый

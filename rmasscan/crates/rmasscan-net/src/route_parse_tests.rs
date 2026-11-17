@@ -255,7 +255,7 @@ fn netlink_local_and_unreachable_kinds_are_kept() {
             route_from_nl(r, |_| "x".into()),
             None,
             "kind {} / oif {:?}",
-            r.kind,
+            r.kind.0,
             r.oif
         );
     }

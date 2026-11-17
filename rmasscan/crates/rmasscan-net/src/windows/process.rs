@@ -4,10 +4,9 @@
 //! функции. Всё, что измерить не удалось, это `None`, не 0.
 
 use std::mem::size_of;
+use std::os::windows::io::{AsRawHandle, FromRawHandle, HandleOrInvalid, OwnedHandle};
 
-use windows_sys::Win32::Foundation::{
-    CloseHandle, FILETIME, GetLastError, HANDLE, INVALID_HANDLE_VALUE, SetLastError,
-};
+use windows_sys::Win32::Foundation::{FILETIME, GetLastError, HANDLE, SetLastError};
 use windows_sys::Win32::Security::{
     GetTokenInformation, IsTokenRestricted, TOKEN_ELEVATION, TOKEN_QUERY, TokenElevation,
 };
@@ -54,37 +53,47 @@ fn ft_ms(f: &FILETIME) -> u64 {
     ((u64::from(f.dwHighDateTime) << 32) | u64::from(f.dwLowDateTime)) / 10_000
 }
 
-/// Число потоков процесса по снимку Toolhelp. Снимок может разойтись с
-/// действительностью на потоки, которые рождаются или завершаются в этот момент
-/// (та же гонка, что у `/proc/self/task` на Linux).
+/// Снимок потоков Toolhelp во владении (`CloseHandle` в `Drop`, ровно один раз); `None`, если снимок не создан
+/// (`INVALID_HANDLE_VALUE`).
+fn thread_snapshot() -> Option<OwnedHandle> {
+    // SAFETY: вызов без указателей.
+    let raw = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0) };
+    // SAFETY: `raw` это результат CreateToolhelp32Snapshot: при сбое INVALID_HANDLE_VALUE (`try_from` отвергает его,
+    // ничего не закрывая), иначе новый handle снимка, которым больше никто не владеет.
+    OwnedHandle::try_from(unsafe { HandleOrInvalid::from_raw_handle(raw) }).ok()
+}
+
+/// Идентификаторы потоков процесса `me` в снимке `snap`, в порядке снимка: `Thread32First`, затем `Thread32Next` до
+/// первого FALSE.
+fn snapshot_thread_ids(snap: &OwnedHandle, me: u32) -> impl Iterator<Item = u64> {
+    let mut e = THREADENTRY32 {
+        dwSize: THREADENTRY32_SIZE,
+        ..Default::default()
+    };
+    let mut first = true;
+    std::iter::from_fn(move || {
+        let h = snap.as_raw_handle();
+        // SAFETY: h это живой снимок потоков (`snap` заимствован итератором), e имеет верный dwSize.
+        let ok = unsafe {
+            if first {
+                Thread32First(h, &mut e)
+            } else {
+                Thread32Next(h, &mut e)
+            }
+        };
+        first = false;
+        (ok != 0).then_some(e)
+    })
+    .filter(move |e| e.th32OwnerProcessID == me)
+    .map(|e| u64::from(e.th32ThreadID))
+}
+
+/// Число потоков процесса по одному снимку Toolhelp ([`thread_ids`]; `None` там же, где у него). Снимок может
+/// разойтись с действительностью на потоки, которые рождаются или завершаются в этот момент (та же гонка, что у
+/// `/proc/self/task` на Linux).
 fn thread_count() -> Option<u64> {
-    // SAFETY: вызов без указателей; результат проверяется на INVALID_HANDLE_VALUE.
-    let snap = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0) };
-    if snap == INVALID_HANDLE_VALUE {
-        return None;
-    }
-    // SAFETY: GetCurrentProcessId без предусловий.
-    let me = unsafe { GetCurrentProcessId() };
-    // SAFETY: структура из нулей допустима для THREADENTRY32.
-    let mut e: THREADENTRY32 = unsafe { std::mem::zeroed() };
-    e.dwSize = THREADENTRY32_SIZE;
-    let mut n = 0u64;
-    let mut ok = true;
-    // SAFETY: snap это живой снимок потоков, e имеет верный dwSize.
-    let mut more = unsafe { Thread32First(snap, &mut e) } != 0;
-    while more {
-        if e.th32OwnerProcessID == me {
-            n += 1;
-        }
-        // SAFETY: snap жив, e по-прежнему с верным dwSize.
-        more = unsafe { Thread32Next(snap, &mut e) } != 0;
-    }
-    if n == 0 {
-        ok = false; // в живом процессе хотя бы один поток есть: снимок неполон
-    }
-    // SAFETY: snap это открытый нами handle, закрывается один раз.
-    unsafe { CloseHandle(snap) };
-    ok.then_some(n)
+    // Длина `Vec` помещается в `u64` (`usize::BITS <= 64`, lib.rs): запасная ветка недостижима.
+    thread_ids().map(|ids| u64::try_from(ids.len()).unwrap_or(u64::MAX))
 }
 
 /// Идентификатор текущего потока ОС (для сверки потоков движка до и после join).
@@ -97,28 +106,11 @@ pub(crate) fn current_thread_id() -> Option<u64> {
 /// недоступен или пуст). Нужны, чтобы проверить конкретные потоки движка, а не
 /// общее число потоков: системные рабочие потоки Windows переживают join.
 pub(crate) fn thread_ids() -> Option<Vec<u64>> {
-    // SAFETY: вызов без указателей; результат проверяется на INVALID_HANDLE_VALUE.
-    let snap = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0) };
-    if snap == INVALID_HANDLE_VALUE {
-        return None;
-    }
+    let snap = thread_snapshot()?;
     // SAFETY: GetCurrentProcessId без предусловий.
     let me = unsafe { GetCurrentProcessId() };
-    // SAFETY: структура из нулей допустима для THREADENTRY32.
-    let mut e: THREADENTRY32 = unsafe { std::mem::zeroed() };
-    e.dwSize = THREADENTRY32_SIZE;
-    let mut ids = Vec::new();
-    // SAFETY: snap это живой снимок потоков, e имеет верный dwSize.
-    let mut more = unsafe { Thread32First(snap, &mut e) } != 0;
-    while more {
-        if e.th32OwnerProcessID == me {
-            ids.push(u64::from(e.th32ThreadID));
-        }
-        // SAFETY: snap жив, e по-прежнему с верным dwSize.
-        more = unsafe { Thread32Next(snap, &mut e) } != 0;
-    }
-    // SAFETY: snap это открытый нами handle, закрывается один раз.
-    unsafe { CloseHandle(snap) };
+    let ids: Vec<u64> = snapshot_thread_ids(&snap, me).collect();
+    // В живом процессе хотя бы один поток есть: пустой снимок неполон. Снимок закрывается после обхода (`Drop`).
     (!ids.is_empty()).then_some(ids)
 }
 
@@ -170,17 +162,20 @@ fn restricted_from(rc: i32, last_error: u32) -> Option<bool> {
 }
 
 pub(crate) fn token_flags() -> TokenFlags {
-    let mut token: HANDLE = std::ptr::null_mut();
-    // SAFETY: псевдо-handle процесса; token валидный выходной параметр.
-    if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) } == 0 {
+    let mut raw: HANDLE = std::ptr::null_mut();
+    // SAFETY: псевдо-handle процесса; raw валидный выходной параметр.
+    if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut raw) } == 0 {
         return TokenFlags::default();
     }
+    // SAFETY: OpenProcessToken успешен: raw это открытый им handle токена, которым больше никто не владеет;
+    // `OwnedHandle` закрывает его ровно один раз.
+    let token = unsafe { OwnedHandle::from_raw_handle(raw) };
     let mut el = TOKEN_ELEVATION { TokenIsElevated: 0 };
     let mut ret = 0u32;
-    // SAFETY: token открыт с TOKEN_QUERY; el имеет размер size_of::<TOKEN_ELEVATION>().
+    // SAFETY: token открыт с TOKEN_QUERY и жив; el имеет размер size_of::<TOKEN_ELEVATION>().
     let ok = unsafe {
         GetTokenInformation(
-            token,
+            token.as_raw_handle(),
             TokenElevation,
             (&raw mut el).cast(),
             TOKEN_ELEVATION_SIZE,
@@ -188,14 +183,14 @@ pub(crate) fn token_flags() -> TokenFlags {
         )
     };
     // SAFETY: SetLastError/GetLastError без предусловий; token открыт нами с
-    // TOKEN_QUERY. Код ошибки обнуляется заранее, иначе 0 не отличить от сбоя.
+    // TOKEN_QUERY и жив. Код ошибки обнуляется заранее, иначе 0 не отличить от сбоя.
     let (rc, last_error) = unsafe {
         SetLastError(0);
-        let rc = IsTokenRestricted(token);
+        let rc = IsTokenRestricted(token.as_raw_handle());
         (rc, GetLastError())
     };
-    // SAFETY: token это открытый нами handle, закрывается один раз.
-    unsafe { CloseHandle(token) };
+    // Закрытие там же, где прежний `CloseHandle`: после IsTokenRestricted и GetLastError.
+    drop(token);
     TokenFlags {
         elevated: (ok != 0).then_some(el.TokenIsElevated != 0),
         restricted: restricted_from(rc, last_error),

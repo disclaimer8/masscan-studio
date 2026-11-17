@@ -788,6 +788,170 @@ mod tests {
         }
     }
 
+    /// The four IP Helper call labels and their error texts are the base texts byte for byte.
+    #[test]
+    fn iphlp_labels_are_byte_identical() {
+        assert_eq!(
+            [FWD4_LABEL, FWD6_LABEL, BEST4_LABEL, BEST6_LABEL],
+            [
+                "GetIpForwardTable2",
+                "GetIpForwardTable2(AF_INET6)",
+                "GetBestRoute2",
+                "GetBestRoute2(AF_INET6)"
+            ]
+        );
+        for (label, text) in [
+            (FWD4_LABEL, "system error: GetIpForwardTable2 error 5"),
+            (
+                FWD6_LABEL,
+                "system error: GetIpForwardTable2(AF_INET6) error 5",
+            ),
+            (BEST4_LABEL, "system error: GetBestRoute2 error 5"),
+            (BEST6_LABEL, "system error: GetBestRoute2(AF_INET6) error 5"),
+        ] {
+            assert_eq!(iphlp_error(label, 5).to_string(), text, "{label}");
+        }
+    }
+
+    /// `MIB_IPFORWARD_TABLE2` with `N` rows: the header, then the rows from `Table[0]` (`windows-sys` declares
+    /// `Table` as an array of one row).
+    #[repr(C)]
+    struct SyntheticTable<const N: usize> {
+        num_entries: u32,
+        rows: [windows_sys::Win32::NetworkManagement::IpHelper::MIB_IPFORWARD_ROW2; N],
+    }
+
+    const _: () = assert!(
+        std::mem::offset_of!(SyntheticTable<3>, rows)
+            == std::mem::offset_of!(
+                windows_sys::Win32::NetworkManagement::IpHelper::MIB_IPFORWARD_TABLE2,
+                Table
+            )
+    );
+
+    /// A borrowed table over a synthetic buffer; `num_entries` never exceeds the rows the buffer holds.
+    fn synthetic<const N: usize>(t: &SyntheticTable<N>) -> TableRef<'_> {
+        assert!(usize::try_from(t.num_entries).is_ok_and(|n| n <= N));
+        TableRef {
+            head: std::ptr::NonNull::from(t).cast(),
+            _owner: std::marker::PhantomData,
+        }
+    }
+
+    /// The pure walk behind `forward_rows` reads `NumEntries` rows from `Table[0]` (a third row past the header's
+    /// count is never decoded) and decodes each family: the gateway only when `NextHop` has the row's family,
+    /// `Loopback` as is, `loopback_if` always false.
+    #[test]
+    fn forward_rows_decode_a_synthetic_table_for_both_families() {
+        use windows_sys::Win32::NetworkManagement::IpHelper::MIB_IPFORWARD_ROW2;
+        use windows_sys::Win32::Networking::WinSock::{
+            AF_INET, AF_INET6, IN_ADDR, IN_ADDR_0, IN6_ADDR, IN6_ADDR_0, SOCKADDR_IN, SOCKADDR_IN6,
+        };
+
+        let row = |ifindex: u32, prefix_len: u8, metric: u32, loopback: bool| {
+            let mut r = MIB_IPFORWARD_ROW2::default();
+            r.InterfaceIndex = ifindex;
+            r.DestinationPrefix.PrefixLength = prefix_len;
+            r.Metric = metric;
+            r.Loopback = loopback;
+            r
+        };
+        let via4 = |r: &mut MIB_IPFORWARD_ROW2, gw: Ipv4Addr| {
+            r.NextHop.Ipv4 = SOCKADDR_IN {
+                sin_family: AF_INET,
+                sin_addr: IN_ADDR {
+                    S_un: IN_ADDR_0 {
+                        S_addr: u32::from_ne_bytes(gw.octets()),
+                    },
+                },
+                ..Default::default()
+            };
+        };
+        let via6 = |r: &mut MIB_IPFORWARD_ROW2, gw: Ipv6Addr| {
+            r.NextHop.Ipv6 = SOCKADDR_IN6 {
+                sin6_family: AF_INET6,
+                sin6_addr: IN6_ADDR {
+                    u: IN6_ADDR_0 { Byte: gw.octets() },
+                },
+                ..Default::default()
+            };
+        };
+
+        // IPv4: a default route via a gateway, an on-link /32 with `Loopback` (NextHop of no family), and a third row
+        // past NumEntries.
+        let mut r0 = row(7, 0, 25, false);
+        via4(&mut r0, Ipv4Addr::new(198, 51, 100, 1));
+        let r1 = row(1, 32, 256, true);
+        let mut r2 = row(99, 8, 1, false);
+        via4(&mut r2, Ipv4Addr::new(203, 0, 113, 9));
+        let v4 = SyntheticTable {
+            num_entries: 2,
+            rows: [r0, r1, r2],
+        };
+        assert_eq!(
+            walk_table(synthetic(&v4), fwd_from_row),
+            vec![
+                Fwd {
+                    ifindex: 7,
+                    prefix_len: 0,
+                    next_hop: Ipv4Addr::new(198, 51, 100, 1),
+                    metric: 25,
+                    mib_loopback: false,
+                    loopback_if: false,
+                },
+                Fwd {
+                    ifindex: 1,
+                    prefix_len: 32,
+                    next_hop: Ipv4Addr::UNSPECIFIED,
+                    metric: 256,
+                    mib_loopback: true,
+                    loopback_if: false,
+                },
+            ]
+        );
+
+        // IPv6: a default route via a gateway, a /128 with `Loopback` whose NextHop is IPv4 (not the row's family), and
+        // a third row past NumEntries.
+        let mut r0 = row(12, 0, 10, false);
+        via6(&mut r0, "2001:db8::1".parse().unwrap());
+        let mut r1 = row(1, 128, 256, true);
+        via4(&mut r1, Ipv4Addr::new(198, 51, 100, 2));
+        let mut r2 = row(99, 64, 1, false);
+        via6(&mut r2, "2001:db8::9".parse().unwrap());
+        let v6 = SyntheticTable {
+            num_entries: 2,
+            rows: [r0, r1, r2],
+        };
+        assert_eq!(
+            walk_table(synthetic(&v6), fwd6_from_row),
+            vec![
+                Fwd6 {
+                    ifindex: 12,
+                    prefix_len: 0,
+                    next_hop: "2001:db8::1".parse().unwrap(),
+                    metric: 10,
+                    mib_loopback: false,
+                    loopback_if: false,
+                },
+                Fwd6 {
+                    ifindex: 1,
+                    prefix_len: 128,
+                    next_hop: Ipv6Addr::UNSPECIFIED,
+                    metric: 256,
+                    mib_loopback: true,
+                    loopback_if: false,
+                },
+            ]
+        );
+
+        // An empty table decodes to nothing.
+        let empty = SyntheticTable {
+            num_entries: 0,
+            rows: [row(5, 0, 1, false)],
+        };
+        assert!(walk_table(synthetic(&empty), fwd_from_row).is_empty());
+    }
+
     #[test]
     fn system_directory_is_absolute_and_ends_in_system32() {
         let d = system_directory().unwrap();

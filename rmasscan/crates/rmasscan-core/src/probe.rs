@@ -235,7 +235,6 @@ struct Builder {
     sctp: SctpTemplate,
     /// Шаблон ARP who-has (`--arp`, `I:2`, templ-pkt.c:162): тот же путь адаптера, всегда широковещательный.
     arp: ArpTemplate,
-    payloads: Arc<PayloadTable>,
     ip_me0: u32,
     first: u16,
     port_mask: u32,
@@ -245,12 +244,7 @@ struct Builder {
 }
 
 impl Builder {
-    fn from_nic(
-        nic: &NicBinding,
-        seed: u64,
-        mods: &PacketModifiers,
-        payloads: &Arc<PayloadTable>,
-    ) -> Result<Builder, PlanError> {
+    fn from_nic(nic: &NicBinding, seed: u64, mods: &PacketModifiers) -> Result<Builder, PlanError> {
         let binding = &nic.binding;
         let (first, last) = binding.source_ports;
         check_source_ports(first, last, nic.legacy_c_17_port_mask)?;
@@ -299,7 +293,6 @@ impl Builder {
                 mods.ttl,
             ),
             arp: ArpTemplate::new(binding.source_mac),
-            payloads: payloads.clone(),
             ip_me0: binding.source_ipv4,
             ipv4_mask: nic.source_ipv4_last - binding.source_ipv4,
             first,
@@ -326,8 +319,10 @@ impl Builder {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn fill(
         &self,
+        payloads: &PayloadTable,
         p: &mut Probe,
         i: u64,
         repeats: u64,
@@ -359,7 +354,7 @@ impl Builder {
                 (ip_them, port16),
                 (ip_me, port_me16),
                 seqno,
-                self.payloads.get(port16),
+                payloads.get(port16),
                 frame,
             ),
             // templ-pkt.c:907-910: initiate_tag INIT это cookie по индексу `Templ_SCTP + порт`.
@@ -460,12 +455,7 @@ pub fn for_each_probe_nic_with_payloads<B>(
     payloads: &PayloadTable,
     mut f: impl FnMut(&Probe) -> ControlFlow<B>,
 ) -> Result<ControlFlow<B>, PlanError> {
-    let builder = Builder::from_nic(
-        nic,
-        eff.seed(),
-        &eff.packet_modifiers(),
-        &Arc::new(payloads.clone()),
-    )?;
+    let builder = Builder::from_nic(nic, eff.seed(), &eff.packet_modifiers())?;
     let mut probe = Probe::default();
     // main.c:336-373: цели IPv6 на нижних индексах (`Builder::fill_v6`), IPv4 после них; без целей IPv6
     // `range_ipv6 == 0` и поток побайтно прежний.
@@ -483,7 +473,7 @@ pub fn for_each_probe_nic_with_payloads<B>(
         |i, repeats, xxx, target, port_them| {
             let built = match target {
                 TargetIp::V4(ip_them) => {
-                    builder.fill(&mut probe, i, repeats, xxx, ip_them, port_them)
+                    builder.fill(payloads, &mut probe, i, repeats, xxx, ip_them, port_them)
                 }
                 TargetIp::V6(ip_them) => builder.fill_v6(&mut probe, i, ip_them, port_them),
             };
@@ -740,14 +730,7 @@ impl ReadyPlan {
         }
         let builders = nics
             .iter()
-            .map(|n| {
-                Builder::from_nic(
-                    n,
-                    effective.seed(),
-                    &effective.packet_modifiers(),
-                    &payloads,
-                )
-            })
+            .map(|n| Builder::from_nic(n, effective.seed(), &effective.packet_modifiers()))
             .collect::<Result<Vec<_>, _>>()?;
         // Студия (`new`) принимает только TCP; план CLI проверил порты в `check_cli_ports`.
         if tcp_only
@@ -1010,7 +993,9 @@ impl ProbeCursor {
         // нарушение инварианта или адаптер без `source_ipv6`/`next_hop_mac_ipv6` у цели IPv6. Он не паникует и не
         // выдаётся за конец скана: курсор останавливается и хранит причину, а движок завершает запуск отказом.
         let built = match target {
-            TargetIp::V4(ip) => builder.fill(&mut p, i, self.repeats, xxx, ip, port),
+            TargetIp::V4(ip) => {
+                builder.fill(&inner.payloads, &mut p, i, self.repeats, xxx, ip, port)
+            }
             TargetIp::V6(ip) => builder.fill_v6(&mut p, i, ip, port),
         };
         match built {
@@ -1647,13 +1632,13 @@ mod tests {
     fn fill_refusal_leaves_only_the_target_written() {
         // Отказ `fill` (порт источника вне 16 бит; `I:n` и `O:n` без построителя) пишет только `target`: ни одно
         // другое поле и ни один байт кадра не меняются.
-        let payloads = Arc::new(PayloadTable::builtin());
+        let payloads = PayloadTable::builtin();
         let mods = PacketModifiers::default();
         let nic = NicBinding::from(binding());
-        let mut wide = Builder::from_nic(&nic, 0x1234_5678, &mods, &payloads).unwrap();
+        let mut wide = Builder::from_nic(&nic, 0x1234_5678, &mods).unwrap();
         wide.first = 0xFFFF;
         wide.port_mask = 0xFFFF;
-        let narrow = Builder::from_nic(&nic, 0x1234_5678, &mods, &payloads).unwrap();
+        let narrow = Builder::from_nic(&nic, 0x1234_5678, &mods).unwrap();
         let dirty = || Probe {
             index: 0x1111_1111_1111_1111,
             ip_me: 0x2222_2222,
@@ -1679,7 +1664,7 @@ mod tests {
         for (b, port_them, port_me) in cases {
             let mut p = dirty();
             let err = b
-                .fill(&mut p, i, repeats, xxx, ip_them, port_them)
+                .fill(&payloads, &mut p, i, repeats, xxx, ip_them, port_them)
                 .unwrap_err();
             assert_eq!(err, PlanError::PortDoesNotFit { port_them, port_me });
             let mut want = dirty();

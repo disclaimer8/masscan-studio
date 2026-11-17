@@ -8,6 +8,7 @@
 //! Модуль ничего не передаёт в сеть.
 
 use crate::targets::{ParseError, is_c_space};
+use std::fmt::{self, Write as _};
 
 /// Адрес IPv6 в сетевом порядке байт (массив `tmp[16]` из `ipv6address_fmt`,
 /// massip-addr.c:84-92).
@@ -274,47 +275,59 @@ impl Range6List {
     }
 }
 
-/// massip-addr.c:33-109 `ipv6address_fmt`: слова по 16 бит в hex без ведущих
-/// нулей; сжимается ПЕРВАЯ серия нулевых слов (не самая длинная, в отличие от
-/// `Ipv6Addr::Display`), одиночный нулевой слово тоже сжимается в `::`.
-pub fn format_ipv6_c(addr: u128) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let ip = Ipv6AddrBytes::from_u128(addr).0;
-    let mut out = String::with_capacity(39);
-    let mut is_ellision = false;
-    let mut i = 0usize;
-    // `for (i = 0; i < 16; i += 2)`, :36-77
-    while i < 16 {
-        let n = (u32::from(ip[i]) << 8) | u32::from(ip[i + 1]);
-        if n == 0 && !is_ellision {
-            is_ellision = true;
-            while i < 13 && ip[i + 2] == 0 && ip[i + 3] == 0 {
+/// Адрес IPv6 для печати как в C (`ipv6address_fmt`, massip-addr.c:33-109): слова по 16 бит в hex без ведущих
+/// нулей; сжимается ПЕРВАЯ серия нулевых слов (не самая длинная, в отличие от `Ipv6Addr::Display`), одиночное
+/// нулевое слово тоже сжимается в `::`. [`format_ipv6_c`] печатает его же.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct CIpv6(pub u128);
+
+impl fmt::Display for CIpv6 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        let ip = Ipv6AddrBytes::from_u128(self.0).0;
+        let mut is_ellision = false;
+        let mut i = 0usize;
+        // `for (i = 0; i < 16; i += 2)`, :36-77
+        while i < 16 {
+            let n = (u32::from(ip[i]) << 8) | u32::from(ip[i + 1]);
+            if n == 0 && !is_ellision {
+                is_ellision = true;
+                while i < 13 && ip[i + 2] == 0 && ip[i + 3] == 0 {
+                    i += 2;
+                }
+                f.write_char(':')?;
+                // Нулевой адрес целиком: вывод "::" (:58-62).
+                while i == 14 && ip[i] == 0 && ip[i + 1] == 0 {
+                    i = 16;
+                    f.write_char(':')?;
+                }
                 i += 2;
+                continue;
             }
-            out.push(':');
-            // Нулевой адрес целиком: вывод "::" (:58-62).
-            while i == 14 && ip[i] == 0 && ip[i + 1] == 0 {
-                i = 16;
-                out.push(':');
+            if i != 0 {
+                f.write_char(':')?;
             }
+            if n >> 12 != 0 {
+                f.write_char(char::from(HEX[((n >> 12) & 0xF) as usize]))?;
+            }
+            if n >> 8 != 0 {
+                f.write_char(char::from(HEX[((n >> 8) & 0xF) as usize]))?;
+            }
+            if n >> 4 != 0 {
+                f.write_char(char::from(HEX[((n >> 4) & 0xF) as usize]))?;
+            }
+            f.write_char(char::from(HEX[(n & 0xF) as usize]))?;
             i += 2;
-            continue;
         }
-        if i != 0 {
-            out.push(':');
-        }
-        if n >> 12 != 0 {
-            out.push(char::from(HEX[((n >> 12) & 0xF) as usize]));
-        }
-        if n >> 8 != 0 {
-            out.push(char::from(HEX[((n >> 8) & 0xF) as usize]));
-        }
-        if n >> 4 != 0 {
-            out.push(char::from(HEX[((n >> 4) & 0xF) as usize]));
-        }
-        out.push(char::from(HEX[(n & 0xF) as usize]));
-        i += 2;
+        Ok(())
     }
+}
+
+/// massip-addr.c:33-109 `ipv6address_fmt`: текст [`CIpv6`].
+pub fn format_ipv6_c(addr: u128) -> String {
+    let mut out = String::with_capacity(39);
+    // запись в `String` не отказывает
+    let _ = write!(out, "{}", CIpv6(addr));
     out
 }
 
@@ -1264,5 +1277,93 @@ mod tests {
         eprintln!(
             "pick6 differential: compared {compared}, old search stuck {skipped}, non-monotone lists {non_monotone}"
         );
+    }
+
+    /// Копия `format_ipv6_c` из базы (до `CIpv6`): сверка нового `Display` с прежним текстом.
+    fn old_format_ipv6_c(addr: u128) -> String {
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        let ip = Ipv6AddrBytes::from_u128(addr).0;
+        let mut out = String::with_capacity(39);
+        let mut is_ellision = false;
+        let mut i = 0usize;
+        while i < 16 {
+            let n = (u32::from(ip[i]) << 8) | u32::from(ip[i + 1]);
+            if n == 0 && !is_ellision {
+                is_ellision = true;
+                while i < 13 && ip[i + 2] == 0 && ip[i + 3] == 0 {
+                    i += 2;
+                }
+                out.push(':');
+                while i == 14 && ip[i] == 0 && ip[i + 1] == 0 {
+                    i = 16;
+                    out.push(':');
+                }
+                i += 2;
+                continue;
+            }
+            if i != 0 {
+                out.push(':');
+            }
+            if n >> 12 != 0 {
+                out.push(char::from(HEX[((n >> 12) & 0xF) as usize]));
+            }
+            if n >> 8 != 0 {
+                out.push(char::from(HEX[((n >> 8) & 0xF) as usize]));
+            }
+            if n >> 4 != 0 {
+                out.push(char::from(HEX[((n >> 4) & 0xF) as usize]));
+            }
+            out.push(char::from(HEX[(n & 0xF) as usize]));
+            i += 2;
+        }
+        out
+    }
+
+    #[test]
+    fn cipv6_display_equals_format_ipv6_c() {
+        let mut fixed: Vec<u128> = [
+            "2a03:9060:0:400:0:0:0:2",
+            "2001:db8:0:0:0:0:0:1",
+            "1:0:0:0:0:0:0:0",
+            "0:0:0:0:0:0:0:0",
+            "::1",
+            "1::",
+            "0:0:0:0:0:0:1:0",
+            "1:0:2:0:0:0:3:0",
+            "0:1:0:0:2:0:0:0",
+            "1:0:0:2:0:0:0:0",
+            "1:2:3:4:5:6:7:0",
+            "1:0:2:3:4:5:6:7",
+            "0:2:3:4:5:6:7:8",
+            "1:2:3:4:5:6:0:0",
+            "1:2:3:4:5:6:0:8",
+            "ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+            "1:2:3:4:5:6:7:8",
+            "a:b::",
+            "0:0:1:0:0:0:0:0",
+            "1:0:0:2:0:0:3:0",
+        ]
+        .iter()
+        .map(|s| v(s))
+        .collect();
+        fixed.extend([0, 1, u128::MAX]);
+        for a in fixed {
+            assert_eq!(CIpv6(a).to_string(), old_format_ipv6_c(a), "{a:#x}");
+            assert_eq!(format_ipv6_c(a), old_format_ipv6_c(a), "{a:#x}");
+        }
+        // 10 000 случайных адресов: каждая из восьми групп нулевая с вероятностью 1/2.
+        let mut state = 0x6369_7076_u64;
+        for _ in 0..10_000 {
+            let mut a = 0u128;
+            for _ in 0..8 {
+                let group = if splitmix(&mut state) & 1 == 0 {
+                    0
+                } else {
+                    splitmix(&mut state) & 0xFFFF
+                };
+                a = (a << 16) | u128::from(group);
+            }
+            assert_eq!(CIpv6(a).to_string(), old_format_ipv6_c(a), "{a:#x}");
+        }
     }
 }

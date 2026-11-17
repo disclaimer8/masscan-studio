@@ -274,6 +274,8 @@ pub fn inventory_bpf() -> Result<BpfInventory, NetError> {
 pub struct NetStats {
     pub tx_sent: u64,
     pub tx_would_block: u64,
+    /// Кадры с исходом `Uncertain`. При исходе `Uncertain` пачки Windows прибавляет все неподтверждённые кадры
+    /// (`n − sent`), Linux — единицу, как одиночный путь.
     pub tx_uncertain: u64,
     pub tx_errors: u64,
     pub rx_packets: u64,
@@ -289,16 +291,17 @@ pub struct NetStats {
     pub rx_wrong_interface: u64,
     pub rx_errors: u64,
     pub kernel_drops: Option<u64>,
-    /// Вызовы пакетной передачи (Windows: `pcap_sendqueue_transmit`). Linux и
-    /// macOS: всегда 0, у них пачек нет.
+    /// Вызовы пакетной передачи. Windows: `pcap_sendqueue_transmit`. Linux:
+    /// вызовы `send_batch` с n ≥ 2, дошедшие до ядра (выполнен хотя бы один
+    /// `sendmmsg`). macOS: всегда 0, у него пачек нет.
     pub tx_batches: u64,
     /// Наибольшая пачка (кадров) среди этих вызовов; 0, если пачек не было.
     pub tx_batch_max: u64,
     /// Вызовы драйвера (`pcap_sendpacket`/`pcap_sendqueue_transmit`) дольше
     /// `MAX_IO_TIMEOUT` (50 мс) по `Instant`.
-    /// Измеряет только Windows (там передача синхронна и не отменяема). Linux и
-    /// macOS: всегда 0 и НЕ измерено, а структурно не наблюдается; нуль там не
-    /// свидетельство соблюдения бюджета.
+    /// Измеряет только Windows (там передача синхронна и не отменяема). Linux
+    /// (в том числе пачки `sendmmsg`) и macOS: всегда 0 и НЕ измерено, а
+    /// структурно не наблюдается; нуль там не свидетельство соблюдения бюджета.
     pub tx_over_budget: u64,
 }
 
@@ -378,8 +381,9 @@ impl std::fmt::Debug for NetStatsHandle {
     }
 }
 
-/// Как адаптер передаёт кадры. `SendQueue`: один вызов драйвера на пачку до
-/// `max_batch` кадров (Windows, Npcap sendqueue); `Single`: один кадр на вызов.
+/// Как адаптер передаёт кадры. `SendQueue`: пачка до `max_batch` кадров за
+/// вызов `send_batch` (Windows — Npcap sendqueue, Linux — `sendmmsg`); `Single`:
+/// один кадр на вызов (macOS).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TxMode {
     Single,

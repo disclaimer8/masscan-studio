@@ -10,6 +10,9 @@
 //!
 //! Приём идёт пачками: один `recvmmsg` забирает до [`RX_BATCH`] кадров во внутреннее кольцо `RxHalf`, а `recv`
 //! выдаёт их по одному, с теми же фильтрами, счётчиками и проверкой дедлайна, что у покадрового пути.
+//!
+//! Передача (P1) тоже идёт пачками: `send_batch` отдаёт до [`TX_BATCH_FRAMES`] кадров одним `sendmmsg` и даёт каждому
+//! кадру ровно исход одиночного `send` (тексты, счётчики, повторы EAGAIN/EINTR), с одним дедлайном на весь вызов.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -18,7 +21,7 @@ use rmasscan_core::packet::LinkType;
 use rmasscan_core::probe::AdapterBinding;
 #[cfg(target_os = "linux")]
 use rmasscan_engine::AdapterPair;
-use rmasscan_engine::{IoError, MAX_IO_TIMEOUT, Rx, RxHealth, SendStatus, Tx};
+use rmasscan_engine::{IoError, MAX_IO_TIMEOUT, Rx, RxHealth, SendStatus, Tx, TxBatch};
 
 #[cfg(target_os = "linux")]
 use crate::OpenedAdapter;
@@ -29,7 +32,7 @@ use crate::{Counters, NetError, NetStatsHandle};
 
 // Номера Linux без `libc`: errno, `ARPHRD_ETHER`, `PACKET_OUTGOING`.
 mod abi;
-use abi::errno::{EAGAIN, EBADF, EINTR, EINVAL, ENODEV, EWOULDBLOCK};
+use abi::errno::{EAGAIN, EBADF, EINTR, EINVAL, EIO, ENODEV, EWOULDBLOCK};
 use abi::{ARPHRD_ETHER, PACKET_OUTGOING};
 
 #[cfg(target_os = "linux")]
@@ -75,9 +78,25 @@ pub(crate) fn batch_len(slots: usize, metas: usize) -> Result<usize, Errno> {
     }
 }
 
+/// Кадров в одной пачке передачи: `max_batch()` TX Linux и длина массивов одного `sendmmsg`.
+pub(crate) const TX_BATCH_FRAMES: usize = 64;
+
+/// Сколько сообщений отдать ядру одним `sendmmsg`: `min(frames, lens, TX_BATCH_FRAMES)`, то есть не больше, чем есть
+/// кадров и мест для длин. Ноль — `Err(EINVAL)` до любого системного вызова.
+fn send_count(frames: usize, lens: usize) -> Result<usize, Errno> {
+    match frames.min(lens).min(TX_BATCH_FRAMES) {
+        0 => Err(EINVAL),
+        n => Ok(n),
+    }
+}
+
 /// Шов syscalls одного сокета. Все методы НЕБЛОКИРУЮЩИЕ.
 pub(crate) trait PacketIo: Send {
     fn send(&mut self, frame: &[u8]) -> Result<usize, Errno>;
+    /// Пачка: первые [`send_count`] кадров `frames` одним `sendmmsg`. `Ok(k)` — ядро приняло сообщения `0..k`,
+    /// `lens[j]` — байты сообщения j; ошибка первого сообщения — `Err`. Ошибку после принятого префикса ядро теряет
+    /// (возвращает `k`), повтор с кадра `k` возвращает её. Ноль сообщений — `Err(EINVAL)` без системного вызова.
+    fn send_many(&mut self, frames: &[&[u8]], lens: &mut [usize]) -> Result<usize, Errno>;
     /// Один кадр в буфер вызывающего (прямой путь `RxHalf`: буфер длиннее [`RX_SLOT`]). Адрес короче
     /// `SLL_MIN_LEN` — `Err(EPROTO)`.
     fn recv(&mut self, buf: &mut [u8]) -> Result<RecvMeta, Errno>;
@@ -142,13 +161,34 @@ impl Deadline {
 }
 
 /// TX-половина. После фатальной ошибки fd закрывается (`io = None`).
+///
+/// Пачка (`send_batch`, P1): до [`TX_BATCH_FRAMES`] кадров одним `sendmmsg`, с одним дедлайном на весь вызов; каждый
+/// кадр получает ровно исход одиночного `send` на том же кадре (тексты, счётчики, повторы EAGAIN/EINTR). Фатальная
+/// ошибка после принятого префикса закрывает fd, префикс засчитывается (`TxBatch { sent: i, rest: WouldBlockUnsent }`),
+/// а её текст ждёт в `deferred`: следующий вызов (`send` или `send_batch`) сразу возвращает его как `Err`, без
+/// системного вызова и без нового счёта, как вернул бы одиночный путь на этом кадре; после него — «adapter closed…».
+///
+/// Известное ограничение (исправление — фаза 2, движок): если Pause или Stop приходит в ту 1 мс, что движок спит после
+/// `WouldBlockUnsent`, следующим вызовом оказывается `send` из linger или стека (`flush_replies`, `send_stack_frames`),
+/// а движок игнорирует его `Err`: запуск кончается `Paused`/`Stopped` вместо `Failed(TxError)`, текст теряется.
+/// Checkpoint при этом верен: принят ровно префикс.
 pub(crate) struct TxHalf<I: PacketIo> {
     io: Option<I>,
     counters: Arc<Counters>,
+    /// Текст фатальной ошибки, случившейся в пачке после принятого префикса: отдаётся следующим вызовом.
+    deferred: Option<String>,
 }
 
 enum TxStep {
     Done(SendStatus),
+    Fatal(String),
+}
+
+/// Что делать после ошибки отправки кадра: повторить его, сдаться без отправки (`WouldBlockUnsent`) или фатальная
+/// ошибка со своим текстом.
+enum Retry {
+    Again,
+    Unsent,
     Fatal(String),
 }
 
@@ -157,41 +197,90 @@ impl<I: PacketIo> TxHalf<I> {
         Self {
             io: Some(io),
             counters,
+            deferred: None,
         }
+    }
+
+    /// Ошибка `send`/`sendmmsg` на кадре, одна для одиночного пути и пачки. EAGAIN/EINTR: ядро не приняло ни байта
+    /// кадра; EAGAIN ждёт `poll(POLLOUT)` до дедлайна вызова, EINTR — паузу не больше [`EINTR_BACKOFF_MAX`].
+    fn on_send_error(io: &mut I, e: Errno, deadline: &Deadline) -> Retry {
+        if is_again(e) {
+            if deadline.expired() {
+                return Retry::Unsent;
+            }
+            return match io.poll(true, deadline.poll_ms()) {
+                Ok(Readiness::Ready) => Retry::Again,
+                Ok(Readiness::Timeout) => Retry::Unsent,
+                Ok(Readiness::Failed) => Retry::Fatal("poll(POLLOUT): socket error".into()),
+                Err(EINTR) => {
+                    io.backoff(deadline.eintr_wait());
+                    Retry::Again
+                }
+                Err(e) => Retry::Fatal(errno_msg("poll(POLLOUT)", e)),
+            };
+        }
+        if e == EINTR {
+            // POSIX: send(), прерванный до передачи первого байта, ничего не
+            // отправил, поэтому WouldBlockUnsent (не Uncertain) безопасен.
+            if deadline.expired() {
+                return Retry::Unsent;
+            }
+            io.backoff(deadline.eintr_wait());
+            return Retry::Again;
+        }
+        Retry::Fatal(errno_msg("send", e))
     }
 
     fn step(io: &mut I, frame: &[u8], deadline: &Deadline) -> TxStep {
         loop {
-            match io.send(frame) {
+            let e = match io.send(frame) {
                 Ok(n) if n == frame.len() => return TxStep::Done(SendStatus::Sent),
                 // Короткая запись: часть могла уйти.
                 Ok(_) => return TxStep::Done(SendStatus::Uncertain),
-                // EAGAIN/EINTR от send(): ядро не приняло ни байта.
-                Err(e) if is_again(e) => {
-                    if deadline.expired() {
-                        return TxStep::Done(SendStatus::WouldBlockUnsent);
+                Err(e) => e,
+            };
+            match Self::on_send_error(io, e, deadline) {
+                Retry::Again => {}
+                Retry::Unsent => return TxStep::Done(SendStatus::WouldBlockUnsent),
+                Retry::Fatal(msg) => return TxStep::Fatal(msg),
+            }
+        }
+    }
+
+    /// Пачка из `frames` (2..=[`TX_BATCH_FRAMES`]) под одним дедлайном: число принятых кадров и исход первого
+    /// непринятого (`Done(Sent)` — приняты все). Каждый вызов `send_many` начинается с первого непринятого кадра.
+    fn step_batch(io: &mut I, frames: &[&[u8]], deadline: &Deadline) -> (usize, TxStep) {
+        let mut lens = [0usize; TX_BATCH_FRAMES];
+        let mut i = 0;
+        loop {
+            let rest = frames.get(i..).unwrap_or_default();
+            let e = match io.send_many(rest, &mut lens) {
+                // Ядро при vlen ≥ 1 не возвращает 0; ноль без errno — фатальная EIO, а не повтор без конца.
+                Ok(0) => return (i, TxStep::Fatal(errno_msg("send", EIO))),
+                Ok(k) => {
+                    let k = k.min(rest.len());
+                    // Короткое сообщение — как короткая запись одиночного пути: Uncertain на этом кадре.
+                    if let Some(j) = rest
+                        .iter()
+                        .zip(&lens)
+                        .take(k)
+                        .position(|(frame, &len)| len != frame.len())
+                    {
+                        return (i + j, TxStep::Done(SendStatus::Uncertain));
                     }
-                    match io.poll(true, deadline.poll_ms()) {
-                        Ok(Readiness::Ready) => {}
-                        Ok(Readiness::Timeout) => {
-                            return TxStep::Done(SendStatus::WouldBlockUnsent);
-                        }
-                        Ok(Readiness::Failed) => {
-                            return TxStep::Fatal("poll(POLLOUT): socket error".into());
-                        }
-                        Err(EINTR) => io.backoff(deadline.eintr_wait()),
-                        Err(e) => return TxStep::Fatal(errno_msg("poll(POLLOUT)", e)),
+                    i += k;
+                    if i >= frames.len() {
+                        return (frames.len(), TxStep::Done(SendStatus::Sent));
                     }
+                    // Ошибку после принятого префикса ядро теряет: повтор с кадра i вернёт настоящую.
+                    continue;
                 }
-                Err(EINTR) => {
-                    // POSIX: send(), прерванный до передачи первого байта, ничего не
-                    // отправил, поэтому WouldBlockUnsent (не Uncertain) безопасен.
-                    if deadline.expired() {
-                        return TxStep::Done(SendStatus::WouldBlockUnsent);
-                    }
-                    io.backoff(deadline.eintr_wait());
-                }
-                Err(e) => return TxStep::Fatal(errno_msg("send", e)),
+                Err(e) => e,
+            };
+            match Self::on_send_error(io, e, deadline) {
+                Retry::Again => {}
+                Retry::Unsent => return (i, TxStep::Done(SendStatus::WouldBlockUnsent)),
+                Retry::Fatal(msg) => return (i, TxStep::Fatal(msg)),
             }
         }
     }
@@ -199,6 +288,9 @@ impl<I: PacketIo> TxHalf<I> {
 
 impl<I: PacketIo> Tx for TxHalf<I> {
     fn send(&mut self, frame: &[u8], timeout: Duration) -> Result<SendStatus, IoError> {
+        if let Some(msg) = self.deferred.take() {
+            return Err(IoError::new(msg));
+        }
         let deadline = Deadline::new(timeout);
         let Some(io) = self.io.as_mut() else {
             return Err(closed_error());
@@ -220,12 +312,82 @@ impl<I: PacketIo> Tx for TxHalf<I> {
             }
         }
     }
+
+    fn max_batch(&self) -> usize {
+        TX_BATCH_FRAMES
+    }
+
+    fn send_batch(&mut self, frames: &[&[u8]], timeout: Duration) -> Result<TxBatch, IoError> {
+        use std::sync::atomic::Ordering::Relaxed;
+        if let Some(msg) = self.deferred.take() {
+            return Err(IoError::new(msg));
+        }
+        // Тексты Windows (`windows::adapter`): движок таких пачек не предлагает.
+        if frames.is_empty() {
+            return Err(IoError::new(
+                "send_batch called with no frames; nothing was sent",
+            ));
+        }
+        if frames.len() > TX_BATCH_FRAMES {
+            return Err(IoError::new(format!(
+                "send_batch called with {} frames, more than {TX_BATCH_FRAMES}; nothing was sent",
+                frames.len()
+            )));
+        }
+        if let [one] = frames {
+            // Один кадр: прежний одиночный путь, без пачки и без её счёта.
+            let rest = self.send(one, timeout)?;
+            return Ok(TxBatch {
+                sent: usize::from(rest == SendStatus::Sent),
+                rest,
+            });
+        }
+        // Один дедлайн на весь вызов: контракт движка для `max_batch() > 1`.
+        let deadline = Deadline::new(timeout);
+        let Some(io) = self.io.as_mut() else {
+            return Err(closed_error());
+        };
+        let (sent, step) = Self::step_batch(io, frames, &deadline);
+        let c = &self.counters;
+        // Вызов дошёл до ядра: `step_batch` всегда выполняет хотя бы один `sendmmsg`.
+        Counters::bump(&c.tx_batches);
+        c.tx_batch_max
+            .fetch_max(u64::try_from(frames.len()).unwrap_or(u64::MAX), Relaxed);
+        c.tx_sent
+            .fetch_add(u64::try_from(sent).unwrap_or(u64::MAX), Relaxed);
+        match step {
+            TxStep::Done(rest) => {
+                match rest {
+                    SendStatus::Sent => {}
+                    SendStatus::WouldBlockUnsent => Counters::bump(&c.tx_would_block),
+                    SendStatus::Uncertain => Counters::bump(&c.tx_uncertain),
+                }
+                Ok(TxBatch { sent, rest })
+            }
+            TxStep::Fatal(msg) => {
+                Counters::bump(&c.tx_errors);
+                self.io = None; // закрывает fd
+                if sent == 0 {
+                    return Err(IoError::new(msg));
+                }
+                // Префикс принят: движок засчитает ровно его и предложит кадр `sent` снова, а следующий вызов
+                // получит эту ошибку (`TxError`), как одиночный путь на этом кадре.
+                self.deferred = Some(msg);
+                Ok(TxBatch {
+                    sent,
+                    rest: SendStatus::WouldBlockUnsent,
+                })
+            }
+        }
+    }
 }
 
 /// RX-половина. Внутреннее кольцо из [`RX_BATCH`] слотов по [`RX_SLOT`] байт: пачку `recv_batch` `recv` выдаёт по
 /// одной записи, и пока в кольце есть записи, никакого нового приёма нет; прямой путь (буфер вызывающего длиннее
 /// слота) идёт только при пустом кольце. Кадры в кольце при закрытии теряются (раньше они так же лежали в очереди
-/// сокета и уходили вместе с fd).
+/// сокета и уходили вместе с fd). Кадр длиннее [`RX_SLOT`], ждущий в кольце, когда вызывающий тем временем увеличил
+/// буфер, считается `rx_truncated` (база выдала бы его целиком): ядро уже усекло его до слота; так не делает ни один
+/// вызывающий в workspace (у каждого приёмника буфер одного размера).
 pub(crate) struct RxHalf<I: PacketIo> {
     io: Option<I>,
     ifindex: i32,
@@ -532,7 +694,9 @@ pub(crate) fn open(binding: &AdapterBinding) -> Result<OpenedAdapter, NetError> 
             rx: Box::new(RxHalf::new(rx, ifindex, Arc::clone(&counters))),
         },
         stats: NetStatsHandle::new(counters),
-        tx_mode: crate::TxMode::Single,
+        tx_mode: crate::TxMode::SendQueue {
+            max_batch: TX_BATCH_FRAMES,
+        },
     })
 }
 

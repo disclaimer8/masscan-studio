@@ -23,11 +23,11 @@ pub(crate) mod errno {
     pub(crate) use crate::adapter_common::errno::{EACCES, ENXIO, EPERM};
 
     pub(crate) const EINTR: i32 = 4;
-    #[cfg(test)]
+    /// `sendmmsg` без принятых сообщений и без errno (`TxHalf::send_batch`).
     pub(crate) const EIO: i32 = 5;
     pub(crate) const EBADF: i32 = 9;
     pub(crate) const EAGAIN: i32 = 11;
-    /// Пачка приёма без слотов или метаданных (`batch_len`).
+    /// Пачка приёма без слотов или метаданных (`batch_len`), пачка передачи без кадров или мест для длин (`send_count`).
     pub(crate) const EINVAL: i32 = 22;
     /// На Linux равен `EAGAIN`.
     pub(crate) const EWOULDBLOCK: i32 = 11;

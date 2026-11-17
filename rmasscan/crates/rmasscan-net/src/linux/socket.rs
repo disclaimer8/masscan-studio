@@ -1,9 +1,9 @@
 //! Private FFI-слой Linux AF_PACKET. Каждый syscall завернут в безопасную
 //! функцию/метод; наружу не выходят сырые указатели и неочищаемые ресурсы.
 //! `socket`, `poll` одного fd и `setsockopt` целого идут через общие
-//! примитивы `crate::unix_sys`; здесь остаются `bind`, `send`, `recvmmsg`
-//! (единственный приём: и пачка, и прямой `recv`), `getsockopt` и ioctl
-//! интерфейса:
+//! примитивы `crate::unix_sys`; здесь остаются `bind`, `send`, `sendmmsg`
+//! (пачка передачи), `recvmmsg` (единственный приём: и пачка, и прямой
+//! `recv`), `getsockopt` и ioctl интерфейса:
 //!
 //! * fd всегда живёт в `OwnedFd` (закрывается в Drop ровно один раз);
 //! * все буферы это срезы Rust, длина берётся из самого среза;
@@ -19,7 +19,7 @@ use std::ptr;
 
 use super::{
     Errno, IfaceInfo, KernelStats, PacketIo, RX_BATCH, RX_SLOT, Readiness, RecvMeta, SlotMeta,
-    batch_len,
+    TX_BATCH_FRAMES, batch_len, send_count,
 };
 use crate::unix_sys::{last_errno, poll_one, setsockopt_int, socket, socklen_of};
 
@@ -265,6 +265,57 @@ impl PacketIo for PacketFd {
             )
         };
         usize::try_from(n).map_err(|_| last_errno())
+    }
+
+    /// Одна пачка передачи: `sendmmsg` (MSG_NOSIGNAL, как `send`) первых `send_count` кадров, по одному `iovec` на
+    /// сообщение, без адреса (сокет привязан к ifindex, как у `send`). Массивы — на стеке вызова, длины
+    /// `TX_BATCH_FRAMES`; сырые указатели не переживают вызов, поэтому `PacketFd` остаётся `Send`.
+    fn send_many(&mut self, frames: &[&[u8]], lens: &mut [usize]) -> Result<usize, Errno> {
+        let n = send_count(frames.len(), lens.len())?;
+        let mut iov = [NO_IOV; TX_BATCH_FRAMES];
+        for (v, frame) in iov.iter_mut().zip(frames).take(n) {
+            *v = libc::iovec {
+                // Ядро только читает буфер передачи; `*mut` требует тип поля `iovec`.
+                iov_base: frame.as_ptr().cast_mut().cast::<libc::c_void>(),
+                iov_len: frame.len(),
+            };
+        }
+        let mut msgs = [NO_MSG; TX_BATCH_FRAMES];
+        for (m, v) in msgs.iter_mut().zip(iov.iter_mut()).take(n) {
+            *m = libc::mmsghdr {
+                msg_hdr: libc::msghdr {
+                    msg_name: ptr::null_mut(),
+                    msg_namelen: 0,
+                    msg_iov: &raw mut *v,
+                    msg_iovlen: 1,
+                    msg_control: ptr::null_mut(),
+                    msg_controllen: 0,
+                    msg_flags: 0,
+                },
+                msg_len: 0,
+            };
+        }
+        let vlen = libc::c_uint::try_from(n).map_err(|_| libc::EINVAL)?;
+        // SAFETY: ядру передаются первые `vlen` = n записей `msgs`, n = `send_count(..)` ≤ TX_BATCH_FRAMES = длине
+        // `msgs` и `iov` (проверено выше), n ≤ `frames.len()` и n ≤ `lens.len()`. У каждой из этих записей `msg_iov`
+        // указывает на свой живой `iovec` (`msg_iovlen` 1), а тот — на живой срез кадра `frames[i]` (i < n) с его
+        // длиной: срезы заимствованы на весь вызов, ядро их только читает. Адреса нет (NULL, 0), управляющих данных
+        // нет (NULL, 0). Ядро пишет только `msg_len` записей `msgs`, массивы живут до конца вызова и не перемещаются;
+        // fd валиден (владеет OwnedFd).
+        let rc = unsafe {
+            libc::sendmmsg(
+                self.fd.as_raw_fd(),
+                msgs.as_mut_ptr(),
+                vlen,
+                libc::MSG_NOSIGNAL,
+            )
+        };
+        // Ядро возвращает не больше `vlen` сообщений; -1 с errno — ошибка первого сообщения.
+        let k = usize::try_from(rc).map_err(|_| last_errno())?.min(n);
+        for (len, m) in lens.iter_mut().zip(&msgs).take(k) {
+            *len = usize::try_from(m.msg_len).unwrap_or(usize::MAX);
+        }
+        Ok(k)
     }
 
     fn recv(&mut self, buf: &mut [u8]) -> Result<RecvMeta, Errno> {

@@ -20,16 +20,27 @@ type ScriptedFrame = Result<(Vec<u8>, u8, i32), Errno>;
 
 #[derive(Default)]
 struct Script {
+    /// Исход каждого кадра по очереди, общий для `send` и `send_many`: `Ok(байт)` или errno.
     sends: VecDeque<Result<usize, Errno>>,
     /// Если очередь пуста: повторять эту ошибку вечно.
     send_forever: Option<Errno>,
+    /// Предел принятых сообщений для очередных вызовов `send_many` (ядро вернуло `k < n` без errno); `0` — вызов
+    /// возвращает `Ok(0)`, ничего не трогая. Пусто — без предела.
+    many_caps: VecDeque<usize>,
     recvs: VecDeque<ScriptedFrame>,
     recv_forever: Option<Errno>,
     polls: VecDeque<Result<Readiness, Errno>>,
     /// Если очередь пуста: спать запрошенный таймаут и вернуть Timeout.
     stats: VecDeque<Result<KernelStats, Errno>>,
+    /// Пауза перед заготовленным исходом `poll` (не дольше его таймаута): медленная готовность.
+    poll_delay: Duration,
     poll_ms: Vec<i32>,
     send_calls: usize,
+    /// Вызовы `send_many` (по одному `sendmmsg`) и кадры, предложенные каждым из них.
+    many_calls: usize,
+    many_offered: Vec<Vec<Vec<u8>>>,
+    /// Байты, принятые сокетом, по кадрам, в порядке приёма (`send` и `send_many`).
+    wire: Vec<Vec<u8>>,
     /// Все вызовы приёма: прямые `recv` и пачки `recv_batch`.
     recv_calls: usize,
     /// Из них пачки `recv_batch`.
@@ -63,15 +74,52 @@ fn fake(script: Script) -> (Fake, Arc<Mutex<Script>>, Arc<AtomicBool>) {
     )
 }
 
+impl Script {
+    /// Исход очередного кадра: голова очереди `sends`, иначе `send_forever`.
+    fn next_send(&mut self) -> Result<usize, Errno> {
+        match self.sends.pop_front() {
+            Some(r) => r,
+            None => Err(self.send_forever.expect("unexpected send syscall")),
+        }
+    }
+}
+
 impl PacketIo for Fake {
     fn send(&mut self, frame: &[u8]) -> Result<usize, Errno> {
         let mut s = self.s.lock().unwrap();
         s.send_calls += 1;
-        let _ = frame;
-        match s.sends.pop_front() {
-            Some(r) => r,
-            None => Err(s.send_forever.expect("unexpected send syscall")),
+        let r = s.next_send();
+        if let Ok(n) = r {
+            s.wire.push(frame[..n.min(frame.len())].to_vec());
         }
+        r
+    }
+    /// Модель `sendmmsg`: сообщения по очереди берут исходы кадров из `sends`. Ошибка на первом — `Err`; ошибка после
+    /// принятого префикса ядром теряется (вызов возвращает префикс), а её причина остаётся для следующего вызова
+    /// (исход возвращается в голову очереди). Короткое сообщение принято с меньшим числом байт, вызов идёт дальше.
+    fn send_many(&mut self, frames: &[&[u8]], lens: &mut [usize]) -> Result<usize, Errno> {
+        let n = send_count(frames.len(), lens.len())?;
+        let mut s = self.s.lock().unwrap();
+        s.many_calls += 1;
+        s.many_offered
+            .push(frames[..n].iter().map(|f| f.to_vec()).collect());
+        let cap = s.many_caps.pop_front().unwrap_or(n).min(n);
+        let mut k = 0;
+        while k < cap {
+            match s.next_send() {
+                Ok(len) => {
+                    lens[k] = len;
+                    s.wire.push(frames[k][..len.min(frames[k].len())].to_vec());
+                    k += 1;
+                }
+                Err(e) if k == 0 => return Err(e),
+                Err(e) => {
+                    s.sends.push_front(Err(e));
+                    break;
+                }
+            }
+        }
+        Ok(k)
     }
     fn recv(&mut self, buf: &mut [u8]) -> Result<RecvMeta, Errno> {
         let mut s = self.s.lock().unwrap();
@@ -132,14 +180,17 @@ impl PacketIo for Fake {
         }
     }
     fn poll(&mut self, _write: bool, timeout_ms: i32) -> Result<Readiness, Errno> {
-        let next = {
+        let (next, delay) = {
             let mut s = self.s.lock().unwrap();
             s.poll_ms.push(timeout_ms);
             s.poll_calls += 1;
-            s.polls.pop_front()
+            (s.polls.pop_front(), s.poll_delay)
         };
         match next {
-            Some(r) => r,
+            Some(r) => {
+                std::thread::sleep(delay.min(Duration::from_millis(timeout_ms as u64)));
+                r
+            }
             None => {
                 std::thread::sleep(Duration::from_millis(timeout_ms as u64));
                 Ok(Readiness::Timeout)
@@ -423,6 +474,701 @@ fn tx_poll_failure_is_fatal() {
     });
     assert!(t.send(&FRAME, MS50).is_err());
     assert!(dropped.load(Ordering::SeqCst));
+}
+
+// ---------------------------------------------------------------- TX batches (sendmmsg)
+
+/// `n` frames of 58 bytes, each different: bytes 0 and 1 are the frame number.
+fn frames58(n: usize) -> Vec<Vec<u8>> {
+    (0..n)
+        .map(|i| {
+            let mut f = FRAME.to_vec();
+            f[0] = i as u8;
+            f[1] = (i >> 8) as u8;
+            f
+        })
+        .collect()
+}
+
+fn refs(frames: &[Vec<u8>]) -> Vec<&[u8]> {
+    frames.iter().map(Vec::as_slice).collect()
+}
+
+/// `n` frames of 58 bytes each accepted whole.
+fn ok58(n: usize) -> impl Iterator<Item = Result<usize, Errno>> {
+    std::iter::repeat_n(Ok(58), n)
+}
+
+/// `tx_sent`, `tx_would_block`, `tx_uncertain`, `tx_errors`, `tx_batches`, `tx_batch_max`.
+fn tx_counts(c: &Arc<Counters>) -> [u64; 6] {
+    let s = snap(c);
+    [
+        s.tx_sent,
+        s.tx_would_block,
+        s.tx_uncertain,
+        s.tx_errors,
+        s.tx_batches,
+        s.tx_batch_max,
+    ]
+}
+
+const fn batch(sent: usize, rest: SendStatus) -> TxBatch {
+    TxBatch { sent, rest }
+}
+
+#[test]
+fn tx_batch_of_n_is_one_sendmmsg_and_counts_one_batch() {
+    assert_eq!(TX_BATCH_FRAMES, 64);
+    let (mut t, s, _, c) = tx(Script {
+        sends: ok58(8 + 3).collect(),
+        ..Default::default()
+    });
+    assert_eq!(t.max_batch(), TX_BATCH_FRAMES);
+    let f = frames58(8);
+    assert_eq!(
+        t.send_batch(&refs(&f), MS50),
+        Ok(batch(8, SendStatus::Sent))
+    );
+    {
+        let s = s.lock().unwrap();
+        assert_eq!((s.many_calls, s.send_calls, s.poll_calls), (1, 0, 0));
+        assert_eq!(s.many_offered, vec![f.clone()]);
+    }
+    assert_eq!(tx_counts(&c), [8, 0, 0, 0, 1, 8]);
+    let f = frames58(3);
+    assert_eq!(
+        t.send_batch(&refs(&f), MS50),
+        Ok(batch(3, SendStatus::Sent))
+    );
+    assert_eq!(s.lock().unwrap().many_calls, 2);
+    assert_eq!(
+        tx_counts(&c),
+        [11, 0, 0, 0, 2, 8],
+        "tx_batch_max keeps the largest batch"
+    );
+}
+
+#[test]
+fn tx_batch_of_one_uses_plain_send() {
+    let (mut t, s, _, c) = tx(Script {
+        sends: [Ok(58)].into(),
+        send_forever: Some(EAGAIN),
+        ..Default::default()
+    });
+    let f = frames58(1);
+    assert_eq!(
+        t.send_batch(&refs(&f), MS50),
+        Ok(batch(1, SendStatus::Sent))
+    );
+    assert_eq!(
+        t.send_batch(&refs(&f), Duration::from_millis(5)),
+        Ok(batch(0, SendStatus::WouldBlockUnsent))
+    );
+    let s = s.lock().unwrap();
+    assert_eq!(s.many_calls, 0, "one frame never takes sendmmsg");
+    assert!(s.send_calls >= 2, "{}", s.send_calls);
+    assert_eq!(s.wire, f);
+    assert_eq!(
+        tx_counts(&c),
+        [1, 1, 0, 0, 0, 0],
+        "the plain path counts no batch"
+    );
+}
+
+#[test]
+fn tx_batch_frames_reach_the_socket_in_order_unchanged() {
+    // 64 frames of different lengths and contents. The kernel takes 17, then 23 and loses the EAGAIN of frame 40,
+    // then returns it, then takes the rest: every frame reaches the socket once, in order, byte for byte.
+    let f: Vec<Vec<u8>> = (0..TX_BATCH_FRAMES)
+        .map(|i| (0..42 + i).map(|b| (i * 7 + b) as u8).collect())
+        .collect();
+    let mut sends: VecDeque<_> = f.iter().map(|x| Ok(x.len())).collect();
+    sends.insert(40, Err(EAGAIN));
+    let (mut t, s, _, c) = tx(Script {
+        sends,
+        many_caps: [17].into(),
+        polls: [Ok(Readiness::Ready)].into(),
+        ..Default::default()
+    });
+    assert_eq!(
+        t.send_batch(&refs(&f), MS50),
+        Ok(batch(TX_BATCH_FRAMES, SendStatus::Sent))
+    );
+    let s = s.lock().unwrap();
+    assert_eq!(s.wire, f);
+    assert_eq!(
+        s.many_offered,
+        vec![
+            f.clone(),
+            f[17..].to_vec(),
+            f[40..].to_vec(),
+            f[40..].to_vec()
+        ]
+    );
+    assert_eq!((s.poll_calls, s.send_calls), (1, 0));
+    assert_eq!(tx_counts(&c), [64, 0, 0, 0, 1, 64]);
+}
+
+#[test]
+fn tx_partial_sendmmsg_reissues_from_the_first_unsent_frame() {
+    // The kernel returns 3 of 8, then 2 of 5, without an errno: each reissue starts at the first unsent frame, at
+    // once (no poll), and no frame goes twice.
+    let f = frames58(8);
+    let (mut t, s, _, c) = tx(Script {
+        sends: ok58(8).collect(),
+        many_caps: [3, 2].into(),
+        ..Default::default()
+    });
+    assert_eq!(
+        t.send_batch(&refs(&f), MS50),
+        Ok(batch(8, SendStatus::Sent))
+    );
+    let s = s.lock().unwrap();
+    assert_eq!(
+        s.many_offered,
+        vec![f.clone(), f[3..].to_vec(), f[5..].to_vec()]
+    );
+    assert_eq!(s.wire, f);
+    assert_eq!((s.poll_calls, s.send_calls), (0, 0));
+    assert_eq!(tx_counts(&c), [8, 0, 0, 0, 1, 8]);
+}
+
+/// Review Focus 2: `sendmmsg` takes 3 of 8 and the kernel loses the errno of frame 3 (EAGAIN). The reissue from frame
+/// 3 returns the real EAGAIN, which waits in `poll(POLLOUT)` for what is left of the ONE deadline of the call; the
+/// prefix is counted once.
+#[test]
+fn tx_batch_lost_error_is_resolved_by_reissue_within_one_deadline() {
+    let f = frames58(8);
+    let (mut t, s, _, c) = tx(Script {
+        sends: ok58(3).collect(),
+        send_forever: Some(EAGAIN),
+        ..Default::default()
+    });
+    let t0 = Instant::now();
+    assert_eq!(
+        t.send_batch(&refs(&f), MS50),
+        Ok(batch(3, SendStatus::WouldBlockUnsent))
+    );
+    let e = t0.elapsed();
+    assert!(e < MS50 + SLACK, "{e:?}");
+    let s = s.lock().unwrap();
+    assert_eq!(s.many_offered, vec![f.clone(), f[3..].to_vec()]);
+    assert_eq!(
+        s.wire,
+        f[..3].to_vec(),
+        "the prefix reached the socket once"
+    );
+    let polled: i32 = s.poll_ms.iter().sum();
+    assert!(polled <= 50, "one deadline for the call: {:?}", s.poll_ms);
+    assert_eq!(s.poll_calls, 1);
+    assert_eq!(tx_counts(&c), [3, 1, 0, 0, 1, 8]);
+}
+
+#[test]
+fn tx_batch_fatal_error_keeps_the_single_path_outcome() {
+    let n = 8;
+    let text = format!("send: {}", os(ENETDOWN));
+    for pos in [0, 1, n - 1] {
+        let f = frames58(n);
+        let (mut t, s, dropped, c) = tx(Script {
+            sends: ok58(pos).chain([Err(ENETDOWN)]).collect(),
+            ..Default::default()
+        });
+        let got = t.send_batch(&refs(&f), MS50);
+        assert!(
+            dropped.load(Ordering::SeqCst),
+            "position {pos}: the fd closes at the failure"
+        );
+        if pos == 0 {
+            assert_eq!(got.unwrap_err().message, text);
+        } else {
+            assert_eq!(
+                got,
+                Ok(batch(pos, SendStatus::WouldBlockUnsent)),
+                "position {pos}"
+            );
+            let calls = {
+                let s = s.lock().unwrap();
+                (s.send_calls, s.many_calls, s.poll_calls)
+            };
+            // The engine offers frame `pos` again; the next call returns the deferred error without a syscall.
+            assert_eq!(
+                t.send_batch(&refs(&f[pos..]), MS50).unwrap_err().message,
+                text,
+                "position {pos}"
+            );
+            let s = s.lock().unwrap();
+            assert_eq!((s.send_calls, s.many_calls, s.poll_calls), calls);
+        }
+        assert_eq!(
+            t.send_batch(&refs(&f[pos..]), MS50).unwrap_err().message,
+            CLOSED
+        );
+        assert_eq!(s.lock().unwrap().wire, f[..pos].to_vec());
+        let st = snap(&c);
+        assert_eq!(
+            (st.tx_sent, st.tx_would_block, st.tx_uncertain, st.tx_errors),
+            (pos as u64, 0, 0, 1),
+            "position {pos}"
+        );
+    }
+}
+
+#[test]
+fn tx_batch_fatal_poll_after_a_prefix_is_deferred() {
+    for (poll, text) in [
+        (
+            Ok(Readiness::Failed),
+            "poll(POLLOUT): socket error".to_string(),
+        ),
+        (Err(EBADF), format!("poll(POLLOUT): {}", os(EBADF))),
+    ] {
+        let f = frames58(4);
+        let (mut t, _, dropped, c) = tx(Script {
+            sends: [Ok(58), Err(EAGAIN)].into(),
+            polls: [poll].into(),
+            ..Default::default()
+        });
+        assert_eq!(
+            t.send_batch(&refs(&f), MS50),
+            Ok(batch(1, SendStatus::WouldBlockUnsent))
+        );
+        assert!(dropped.load(Ordering::SeqCst));
+        assert_eq!(
+            t.send_batch(&refs(&f[1..]), MS50).unwrap_err().message,
+            text
+        );
+        assert_eq!(
+            t.send_batch(&refs(&f[1..]), MS50).unwrap_err().message,
+            CLOSED
+        );
+        assert_eq!(tx_counts(&c), [1, 0, 0, 1, 1, 4], "{text}");
+    }
+}
+
+#[test]
+fn send_returns_the_deferred_error_at_once() {
+    let f = frames58(4);
+    let (mut t, s, _, c) = tx(Script {
+        sends: [Ok(58), Ok(58), Err(ENETDOWN)].into(),
+        ..Default::default()
+    });
+    assert_eq!(
+        t.send_batch(&refs(&f), MS50),
+        Ok(batch(2, SendStatus::WouldBlockUnsent))
+    );
+    let calls = |s: &Script| (s.send_calls, s.many_calls, s.poll_calls, s.backoffs.len());
+    let before = calls(&s.lock().unwrap());
+    let counts = tx_counts(&c);
+    assert_eq!(
+        t.send(&FRAME, MS50).unwrap_err().message,
+        format!("send: {}", os(ENETDOWN))
+    );
+    assert_eq!(calls(&s.lock().unwrap()), before, "no seam call");
+    assert_eq!(tx_counts(&c), counts, "no new count");
+    assert_eq!(t.send(&FRAME, MS50).unwrap_err().message, CLOSED);
+    assert_eq!(calls(&s.lock().unwrap()), before);
+}
+
+#[test]
+fn tx_batch_zero_accepted_is_fatal_not_a_spin() {
+    let text = format!("send: {}", os(EIO));
+    // At the head: `Ok(0)` with no errno is the fatal EIO after one seam call; no frame is taken from the script.
+    let f = frames58(5);
+    let (mut t, s, dropped, c) = tx(Script {
+        many_caps: [0].into(),
+        ..Default::default()
+    });
+    assert_eq!(t.send_batch(&refs(&f), MS50).unwrap_err().message, text);
+    assert!(dropped.load(Ordering::SeqCst));
+    assert_eq!(s.lock().unwrap().many_calls, 1, "one call, no loop");
+    assert_eq!(tx_counts(&c), [0, 0, 0, 1, 1, 5]);
+    // After a prefix: the prefix is accepted and the same text is deferred.
+    let (mut t, s, _, c) = tx(Script {
+        sends: ok58(2).collect(),
+        many_caps: [2, 0].into(),
+        ..Default::default()
+    });
+    assert_eq!(
+        t.send_batch(&refs(&f), MS50),
+        Ok(batch(2, SendStatus::WouldBlockUnsent))
+    );
+    assert_eq!(
+        t.send_batch(&refs(&f[2..]), MS50).unwrap_err().message,
+        text
+    );
+    assert_eq!(s.lock().unwrap().many_calls, 2);
+    assert_eq!(tx_counts(&c), [2, 0, 0, 1, 1, 5]);
+}
+
+#[test]
+fn tx_batch_short_message_is_uncertain_at_that_frame() {
+    let f = frames58(6);
+    let (mut t, s, dropped, c) = tx(Script {
+        sends: [Ok(58), Ok(58), Ok(30), Ok(58), Ok(58), Ok(58)].into(),
+        ..Default::default()
+    });
+    assert_eq!(
+        t.send_batch(&refs(&f), MS50),
+        Ok(batch(2, SendStatus::Uncertain))
+    );
+    assert!(
+        !dropped.load(Ordering::SeqCst),
+        "the fd stays open, as on the single path"
+    );
+    assert_eq!(s.lock().unwrap().many_calls, 1);
+    assert_eq!(tx_counts(&c), [2, 0, 1, 0, 1, 6]);
+    // A short message at the head of a reissue: Uncertain at the frame the reissue started from.
+    let (mut t, _, _, c) = tx(Script {
+        sends: [Ok(58), Err(EAGAIN), Ok(30)]
+            .into_iter()
+            .chain(ok58(4))
+            .collect(),
+        polls: [Ok(Readiness::Ready)].into(),
+        ..Default::default()
+    });
+    assert_eq!(
+        t.send_batch(&refs(&f), MS50),
+        Ok(batch(1, SendStatus::Uncertain))
+    );
+    assert_eq!(tx_counts(&c), [1, 0, 1, 0, 1, 6]);
+}
+
+#[test]
+fn tx_batch_whole_call_respects_one_deadline() {
+    let f = frames58(TX_BATCH_FRAMES);
+    let timeout = Duration::from_millis(20);
+    // EINTR before every frame after the first: a pause of up to 1 ms each. 63 pauses would take ~63 ms; the ONE
+    // deadline of the call ends it first.
+    let (mut t, s, _, c) = tx(Script {
+        sends: (0..TX_BATCH_FRAMES)
+            .flat_map(|_| [Ok(58), Err(EINTR)])
+            .collect(),
+        ..Default::default()
+    });
+    let t0 = Instant::now();
+    let r = t.send_batch(&refs(&f), timeout).unwrap();
+    let e = t0.elapsed();
+    assert_eq!(r.rest, SendStatus::WouldBlockUnsent);
+    assert!(r.sent < TX_BATCH_FRAMES, "{r:?}");
+    assert!(e < timeout + SLACK, "{e:?}");
+    {
+        let s = s.lock().unwrap();
+        let waited: Duration = s.backoffs.iter().sum();
+        assert!(waited <= timeout, "{waited:?}");
+        assert!(s.backoffs.iter().all(|w| *w <= EINTR_BACKOFF_MAX));
+    }
+    assert_eq!(tx_counts(&c), [r.sent as u64, 1, 0, 0, 1, 64]);
+    // EAGAIN before every frame after the first, with slow readiness: each poll gets what is left of the same
+    // deadline (never a fresh one), so the timeouts never grow.
+    let (mut t, s, _, _) = tx(Script {
+        sends: (0..TX_BATCH_FRAMES)
+            .flat_map(|_| [Ok(58), Err(EAGAIN)])
+            .collect(),
+        polls: std::iter::repeat_n(Ok(Readiness::Ready), TX_BATCH_FRAMES).collect(),
+        poll_delay: Duration::from_millis(4),
+        ..Default::default()
+    });
+    let t0 = Instant::now();
+    let r = t.send_batch(&refs(&f), timeout).unwrap();
+    let e = t0.elapsed();
+    assert_eq!(r.rest, SendStatus::WouldBlockUnsent);
+    assert!(r.sent < TX_BATCH_FRAMES, "{r:?}");
+    assert!(e < timeout + SLACK, "{e:?}");
+    let s = s.lock().unwrap();
+    assert!(
+        s.poll_ms.windows(2).all(|w| w[1] <= w[0]),
+        "{:?}",
+        s.poll_ms
+    );
+    assert!(s.poll_ms.iter().all(|&m| m <= 20), "{:?}", s.poll_ms);
+}
+
+#[test]
+fn tx_batch_rejects_empty_and_oversized() {
+    let (mut t, s, _, c) = tx(Script {
+        sends: ok58(TX_BATCH_FRAMES).collect(),
+        ..Default::default()
+    });
+    assert_eq!(
+        t.send_batch(&[], MS50).unwrap_err().message,
+        "send_batch called with no frames; nothing was sent"
+    );
+    let f = frames58(TX_BATCH_FRAMES + 1);
+    assert_eq!(
+        t.send_batch(&refs(&f), MS50).unwrap_err().message,
+        "send_batch called with 65 frames, more than 64; nothing was sent"
+    );
+    {
+        let s = s.lock().unwrap();
+        assert_eq!((s.send_calls, s.many_calls, s.poll_calls), (0, 0, 0));
+    }
+    assert_eq!(tx_counts(&c), [0; 6], "nothing counted");
+    // The adapter stays usable: a full batch goes out.
+    assert_eq!(
+        t.send_batch(&refs(&f[..TX_BATCH_FRAMES]), MS50),
+        Ok(batch(TX_BATCH_FRAMES, SendStatus::Sent))
+    );
+}
+
+#[test]
+fn send_many_count_is_bounded() {
+    assert_eq!(send_count(0, TX_BATCH_FRAMES), Err(EINVAL));
+    assert_eq!(send_count(5, 0), Err(EINVAL));
+    assert_eq!(send_count(0, 0), Err(EINVAL));
+    assert_eq!(send_count(1, 1), Ok(1));
+    assert_eq!(send_count(3, TX_BATCH_FRAMES), Ok(3));
+    assert_eq!(send_count(TX_BATCH_FRAMES, 3), Ok(3));
+    assert_eq!(send_count(TX_BATCH_FRAMES, TX_BATCH_FRAMES), Ok(64));
+    assert_eq!(send_count(TX_BATCH_FRAMES + 1, TX_BATCH_FRAMES), Ok(64));
+    assert_eq!(send_count(TX_BATCH_FRAMES, 100), Ok(64));
+    assert_eq!(send_count(usize::MAX, usize::MAX), Ok(64));
+    // The seam refuses an empty call before it takes anything, and never takes more than the count.
+    let (mut io, s, _) = fake(Script {
+        sends: ok58(100).collect(),
+        ..Default::default()
+    });
+    let mut lens = [0usize; TX_BATCH_FRAMES];
+    assert_eq!(io.send_many(&[], &mut lens), Err(EINVAL));
+    let f = frames58(70);
+    assert_eq!(io.send_many(&refs(&f), &mut []), Err(EINVAL));
+    assert_eq!(s.lock().unwrap().many_calls, 0, "no syscall");
+    let mut big = [0usize; 100];
+    assert_eq!(io.send_many(&refs(&f), &mut big), Ok(64));
+    assert_eq!(io.send_many(&refs(&f[..10]), &mut lens[..4]), Ok(4));
+    assert_eq!(s.lock().unwrap().wire.len(), 68);
+}
+
+/// One per-frame script of the TX seam: the outcome of each frame in order (`sends`, then `send_forever`), the
+/// readiness answers and the per-call caps of `send_many`.
+struct TxCase {
+    name: String,
+    sends: Vec<Result<usize, Errno>>,
+    send_forever: Option<Errno>,
+    polls: Vec<Result<Readiness, Errno>>,
+    many_caps: Vec<usize>,
+}
+
+impl TxCase {
+    fn script(&self) -> Script {
+        Script {
+            sends: self.sends.clone().into(),
+            send_forever: self.send_forever,
+            polls: self.polls.clone().into(),
+            many_caps: self.many_caps.clone().into(),
+            ..Default::default()
+        }
+    }
+}
+
+/// Every kind of outcome at the head, after one frame, in the middle and at the last frame of `n`. With
+/// `caps`, also the kernel's partial accepts without an errno and the zero accept (no single-path equivalent).
+fn tx_cases(n: usize, caps: bool) -> Vec<TxCase> {
+    let mut out = Vec::new();
+    let mut add = |name: String, sends: Vec<Result<usize, Errno>>, forever, polls, many_caps| {
+        out.push(TxCase {
+            name,
+            sends,
+            send_forever: forever,
+            polls,
+            many_caps,
+        })
+    };
+    add("all sent".into(), ok58(n).collect(), None, vec![], vec![]);
+    let mut at = vec![0, 1, n / 2, n - 1];
+    at.dedup();
+    for p in at {
+        let pre = || ok58(p).collect::<Vec<_>>();
+        let tail = || ok58(n - p - 1).collect::<Vec<_>>();
+        let with =
+            |mid: &[Result<usize, Errno>], tail: Vec<_>| [pre(), mid.to_vec(), tail].concat();
+        add(
+            format!("short at {p}"),
+            with(&[Ok(30)], tail()),
+            None,
+            vec![],
+            vec![],
+        );
+        add(
+            format!("EAGAIN once at {p}"),
+            with(&[Err(EAGAIN), Ok(58)], tail()),
+            None,
+            vec![Ok(Readiness::Ready)],
+            vec![],
+        );
+        add(
+            format!("EAGAIN forever from {p}"),
+            pre(),
+            Some(EAGAIN),
+            vec![],
+            vec![],
+        );
+        add(
+            format!("ENETDOWN at {p}"),
+            with(&[Err(ENETDOWN)], vec![]),
+            None,
+            vec![],
+            vec![],
+        );
+        add(
+            format!("poll fails at {p}"),
+            with(&[Err(EAGAIN)], vec![]),
+            None,
+            vec![Ok(Readiness::Failed)],
+            vec![],
+        );
+        add(
+            format!("poll error at {p}"),
+            with(&[Err(EAGAIN)], vec![]),
+            None,
+            vec![Err(EBADF)],
+            vec![],
+        );
+        add(
+            format!("poll EINTR at {p}"),
+            with(&[Err(EAGAIN), Ok(58)], tail()),
+            None,
+            vec![Err(EINTR), Ok(Readiness::Ready)],
+            vec![],
+        );
+        add(
+            format!("EINTR once at {p}"),
+            with(&[Err(EINTR), Ok(58)], tail()),
+            None,
+            vec![],
+            vec![],
+        );
+        add(
+            format!("EINTR forever from {p}"),
+            pre(),
+            Some(EINTR),
+            vec![],
+            vec![],
+        );
+        if caps {
+            add(
+                format!("kernel takes {} per call", p.max(1)),
+                ok58(n).collect(),
+                None,
+                vec![],
+                vec![p.max(1); n],
+            );
+            add(
+                format!("zero accept after {p}"),
+                pre(),
+                None,
+                vec![],
+                if p == 0 { vec![0] } else { vec![p, 0] },
+            );
+        }
+    }
+    out
+}
+
+/// What a call left: the frames accepted and the outcome of the first frame not accepted (`Err` = fatal text).
+type FrameOutcome = (usize, Result<SendStatus, String>);
+
+/// The batch path, with a deferred fatal error read as the fatal outcome of frame `sent`.
+fn batch_outcome_of(t: &mut TxHalf<Fake>, frames: &[&[u8]], timeout: Duration) -> FrameOutcome {
+    match t.send_batch(frames, timeout) {
+        Ok(r) => match t.deferred.clone() {
+            Some(msg) => (r.sent, Err(msg)),
+            None => (r.sent, Ok(r.rest)),
+        },
+        Err(e) => (0, Err(e.message)),
+    }
+}
+
+/// The single path: one `send` per frame until the first outcome that is not `Sent`.
+fn single_outcome_of(t: &mut TxHalf<Fake>, frames: &[&[u8]], timeout: Duration) -> FrameOutcome {
+    for (i, frame) in frames.iter().enumerate() {
+        match t.send(frame, timeout) {
+            Ok(SendStatus::Sent) => {}
+            Ok(status) => return (i, Ok(status)),
+            Err(e) => return (i, Err(e.message)),
+        }
+    }
+    (frames.len(), Ok(SendStatus::Sent))
+}
+
+#[test]
+fn tx_batch_invariant_sent_eq_n_iff_sent() {
+    let timeout = Duration::from_millis(3);
+    for n in [2, 3, 8, TX_BATCH_FRAMES] {
+        let f = frames58(n);
+        for case in tx_cases(n, true) {
+            let (mut t, _, _, c) = tx(case.script());
+            let name = format!("n {n}, {}", case.name);
+            match t.send_batch(&refs(&f), timeout) {
+                Ok(r) => {
+                    assert!(r.sent <= n, "{name}: {r:?}");
+                    assert_eq!(r.sent == n, r.rest == SendStatus::Sent, "{name}: {r:?}");
+                    if t.deferred.is_some() {
+                        assert!(
+                            r.sent > 0 && r.rest == SendStatus::WouldBlockUnsent,
+                            "{name}: {r:?}"
+                        );
+                    }
+                    assert_eq!(snap(&c).tx_sent, r.sent as u64, "{name}");
+                }
+                Err(_) => assert_eq!(snap(&c).tx_sent, 0, "{name}"),
+            }
+            assert_eq!(
+                (snap(&c).tx_batches, snap(&c).tx_batch_max),
+                (1, n as u64),
+                "{name}"
+            );
+        }
+    }
+}
+
+#[test]
+fn tx_batch_counters_match_the_single_path_accounting() {
+    let timeout = Duration::from_millis(3);
+    for n in [2, 8] {
+        let f = frames58(n);
+        for case in tx_cases(n, false) {
+            let (mut single, ss, _, sc) = tx(case.script());
+            let (mut batched, bs, _, bc) = tx(case.script());
+            let want = single_outcome_of(&mut single, &refs(&f), timeout);
+            let got = batch_outcome_of(&mut batched, &refs(&f), timeout);
+            let name = format!("n {n}, {}", case.name);
+            assert_eq!(got, want, "{name}: outcome at the same frame");
+            let (s, b) = (snap(&sc), snap(&bc));
+            assert_eq!(
+                (b.tx_sent, b.tx_would_block, b.tx_uncertain, b.tx_errors),
+                (s.tx_sent, s.tx_would_block, s.tx_uncertain, s.tx_errors),
+                "{name}: counters"
+            );
+            assert_eq!((s.tx_batches, s.tx_batch_max), (0, 0), "{name}");
+            assert_eq!((b.tx_batches, b.tx_batch_max), (1, n as u64), "{name}");
+            let accepted = want.0;
+            assert_eq!(
+                bs.lock().unwrap().wire[..accepted],
+                ss.lock().unwrap().wire[..accepted],
+                "{name}: the accepted frames on the wire"
+            );
+            // After a fatal outcome both paths are closed; the batch path first returns its deferred text.
+            if let Err(text) = &want.1 {
+                assert_eq!(single.send(&FRAME, MS50).unwrap_err().message, CLOSED);
+                if accepted > 0 {
+                    assert_eq!(
+                        batched
+                            .send_batch(&refs(&f[accepted..]), MS50)
+                            .unwrap_err()
+                            .message,
+                        *text,
+                        "{name}"
+                    );
+                }
+                assert_eq!(
+                    batched.send_batch(&refs(&f), MS50).unwrap_err().message,
+                    CLOSED,
+                    "{name}"
+                );
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------- RX
@@ -1070,6 +1816,28 @@ fn health_between_batches_reads_fresh_drops_and_keeps_buffered_frames() {
     assert!(s.stats.is_empty(), "each health read the kernel once");
 }
 
+/// The deadline is checked after every dropped record, also inside a batch: with `Duration::ZERO` the call ends on
+/// the dropped outgoing frame, and the frame behind it waits in the ring for the next call (no new receive).
+#[test]
+fn rx_deadline_expiry_inside_a_batch_keeps_the_rest_of_the_ring() {
+    let (mut r, s, _, c) = rx(Script {
+        recvs: [
+            Ok((vec![1; 10], PACKET_OUTGOING, IFINDEX as i32)),
+            frame(&[2, 2]),
+        ]
+        .into(),
+        ..Default::default()
+    });
+    let mut buf = [0u8; 16];
+    assert_eq!(r.recv(&mut buf, Duration::ZERO), Ok(None));
+    assert_eq!(rx_counts(&c), [0, 1, 0, 0, 0]);
+    assert_eq!(r.recv(&mut buf, MS50), Ok(Some(2)));
+    assert_eq!(&buf[..2], &[2, 2]);
+    let s = s.lock().unwrap();
+    assert_eq!((s.recv_calls, s.batch_calls), (1, 1));
+    assert_eq!(rx_counts(&c), [1, 1, 0, 0, 0]);
+}
+
 // ---------------------------------------------------------------- binding
 
 struct FakeIface {
@@ -1460,6 +2228,13 @@ struct BenchIo {
 impl PacketIo for BenchIo {
     fn send(&mut self, frame: &[u8]) -> Result<usize, Errno> {
         Ok(frame.len())
+    }
+    fn send_many(&mut self, frames: &[&[u8]], lens: &mut [usize]) -> Result<usize, Errno> {
+        let n = send_count(frames.len(), lens.len())?;
+        for (len, frame) in lens.iter_mut().zip(frames).take(n) {
+            *len = frame.len();
+        }
+        Ok(n)
     }
     fn recv(&mut self, buf: &mut [u8]) -> Result<RecvMeta, Errno> {
         let n = self.frame.len().min(buf.len());

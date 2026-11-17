@@ -15,7 +15,7 @@ use std::sync::Arc;
 use super::ffi::{
     BPF_RET_K, BpfInsn, BpfProgram, DLT_EN10MB, DLT_IEEE802_11_RADIO, DLT_NULL, NEXT_EX_EOF,
     NEXT_EX_OK, NEXT_EX_TIMEOUT, PCAP_ERRBUF_SIZE, PCAP_IF_LOOPBACK, PCAP_NETMASK_UNKNOWN, PcapIf,
-    PcapPkthdr, PcapSendQueue, PcapStat, PcapT, SENDQUEUE_RECORD_HEADER,
+    PcapPkthdr, PcapSendQueue, PcapStat, PcapT,
 };
 use super::loader::NpcapApi;
 use crate::NetError;
@@ -23,14 +23,16 @@ use crate::NetError;
 /// Верхняя граница длины имени устройства (`\Device\NPF_{GUID}` это 49 байт).
 pub(crate) const MAX_DEVICE_NAME: usize = 1024;
 
-/// [`SENDQUEUE_RECORD_HEADER`] как `u32` размеров записей очереди.
+/// [`SENDQUEUE_RECORD_HEADER`](super::ffi::SENDQUEUE_RECORD_HEADER) как `u32` размеров записей очереди (их ведут
+/// только тесты).
+#[cfg(test)]
 #[allow(
     clippy::cast_possible_truncation,
     reason = "a 16-byte header; the assert proves that it fits u32"
 )]
 const RECORD_HEADER_U32: u32 = {
-    assert!(SENDQUEUE_RECORD_HEADER <= 0xFFFF_FFFF);
-    SENDQUEUE_RECORD_HEADER as u32
+    assert!(super::ffi::SENDQUEUE_RECORD_HEADER <= 0xFFFF_FFFF);
+    super::ffi::SENDQUEUE_RECORD_HEADER as u32
 };
 
 const PCAP_ERROR_NO_SUCH_DEVICE: c_int = -5;
@@ -220,11 +222,12 @@ impl PcapHandle {
         Ok(())
     }
 
-    /// `pcap_getnonblock`: 0/1, либо отрицательный код ошибки.
-    pub(crate) fn get_nonblock(&mut self) -> c_int {
+    /// `pcap_getnonblock`: неотрицательный код это `Ok(код == 1)`, отрицательный код ошибки это `Err(код)`.
+    pub(crate) fn get_nonblock(&mut self) -> Result<bool, c_int> {
         let mut err: [c_char; PCAP_ERRBUF_SIZE] = [0; PCAP_ERRBUF_SIZE];
         // SAFETY: raw валиден и активирован; err имеет PCAP_ERRBUF_SIZE байт.
-        unsafe { (self.api.fns.getnonblock)(self.raw.as_ptr(), err.as_mut_ptr()) }
+        let v = unsafe { (self.api.fns.getnonblock)(self.raw.as_ptr(), err.as_mut_ptr()) };
+        if v >= 0 { Ok(v == 1) } else { Err(v) }
     }
 
     /// Один `pcap_next_ex`. Указатель кадра действителен до следующего вызова
@@ -297,14 +300,15 @@ impl PcapHandle {
         }
     }
 
-    /// Синхронный `pcap_sendpacket`: сырой код (0 успех, иначе ошибка). Кадр
-    /// длиннее `i32::MAX` отвергается без вызова (-1).
-    pub(crate) fn send_raw(&mut self, frame: &[u8]) -> c_int {
+    /// Синхронный `pcap_sendpacket`: `Ok` при коде 0, иначе `Err(код)` как есть. Кадр
+    /// длиннее `i32::MAX` отвергается без вызова (`Err(-1)`).
+    pub(crate) fn send_raw(&mut self, frame: &[u8]) -> Result<(), c_int> {
         let Ok(n) = c_int::try_from(frame.len()) else {
-            return -1;
+            return Err(-1);
         };
         // SAFETY: raw валиден; frame валиден на n байт на время вызова.
-        unsafe { (self.api.fns.sendpacket)(self.raw.as_ptr(), frame.as_ptr(), n) }
+        let rc = unsafe { (self.api.fns.sendpacket)(self.raw.as_ptr(), frame.as_ptr(), n) };
+        if rc == 0 { Ok(()) } else { Err(rc) }
     }
 
     /// `pcap_stats`: структура при rc 0, иначе сырой код ошибки.
@@ -329,7 +333,9 @@ pub(crate) struct SendQueue {
     /// Только для проверок в тестах (`capacity()`).
     #[cfg(test)]
     capacity: u32,
-    /// Размер каждой записи (`16 + caplen`) в порядке постановки.
+    /// Размер каждой записи (`16 + caplen`) в порядке постановки; только для проверок в тестах
+    /// (`record_sizes`, `len`, `is_empty`).
+    #[cfg(test)]
     records: Vec<u32>,
     api: Arc<NpcapApi>,
 }
@@ -362,6 +368,7 @@ impl SendQueue {
             raw,
             #[cfg(test)]
             capacity: bytes,
+            #[cfg(test)]
             records: Vec::new(),
             api: Arc::clone(api),
         })
@@ -386,6 +393,7 @@ impl SendQueue {
         if rc != 0 {
             return Err(rc);
         }
+        #[cfg(test)]
         self.records.push(caplen.saturating_add(RECORD_HEADER_U32));
         Ok(())
     }
@@ -405,7 +413,7 @@ impl SendQueue {
             return Err(rc);
         }
         self.records
-            .push(hdr.caplen.saturating_add(SENDQUEUE_RECORD_HEADER as u32));
+            .push(hdr.caplen.saturating_add(RECORD_HEADER_U32));
         Ok(())
     }
 
@@ -443,6 +451,7 @@ impl SendQueue {
 
     /// Освобождает очередь для повторного использования: `len = 0`.
     pub(crate) fn clear(&mut self) {
+        #[cfg(test)]
         self.records.clear();
         // SAFETY: raw валиден; `len` публичное поле структуры (единственный
         // писатель pcap_sendqueue_queue, читающий только len/maxlen), &mut

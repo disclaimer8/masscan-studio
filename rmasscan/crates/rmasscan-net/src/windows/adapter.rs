@@ -152,31 +152,35 @@ impl TxHalf {
             frame.len()
         )))
     }
+
+    /// Кадр, длина которого уже проверена (`check_len`): ровно один синхронный вызов, без повторов; `timeout` не
+    /// применим: pcap_sendpacket нельзя отменить (граница измерена в спайке).
+    fn send_checked(&mut self, frame: &[u8]) -> SendStatus {
+        let t = Instant::now();
+        let sent = self.handle.send_raw(frame).is_ok();
+        self.note_duration(t.elapsed());
+        if sent {
+            Counters::bump(&self.counters.tx_sent);
+            SendStatus::Sent
+        } else {
+            Counters::bump(&self.counters.tx_uncertain);
+            SendStatus::Uncertain
+        }
+    }
 }
 
 impl Tx for TxHalf {
     fn send(&mut self, frame: &[u8], _timeout: Duration) -> Result<SendStatus, IoError> {
         // Проверка ДО вызова драйвера: кадр не уходит, исход известен.
         self.check_len(frame)?;
-        // Ровно один синхронный вызов, без повторов; `timeout` не применим:
-        // pcap_sendpacket нельзя отменить (граница измерена в спайке).
-        let t = Instant::now();
-        let rc = self.handle.send_raw(frame);
-        self.note_duration(t.elapsed());
-        if rc == 0 {
-            Counters::bump(&self.counters.tx_sent);
-            Ok(SendStatus::Sent)
-        } else {
-            Counters::bump(&self.counters.tx_uncertain);
-            Ok(SendStatus::Uncertain)
-        }
+        Ok(self.send_checked(frame))
     }
 
     fn max_batch(&self) -> usize {
         TX_BATCH_FRAMES
     }
 
-    fn send_batch(&mut self, frames: &[&[u8]], timeout: Duration) -> Result<TxBatch, IoError> {
+    fn send_batch(&mut self, frames: &[&[u8]], _timeout: Duration) -> Result<TxBatch, IoError> {
         if frames.is_empty() {
             return Err(IoError::new(
                 "send_batch called with no frames; nothing was sent",
@@ -193,8 +197,8 @@ impl Tx for TxHalf {
             self.check_len(frame)?;
         }
         if let [one] = frames {
-            // Один кадр: принятый путь `pcap_sendpacket`, очередь не нужна.
-            let rest = self.send(one, timeout)?;
+            // Один кадр: принятый путь `pcap_sendpacket`, очередь не нужна; длина уже проверена выше.
+            let rest = self.send_checked(one);
             return Ok(TxBatch {
                 sent: usize::from(rest == SendStatus::Sent),
                 rest,
@@ -397,7 +401,8 @@ pub(crate) fn open_with(
         },
     )?;
     rx.set_nonblock(true)?;
-    if rx.get_nonblock() != 1 {
+    // Один текст на всё, кроме `Ok(true)`: и «всё ещё блокирующий», и ошибка `pcap_getnonblock`.
+    if rx.get_nonblock() != Ok(true) {
         return Err(NetError::System(
             "pcap_setnonblock did not take effect on the RX handle".into(),
         ));

@@ -10,12 +10,13 @@
 //! замена по итогам спайка меняет только этот файл.
 
 use std::ffi::CString;
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+use std::os::fd::{AsFd, AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::time::Duration;
 
 use super::Errno;
 use super::abi::{BpfInsn, BpfStat, HDR_OFF_CAPLEN, HDR_OFF_DATALEN, HDR_OFF_HDRLEN};
 use super::adapter::{BpfIo, BpfOpener, BpfSetup, Readiness};
+use crate::unix_sys::{last_errno, poll_one};
 
 /// `struct bpf_hdr` (net/bpf.h, `__LP64__`: `BPF_TIMEVAL = timeval32`): sizeof 20 (tail
 /// padding), как `libc::bpf_hdr`. Заголовок записи, который реально пишет ядро, это
@@ -63,12 +64,6 @@ pub(crate) const BIOCGSEESENT: libc::c_ulong = 0x4004_4276;
 pub(crate) const BIOCSRTIMEOUT: libc::c_ulong = 0x8010_426d;
 
 pub(crate) const IFT_ETHER: u8 = 0x06;
-
-fn last_errno() -> Errno {
-    std::io::Error::last_os_error()
-        .raw_os_error()
-        .unwrap_or(libc::EIO)
-}
 
 /// `ioctl` с указателем на значение вызывающего. Размер `T` обязан совпадать с
 /// `IOCPARM_LEN(req)` (биты 16..29 запроса): иначе `EINVAL` до системного вызова.
@@ -156,19 +151,10 @@ impl BpfIo for BpfFd {
     }
 
     fn poll_in(&mut self, timeout_ms: i32) -> Result<Readiness, Errno> {
-        let mut p = libc::pollfd {
-            fd: self.fd.as_raw_fd(),
-            events: libc::POLLIN,
-            revents: 0,
-        };
-        // SAFETY: `p` это одна валидная `pollfd`, `nfds == 1`.
-        let rc = unsafe { libc::poll(&mut p, 1, timeout_ms) };
-        if rc < 0 {
-            return Err(last_errno());
-        }
+        let (rc, revents) = poll_one(self.fd.as_fd(), libc::POLLIN, timeout_ms)?;
         Ok(if rc == 0 {
             Readiness::Timeout
-        } else if p.revents & libc::POLLIN != 0 {
+        } else if revents & libc::POLLIN != 0 {
             Readiness::Ready
         } else {
             Readiness::Failed
@@ -286,13 +272,7 @@ fn sysctl_read(name: &str, buf: Option<&mut [u8]>) -> Result<usize, Errno> {
     // null (запрос размера, `len == 0`), либо указывает на `len` записываемых
     // байт буфера вызывающего; новое значение не задаётся (null, 0).
     let rc = unsafe { libc::sysctlbyname(c.as_ptr(), ptr, &mut len, std::ptr::null_mut(), 0) };
-    if rc == 0 {
-        Ok(len)
-    } else {
-        Err(std::io::Error::last_os_error()
-            .raw_os_error()
-            .unwrap_or(libc::EIO))
-    }
+    if rc == 0 { Ok(len) } else { Err(last_errno()) }
 }
 
 /// Строковый sysctl (без завершающего NUL). `Err(ENOENT)`, если ключа нет.

@@ -7,7 +7,9 @@ use std::ffi::c_int;
 use std::mem;
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd};
 
-use super::{Errno, RX_SOCKET_BUFFER, ioctl_socket, request_rx_buffer, set_int_opt};
+use super::{Errno, RX_SOCKET_BUFFER, ioctl_socket, request_rx_buffer};
+// The helper of task 2b moved to the shared Unix primitives; these tests keep its old name.
+use crate::unix_sys::setsockopt_int as set_int_opt;
 
 /// `getsockopt` of one `c_int` option of `fd`.
 fn get_int_opt(fd: BorrowedFd<'_>, level: c_int, name: c_int) -> c_int {

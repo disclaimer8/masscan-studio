@@ -1,49 +1,26 @@
-//! Private FFI-слой Linux AF_PACKET. ЕДИНСТВЕННОЕ место с `unsafe` во всём
-//! workspace. Каждый syscall завернут в безопасную функцию/метод; наружу не
-//! выходят сырые указатели и неочищаемые ресурсы:
+//! Private FFI-слой Linux AF_PACKET. Каждый syscall завернут в безопасную
+//! функцию/метод; наружу не выходят сырые указатели и неочищаемые ресурсы.
+//! `socket`, `poll` одного fd и `setsockopt` целого идут через общие
+//! примитивы `crate::unix_sys`; здесь остаются `bind`, `send`, `recvfrom`,
+//! `getsockopt` и ioctl интерфейса:
 //!
 //! * fd всегда живёт в `OwnedFd` (закрывается в Drop ровно один раз);
 //! * все буферы это срезы Rust, длина берётся из самого среза;
-//! * C-структуры инициализируются нулями (`mem::zeroed`) только для типов,
-//!   состоящих из целых и массивов целых, для которых нулевой образ корректен;
+//! * `sockaddr_ll` собирается литералом структуры (все поля публичны);
+//!   нулями (`mem::zeroed`) инициализируется только `ifreq` (union);
 //! * других ресурсов libc, требующих освобождения, нет.
 
 use std::ffi::CString;
 use std::mem;
-use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd};
+use std::os::fd::{AsFd, AsRawFd, OwnedFd};
 
 use super::{Errno, IfaceInfo, KernelStats, PacketIo, Readiness, RecvMeta};
-
-fn last_errno() -> Errno {
-    std::io::Error::last_os_error()
-        .raw_os_error()
-        .unwrap_or(libc::EIO)
-}
+use crate::unix_sys::{last_errno, poll_one, setsockopt_int, socket};
 
 /// Буфер приёма, который просит RX-сокет (P5): 4 MiB. С буфером по умолчанию (`net.core.rmem_default`, около
 /// 208 KiB, ≈190 кадров RST) пауза потока RX в несколько миллисекунд при десятках тысяч ответов в секунду
 /// переполняет очередь сокета, а движок считает любую потерю ядра фатальной (`RxLoss`).
 const RX_SOCKET_BUFFER: libc::c_int = 4 << 20;
-
-/// `setsockopt` целого значения; `Err` несёт errno.
-fn set_int_opt(
-    fd: BorrowedFd<'_>,
-    level: libc::c_int,
-    name: libc::c_int,
-    value: libc::c_int,
-) -> Result<(), Errno> {
-    // SAFETY: указатель и длина описывают живой `value`; `fd` заимствован, поэтому открыт всё время вызова.
-    let rc = unsafe {
-        libc::setsockopt(
-            fd.as_raw_fd(),
-            level,
-            name,
-            (&raw const value).cast::<libc::c_void>(),
-            mem::size_of::<libc::c_int>() as libc::socklen_t,
-        )
-    };
-    if rc < 0 { Err(last_errno()) } else { Ok(()) }
-}
 
 /// Запрос буфера приёма RX-сокета через `set(name, value)` = `setsockopt(SOL_SOCKET, name, value)`: сначала
 /// `SO_RCVBUFFORCE` (нужен CAP_NET_ADMIN, снимает предел `net.core.rmem_max`), при `EPERM` — `SO_RCVBUF` (ядро
@@ -63,7 +40,24 @@ pub(super) const ETH_P_ALL_BE: u16 = (libc::ETH_P_ALL as u16).to_be();
 
 /// Минимальный размер адреса, при котором доступны `sll_ifindex` и
 /// `sll_pkttype` (offsetof(sll_addr) == 12).
-pub(super) const SLL_MIN_LEN: usize = 12;
+pub(super) const SLL_MIN_LEN: usize = mem::offset_of!(libc::sockaddr_ll, sll_addr);
+
+/// `sockaddr_ll` с семейством, протоколом и ifindex; остальные поля нулевые.
+fn sockaddr_ll(
+    family: libc::c_ushort,
+    protocol_be: u16,
+    ifindex: libc::c_int,
+) -> libc::sockaddr_ll {
+    libc::sockaddr_ll {
+        sll_family: family,
+        sll_protocol: protocol_be,
+        sll_ifindex: ifindex,
+        sll_hatype: 0,
+        sll_pkttype: 0,
+        sll_halen: 0,
+        sll_addr: [0; 8],
+    }
+}
 
 /// Неблокирующий AF_PACKET SOCK_RAW fd, привязанный к одному ifindex.
 pub(super) struct PacketFd {
@@ -74,35 +68,24 @@ impl PacketFd {
     /// Создаёт сокет БЕЗ протокола (ничего не принимает до bind) и привязывает
     /// его к `ifindex`. `protocol_be == 0` для TX, `ETH_P_ALL_BE` для RX.
     pub(super) fn open(ifindex: u32, protocol_be: u16) -> Result<PacketFd, Errno> {
-        // SAFETY: socket() принимает только целые аргументы; предусловий по
-        // памяти нет. Результат проверяется ниже.
-        let raw = unsafe {
-            libc::socket(
-                libc::AF_PACKET,
-                libc::SOCK_RAW | libc::SOCK_NONBLOCK | libc::SOCK_CLOEXEC,
-                0,
-            )
-        };
-        if raw < 0 {
-            return Err(last_errno());
-        }
-        // SAFETY: `raw` только что вернул socket(), он >= 0 и больше нигде не
-        // хранится, поэтому OwnedFd становится единственным владельцем.
-        let fd = unsafe { OwnedFd::from_raw_fd(raw) };
+        let fd = socket(
+            libc::AF_PACKET,
+            libc::SOCK_RAW | libc::SOCK_NONBLOCK | libc::SOCK_CLOEXEC,
+            0,
+        )?;
         if protocol_be == ETH_P_ALL_BE {
             // Только RX-сокет, до bind (после bind кадры уже идут в очередь): буфер приёма 4 MiB (P5). Любой отказ
             // безвреден, как у PACKET_IGNORE_OUTGOING ниже: сокет остаётся с буфером по умолчанию.
             let _ = request_rx_buffer(|name, value| {
-                set_int_opt(fd.as_fd(), libc::SOL_SOCKET, name, value)
+                setsockopt_int(fd.as_fd(), libc::SOL_SOCKET, name, value)
             });
         }
 
-        // SAFETY: sockaddr_ll состоит из целых и массива u8; нулевой образ
-        // корректен.
-        let mut addr: libc::sockaddr_ll = unsafe { mem::zeroed() };
-        addr.sll_family = libc::AF_PACKET as libc::c_ushort;
-        addr.sll_protocol = protocol_be;
-        addr.sll_ifindex = ifindex as libc::c_int;
+        let addr = sockaddr_ll(
+            libc::AF_PACKET as libc::c_ushort,
+            protocol_be,
+            ifindex as libc::c_int,
+        );
         // SAFETY: `addr` живёт до конца вызова, указатель и длина описывают
         // именно этот объект; fd валиден (владеет OwnedFd).
         let rc = unsafe {
@@ -123,9 +106,13 @@ impl PacketFd {
             // переполняется и ядро роняет настоящие ответы. PACKET_IGNORE_OUTGOING
             // (SOL_PACKET, 23, Linux 4.20+) отбрасывает их в ядре. На старых ядрах setsockopt
             // безвредно падает, и запасным остаётся user-space фильтр PACKET_OUTGOING.
-            const PACKET_IGNORE_OUTGOING: libc::c_int = 23;
             // Результат намеренно игнорируется (см. выше).
-            let _ = set_int_opt(fd.as_fd(), libc::SOL_PACKET, PACKET_IGNORE_OUTGOING, 1);
+            let _ = setsockopt_int(
+                fd.as_fd(),
+                libc::SOL_PACKET,
+                libc::PACKET_IGNORE_OUTGOING,
+                1,
+            );
         }
         Ok(PacketFd { fd })
     }
@@ -147,8 +134,7 @@ impl PacketIo for PacketFd {
     }
 
     fn recv(&mut self, buf: &mut [u8]) -> Result<RecvMeta, Errno> {
-        // SAFETY: sockaddr_ll: целые поля, нулевой образ корректен.
-        let mut sll: libc::sockaddr_ll = unsafe { mem::zeroed() };
+        let mut sll = sockaddr_ll(0, 0, 0);
         let mut slen = mem::size_of::<libc::sockaddr_ll>() as libc::socklen_t;
         // SAFETY: буфер описан срезом (ptr+len одного объекта, ядро пишет не
         // более len байт); `sll` и `slen` это живые локальные объекты, `slen`
@@ -178,19 +164,12 @@ impl PacketIo for PacketFd {
 
     fn poll(&mut self, write: bool, timeout_ms: i32) -> Result<Readiness, Errno> {
         let want = if write { libc::POLLOUT } else { libc::POLLIN };
-        let mut pfd = libc::pollfd {
-            fd: self.fd.as_raw_fd(),
-            events: want,
-            revents: 0,
-        };
-        // SAFETY: передаётся ровно один живой pollfd (nfds == 1).
-        let rc = unsafe { libc::poll(&raw mut pfd, 1, timeout_ms) };
-        match rc {
-            r if r < 0 => Err(last_errno()),
-            0 => Ok(Readiness::Timeout),
-            _ if pfd.revents & want != 0 => Ok(Readiness::Ready),
-            _ => Ok(Readiness::Failed),
-        }
+        let (n, revents) = poll_one(self.fd.as_fd(), want, timeout_ms)?;
+        Ok(match n {
+            0 => Readiness::Timeout,
+            _ if revents & want != 0 => Readiness::Ready,
+            _ => Readiness::Failed,
+        })
     }
 
     fn packet_stats(&mut self) -> Result<KernelStats, Errno> {
@@ -216,10 +195,7 @@ impl PacketIo for PacketFd {
         if (len as usize) < mem::size_of::<libc::tpacket_stats>() {
             return Err(libc::EPROTO);
         }
-        Ok(KernelStats {
-            packets: st.tp_packets,
-            drops: st.tp_drops,
-        })
+        Ok(KernelStats { drops: st.tp_drops })
     }
 
     fn backoff(&mut self, wait: std::time::Duration) {
@@ -229,13 +205,7 @@ impl PacketIo for PacketFd {
 
 /// Датаграммный сокет AF_INET только для ioctl `SIOCGIFHWADDR` (без привилегий, `SOCK_CLOEXEC`).
 pub(super) fn ioctl_socket() -> Result<OwnedFd, Errno> {
-    // SAFETY: socket() только с целыми аргументами.
-    let raw = unsafe { libc::socket(libc::AF_INET, libc::SOCK_DGRAM | libc::SOCK_CLOEXEC, 0) };
-    if raw < 0 {
-        return Err(last_errno());
-    }
-    // SAFETY: `raw` свежий fd >= 0, единственный владелец теперь OwnedFd.
-    Ok(unsafe { OwnedFd::from_raw_fd(raw) })
+    socket(libc::AF_INET, libc::SOCK_DGRAM | libc::SOCK_CLOEXEC, 0)
 }
 
 /// Проверка интерфейса через ОС (if_nametoindex, SIOCGIFHWADDR).
@@ -270,7 +240,7 @@ impl IfaceInfo for OsIface {
         }
     }
 
-    fn hw_addr(&self, name: &str) -> Result<(u16, [u8; 6]), Errno> {
+    fn link_family(&self, name: &str) -> Result<u16, Errno> {
         let mut ifr = ifreq_for(name)?;
         let sock = ioctl_socket()?;
         // SAFETY: `ifr` живой ifreq с NUL-терминированным именем; для
@@ -279,13 +249,8 @@ impl IfaceInfo for OsIface {
         if rc < 0 {
             return Err(last_errno());
         }
-        // SAFETY: после успешного SIOCGIFHWADDR активен вариант ifru_hwaddr.
-        let sa = unsafe { ifr.ifr_ifru.ifru_hwaddr };
-        let mut mac = [0u8; 6];
-        for (dst, src) in mac.iter_mut().zip(sa.sa_data.iter()) {
-            *dst = *src as u8;
-        }
-        Ok((sa.sa_family, mac))
+        // SAFETY: после успешного SIOCGIFHWADDR активен вариант ifru_hwaddr (sockaddr из целых).
+        Ok(unsafe { ifr.ifr_ifru.ifru_hwaddr.sa_family })
     }
 }
 

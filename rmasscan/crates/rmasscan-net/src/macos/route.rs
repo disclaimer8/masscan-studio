@@ -6,33 +6,25 @@ use crate::route_parse::{
     LO0, RtReply, defaults_from_rt, defaults6_from_rt, lookup_from_rt, lookup6_from_rt,
     parse_rt_reply, rt_get_request, rt_get_request6,
 };
+use crate::unix_sys::{last_errno, poll_one, socket};
 use crate::{
     NetError,
     discover::{Iface, Interfaces, Route, RouteTable, RouteV6},
 };
 use std::net::{Ipv4Addr, Ipv6Addr};
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::os::fd::{AsFd, AsRawFd, OwnedFd};
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::time::{Duration, Instant};
 const BUF_LEN: usize = 4096;
 static SEQ: AtomicI32 = AtomicI32::new(1);
-fn last_errno() -> i32 {
-    std::io::Error::last_os_error()
-        .raw_os_error()
-        .unwrap_or(libc::EIO)
-}
 fn sys(op: &str, e: i32) -> NetError {
     NetError::System(format!("{op}: {}", std::io::Error::from_raw_os_error(e)))
 }
 /// Сокет `PF_ROUTE` с фильтром семейства `family` (`AF_INET` или `AF_INET6`).
+/// Без `SOCK_CLOEXEC`: `FD_CLOEXEC` не ставится, а `O_NONBLOCK` ставит `fcntl` после открытия.
 fn route_socket(family: libc::c_int) -> Result<OwnedFd, NetError> {
-    // SAFETY: scalar socket arguments; the result is checked before ownership transfer.
-    let raw = unsafe { libc::socket(libc::PF_ROUTE, libc::SOCK_RAW, family) };
-    if raw < 0 {
-        return Err(sys("socket(PF_ROUTE)", last_errno()));
-    }
-    // SAFETY: raw is a newly acquired descriptor owned solely by this object.
-    let fd = unsafe { OwnedFd::from_raw_fd(raw) };
+    let fd =
+        socket(libc::PF_ROUTE, libc::SOCK_RAW, family).map_err(|e| sys("socket(PF_ROUTE)", e))?;
     // SAFETY: valid owned descriptor; F_GETFL has no pointer argument.
     let flags = unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_GETFL) };
     if flags < 0 {
@@ -45,25 +37,17 @@ fn route_socket(family: libc::c_int) -> Result<OwnedFd, NetError> {
     Ok(fd)
 }
 fn ready(fd: &OwnedFd, event: libc::c_short, wait: Duration) -> Result<bool, NetError> {
-    let mut p = libc::pollfd {
-        fd: fd.as_raw_fd(),
-        events: event,
-        revents: 0,
-    };
     // Floor to milliseconds; a sub-ms residual becomes a nonblocking poll.
     let millis = wait.as_millis().min(50) as libc::c_int;
-    // SAFETY: p is one writable pollfd, fd is owned and millis is bounded.
-    let n = unsafe { libc::poll(&mut p, 1, millis) };
-    if n < 0 {
-        return match last_errno() {
-            libc::EINTR => Ok(false),
-            e => Err(sys("poll(PF_ROUTE)", e)),
-        };
-    }
-    if p.revents & (libc::POLLERR | libc::POLLHUP | libc::POLLNVAL) != 0 {
+    let (n, revents) = match poll_one(fd.as_fd(), event, millis) {
+        Ok(r) => r,
+        Err(libc::EINTR) => return Ok(false),
+        Err(e) => return Err(sys("poll(PF_ROUTE)", e)),
+    };
+    if revents & (libc::POLLERR | libc::POLLHUP | libc::POLLNVAL) != 0 {
         return Err(NetError::System("route socket readiness error".into()));
     }
-    Ok(n > 0 && p.revents & event != 0)
+    Ok(n > 0 && revents & event != 0)
 }
 fn retry_until<T>(
     deadline: Instant,

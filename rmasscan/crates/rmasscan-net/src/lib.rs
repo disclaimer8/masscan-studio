@@ -6,8 +6,10 @@
 //! * `macos::{sys, ifinfo, process, route}` (BPF ABI и sysctl, getifaddrs, метрики процесса, route socket);
 //! * `windows::{ffi, handle, loader, process, sys}` (Npcap; `process` это телеметрия процесса для harness, в
 //!   продуктовой сборке она тоже есть; `sys` также читает адаптеры и маршруты IP Helper для обнаружения);
+//! * `unix_sys` (общие примитивы Unix для `linux`, `macos`, `interrupt` и `lab_io`: `socket`, `poll` одного fd,
+//!   `setsockopt` целого, `sigaction`, адрес ядра `sockaddr_nl`);
 //! * `localtime` (смещение местного времени: `localtime_r`, `SystemTimeToTzSpecificLocalTime`);
-//! * `interrupt` (счётчик Ctrl-C живого скана: `sigaction`, `SetConsoleCtrlHandler`).
+//! * `interrupt` (счётчик Ctrl-C живого скана: `_exit`, `SetConsoleCtrlHandler`; `sigaction` через `unix_sys`).
 //!
 //! Вне продукта: `lab_io::imp` только с feature `lab` (её включает один rmasscan-lab: sigaction-флаг остановки и
 //! listener с backlog 0) и тестовые модули (`macos::spike`, `windows::{tests, live}`). Остальной код безопасный:

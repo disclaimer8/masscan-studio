@@ -596,17 +596,7 @@ fn rx_fatal_error_closes_fd_and_later_calls_fail() {
 #[test]
 fn kernel_drops_accumulate_and_reading_does_not_reset() {
     let (mut r, _, _, c) = rx(Script {
-        stats: [
-            Ok(KernelStats {
-                packets: 5,
-                drops: 3,
-            }),
-            Ok(KernelStats {
-                packets: 2,
-                drops: 4,
-            }),
-        ]
-        .into(),
+        stats: [Ok(KernelStats { drops: 3 }), Ok(KernelStats { drops: 4 })].into(),
         ..Default::default()
     });
     let h = NetStatsHandle::new(Arc::clone(&c));
@@ -638,11 +628,7 @@ fn kernel_drops_stay_none_when_statistics_are_unavailable() {
 #[test]
 fn stats_handle_survives_the_close_and_final_drops_are_collected() {
     let (r, _, dropped, c) = rx(Script {
-        stats: [Ok(KernelStats {
-            packets: 1,
-            drops: 9,
-        })]
-        .into(),
+        stats: [Ok(KernelStats { drops: 9 })].into(),
         ..Default::default()
     });
     let h = NetStatsHandle::new(Arc::clone(&c));
@@ -655,7 +641,7 @@ fn stats_handle_survives_the_close_and_final_drops_are_collected() {
 // ------------------------------------------------------------ rx health
 
 fn ks(drops: u32) -> Result<KernelStats, Errno> {
-    Ok(KernelStats { packets: 1, drops })
+    Ok(KernelStats { drops })
 }
 
 #[test]
@@ -738,7 +724,8 @@ fn health_after_fatal_error_reports_the_closed_adapter() {
 
 struct FakeIface {
     index: Option<u32>,
-    hw: (u16, [u8; 6]),
+    /// `sa_family` of the link address (`SIOCGIFHWADDR`).
+    family: u16,
     /// `if_nametoindex` fails with this errno.
     index_err: Option<Errno>,
     /// `SIOCGIFHWADDR` fails with this errno.
@@ -750,7 +737,7 @@ impl FakeIface {
     fn ok() -> Self {
         FakeIface {
             index: Some(IFINDEX),
-            hw: (ARPHRD_ETHER, MAC),
+            family: ARPHRD_ETHER,
             index_err: None,
             hw_err: None,
             queried: Mutex::new(Vec::new()),
@@ -763,9 +750,9 @@ impl IfaceInfo for FakeIface {
         self.queried.lock().unwrap().push("ifindex");
         self.index_err.map_or(Ok(self.index), Err)
     }
-    fn hw_addr(&self, _: &str) -> Result<(u16, [u8; 6]), Errno> {
+    fn link_family(&self, _: &str) -> Result<u16, Errno> {
         self.queried.lock().unwrap().push("hw");
-        self.hw_err.map_or(Ok(self.hw), Err)
+        self.hw_err.map_or(Ok(self.family), Err)
     }
 }
 
@@ -805,7 +792,7 @@ fn non_ethernet_link_type_is_rejected_before_any_os_query() {
 #[test]
 fn wrong_interface_link_type_is_unsupported_link() {
     let mut q = FakeIface::ok();
-    q.hw = (772 /* ARPHRD_LOOPBACK */, [0; 6]);
+    q.family = 772 /* ARPHRD_LOOPBACK */;
     assert!(matches!(
         verify_binding(&q, &binding()),
         Err(NetError::UnsupportedLink(_))
@@ -916,7 +903,7 @@ fn error_texts_are_byte_identical() {
         format!("system error: SIOCGIFHWADDR: {}", os(libc::EIO))
     );
     let mut q = FakeIface::ok();
-    q.hw = (772, [0; 6]);
+    q.family = 772;
     assert_eq!(
         text(&q, &binding()),
         "unsupported link type: interface \"veth-a\" has ARPHRD type 772, not Ethernet"
@@ -1135,10 +1122,7 @@ impl PacketIo for BenchIo {
         Ok(Readiness::Ready)
     }
     fn packet_stats(&mut self) -> Result<KernelStats, Errno> {
-        Ok(KernelStats {
-            packets: 0,
-            drops: 0,
-        })
+        Ok(KernelStats { drops: 0 })
     }
     fn backoff(&mut self, _wait: Duration) {}
 }

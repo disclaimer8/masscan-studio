@@ -3,7 +3,9 @@
 use super::*;
 use crate::network_plan::{Ipv4Prefix, check_observation};
 use crate::route_parse::{RTN_LOCAL, RTN_UNICAST};
+use crate::unix_sys::poll_one;
 use std::collections::BTreeMap;
+use std::os::fd::AsFd;
 use std::time::Duration;
 
 const HEADER_LEN: usize = 16;
@@ -54,47 +56,30 @@ struct Socket(OwnedFd);
 
 impl Socket {
     fn open() -> Result<Self, NetError> {
-        // SAFETY: scalar arguments; nonnegative return is transferred to one OwnedFd.
-        let raw = unsafe {
-            libc::socket(
-                libc::AF_NETLINK,
-                libc::SOCK_RAW | libc::SOCK_CLOEXEC | libc::SOCK_NONBLOCK,
-                libc::NETLINK_ROUTE,
-            )
-        };
-        if raw < 0 {
-            return Err(sys("socket(NETLINK_ROUTE observation)", last_errno()));
-        }
-        // SAFETY: raw is a newly created descriptor; no other object owns it.
-        Ok(Self(unsafe { OwnedFd::from_raw_fd(raw) }))
+        socket(
+            libc::AF_NETLINK,
+            libc::SOCK_RAW | libc::SOCK_CLOEXEC | libc::SOCK_NONBLOCK,
+            libc::NETLINK_ROUTE,
+        )
+        .map(Self)
+        .map_err(|e| sys("socket(NETLINK_ROUTE observation)", e))
     }
 }
 
 impl DatagramIo for Socket {
     fn ready(&mut self, write: bool, wait: Duration) -> Result<bool, i32> {
         let event = if write { libc::POLLOUT } else { libc::POLLIN };
-        let mut p = libc::pollfd {
-            fd: self.0.as_raw_fd(),
-            events: event,
-            revents: 0,
-        };
         // Floor rather than round up: a residual shorter than 1ms is nonblocking.
         let millis = wait.min(SLICE).as_millis() as libc::c_int;
-        // SAFETY: p is one live writable pollfd; the timeout is bounded to 50ms.
-        let n = unsafe { libc::poll(&raw mut p, 1, millis) };
-        if n < 0 {
-            return Err(last_errno());
-        }
-        if p.revents & (libc::POLLERR | libc::POLLHUP | libc::POLLNVAL) != 0 {
+        let (n, revents) = poll_one(self.0.as_fd(), event, millis)?;
+        if revents & (libc::POLLERR | libc::POLLHUP | libc::POLLNVAL) != 0 {
             return Err(libc::EIO);
         }
-        Ok(n > 0 && p.revents & event != 0)
+        Ok(n > 0 && revents & event != 0)
     }
 
     fn send(&mut self, request: &[u8]) -> Result<usize, i32> {
-        // SAFETY: sockaddr_nl is integer fields and zero is a valid kernel destination.
-        let mut kernel: libc::sockaddr_nl = unsafe { mem::zeroed() };
-        kernel.nl_family = libc::AF_NETLINK as libc::sa_family_t;
+        let kernel = nl_kernel_addr();
         // SAFETY: request and address are live and exactly described by their lengths;
         // the owned nonblocking fd prevents a write from extending our deadline.
         let n = unsafe {
@@ -111,8 +96,8 @@ impl DatagramIo for Socket {
     }
 
     fn recv(&mut self, buffer: &mut [u8]) -> Result<(usize, bool), i32> {
-        // SAFETY: sockaddr_nl has integer fields, so its zero representation is valid.
-        let mut from: libc::sockaddr_nl = unsafe { mem::zeroed() };
+        // The sender address; the kernel overwrites it on every receive (initial `nl_pid` 0, as the zeroed value was).
+        let mut from = nl_kernel_addr();
         let mut len = mem::size_of_val(&from) as libc::socklen_t;
         // SAFETY: both output buffers have their true writable lengths. MSG_TRUNC
         // reports the datagram's true size, which the caller checks before slicing.

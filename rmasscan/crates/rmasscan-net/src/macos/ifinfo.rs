@@ -71,9 +71,7 @@ impl IfAddrs {
         // владение списком, который освобождает только `Drop`.
         let rc = unsafe { libc::getifaddrs(&mut head) };
         if rc != 0 {
-            return Err(std::io::Error::last_os_error()
-                .raw_os_error()
-                .unwrap_or(libc::EIO));
+            return Err(crate::unix_sys::last_errno());
         }
         Ok(IfAddrs(head))
     }
@@ -215,6 +213,7 @@ impl IfaceInfo for OsIface {
         if idx != 0 {
             return Ok(Some(idx));
         }
+        // Не `unix_sys::last_errno`: здесь errno без номера значит «интерфейса нет», а не `EIO`.
         match std::io::Error::last_os_error().raw_os_error() {
             Some(libc::ENXIO) | Some(libc::ENODEV) | None => Ok(None),
             Some(e) => Err(e),

@@ -42,9 +42,9 @@ pub(crate) struct RecvMeta {
     pub ifindex: i32,
 }
 
+/// PACKET_STATISTICS: читаются только потери (`tp_drops`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct KernelStats {
-    pub packets: u32,
     pub drops: u32,
 }
 
@@ -65,8 +65,8 @@ pub(crate) trait PacketIo: Send {
 pub(crate) trait IfaceInfo {
     /// `Ok(None)`: такого интерфейса нет.
     fn ifindex(&self, name: &str) -> Result<Option<u32>, Errno>;
-    /// (sa_family, MAC).
-    fn hw_addr(&self, name: &str) -> Result<(u16, [u8; 6]), Errno>;
+    /// `sa_family` адреса канального уровня (`SIOCGIFHWADDR`): тип ARPHRD.
+    fn link_family(&self, name: &str) -> Result<u16, Errno>;
 }
 
 const EAGAIN: Errno = libc::EAGAIN;
@@ -379,8 +379,8 @@ pub(crate) fn verify_binding(q: &dyn IfaceInfo, binding: &AdapterBinding) -> Res
         .ifindex(name)
         .map_err(|e| sys("if_nametoindex", e))?
         .ok_or_else(|| NetError::InterfaceMismatch(format!("no such interface {name:?}")))?;
-    let (family, _nic_mac) = match q.hw_addr(name) {
-        Ok(v) => v,
+    let family = match q.link_family(name) {
+        Ok(f) => f,
         Err(libc::ENODEV) => {
             return Err(NetError::InterfaceMismatch(format!(
                 "interface {name:?} disappeared"

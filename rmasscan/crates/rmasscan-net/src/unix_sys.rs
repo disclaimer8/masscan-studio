@@ -74,8 +74,9 @@ pub(crate) fn setsockopt_int(
 /// Обработчик `handler` сигнала `sig` через `sigaction`: `SA_RESTART`, пустая маска, без `SA_RESETHAND` (обработчик
 /// остаётся на следующие сигналы). `Err` несёт errno.
 pub(crate) fn install_handler(sig: c_int, handler: extern "C" fn(c_int)) -> Result<(), i32> {
-    // SAFETY: `sigaction` это C-структура из целых, адреса обработчика (целое `sighandler_t`) и `sigset_t`; нулевой
-    // образ допустим как начальное значение.
+    // SAFETY: поля `sigaction` это адрес обработчика (целое `sighandler_t`), `sigset_t` (массив целых), `sa_flags` и
+    // на Linux `sa_restorer` (`Option` указателя на функцию, нулевой образ это `None`); нулевой образ каждого поля
+    // допустим как начальное значение.
     let mut action: libc::sigaction = unsafe { std::mem::zeroed() };
     action.sa_sigaction = handler as libc::sighandler_t;
     action.sa_flags = libc::SA_RESTART;

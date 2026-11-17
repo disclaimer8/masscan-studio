@@ -5,11 +5,14 @@ use std::mem::{offset_of, size_of};
 
 use super::socket::SLL_MIN_LEN;
 use crate::route_parse::{
-    AF_INET, AF_INET6_LINUX, IFA_ADDRESS, IFA_F_DADFAILED, IFA_F_DEPRECATED, IFA_F_TENTATIVE,
-    IFA_FLAGS, IFA_LOCAL, NLM_F_DUMP, NLM_F_REQUEST, NLMSG_DONE, NLMSG_ERROR, NLMSG_HDRLEN,
+    AF_INET, AF_INET6_LINUX, AF_UNSPEC, ARPHRD_ETHER, IFA_ADDRESS, IFA_F_DADFAILED,
+    IFA_F_DEPRECATED, IFA_F_TENTATIVE, IFA_FLAGS, IFA_LOCAL, IFADDRMSG_LEN, IFF_UP, IFINFOMSG_LEN,
+    IFLA_ADDRESS, IFLA_IFNAME, NLM_F_DUMP, NLM_F_DUMP_INTR, NLM_F_REQUEST, NLMSG_DONE, NLMSG_ERROR,
+    NLMSG_HDRLEN, OFF_IFA_FAMILY, OFF_IFA_INDEX, OFF_IFA_PREFIXLEN, OFF_IFI_FAMILY, OFF_IFI_FLAGS,
+    OFF_IFI_INDEX, OFF_IFI_TYPE, OFF_NLMSG_FLAGS, OFF_NLMSG_LEN, OFF_NLMSG_SEQ, OFF_NLMSG_TYPE,
     RT_TABLE_MAIN, RTA_DST, RTA_GATEWAY, RTA_HDRLEN, RTA_OIF, RTA_PREFSRC, RTA_PRIORITY, RTA_TABLE,
-    RTM_GETADDR, RTM_GETROUTE, RTM_NEWADDR, RTM_NEWROUTE, RTN_BLACKHOLE, RTN_LOCAL, RTN_PROHIBIT,
-    RTN_UNICAST, RTN_UNREACHABLE,
+    RTM_GETADDR, RTM_GETLINK, RTM_GETROUTE, RTM_NEWADDR, RTM_NEWLINK, RTM_NEWROUTE, RTN_BLACKHOLE,
+    RTN_LOCAL, RTN_PROHIBIT, RTN_UNICAST, RTN_UNREACHABLE,
 };
 
 #[test]
@@ -81,4 +84,57 @@ fn netlink_constants_match_libc() {
     // `recvfrom` needs the address up to `sll_addr` to read `sll_ifindex` and `sll_pkttype`.
     assert_eq!(SLL_MIN_LEN, offset_of!(libc::sockaddr_ll, sll_addr));
     assert_eq!(SLL_MIN_LEN, 12);
+}
+
+/// Разбор наблюдения (`route_parse::observation_*`): константы и смещения полей, которые прежде были литералами в
+/// `linux::route::observation` (тест задачи 1 сверял `libc` с литералами).
+#[test]
+fn observation_constants_and_offsets_match_libc() {
+    assert_eq!(
+        [RTM_NEWLINK, RTM_GETLINK],
+        [libc::RTM_NEWLINK, libc::RTM_GETLINK]
+    );
+    assert_eq!(i32::from(NLM_F_DUMP_INTR), libc::NLM_F_DUMP_INTR);
+    assert_eq!(ARPHRD_ETHER, libc::ARPHRD_ETHER);
+    assert_eq!(IFF_UP, libc::IFF_UP.cast_unsigned());
+    assert_eq!(i32::from(AF_UNSPEC), libc::AF_UNSPEC);
+    assert_eq!(
+        [IFLA_ADDRESS, IFLA_IFNAME],
+        [libc::IFLA_ADDRESS, libc::IFLA_IFNAME]
+    );
+    assert_eq!(
+        [
+            OFF_NLMSG_LEN,
+            OFF_NLMSG_TYPE,
+            OFF_NLMSG_FLAGS,
+            OFF_NLMSG_SEQ
+        ],
+        [
+            offset_of!(libc::nlmsghdr, nlmsg_len),
+            offset_of!(libc::nlmsghdr, nlmsg_type),
+            offset_of!(libc::nlmsghdr, nlmsg_flags),
+            offset_of!(libc::nlmsghdr, nlmsg_seq)
+        ]
+    );
+    // Код `nlmsgerr` сразу за заголовком: разбор читает его по смещению `NLMSG_HDRLEN`.
+    assert_eq!(offset_of!(libc::nlmsgerr, error), 0);
+    assert_eq!(IFINFOMSG_LEN, size_of::<libc::ifinfomsg>());
+    assert_eq!(
+        [OFF_IFI_FAMILY, OFF_IFI_TYPE, OFF_IFI_INDEX, OFF_IFI_FLAGS],
+        [
+            offset_of!(libc::ifinfomsg, ifi_family),
+            offset_of!(libc::ifinfomsg, ifi_type),
+            offset_of!(libc::ifinfomsg, ifi_index),
+            offset_of!(libc::ifinfomsg, ifi_flags)
+        ]
+    );
+    assert_eq!(IFADDRMSG_LEN, size_of::<libc::ifaddrmsg>());
+    assert_eq!(
+        [OFF_IFA_FAMILY, OFF_IFA_PREFIXLEN, OFF_IFA_INDEX],
+        [
+            offset_of!(libc::ifaddrmsg, ifa_family),
+            offset_of!(libc::ifaddrmsg, ifa_prefixlen),
+            offset_of!(libc::ifaddrmsg, ifa_index)
+        ]
+    );
 }

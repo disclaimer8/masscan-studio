@@ -1,4 +1,5 @@
 use super::*;
+use crate::route_parse::{NLMSG_HDRLEN, RTM_NEWLINK};
 use std::cell::Cell;
 use std::collections::VecDeque;
 
@@ -31,87 +32,6 @@ fn link(index: u32, name: &str, kind: u16, flags: u32) -> Vec<u8> {
     body.extend(attr(3, format!("{name}\0").as_bytes()));
     body.extend(attr(1, &[2, 1, 2, 3, 4, 5]));
     message(16, 0, 41, &body)
-}
-
-fn address(index: u32, address: [u8; 4], prefix: u8, local: Option<[u8; 4]>) -> Vec<u8> {
-    let mut body = vec![2, prefix, 0, 0];
-    body.extend(index.to_ne_bytes());
-    body.extend(attr(1, &address));
-    if let Some(local) = local {
-        body.extend(attr(2, &local));
-    }
-    // A legacy alias label must not cause a separate or missing interface.
-    body.extend(attr(3, b"eth0:office\0"));
-    message(20, 0, 42, &body)
-}
-
-#[test]
-fn network_plan_keeps_all_alias_prefixes_and_uses_local_point_to_point_address() {
-    let links = [
-        link(2, "eth0", 1, 1),
-        link(7, "ppp0", 512, 1),
-        link(8, "down0", 1, 0),
-    ]
-    .concat();
-    let addrs = [
-        address(2, [192, 168, 5, 20], 24, None),
-        address(2, [10, 9, 0, 5], 16, Some([10, 9, 0, 5])),
-        address(2, [10, 9, 0, 5], 16, None),
-        address(7, [10, 0, 0, 2], 32, Some([10, 0, 0, 1])),
-    ]
-    .concat();
-    let result = observations(&links, 41, &addrs, 42).unwrap();
-    assert_eq!(result.len(), 3);
-    assert_eq!(result[0].iface.name, "eth0");
-    assert_eq!(
-        result[0].iface.ipv4,
-        vec![Ipv4Addr::new(10, 9, 0, 5), Ipv4Addr::new(192, 168, 5, 20)]
-    );
-    assert_eq!(
-        result[0].ipv4_prefixes,
-        vec![
-            Ipv4Prefix {
-                address: Ipv4Addr::new(10, 9, 0, 5),
-                length: 16
-            },
-            Ipv4Prefix {
-                address: Ipv4Addr::new(192, 168, 5, 20),
-                length: 24
-            },
-        ]
-    );
-    assert_eq!(result[0].iface.mac, Some([2, 1, 2, 3, 4, 5]));
-    assert!(result[0].iface.ethernet && result[0].iface.up);
-    assert_eq!(result[1].iface.ipv4, vec![Ipv4Addr::new(10, 0, 0, 1)]);
-    assert_eq!(result[1].ipv4_prefixes[0].length, 32);
-    assert!(!result[1].iface.ethernet);
-    assert_eq!(result[1].iface.mac, None);
-    assert!(!result[2].iface.up);
-    assert!(result[2].ipv4_prefixes.is_empty());
-}
-
-#[test]
-fn network_plan_prefix_extremes_are_not_guessed_or_truncated() {
-    let links = link(2, "eth0", 1, 1);
-    for prefix in [0, 31, 32] {
-        let result =
-            observations(&links, 41, &address(2, [10, 0, 0, 1], prefix, None), 42).unwrap();
-        assert_eq!(result[0].ipv4_prefixes[0].length, prefix);
-    }
-    assert!(observations(&links, 41, &address(2, [10, 0, 0, 1], 33, None), 42).is_err());
-    assert!(observations(&links, 41, &address(99, [10, 0, 0, 1], 24, None), 42).is_err());
-}
-
-#[test]
-fn network_plan_rejects_truncated_link_and_address_attributes() {
-    let links = link(2, "eth0", 1, 1);
-    for body in [vec![], vec![0; 7]] {
-        assert!(observations(&links, 41, &message(20, 0, 42, &body), 42).is_err());
-    }
-    let mut body = vec![2, 24, 0, 0, 2, 0, 0, 0];
-    body.extend(attr(1, &[10, 0, 1]));
-    assert!(observations(&links, 41, &message(20, 0, 42, &body), 42).is_err());
-    assert!(observations(&message(16, 0, 41, &[0; 15]), 41, &[], 42).is_err());
 }
 
 #[test]
@@ -292,80 +212,10 @@ fn network_plan_short_send_and_socket_failure_are_not_retried() {
     }
 }
 
-fn route_response(kind: u8) -> Vec<u8> {
-    // RTM_NEWROUTE: AF_INET, /32 destination, main table, static protocol,
-    // link scope, specified kernel route kind, no rtm_flags.
-    let mut body = vec![2, 32, 0, 0, 254, 4, 253, kind, 0, 0, 0, 0];
-    body.extend(attr(1, &[192, 0, 2, 42])); // RTA_DST
-    body.extend(attr(4, &2u32.to_ne_bytes())); // RTA_OIF
-    body.extend(attr(5, &[192, 0, 2, 1])); // RTA_GATEWAY
-    message(24, 0, 41, &body)
-}
-
-#[test]
-fn network_plan_kernel_custom_broadcast_route_is_not_an_ordinary_destination() {
-    // 192.0.2.42 is neither endpoint of 192.0.2.0/24, but Linux may assign
-    // it as that interface's custom broadcast. The kernel route kind wins.
-    let result = route_reply(&route_response(3), |_| "eth0".into()).unwrap();
-    assert_eq!(result, None);
-}
-
-#[test]
-fn network_plan_kernel_anycast_multicast_and_unknown_route_kinds_are_refused() {
-    for kind in (0..=u8::MAX).filter(|kind| !matches!(kind, 1..=3)) {
-        let result = route_reply(&route_response(kind), |_| "eth0".into()).unwrap();
-        assert_eq!(result, None, "unsupported route kind {kind}");
-    }
-}
-
-#[test]
-fn network_plan_kernel_unicast_and_local_route_kinds_retain_their_meaning() {
-    for (kind, local, gateway) in [
-        (1, false, Some(Ipv4Addr::new(192, 0, 2, 1))),
-        (2, true, None),
-    ] {
-        assert_eq!(
-            route_reply(&route_response(kind), |_| "eth0".into()).unwrap(),
-            Some(Route {
-                ifindex: 2,
-                ifname: "eth0".into(),
-                gateway,
-                local
-            })
-        );
-    }
-}
-
-#[test]
-fn observation_constants_and_offsets_match_libc() {
-    use std::mem::{offset_of, size_of};
-    assert_eq!(HEADER_LEN, size_of::<libc::nlmsghdr>());
-    assert_eq!(i32::from(NLMSG_ERROR), libc::NLMSG_ERROR);
-    assert_eq!(i32::from(NLMSG_DONE), libc::NLMSG_DONE);
-    assert_eq!(i32::from(NLM_F_DUMP_INTR), libc::NLM_F_DUMP_INTR);
-    assert_eq!(
-        [RTM_NEWLINK, RTM_GETLINK, RTM_NEWADDR, RTM_GETADDR],
-        [
-            libc::RTM_NEWLINK,
-            libc::RTM_GETLINK,
-            libc::RTM_NEWADDR,
-            libc::RTM_GETADDR
-        ]
-    );
-    // `dump_request` and `observations` read these structures at fixed offsets.
-    assert_eq!(size_of::<libc::ifinfomsg>(), 16);
-    assert_eq!(offset_of!(libc::ifinfomsg, ifi_type), 2);
-    assert_eq!(offset_of!(libc::ifinfomsg, ifi_index), 4);
-    assert_eq!(offset_of!(libc::ifinfomsg, ifi_flags), 8);
-    assert_eq!(size_of::<libc::ifaddrmsg>(), 8);
-    assert_eq!(offset_of!(libc::ifaddrmsg, ifa_prefixlen), 1);
-    assert_eq!(offset_of!(libc::ifaddrmsg, ifa_index), 4);
-}
-
 #[test]
 fn observation_socket_keeps_its_flags() {
     use std::os::fd::AsFd;
-    let socket = Socket::open().unwrap();
+    let socket = NlSocket::open("socket(NETLINK_ROUTE observation)", true).unwrap();
     let (status, cloexec) = crate::unix_fd_tests::fd_flags(socket.0.as_fd());
     assert!(cloexec, "the observation socket sets FD_CLOEXEC");
     assert_ne!(
@@ -400,7 +250,7 @@ fn error_texts_are_byte_identical() {
         "system error: netlink observation: interrupted dump"
     );
     // 129 full datagrams of one link message each pass the 8 MiB reply limit.
-    let full = message(RTM_NEWLINK, 0, 41, &vec![0; RECV_BUF - HEADER_LEN]);
+    let full = message(RTM_NEWLINK, 0, 41, &vec![0; RECV_BUF - NLMSG_HDRLEN]);
     assert_eq!(full.len(), RECV_BUF);
     let mut io = Fake::replies(vec![(full, true); MAX_REPLY_BYTES / RECV_BUF + 1]);
     assert_eq!(
@@ -463,18 +313,4 @@ fn error_texts_are_byte_identical() {
         retry(now + Duration::from_secs(1), false),
         "system error: netlink observation retry limit exceeded"
     );
-}
-
-/// `nlmsg_len` is read with all 32 bits: lengths whose low 16 bits would give the exact length, and `u32::MAX`, are
-/// rejected; the exact length is accepted.
-#[test]
-fn netlink_length_is_read_with_all_32_bits() {
-    let msg = message(RTM_NEWLINK, 0, 7, &[0; 4]);
-    assert_eq!(messages(&msg, 7).unwrap(), [msg.as_slice()]);
-    let exact = u32::try_from(msg.len()).unwrap();
-    for len in [exact | 0x1_0000, exact | 0x8000_0000, u32::MAX] {
-        let mut m = msg.clone();
-        m[0..4].copy_from_slice(&len.to_ne_bytes());
-        assert!(messages(&m, 7).is_err(), "nlmsg_len {len:#x}");
-    }
 }

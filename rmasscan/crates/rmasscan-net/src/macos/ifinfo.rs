@@ -11,6 +11,7 @@ use rmasscan_core::probe::AdapterBinding;
 
 use super::sys::IFT_ETHER;
 use super::{Errno, errno_msg};
+use crate::adapter_common::valid_ifname;
 use crate::discover::{DARWIN_MASKED_MAC, Iface};
 use crate::{IfaceReport, NetError};
 
@@ -328,16 +329,6 @@ pub(crate) fn merge(addrs: &[RawAddr], q: &dyn IfaceInfo) -> Vec<IfaceReport> {
         }
     }
     out
-}
-
-fn valid_ifname(name: &str) -> bool {
-    !name.is_empty()
-        && name.len() < libc::IFNAMSIZ
-        && name != "."
-        && name != ".."
-        && !name
-            .bytes()
-            .any(|b| b == 0 || b == b'/' || b.is_ascii_whitespace())
 }
 
 /// Проверяет binding через ОС и возвращает ifindex. Без привилегий. Source IP и

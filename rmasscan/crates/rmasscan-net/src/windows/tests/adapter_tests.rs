@@ -21,9 +21,10 @@ use super::fake::*;
 use super::good_api;
 use crate::NetError;
 use crate::TxMode;
+use crate::adapter_common::mac_text;
 use crate::windows::adapter::{
     IO_BUDGET, MAX_TX_FRAME, MIN_TX_FRAME, TX_BATCH_FRAMES, TX_QUEUE_BYTES, batch_outcome,
-    check_binding, mac_text, open_with,
+    check_binding, open_with,
 };
 use crate::windows::ffi::SENDQUEUE_RECORD_HEADER;
 use crate::windows::loader::{ApiSlot, NpcapApi};

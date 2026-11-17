@@ -12,6 +12,9 @@ use rmasscan_core::packet::LinkType;
 use rmasscan_core::probe::AdapterBinding;
 use rmasscan_engine::{AdapterPair, IoError, MAX_IO_TIMEOUT, Rx, RxHealth, SendStatus, Tx};
 
+use crate::adapter_common::{
+    Errno, Readiness, closed_error, errno_msg, map_setup_errno, valid_ifname,
+};
 use crate::{Counters, NetError, NetStatsHandle, OpenedAdapter};
 
 #[allow(unsafe_code)]
@@ -20,18 +23,6 @@ mod socket;
 // Обнаружение в процессе: rtnetlink (маршруты) и ioctl интерфейсов; `unsafe` только вокруг вызовов libc.
 #[allow(unsafe_code)]
 pub(crate) mod route;
-
-/// Сырой errno.
-pub(crate) type Errno = i32;
-
-/// Результат poll.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Readiness {
-    Timeout,
-    Ready,
-    /// POLLERR/POLLHUP/POLLNVAL без запрошенного события.
-    Failed,
-}
 
 /// Метаданные принятого кадра. `len` это ИСТИННАЯ длина (MSG_TRUNC), она
 /// может превышать буфер.
@@ -107,14 +98,6 @@ impl Deadline {
         let ms = left.as_micros().div_ceil(1000);
         ms.min(MAX_IO_TIMEOUT.as_millis()) as i32
     }
-}
-
-fn closed_error() -> IoError {
-    IoError::new("adapter closed after an earlier fatal error")
-}
-
-fn errno_msg(op: &str, e: Errno) -> String {
-    format!("{op}: {}", std::io::Error::from_raw_os_error(e))
 }
 
 /// TX-половина. После фатальной ошибки fd закрывается (`io = None`).
@@ -348,17 +331,6 @@ impl<I: PacketIo> Drop for RxHalf<I> {
     }
 }
 
-/// Имя интерфейса, допустимое для IFNAMSIZ и пригодное как аргумент ОС.
-fn valid_ifname(name: &str) -> bool {
-    !name.is_empty()
-        && name.len() < libc::IFNAMSIZ
-        && name != "."
-        && name != ".."
-        && !name
-            .bytes()
-            .any(|b| b == 0 || b == b'/' || b.is_ascii_whitespace())
-}
-
 /// Проверяет binding через ОС и возвращает ifindex. Не создаёт AF_PACKET
 /// сокетов и не требует привилегий.
 pub(crate) fn verify_binding(q: &dyn IfaceInfo, binding: &AdapterBinding) -> Result<u32, NetError> {
@@ -400,11 +372,7 @@ pub(crate) fn verify_binding(q: &dyn IfaceInfo, binding: &AdapterBinding) -> Res
 }
 
 fn map_open_error(op: &str, e: Errno) -> NetError {
-    match e {
-        libc::EPERM | libc::EACCES => NetError::PermissionDenied(errno_msg(op, e)),
-        libc::ENODEV | libc::ENXIO => NetError::InterfaceMismatch(errno_msg(op, e)),
-        _ => NetError::System(errno_msg(op, e)),
-    }
+    map_setup_errno(op, e)
 }
 
 pub(crate) fn open(binding: &AdapterBinding) -> Result<OpenedAdapter, NetError> {

@@ -8,10 +8,11 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
+use crate::adapter_common::Readiness;
 use crate::macos::Errno;
 use crate::macos::abi::errno::{EAGAIN, EBUSY, ENOENT};
 use crate::macos::abi::{BpfInsn, BpfStat, DLT_EN10MB, SIZEOF_BPF_HDR, bpf_wordalign};
-use crate::macos::adapter::{BpfIo, BpfOpener, BpfSetup, Readiness};
+use crate::macos::adapter::{BpfIo, BpfOpener, BpfSetup};
 
 pub(super) type Responder = Arc<dyn Fn(&[u8]) -> Vec<Vec<u8>> + Send + Sync>;
 

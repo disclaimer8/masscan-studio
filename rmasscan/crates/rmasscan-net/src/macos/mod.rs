@@ -37,12 +37,7 @@ mod tests;
 #[cfg(target_os = "macos")]
 pub(crate) use adapter::open;
 
-/// Сырой errno.
-pub(crate) type Errno = i32;
-
-pub(crate) fn errno_msg(op: &str, e: Errno) -> String {
-    format!("{op}: {}", std::io::Error::from_raw_os_error(e))
-}
+pub(crate) use crate::adapter_common::{Errno, errno_msg};
 
 #[cfg(target_os = "macos")]
 const INSTANT_CLOCK: &str = "CLOCK_UPTIME_RAW (std::time::Instant; stops during sleep)";

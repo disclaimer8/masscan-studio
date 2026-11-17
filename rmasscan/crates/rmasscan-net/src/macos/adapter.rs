@@ -36,18 +36,18 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use rmasscan_core::packet::LinkType;
 use rmasscan_core::probe::AdapterBinding;
 use rmasscan_engine::{AdapterPair, IoError, MAX_IO_TIMEOUT, Rx, RxHealth, SendStatus, Tx};
 
-use super::abi::errno::{
-    EACCES, EAGAIN, EBUSY, EINTR, EMSGSIZE, ENOBUFS, ENODEV, ENOENT, ENXIO, EPERM,
-};
+use super::abi::errno::{EACCES, EAGAIN, EBUSY, EINTR, EMSGSIZE, ENOBUFS, ENOENT, EPERM};
 use super::abi::{
     BpfInsn, BpfStat, DLT_EN10MB, DLT_NULL, MAX_HDRLEN, SIZEOF_BPF_HDR, bpf_wordalign,
     read_record_header,
 };
 use super::{Errno, errno_msg};
+use crate::adapter_common::{
+    Readiness, check_binding as common_check_binding, closed_error, map_setup_errno,
+};
 use crate::drop_counter::DropCounter;
 use crate::{Counters, NetError, NetStatsHandle, OpenedAdapter};
 
@@ -69,15 +69,6 @@ const MAX_NODES: u32 = 256;
 
 const GRANT_HINT: &str =
     "/dev/bpf* is 0600 root:wheel; run `rmasscan-lab macos-lab bpf-access --grant`";
-
-/// Результат ожидания готовности чтения.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Readiness {
-    Timeout,
-    Ready,
-    /// POLLERR/POLLHUP/POLLNVAL без POLLIN.
-    Failed,
-}
 
 /// Шов ввода-вывода одного дескриптора BPF. Все методы НЕБЛОКИРУЮЩИЕ, кроме
 /// `poll_in` (ждёт не дольше `timeout_ms`) и `backoff`.
@@ -147,10 +138,6 @@ pub(crate) fn drop_all_filter() -> [BpfInsn; 1] {
         jf: 0,
         k: 0,
     }]
-}
-
-fn closed_error() -> IoError {
-    IoError::new("adapter closed after an earlier fatal error")
 }
 
 fn is_again(e: Errno) -> bool {
@@ -524,44 +511,9 @@ impl<I: BpfIo> Drop for RxHalf<I> {
 
 // ---------------------------------------------------------------- открытие
 
-pub(crate) fn mac_text(mac: &[u8; 6]) -> String {
-    format!(
-        "{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
-        mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]
-    )
-}
-
-/// Проверка binding без обращения к ОС.
+/// Проверка binding без обращения к ОС (общая с Windows, имя адаптера вставляется в текст отказа).
 pub(crate) fn check_binding(binding: &AdapterBinding) -> Result<(), NetError> {
-    if binding.link_type != LinkType::Ethernet {
-        return Err(NetError::UnsupportedLink(format!(
-            "{:?} (macOS BPF adapter supports Ethernet only)",
-            binding.link_type
-        )));
-    }
-    let mac = binding.source_mac;
-    if mac == [0; 6] || mac[0] & 1 == 1 {
-        return Err(NetError::InterfaceMismatch(format!(
-            "source MAC {} is not a unicast address",
-            mac_text(&mac)
-        )));
-    }
-    if mac == binding.next_hop_mac {
-        return Err(NetError::InterfaceMismatch(
-            "source MAC equals the next-hop MAC: own transmitted frames could not be told \
-             from replies"
-                .into(),
-        ));
-    }
-    Ok(())
-}
-
-fn map_setup_error(op: &str, e: Errno) -> NetError {
-    match e {
-        EPERM | EACCES => NetError::PermissionDenied(errno_msg(op, e)),
-        ENXIO | ENODEV => NetError::InterfaceMismatch(errno_msg(op, e)),
-        _ => NetError::System(errno_msg(op, e)),
-    }
+    common_check_binding(binding, "macOS BPF adapter")
 }
 
 /// Перебор `/dev/bpf0..`: занятый узел пропускается, `EACCES` запоминается,
@@ -590,7 +542,7 @@ fn open_device<O: BpfOpener>(opener: &mut O) -> Result<O::Dev, NetError> {
 fn check_dlt<D: BpfSetup>(dev: &mut D, name: &str) -> Result<(), NetError> {
     match dev
         .data_link()
-        .map_err(|e| map_setup_error("BIOCGDLT", e))?
+        .map_err(|e| map_setup_errno("BIOCGDLT", e))?
     {
         DLT_EN10MB => Ok(()),
         DLT_NULL => Err(NetError::UnsupportedLink(format!(
@@ -611,7 +563,7 @@ fn configure_rx<D: BpfSetup>(
     mac: [u8; 6],
     max_buffer: u32,
 ) -> Result<u32, NetError> {
-    let s = map_setup_error;
+    let s = map_setup_errno;
     dev.set_buffer_len(max_buffer)
         .map_err(|e| s("BIOCSBLEN", e))?;
     dev.bind_interface(name).map_err(|e| s("BIOCSETIF", e))?;
@@ -634,7 +586,7 @@ fn configure_rx<D: BpfSetup>(
 /// TX: `BIOCSBLEN 4096` → `BIOCSETIF` → `BIOCGDLT` → `BIOCSHDRCMPLT 1` →
 /// `BIOCSSEESENT 0` → `BIOCSETF(drop_all_filter)`.
 fn configure_tx<D: BpfSetup>(dev: &mut D, name: &str) -> Result<(), NetError> {
-    let s = map_setup_error;
+    let s = map_setup_errno;
     dev.set_buffer_len(TX_BUFFER_BYTES)
         .map_err(|e| s("BIOCSBLEN", e))?;
     dev.bind_interface(name).map_err(|e| s("BIOCSETIF", e))?;

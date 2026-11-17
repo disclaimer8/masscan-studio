@@ -73,6 +73,10 @@ pub mod arp_resolve;
 // NDP-резолвер соседа/шлюза IPv6 с тем же контрактом, что у ARP (Neighbor Solicitation 135 / Advertisement 136).
 pub mod ndp_resolve;
 
+// Помощники трёх адаптеров (Linux AF_PACKET, macOS BPF, Windows Npcap): тексты ошибок и проверки в одном месте.
+#[cfg(any(target_os = "linux", target_os = "macos", windows, test))]
+mod adapter_common;
+
 // Безопасный переносимый разбор ответов ядра о маршрутах (rtnetlink, route socket Darwin, IP Helper).
 mod route_parse;
 

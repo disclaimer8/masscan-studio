@@ -46,7 +46,6 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering::{Relaxed, Release};
 use std::time::{Duration, Instant};
 
-use rmasscan_core::packet::LinkType;
 use rmasscan_core::probe::AdapterBinding;
 use rmasscan_engine::{
     AdapterPair, IoError, MAX_IO_TIMEOUT, Rx, RxHealth, SendStatus, Tx, TxBatch,
@@ -55,6 +54,7 @@ use rmasscan_engine::{
 use super::ffi::SENDQUEUE_RECORD_HEADER;
 use super::handle::{OpenParams, PcapHandle, Polled, SendQueue, resolve_device};
 use super::loader::NpcapApi;
+use crate::adapter_common::{check_binding as common_check_binding, closed_error, mac_text};
 use crate::drop_counter::DropCounter;
 use crate::{Counters, NetError, NetStatsHandle, OpenedAdapter, TxMode};
 
@@ -84,10 +84,6 @@ const TX_BUFFER_BYTES: i32 = 65_536;
 /// До этого остатка спим по 1 мс, затем отдаём квант (`yield_now`): так
 /// измерен спайк (Hybrid), без активного кручения на всём дедлайне.
 const SPIN_BELOW: Duration = Duration::from_millis(3);
-
-fn closed_error() -> IoError {
-    IoError::new("adapter closed after an earlier fatal error")
-}
 
 fn publish_drops(counters: &Counters, total: u64) {
     counters.kernel_drops.store(total, Relaxed);
@@ -348,36 +344,9 @@ impl Drop for RxHalf {
     }
 }
 
-/// Проверка binding без обращения к Npcap.
+/// Проверка binding без обращения к Npcap (общая с macOS, имя адаптера вставляется в текст отказа).
 pub(crate) fn check_binding(binding: &AdapterBinding) -> Result<(), NetError> {
-    if binding.link_type != LinkType::Ethernet {
-        return Err(NetError::UnsupportedLink(format!(
-            "{:?} (Windows Npcap adapter supports Ethernet only)",
-            binding.link_type
-        )));
-    }
-    let mac = binding.source_mac;
-    if mac == [0; 6] || mac[0] & 1 == 1 {
-        return Err(NetError::InterfaceMismatch(format!(
-            "source MAC {} is not a unicast address",
-            mac_text(&mac)
-        )));
-    }
-    if mac == binding.next_hop_mac {
-        return Err(NetError::InterfaceMismatch(
-            "source MAC equals the next-hop MAC: own transmitted frames could not be told \
-             from replies"
-                .into(),
-        ));
-    }
-    Ok(())
-}
-
-pub(crate) fn mac_text(mac: &[u8; 6]) -> String {
-    format!(
-        "{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
-        mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]
-    )
+    common_check_binding(binding, "Windows Npcap adapter")
 }
 
 /// Открывает пару TX/RX на `api`. При любой ошибке уже открытые handle

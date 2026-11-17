@@ -18,7 +18,8 @@ use std::time::Duration;
 
 use super::Errno;
 use super::abi::{BpfInsn, BpfStat, HDR_OFF_CAPLEN, HDR_OFF_DATALEN, HDR_OFF_HDRLEN};
-use super::adapter::{BpfIo, BpfOpener, BpfSetup, Readiness};
+use super::adapter::{BpfIo, BpfOpener, BpfSetup};
+use crate::adapter_common::Readiness;
 use crate::unix_sys::{last_errno, poll_one};
 
 /// `struct bpf_hdr` (net/bpf.h, `__LP64__`: `BPF_TIMEVAL = timeval32`): sizeof 20 (tail

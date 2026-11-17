@@ -19,13 +19,14 @@ use rmasscan_engine::{
 
 use super::fake::*;
 use crate::NetError;
+use crate::adapter_common::Readiness;
 use crate::macos::abi::errno::{
     EACCES, EAGAIN, EBUSY, EINTR, EMSGSIZE, ENOBUFS, ENODEV, ENXIO, EPERM,
 };
 use crate::macos::abi::{BpfInsn, BpfStat, SIZEOF_BPF_HDR};
 use crate::macos::adapter::{
-    BACKOFF_MAX, IO_BUDGET, MAX_TX_FRAME, MIN_TX_FRAME, Readiness, Record, RecordCursor,
-    check_binding, drop_all_filter, open_with, own_mac_filter,
+    BACKOFF_MAX, IO_BUDGET, MAX_TX_FRAME, MIN_TX_FRAME, Record, RecordCursor, check_binding,
+    drop_all_filter, open_with, own_mac_filter,
 };
 
 const OUR_MAC: [u8; 6] = [0x02, 0xac, 0x00, 0x00, 0x00, 0x01];

@@ -1801,6 +1801,45 @@ udp 7-8 \"x\"
         );
     }
 
+    /// Все записи таблицы по возрастанию порта.
+    fn entries(t: &PayloadTable) -> Vec<(u32, PayloadEntry)> {
+        t.map.iter().map(|(&p, e)| (p, e.clone())).collect()
+    }
+
+    /// `trim` (:13) и разбор портов снимают все пробелы `isspace` C, вместе с `\v` и `\f`: они вокруг `udp`, вокруг
+    /// портов, между портами и вокруг строки дают ту же запись, что чистый файл.
+    #[test]
+    fn nmap_vertical_tab_and_form_feed_are_whitespace() {
+        let load = |f: &[u8]| {
+            let mut t = PayloadTable::empty();
+            let n = t.load_nmap_payloads_bytes(f);
+            (n, entries(&t))
+        };
+        let clean = load(b"udp 53,161\n\"abc\"\nudp 7\n\"x\"\n");
+        let dirty = load(
+            b"\x0b\x0cudp\x0c\x0b\n\x0c\x0b53\x0b,\x0c161\x0b\x0c\n\x0b\x0c\"abc\"\x0c\x0b\n\
+              \x0budp\x0b7\x0c\x0b\"x\"\x0b\n",
+        );
+        assert_eq!(clean.0, Ok(3));
+        assert_eq!(dirty, clean);
+    }
+
+    /// Строка `source N` (:250-261): число читается, остаток строки после него отбрасывается без ошибки, следующая
+    /// запись `udp` разбирается как обычно и своего `source` не наследует.
+    #[test]
+    fn nmap_source_line_tail_is_ignored() {
+        let mut t = PayloadTable::empty();
+        let n = t.load_nmap_payloads("udp 7\n\"x\"\nsource 5 junk \"y\"\nudp 8\n\"z\"\n");
+        assert_eq!(n, Ok(2));
+        let e7 = t.get(7).unwrap();
+        assert_eq!(&e7.payload[..], b"x");
+        assert_eq!(e7.source_port, 5);
+        let e8 = t.get(8).unwrap();
+        assert_eq!(&e8.payload[..], b"z");
+        assert_eq!(e8.source_port, 0x10000);
+        assert_eq!(t.len(), 2);
+    }
+
     fn pcap_file(big: bool, linktype: u32, frames: &[Vec<u8>]) -> Vec<u8> {
         let w32 = |v: u32| {
             if big {

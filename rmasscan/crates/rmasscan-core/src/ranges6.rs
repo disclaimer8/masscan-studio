@@ -644,6 +644,7 @@ pub fn parse_ipv6_target(spec: &str) -> Result<Ipv6Range, ParseError> {
 mod tests {
     use super::*;
     use crate::targets::ParseError;
+    use proptest::prelude::*;
     use std::net::Ipv6Addr;
 
     fn v(s: &str) -> u128 {
@@ -1365,5 +1366,194 @@ mod tests {
             }
             assert_eq!(CIpv6(a).to_string(), old_format_ipv6_c(a), "{a:#x}");
         }
+    }
+
+    /// Копия `add` базы (слияние только с последним элементом буфера). Копия, а не вызов: эталон ниже не зависит от
+    /// меняемого кода.
+    fn old_add(l: &mut Range6List, begin: u128, end: u128) {
+        let range = Ipv6Range { begin, end };
+        l.picker = None;
+        let Some(last) = l.list.last_mut() else {
+            l.list.push(range);
+            l.is_sorted = true;
+            return;
+        };
+        if is_overlap(*last, range) {
+            if range.begin <= last.begin {
+                last.begin = range.begin;
+            }
+            if last.end <= range.end {
+                last.end = range.end;
+            }
+        } else {
+            l.list.push(range);
+        }
+        l.is_sorted = false;
+    }
+
+    /// Копия `remove_range` базы (`Vec::remove(i)` в цикле, повторный просмотр того же индекса после деления).
+    /// На перевёрнутом исключении (`begin > end`), которое делит последний диапазон, не завершается.
+    fn old_remove_range(l: &mut Range6List, begin: u128, end: u128) {
+        let x = Ipv6Range { begin, end };
+        l.picker = None;
+        let mut i = 0usize;
+        while i < l.list.len() {
+            let cur = l.list[i];
+            if !is_overlap(cur, x) {
+                i += 1;
+                continue;
+            }
+            if begin <= cur.begin && cur.end <= end {
+                l.list.remove(i);
+                continue;
+            }
+            if cur.begin <= begin && end <= cur.end {
+                if begin == 0 {
+                    l.list.remove(i);
+                } else {
+                    l.list[i].end = begin - 1;
+                }
+                if end != u128::MAX {
+                    old_add(l, end.wrapping_add(1), cur.end);
+                }
+                continue;
+            }
+            if cur.begin <= end && end <= cur.end {
+                l.list[i].begin = end.wrapping_add(1);
+            }
+            let cur = l.list[i];
+            if cur.begin <= begin && begin <= cur.end {
+                l.list[i].end = begin.wrapping_sub(1);
+            }
+            i += 1;
+        }
+    }
+
+    /// Копия `apply_excludes` базы поверх [`old_remove_range`].
+    fn old_apply_excludes(l: &mut Range6List, excludes: &Range6List) -> u128 {
+        let mut count: u128 = 0;
+        for r in &excludes.list {
+            count = count.wrapping_add(r.end.wrapping_sub(r.begin).wrapping_add(1));
+            old_remove_range(l, r.begin, r.end);
+        }
+        l.picker = None;
+        count
+    }
+
+    const MID6: u128 = 0x2001_0db8 << 96;
+
+    /// Адрес: в пределах 256 от одной из трёх опор (`::`, середина пространства, `ffff:…:ffff`), чтобы концы целей и
+    /// исключений часто совпадали, касались и перекрывались, или любой.
+    fn addr6() -> impl Strategy<Value = u128> {
+        prop_oneof![
+            3 => 0u128..256,
+            3 => MID6..MID6 + 256,
+            3 => (u128::MAX - 255)..=u128::MAX,
+            1 => any::<u128>(),
+        ]
+    }
+
+    /// Цель: до 64 адресов от `addr6`, от `::`, до `ffff:…:ffff` или два независимых конца (`begin > end` достижим
+    /// через `add`, как в корпусе `ranges6`).
+    fn target6() -> impl Strategy<Value = (u128, u128)> {
+        prop_oneof![
+            6 => (addr6(), 0u128..64).prop_map(|(b, n)| (b, b.saturating_add(n))),
+            1 => (0u128..300).prop_map(|e| (0, e)),
+            1 => (0u128..300).prop_map(|n| (u128::MAX - n, u128::MAX)),
+            1 => (addr6(), addr6()),
+        ]
+    }
+
+    /// Исключение, никогда не перевёрнутое (на нём база может не завершиться): узкое (до 8 адресов) пробивает дыры и
+    /// делит цели; реже от `::`, до `ffff:…:ffff` и широкое между двумя адресами (иначе список почти всегда пуст).
+    fn exclude6() -> impl Strategy<Value = (u128, u128)> {
+        prop_oneof![
+            24 => (addr6(), 0u128..8).prop_map(|(b, n)| (b, b.saturating_add(n))),
+            3 => (0u128..300).prop_map(|e| (0, e)),
+            3 => (0u128..300).prop_map(|n| (u128::MAX - n, u128::MAX)),
+            1 => (addr6(), addr6()).prop_map(|(a, b)| (a.min(b), a.max(b))),
+        ]
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(3000))]
+
+        /// `apply_excludes` равен копии базы: список (порядок, слияния, добавленные в конец половины), `is_sorted`,
+        /// сброшенный `picker` и возвращённое число. Цели — через `add` (несортированные, с перекрытиями), после
+        /// `sort_and_merge` или `optimize`; исключения — через `add`, как их строит разбор, или как есть (соседние
+        /// перекрываются).
+        #[test]
+        fn remove_range_matches_reference(
+            ts in proptest::collection::vec(target6(), 1..200),
+            xs in proptest::collection::vec(exclude6(), 1..300),
+            mode in 0u8..3,
+            raw_excludes in any::<bool>(),
+        ) {
+            let mut got = list(&ts);
+            match mode {
+                1 => got.sort_and_merge(),
+                2 => got.optimize(),
+                _ => {}
+            }
+            let ex = if raw_excludes {
+                Range6List {
+                    list: xs.iter().map(|&(begin, end)| Ipv6Range { begin, end }).collect(),
+                    picker: None,
+                    is_sorted: false,
+                }
+            } else {
+                list(&xs)
+            };
+            let mut want = got.clone();
+            let n = got.apply_excludes(&ex);
+            let m = old_apply_excludes(&mut want, &ex);
+            prop_assert_eq!(n, m);
+            prop_assert_eq!(&got.list, &want.list);
+            prop_assert_eq!(got.is_sorted, want.is_sorted);
+            prop_assert!(got.picker.is_none() && want.picker.is_none());
+        }
+    }
+
+    /// Время (`--release -- --ignored --nocapture`): 20 000 целей — блоки /120 по возрастанию с промежутками; 20 000
+    /// исключений — адрес в середине блока `j`, но каждое сотое исключение — сеть, накрывающая целиком первые 50 блоков
+    /// своей сотни (100 удалений за проход: 50 нижних частей и 50 добавленных в конец половин). Печатает время
+    /// `apply_excludes` и копии базы; длина списка, сам список и возвращённое число равны копии базы.
+    #[test]
+    #[ignore = "timing: run in --release with --ignored --nocapture"]
+    fn many_ipv6_excludes_time() {
+        const N: u128 = 20_000;
+        let block = |k: u128| MID6 + (k << 12);
+        let mut t = Range6List::new();
+        for k in 0..N {
+            t.add(block(k), block(k) + 0xff);
+        }
+        let mut x = Range6List::new();
+        for j in 0..N {
+            if j % 100 == 99 {
+                let g = j - 99;
+                x.add(block(g), block(g + 49) + 0xff);
+            } else {
+                x.add(block(j) + 0x80, block(j) + 0x80);
+            }
+        }
+        assert_eq!((t.len(), x.len()), (20_000, 20_000));
+        let mut want = t.clone();
+        let start = std::time::Instant::now();
+        let n = t.apply_excludes(&x);
+        let took = start.elapsed();
+        let start = std::time::Instant::now();
+        let m = old_apply_excludes(&mut want, &x);
+        let took_ref = start.elapsed();
+        println!(
+            "IPV6_EXCLUDES apply_excludes_ms={:.1} reference_ms={:.1} ranges={} count={}",
+            took.as_secs_f64() * 1e3,
+            took_ref.as_secs_f64() * 1e3,
+            t.len(),
+            n
+        );
+        assert_eq!(t.len(), want.len());
+        assert_eq!(t.len(), 19_800);
+        assert_eq!(n, m);
+        assert_eq!(t.list, want.list);
     }
 }

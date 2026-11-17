@@ -846,7 +846,8 @@ while [ $# -gt 0 ]; do
     *) echo "unknown argument: $1" >&2; exit 64 ;;
   esac
 done
-fatal() { echo "FATAL: $*" >&2; exit 2; }
+FATAL_LOG=""   # this session's session.log once it created --out (never the log of an earlier session)
+fatal() { echo "FATAL: $*" >&2; [ -z "$FATAL_LOG" ] || { echo "[stand-s] FATAL: $*" >>"$FATAL_LOG"; } 2>/dev/null || true; exit 2; }
 [ "$(uname -s)" = Linux ] || fatal "Linux only"
 [ "$(id -u)" = 0 ] || fatal "run as root (sudo -n bash $0 ...)"
 [ -n "$OUT" ] && [ -x "$LAB_BIN" ] || fatal "--out and an executable --lab-bin are required"
@@ -864,7 +865,7 @@ fi
 case ",$CELLS," in *,tx,*|*,rx,*) ;; *) fatal "--cells must name tx and/or rx" ;; esac
 for t in ip tc ethtool taskset timeout python3 setpriv; do command -v "$t" >/dev/null || fatal "missing $t"; done
 for ns in rnn-a rnn-b; do [ ! -e "/run/netns/$ns" ] || fatal "namespace $ns exists: another stand is up or an old one was not torn down"; done
-mkdir -p "$OUT/runs"; OUT=$(readlink -f "$OUT")
+mkdir -p "$OUT/runs"; OUT=$(readlink -f "$OUT"); FATAL_LOG=$OUT/session.log
 log() { echo "[stand-s] $*" | tee -a "$OUT/session.log"; }
 
 # ---- the cells (fixed; the text in BENCHMARKS.md names the same values) --------------------------------------
@@ -1218,14 +1219,20 @@ if lad:
 out["noisy_runs"] = {cell: sum(1 for r in runs if r["cell"] == cell and r.get("noisy") and r["series"] != "warmup")
                      for cell in ("tx", "rx")}
 out["oracle"] = [{k: r[k] for k in ("cell", "rate", "rc", "seconds", "vb_rx_delta")} for r in runs if r["version"] == "oracle"]
+for cell, c in out["cells"].items():   # the rerun flag is per metric, the rerun rule per cell (BENCHMARKS.md)
+    failed = {m: e["no_regression_failed_on"] for m, e in c["metrics"].items() if e.get("no_regression_failed_on")}
+    c["median_failed"] = sorted(m for m, f in failed.items() if f == "median")
+    c["confirmatory_rerun"] = bool(failed) and not c["median_failed"]   # no metric of the cell failed on its median
 json.dump(out, open(sys.argv[2], "w"), indent=1)
 for cell, c in out["cells"].items():
     for m, e in c["metrics"].items():
         line = f"U-{cell.upper()} @{c['rate']} {m}: base median {e['cal_median']:.3f} ({e['cal_min']:.3f}-{e['cal_max']:.3f}) S_AA {100*e['S_AA']:.2f}% T {100*e['T']:.2f}%"
         if "ratio_better" in e:
             line += f" | A/B base {e['ab_base_median']:.3f} new {e['ab_new_median']:.3f} ratio {e['ratio_better']:.4f} pairs {e['pairs_not_worse_than_T']}/{e['ab_pairs']} no_regression={e['no_regression']} speedup={e['speedup']}"
-            if e["confirmatory_rerun"]:
+            if e["confirmatory_rerun"] and c["confirmatory_rerun"]:
                 line += " | fails only on the pair count: ONE confirmatory rerun of the whole A/B in a fresh session (protocol)"
+            elif e["confirmatory_rerun"]:
+                line += f" | fails only on the pair count, but {', '.join(c['median_failed'])} failed on its median: FAIL is final, no rerun"
         elif "verdict" in e:
             line += " | " + e["verdict"]
         if "position" in e:

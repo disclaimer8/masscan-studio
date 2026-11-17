@@ -5,6 +5,19 @@
 //! Список используется и для адресов (u32), и для портов (0..=65535 плюс
 //! смещения протоколов), поэтому, как и в C, всё хранится как `u32`.
 
+/// Двоичный поиск значения в диапазонах, отсортированных по началу и не пересекающихся: O(log n). Общий для IPv4,
+/// портов и IPv6 (`bounds` отдаёт `(begin, end)` элемента).
+pub(crate) fn contains_sorted<R, V: Ord + Copy>(
+    ranges: &[R],
+    value: V,
+    bounds: impl Fn(&R) -> (V, V),
+) -> bool {
+    let idx = ranges.partition_point(|r| bounds(r).0 <= value);
+    idx.checked_sub(1)
+        .and_then(|i| ranges.get(i))
+        .is_some_and(|r| value <= bounds(r).1)
+}
+
 /// Инклюзивный диапазон `[begin, end]`. `begin > end` означает «пустой».
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Range {
@@ -161,7 +174,11 @@ impl RangeList {
     }
 
     /// massip-rangesv4.c:60 `rangelist_is_contains` (линейный поиск).
+    /// Отсортированный список (`sort_and_merge`, `optimize`, `exclude`) ищется двоичным поиском, иначе линейно.
     pub fn is_contains(&self, value: u32) -> bool {
+        if self.is_sorted {
+            return contains_sorted(&self.list, value, |r| (r.begin, r.end));
+        }
         self.list.iter().any(|r| r.begin <= value && value <= r.end)
     }
 
@@ -245,8 +262,8 @@ impl RangeList {
 
         let mut newlist = RangeList::new();
         let mut x = 0usize;
-        for i in 0..self.list.len() {
-            let mut range = self.list[i];
+        for &range in &self.list {
+            let mut range = range;
 
             // Двигаем exclude вперёд до возможного пересечения
             while x < excludes.list.len() && excludes.list[x].end < range.begin {
@@ -319,6 +336,7 @@ pub fn range_is_cidr(range: Range) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
     #[test]
     fn range_is_cidr_cases() {
@@ -406,6 +424,69 @@ mod tests {
             l.add_range(b, e);
         }
         l
+    }
+
+    /// Копия линейного `is_contains` базы: эталон для двоичного поиска.
+    fn linear_contains(l: &RangeList, v: u32) -> bool {
+        l.list.iter().any(|r| r.begin <= v && v <= r.end)
+    }
+
+    fn value() -> impl Strategy<Value = u32> {
+        prop_oneof![0u32..40, (u32::MAX - 40)..=u32::MAX, any::<u32>(),]
+    }
+
+    fn pairs() -> impl Strategy<Value = Vec<(u32, u32)>> {
+        // `begin > end` возможен: оба конца берутся независимо.
+        proptest::collection::vec((value(), value()), 0..12)
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(3000))]
+
+        #[test]
+        fn is_contains_binary_equals_linear(
+            adds in pairs(),
+            excl in pairs(),
+            mode in 0u8..4,
+            extra in proptest::collection::vec(value(), 64),
+        ) {
+            let mut l = list(&adds);
+            match mode {
+                0 => {}
+                1 => l.sort_and_merge(),
+                2 => {
+                    let mut e = list(&excl);
+                    l.exclude(&mut e);
+                }
+                _ => {
+                    // исключение от 0.0.0.0
+                    let mut e = list(&excl);
+                    let hi = excl.first().map_or(7, |p| p.1);
+                    e.add_range(0, hi);
+                    l.exclude(&mut e);
+                }
+            }
+            let mut probes = extra;
+            for r in l.as_slice() {
+                for v in [r.begin, r.end] {
+                    probes.extend([v, v.saturating_sub(1), v.saturating_add(1)]);
+                }
+            }
+            for &(b, e) in adds.iter().chain(excl.iter()) {
+                probes.extend([b, e]);
+            }
+            for v in probes {
+                let want = linear_contains(&l, v);
+                prop_assert_eq!(l.is_contains(v), want, "is_contains {} sorted {}", v, l.is_sorted);
+                if l.is_sorted {
+                    prop_assert_eq!(
+                        contains_sorted(l.as_slice(), v, |r| (r.begin, r.end)),
+                        want,
+                        "sorted {}", v
+                    );
+                }
+            }
+        }
     }
 
     #[test]

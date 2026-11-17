@@ -37,6 +37,7 @@
 //!   ужесточает это (ревью 2A, P2).
 
 use crate::arp::{ARP_FRAME_LEN, ArpOp, answer_request, decode};
+use crate::bytes::{be16_at, be32_at, be128_at};
 use crate::checksum::{
     checksum_ipv4, checksum_ipv6, fold, ip_header_checksum, sctp_crc32c, udp_ipv4_checksum_ok,
     word_sum,
@@ -45,14 +46,21 @@ use crate::cookie::{icmp_echo_cookie, syn_cookie_ipv4, syn_cookie_ipv6};
 use crate::ndp::{NDP_FRAME_LEN, answer_neighbor_solicitation};
 use crate::packet::LinkType;
 use crate::probe::ReadyPlan;
-use crate::ranges::RangeList;
+use crate::ranges::{RangeList, contains_sorted};
 use crate::targets::{TEMPL_ICMP_ECHO, TEMPL_SCTP, TEMPL_TCP, TEMPL_UDP};
 
 /// main.c:773 `if (length > 1514) continue;`.
 pub const MAX_FRAME_LEN: usize = 1514;
 
-const FLAG_RST: u8 = 0x04;
-const FLAG_SYNACK_MASK: u8 = 0x12;
+/// Номера IP-протоколов, которые разбирает приёмник (общие для `tcp_frame.rs`).
+pub(crate) const PROTO_ICMP: u8 = 1;
+pub(crate) const PROTO_TCP: u8 = 6;
+pub(crate) const PROTO_UDP: u8 = 17;
+pub(crate) const PROTO_SCTP: u8 = 132;
+
+/// Флаги TCP: RST и SYN+ACK (маска `0x12`).
+pub(crate) const FLAG_RST: u8 = 0x04;
+pub(crate) const FLAG_SYNACK_MASK: u8 = 0x12;
 
 /// Как относиться к контрольным суммам входящих кадров. Это явный выбор
 /// вызывающего, а не глобальный флаг.
@@ -167,17 +175,39 @@ pub fn link_type_from_dlt(dlt: u32) -> Result<LinkType, ParseError> {
     }
 }
 
-pub(crate) fn be16(b: &[u8], i: usize) -> Option<u16> {
-    Some(u16::from_be_bytes([*b.get(i)?, *b.get(i + 1)?]))
+/// Статус по флагам TCP (main.c:1048-1057): SYN+ACK даёт Open, затем RST перекрывает его и даёт Closed.
+pub(crate) fn tcp_status(flags: u8) -> Option<PortStatus> {
+    let mut status = None;
+    if flags & FLAG_SYNACK_MASK == FLAG_SYNACK_MASK {
+        status = Some(PortStatus::Open);
+    }
+    if flags & FLAG_RST != 0 {
+        status = Some(PortStatus::Closed);
+    }
+    status
 }
 
-pub(crate) fn be32(b: &[u8], i: usize) -> Option<u32> {
-    Some(u32::from_be_bytes([
-        *b.get(i)?,
-        *b.get(i + 1)?,
-        *b.get(i + 2)?,
-        *b.get(i + 3)?,
-    ]))
+/// Ответ IPv4 без MAC и адресов IPv6; `remote` и `local` это `(адрес, порт)`.
+fn ipv4_reply(
+    remote: (u32, u16),
+    local: (u32, u16),
+    status: PortStatus,
+    tcp_flags: u8,
+    ttl: u8,
+    ip_proto: u8,
+) -> Reply {
+    Reply {
+        remote_ip: remote.0,
+        remote_port: remote.1,
+        local_ip: local.0,
+        local_port: local.1,
+        status,
+        tcp_flags,
+        ttl,
+        ip_proto,
+        mac: None,
+        ip6: None,
+    }
 }
 
 /// [`parse_reply_with`] с политикой [`ChecksumPolicy::Verify`].
@@ -200,7 +230,7 @@ pub fn parse_reply_with(
         return Err(ParseError::FrameTooLong(frame.len()));
     }
     // ARP-скан: ответ ARP это не IPv4, он разбирается до `locate_ipv4` (main.c:874-906, `FOUND_ARP`).
-    if link == LinkType::Ethernet && be16(frame, 12) == Some(0x0806) {
+    if link == LinkType::Ethernet && be16_at(frame, 12) == Some(0x0806) {
         return Ok(parse_arp_reply(frame, plan));
     }
     let Some(ip) = locate_ipv4(frame, link)? else {
@@ -232,20 +262,20 @@ pub fn udp_payload(frame: &[u8], link: LinkType) -> Option<&[u8]> {
     if frame.len() > MAX_FRAME_LEN {
         return None;
     }
-    if link == LinkType::Ethernet && be16(frame, 12) == Some(0x0806) {
+    if link == LinkType::Ethernet && be16_at(frame, 12) == Some(0x0806) {
         return None;
     }
     let seg = match locate_ipv4(frame, link).ok()? {
         Some(ip) => {
             let p = ipv4_packet(ip).ok()?;
-            if p.proto != 17 {
+            if p.proto != PROTO_UDP {
                 return None;
             }
             p.ip.get(p.header_len..)?
         }
         None => {
             let p = ipv6_packet(locate_ipv6(frame, link).ok()??).ok()?;
-            if p.next != 17 {
+            if p.next != PROTO_UDP {
                 return None;
             }
             p.ip.get(p.offset..)?
@@ -298,13 +328,13 @@ pub fn arp_reply_for(
 /// там уже обработаны.
 pub(crate) fn locate_ipv6(frame: &[u8], link: LinkType) -> Result<Option<&[u8]>, ParseError> {
     match link {
-        LinkType::Ethernet => match be16(frame, 12) {
+        LinkType::Ethernet => match be16_at(frame, 12) {
             Some(0x86dd) if frame.len() >= 14 => Ok(Some(&frame[14..])),
             _ => Ok(None),
         },
         LinkType::Null => {
             // Значения 24, 28, 30 (`AF_INET6` разных ОС), в любом порядке байт (proto-preprocess.c:523-531).
-            let family = be32(frame, 0).ok_or(ParseError::Truncated("null header"))?;
+            let family = be32_at(frame, 0).ok_or(ParseError::Truncated("null header"))?;
             match family {
                 0x1800_0000 | 0x0000_0018 | 0x1c00_0000 | 0x0000_001c | 0x1e00_0000
                 | 0x0000_001e => Ok(Some(&frame[4..])),
@@ -322,7 +352,7 @@ pub(crate) fn locate_ipv6(frame: &[u8], link: LinkType) -> Result<Option<&[u8]>,
 pub(crate) fn locate_ipv4(frame: &[u8], link: LinkType) -> Result<Option<&[u8]>, ParseError> {
     match link {
         LinkType::Ethernet => {
-            let ethertype = be16(frame, 12).ok_or(ParseError::Truncated("ethernet header"))?;
+            let ethertype = be16_at(frame, 12).ok_or(ParseError::Truncated("ethernet header"))?;
             if frame.len() < 14 {
                 return Err(ParseError::Truncated("ethernet header"));
             }
@@ -334,7 +364,7 @@ pub(crate) fn locate_ipv4(frame: &[u8], link: LinkType) -> Result<Option<&[u8]>,
         }
         LinkType::Null => {
             // proto-preprocess.c:495-509: семейство в первых 4 байтах, в любом порядке.
-            let family = be32(frame, 0).ok_or(ParseError::Truncated("null header"))?;
+            let family = be32_at(frame, 0).ok_or(ParseError::Truncated("null header"))?;
             match family {
                 0x0200_0000 | 0x0000_0002 => Ok(Some(&frame[4..])),
                 0x1800_0000 | 0x0000_0018 | 0x1c00_0000 | 0x0000_001c | 0x1e00_0000
@@ -353,13 +383,9 @@ pub(crate) fn locate_ipv4(frame: &[u8], link: LinkType) -> Result<Option<&[u8]>,
     }
 }
 
-/// Двоичный поиск в отсортированных непересекающихся диапазонах: O(log n).
+/// Двоичный поиск в отсортированных непересекающихся диапазонах IPv4 и портов (`validate` вызывает `optimize`).
 fn in_sorted_ranges(list: &RangeList, value: u32) -> bool {
-    let ranges = list.as_slice();
-    let idx = ranges.partition_point(|r| r.begin <= value);
-    idx.checked_sub(1)
-        .and_then(|i| ranges.get(i))
-        .is_some_and(|r| value <= r.end)
+    contains_sorted(list.as_slice(), value, |r| (r.begin, r.end))
 }
 
 /// Проверенный пакет IPv4: обрезан по полю полной длины, заголовок и его поля прочитаны.
@@ -376,10 +402,11 @@ pub(crate) struct Ipv4Packet<'a> {
 /// Заголовок IPv4 (proto-preprocess.c:104-146): общий разбор [`parse_reply`], [`udp_payload`] и
 /// [`crate::tcp_frame::tcp_segment`], поэтому все видят один и тот же пакет.
 pub(crate) fn ipv4_packet(ip: &[u8]) -> Result<Ipv4Packet<'_>, ParseError> {
-    let b0 = *ip.first().ok_or(ParseError::Truncated("ipv4 header"))?;
-    if ip.len() < 20 {
-        return Err(ParseError::Truncated("ipv4 header"));
-    }
+    // Короче 20 байт это `Truncated`, как и пустой пакет; дальше поля фиксированного заголовка читаются без проверок.
+    let hdr = ip
+        .first_chunk::<20>()
+        .ok_or(ParseError::Truncated("ipv4 header"))?;
+    let b0 = hdr[0];
     if b0 >> 4 != 4 {
         return Err(ParseError::BadIpVersion(b0 >> 4));
     }
@@ -391,11 +418,11 @@ pub(crate) fn ipv4_packet(ip: &[u8]) -> Result<Ipv4Packet<'_>, ParseError> {
     if ip.len() < header_len {
         return Err(ParseError::Truncated("ipv4 options"));
     }
-    let frag = be16(ip, 6).ok_or(ParseError::Truncated("ipv4 header"))?;
+    let frag = u16::from_be_bytes([hdr[6], hdr[7]]);
     if frag & 0x3fff != 0 {
         return Err(ParseError::Fragment);
     }
-    let total = be16(ip, 2).ok_or(ParseError::Truncated("ipv4 header"))?;
+    let total = u16::from_be_bytes([hdr[2], hdr[3]]);
     if usize::from(total) < header_len {
         return Err(ParseError::TotalLengthBelowHeader {
             total,
@@ -413,10 +440,10 @@ pub(crate) fn ipv4_packet(ip: &[u8]) -> Result<Ipv4Packet<'_>, ParseError> {
     Ok(Ipv4Packet {
         ip,
         header_len,
-        ttl: ip[8],
-        proto: ip[9],
-        ip_them: be32(ip, 12).ok_or(ParseError::Truncated("ipv4 header"))?,
-        ip_me: be32(ip, 16).ok_or(ParseError::Truncated("ipv4 header"))?,
+        ttl: hdr[8],
+        proto: hdr[9],
+        ip_them: u32::from_be_bytes([hdr[12], hdr[13], hdr[14], hdr[15]]),
+        ip_me: u32::from_be_bytes([hdr[16], hdr[17], hdr[18], hdr[19]]),
     })
 }
 
@@ -435,10 +462,10 @@ fn parse_ipv4_tcp(
         ip_me,
     } = ipv4_packet(ip)?;
     match proto {
-        1 => return parse_icmp(ip, header_len, (ip_them, ip_me, ttl), plan, policy),
-        17 => return parse_udp_reply(ip, header_len, (ip_them, ip_me, ttl), plan, policy),
-        132 => return parse_sctp_reply(ip, header_len, (ip_them, ip_me, ttl), plan, policy),
-        6 => {}
+        PROTO_ICMP => return parse_icmp(ip, header_len, (ip_them, ip_me, ttl), plan, policy),
+        PROTO_UDP => return parse_udp_reply(ip, header_len, (ip_them, ip_me, ttl), plan, policy),
+        PROTO_SCTP => return parse_sctp_reply(ip, header_len, (ip_them, ip_me, ttl), plan, policy),
+        PROTO_TCP => {}
         // прочее: не наш SYN-ответ.
         _ => return Ok(None),
     }
@@ -472,14 +499,7 @@ fn parse_ipv4_tcp(
         return Ok(None);
     }
     // main.c:1048-1057.
-    let mut status = None;
-    if flags & FLAG_SYNACK_MASK == FLAG_SYNACK_MASK {
-        status = Some(PortStatus::Open);
-    }
-    if flags & FLAG_RST != 0 {
-        status = Some(PortStatus::Closed);
-    }
-    let Some(status) = status else {
+    let Some(status) = tcp_status(flags) else {
         return Ok(None);
     };
     // main.c:825, :1059: cookie == seqno_me - 1.
@@ -505,27 +525,19 @@ fn parse_ipv4_tcp(
         }
     }
 
-    Ok(Some(Reply {
-        remote_ip: ip_them,
-        remote_port: port_them,
-        local_ip: ip_me,
-        local_port: port_me,
+    Ok(Some(ipv4_reply(
+        (ip_them, port_them),
+        (ip_me, port_me),
         status,
-        tcp_flags: flags,
+        flags,
         ttl,
-        ip_proto: 6,
-        mac: None,
-        ip6: None,
-    }))
+        PROTO_TCP,
+    )))
 }
 
-/// Двоичный поиск адреса IPv6 в отсортированных непересекающихся диапазонах (`validate` вызывает `optimize`).
+/// Тот же поиск для адресов IPv6 (`validate` вызывает `optimize`).
 fn in_sorted_ranges6(list: &crate::ranges6::Range6List, value: u128) -> bool {
-    let ranges = list.as_slice();
-    let idx = ranges.partition_point(|r| r.begin <= value);
-    idx.checked_sub(1)
-        .and_then(|i| ranges.get(i))
-        .is_some_and(|r| value <= r.end)
+    contains_sorted(list.as_slice(), value, |r| (r.begin, r.end))
 }
 
 /// SYN-ACK и RST поверх IPv6 (`receive_thread`, main.c:830-1065 с `preprocess_frame`, proto-preprocess.c:215-312).
@@ -556,7 +568,7 @@ fn parse_ipv6_tcp(
         ip_me,
     } = ipv6_packet(ip)?;
     // proto-preprocess.c:285-296: TCP разбирается, всё остальное не наш SYN-ответ (R3).
-    if next != 6 {
+    if next != PROTO_TCP {
         return Ok(None);
     }
     parse_ipv6_segment(&ip[offset..], (ip_them, ip_me, hop_limit), plan, policy)
@@ -578,14 +590,14 @@ pub(crate) struct Ipv6Packet<'a> {
 /// Заголовок IPv6 и цепочка Hop-by-Hop (proto-preprocess.c:215-312): общий разбор [`parse_reply`], [`udp_payload`]
 /// и [`crate::tcp_frame::tcp_segment`].
 pub(crate) fn ipv6_packet(ip: &[u8]) -> Result<Ipv6Packet<'_>, ParseError> {
-    let b0 = *ip.first().ok_or(ParseError::Truncated("ipv6 header"))?;
-    if ip.len() < 40 {
-        return Err(ParseError::Truncated("ipv6 header"));
-    }
+    let hdr = ip
+        .first_chunk::<40>()
+        .ok_or(ParseError::Truncated("ipv6 header"))?;
+    let b0 = hdr[0];
     if b0 >> 4 != 6 {
         return Err(ParseError::BadIpVersion(b0 >> 4));
     }
-    let payload_length = be16(ip, 4).ok_or(ParseError::Truncated("ipv6 header"))?;
+    let payload_length = u16::from_be_bytes([hdr[4], hdr[5]]);
     if 40 + usize::from(payload_length) > ip.len() {
         return Err(ParseError::Ipv6PayloadBeyondFrame {
             payload: payload_length,
@@ -593,12 +605,12 @@ pub(crate) fn ipv6_packet(ip: &[u8]) -> Result<Ipv6Packet<'_>, ParseError> {
         });
     }
     let ip = &ip[..40 + usize::from(payload_length)];
-    let hop_limit = ip[7];
-    let ip_them = u128::from_be_bytes(ip[8..24].try_into().expect("16 bytes"));
-    let ip_me = u128::from_be_bytes(ip[24..40].try_into().expect("16 bytes"));
+    let hop_limit = hdr[7];
+    let ip_them = be128_at(hdr, 8).ok_or(ParseError::Truncated("ipv6 header"))?;
+    let ip_me = be128_at(hdr, 24).ok_or(ParseError::Truncated("ipv6 header"))?;
 
     // proto-preprocess.c:285-309.
-    let mut next = ip[6];
+    let mut next = hdr[6];
     let mut offset = 40usize;
     while next == 0 {
         let ext = ip
@@ -656,14 +668,7 @@ fn parse_ipv6_segment(
         return Ok(None);
     }
     // main.c:1048-1057.
-    let mut status = None;
-    if flags & FLAG_SYNACK_MASK == FLAG_SYNACK_MASK {
-        status = Some(PortStatus::Open);
-    }
-    if flags & FLAG_RST != 0 {
-        status = Some(PortStatus::Closed);
-    }
-    let Some(status) = status else {
+    let Some(status) = tcp_status(flags) else {
         return Ok(None);
     };
     // main.c:825, :1059.
@@ -690,7 +695,7 @@ fn parse_ipv6_segment(
         status,
         tcp_flags: flags,
         ttl: hop_limit,
-        ip_proto: 6,
+        ip_proto: PROTO_TCP,
         mac: None,
         ip6: Some(ReplyIpv6 {
             remote: ip_them,
@@ -725,16 +730,8 @@ fn parse_arp_reply(frame: &[u8], plan: &ReadyPlan) -> Option<Reply> {
         return None;
     }
     Some(Reply {
-        remote_ip: a.sender_ip,
-        remote_port: 0,
-        local_ip: a.target_ip,
-        local_port: 0,
-        status: PortStatus::Arp,
-        tcp_flags: 0,
-        ttl: 0,
-        ip_proto: 0,
         mac: Some(a.eth_src),
-        ip6: None,
+        ..ipv4_reply((a.sender_ip, 0), (a.target_ip, 0), PortStatus::Arp, 0, 0, 0)
     })
 }
 
@@ -771,10 +768,10 @@ pub(crate) struct TcpHeader {
 /// Заголовок TCP сегмента `seg` (от начала TCP до конца IP-пакета): общий разбор [`parse_reply`] и
 /// [`crate::tcp_frame::tcp_segment`]. Смещение данных меньше 5 отклоняется (C берёт `px[12]>>2` без проверки).
 pub(crate) fn tcp_header(seg: &[u8]) -> Result<TcpHeader, ParseError> {
-    if seg.len() < 20 {
-        return Err(ParseError::Truncated("tcp header"));
-    }
-    let data_offset = seg[12] >> 4;
+    let hdr = seg
+        .first_chunk::<20>()
+        .ok_or(ParseError::Truncated("tcp header"))?;
+    let data_offset = hdr[12] >> 4;
     if data_offset < 5 {
         return Err(ParseError::BadTcpDataOffset(data_offset));
     }
@@ -782,15 +779,14 @@ pub(crate) fn tcp_header(seg: &[u8]) -> Result<TcpHeader, ParseError> {
     if seg.len() < header_len {
         return Err(ParseError::Truncated("tcp options"));
     }
-    let t = ParseError::Truncated("tcp header");
     Ok(TcpHeader {
-        port_them: be16(seg, 0).ok_or(t.clone())?,
-        port_me: be16(seg, 2).ok_or(t.clone())?,
-        seqno: be32(seg, 4).ok_or(t.clone())?,
-        ackno: be32(seg, 8).ok_or(t.clone())?,
-        flags: seg[13],
+        port_them: u16::from_be_bytes([hdr[0], hdr[1]]),
+        port_me: u16::from_be_bytes([hdr[2], hdr[3]]),
+        seqno: u32::from_be_bytes([hdr[4], hdr[5], hdr[6], hdr[7]]),
+        ackno: u32::from_be_bytes([hdr[8], hdr[9], hdr[10], hdr[11]]),
+        flags: hdr[13],
         header_len,
-        checksum: be16(seg, 16).ok_or(t)?,
+        checksum: u16::from_be_bytes([hdr[16], hdr[17]]),
     })
 }
 
@@ -820,14 +816,13 @@ fn parse_udp_reply(
     if seg.len() < 8 {
         return Err(ParseError::Truncated("udp header"));
     }
-    let port_them = be16(seg, 0).ok_or(ParseError::Truncated("udp header"))?;
-    let port_me = be16(seg, 2).ok_or(ParseError::Truncated("udp header"))?;
+    let port_them = be16_at(seg, 0).ok_or(ParseError::Truncated("udp header"))?;
+    let port_me = be16_at(seg, 2).ok_or(ParseError::Truncated("udp header"))?;
     // main.c:829, :935 (`is_nic_port` для UDP, :911).
     if !is_my_ip(plan, ip_me) {
         return Ok(None);
     }
-    let (first, last) = plan.binding().source_ports;
-    if port_me < first || port_me > last {
+    if !is_my_port(plan, port_me) {
         return Ok(None);
     }
     let targets = plan.effective().massip();
@@ -836,7 +831,7 @@ fn parse_udp_reply(
     {
         return Ok(None);
     }
-    let udp_len = be16(seg, 4).ok_or(ParseError::Truncated("udp header"))?;
+    let udp_len = be16_at(seg, 4).ok_or(ParseError::Truncated("udp header"))?;
     if usize::from(udp_len) < 8 || usize::from(udp_len) > seg.len() {
         return Err(ParseError::BadUdpLength(udp_len));
     }
@@ -848,18 +843,14 @@ fn parse_udp_reply(
             return Err(ParseError::BadUdpChecksum);
         }
     }
-    Ok(Some(Reply {
-        remote_ip: ip_them,
-        remote_port: port_them,
-        local_ip: ip_me,
-        local_port: port_me,
-        status: PortStatus::Open,
-        tcp_flags: 0,
+    Ok(Some(ipv4_reply(
+        (ip_them, port_them),
+        (ip_me, port_me),
+        PortStatus::Open,
+        0,
         ttl,
-        ip_proto: 17,
-        mac: None,
-        ip6: None,
-    }))
+        PROTO_UDP,
+    )))
 }
 
 /// Ответ SCTP на наш INIT (`handle_sctp`, proto-sctp.c:137-189): verification tag ответа равен cookie
@@ -884,15 +875,14 @@ fn parse_sctp_reply(
     if seg.len() < 12 {
         return Err(ParseError::Truncated("sctp header"));
     }
-    let port_them = be16(seg, 0).ok_or(ParseError::Truncated("sctp header"))?;
-    let port_me = be16(seg, 2).ok_or(ParseError::Truncated("sctp header"))?;
-    let tag = be32(seg, 4).ok_or(ParseError::Truncated("sctp header"))?;
+    let port_them = be16_at(seg, 0).ok_or(ParseError::Truncated("sctp header"))?;
+    let port_me = be16_at(seg, 2).ok_or(ParseError::Truncated("sctp header"))?;
+    let tag = be32_at(seg, 4).ok_or(ParseError::Truncated("sctp header"))?;
     // main.c:829: is_my_ip; main.c:935: is_my_port (в C после отчёта, здесь до него).
     if !is_my_ip(plan, ip_me) {
         return Ok(None);
     }
-    let (first, last) = plan.binding().source_ports;
-    if port_me < first || port_me > last {
+    if !is_my_port(plan, port_me) {
         return Ok(None);
     }
     let targets = plan.effective().massip();
@@ -927,22 +917,18 @@ fn parse_sctp_reply(
             return Err(ParseError::BadIpChecksum);
         }
         // CRC-32C считается по всему пакету SCTP (по длине IP-пакета, без трейлера кадра), поле суммы как нули.
-        if be32(seg, 8) != Some(sctp_crc32c(seg)) {
+        if be32_at(seg, 8) != Some(sctp_crc32c(seg)) {
             return Err(ParseError::BadSctpChecksum);
         }
     }
-    Ok(Some(Reply {
-        remote_ip: ip_them,
-        remote_port: port_them,
-        local_ip: ip_me,
-        local_port: port_me,
+    Ok(Some(ipv4_reply(
+        (ip_them, port_them),
+        (ip_me, port_me),
         status,
-        tcp_flags: 0,
+        0,
         ttl,
-        ip_proto: 132,
-        mac: None,
-        ip6: None,
-    }))
+        PROTO_SCTP,
+    )))
 }
 
 /// Диспетчер ICMP по `type`/`code` (`handle_icmp`, proto-icmp.c:94-226): Echo Reply `0/0` и Port Unreachable `3/3`.
@@ -990,10 +976,10 @@ fn parse_port_unreachable(
         return Ok(None);
     }
     let (Some(ip_me2), Some(ip_them2), Some(port_me2), Some(port_them2)) = (
-        be32(q, 12),
-        be32(q, 16),
-        be16(q, inner_header),
-        be16(q, inner_header + 2),
+        be32_at(q, 12),
+        be32_at(q, 16),
+        be16_at(q, inner_header),
+        be16_at(q, inner_header + 2),
     ) else {
         return Ok(None);
     };
@@ -1003,9 +989,9 @@ fn parse_port_unreachable(
     // proto-icmp.c:157-196: только TCP, UDP и SCTP.
     let ip_proto = q[9];
     let offset = match ip_proto {
-        6 => TEMPL_TCP,
-        17 => TEMPL_UDP,
-        132 => TEMPL_SCTP,
+        PROTO_TCP => TEMPL_TCP,
+        PROTO_UDP => TEMPL_UDP,
+        PROTO_SCTP => TEMPL_SCTP,
         _ => return Ok(None),
     };
     let targets = plan.effective().massip();
@@ -1022,18 +1008,14 @@ fn parse_port_unreachable(
             return Err(ParseError::BadIcmpChecksum);
         }
     }
-    Ok(Some(Reply {
-        remote_ip: ip_them2,
-        remote_port: port_them2,
-        local_ip: ip_me2,
-        local_port: port_me2,
-        status: PortStatus::Closed,
-        tcp_flags: 0,
+    Ok(Some(ipv4_reply(
+        (ip_them2, port_them2),
+        (ip_me2, port_me2),
+        PortStatus::Closed,
+        0,
         ttl,
         ip_proto,
-        mac: None,
-        ip6: None,
-    }))
+    )))
 }
 
 /// ICMP Echo Reply на наш Echo Request (proto-icmp.c:200-226, `handle_icmp`).
@@ -1055,8 +1037,7 @@ fn parse_icmp_echo_reply(
         return Err(ParseError::Truncated("icmp header"));
     }
     // main.c:829: is_my_ip, как у TCP.
-    let ip_last = plan.nics()[0].source_ipv4_last;
-    if !(plan.binding().source_ipv4..=ip_last).contains(&ip_me) {
+    if !is_my_ip(plan, ip_me) {
         return Ok(None);
     }
     if msg[0] != 0 || msg[1] != 0 {
@@ -1068,7 +1049,7 @@ fn parse_icmp_echo_reply(
     {
         return Ok(None);
     }
-    let seqno_me = be32(msg, 4).ok_or(ParseError::Truncated("icmp header"))?;
+    let seqno_me = be32_at(msg, 4).ok_or(ParseError::Truncated("icmp header"))?;
     if icmp_echo_cookie(ip_them, ip_me, plan.effective().seed()) != seqno_me {
         return Ok(None);
     }
@@ -1081,18 +1062,14 @@ fn parse_icmp_echo_reply(
             return Err(ParseError::BadIcmpChecksum);
         }
     }
-    Ok(Some(Reply {
-        remote_ip: ip_them,
-        remote_port: 0,
-        local_ip: ip_me,
-        local_port: 0,
-        status: PortStatus::Open,
-        tcp_flags: 0,
+    Ok(Some(ipv4_reply(
+        (ip_them, 0),
+        (ip_me, 0),
+        PortStatus::Open,
+        0,
         ttl,
-        ip_proto: 1,
-        mac: None,
-        ip6: None,
-    }))
+        PROTO_ICMP,
+    )))
 }
 
 #[cfg(test)]

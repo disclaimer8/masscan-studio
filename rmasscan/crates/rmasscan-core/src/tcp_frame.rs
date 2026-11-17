@@ -12,13 +12,14 @@
 //! - TSval `--tcp-tsecho` целиком, как в SYN rmasscan (C пишет `field[2]` дважды, `src/templ-tcp-hdr.c:1111-1112`):
 //!   кадры стека копируют шаблон SYN и несут его опции.
 
+use crate::bytes::be16_at;
 use crate::checksum::{checksum_ipv4, checksum_ipv6, ip_header_checksum};
 use crate::cookie::{syn_cookie_ipv4, syn_cookie_ipv6};
 use crate::packet::{LinkType, Tcp6SynTemplate, TcpSynTemplate};
 use crate::probe::ReadyPlan;
 use crate::receive::{
-    MAX_FRAME_LEN, Reply, be16, ipv4_packet, ipv6_packet, is_my_ip, is_my_ip6, is_my_port,
-    locate_ipv4, locate_ipv6, tcp_header,
+    FLAG_RST, MAX_FRAME_LEN, PROTO_TCP, Reply, ipv4_packet, ipv6_packet, is_my_ip, is_my_ip6,
+    is_my_port, locate_ipv4, locate_ipv6, tcp_header, tcp_status,
 };
 use crate::stack::{ConnAddrs, ConnKey, SegmentIn, SegmentOut};
 
@@ -31,9 +32,6 @@ const C_FRAME_BUFFER: usize = 2040;
 
 /// Минимум Ethernet, до которого C добивает кадр IPv4 нулями на любом канале (`src/templ-pkt.c:510-513`).
 const MIN_FRAME_LEN: usize = 60;
-
-const FLAG_RST: u8 = 0x04;
-const FLAG_SYNACK_MASK: u8 = 0x12;
 
 /// Входящий сегмент TCP, адресованный нам: тот же разбор канала, IP и заголовка TCP, что у
 /// [`crate::receive::parse_reply`] (`locate_ipv4`/`locate_ipv6`, `ipv4_packet`/`ipv6_packet`, `tcp_header`), до
@@ -55,13 +53,13 @@ pub fn tcp_segment<'a>(frame: &'a [u8], link: LinkType, plan: &ReadyPlan) -> Opt
         return None;
     }
     // ARP разбирается до IPv4 и в стек не идёт (main.c:874-906).
-    if link == LinkType::Ethernet && be16(frame, 12) == Some(0x0806) {
+    if link == LinkType::Ethernet && be16_at(frame, 12) == Some(0x0806) {
         return None;
     }
     match locate_ipv4(frame, link).ok()? {
         Some(ip) => {
             let p = ipv4_packet(ip).ok()?;
-            if p.proto != 6 {
+            if p.proto != PROTO_TCP {
                 return None;
             }
             let seg = p.ip.get(p.header_len..)?;
@@ -94,7 +92,7 @@ pub fn tcp_segment<'a>(frame: &'a [u8], link: LinkType, plan: &ReadyPlan) -> Opt
             // План без `source_ipv6` (IPv4 и Студия) IPv6 не принимает вовсе, как `parse_reply`.
             plan.nics().first()?.source_ipv6?;
             let p = ipv6_packet(locate_ipv6(frame, link).ok()??).ok()?;
-            if p.next != 6 {
+            if p.next != PROTO_TCP {
                 return None;
             }
             let seg = p.ip.get(p.offset..)?;
@@ -307,7 +305,7 @@ fn build_v6(t: &FrameTemplate, local: u128, remote: u128, s: &SegmentOut) -> Vec
 /// ответа: `Reply` своего ack не несёт, а `parse_reply` принял ответ только при `cookie == ack - 1`.
 pub fn stateless_rst(reply: &Reply, seed: u64) -> Option<SegmentOut> {
     let f = reply.tcp_flags;
-    if reply.ip_proto != 6 || (f & FLAG_SYNACK_MASK != FLAG_SYNACK_MASK && f & FLAG_RST == 0) {
+    if reply.ip_proto != PROTO_TCP || tcp_status(f).is_none() {
         return None;
     }
     let (port_them, port_me) = (u32::from(reply.remote_port), u32::from(reply.local_port));

@@ -10,6 +10,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use crate::bytes::be16_at;
 use crate::targets::{is_c_space, strtoul0};
 
 /// `length == 0xFFFFFFFF` в таблице C значит "длина строки" (templ-payloads.c:571).
@@ -1159,10 +1160,7 @@ fn parse_c_string(buf: &mut Vec<u8>, line: &[u8]) -> usize {
 // --- разбор кадра для `--pcap-payloads` (proto-preprocess.c:55-212, подмножество) ---
 
 fn rd16(b: &[u8], i: usize) -> Option<usize> {
-    Some(usize::from(u16::from_be_bytes([
-        *b.get(i)?,
-        *b.get(i + 1)?,
-    ])))
+    be16_at(b, i).map(usize::from)
 }
 
 /// Порт назначения и нагрузка UDP-пакета Ethernet-кадра; `None` для всего остального и для искажённых кадров

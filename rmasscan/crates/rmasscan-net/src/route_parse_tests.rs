@@ -2329,3 +2329,158 @@ fn netlink_first_error_wins_as_on_base() {
         nl_malformed("truncated nlmsghdr")
     );
 }
+
+/// Hex captured from the base builders (`rt_get_request`, `rt_get_request6`) before the shared `rt_request`; the
+/// header fields are native-endian, so the literals are little-endian (every supported host).
+#[cfg(target_endian = "little")]
+#[test]
+fn rt_requests_are_byte_identical_to_base() {
+    fn unhex(h: &str) -> Vec<u8> {
+        (0..h.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&h[i..i + 2], 16).unwrap())
+            .collect()
+    }
+    let v4 = ip(198, 51, 100, 7);
+    let v6: std::net::Ipv6Addr = "2001:db8::1:2".parse().unwrap();
+    let cases: [(i32, i32, &str, &str); 2] = [
+        (
+            0,
+            0,
+            concat!(
+                "6c00050400000000010000001100000000000000000000000000000000000000",
+                "0000000000000000000000000000000000000000000000000000000000000000",
+                "0000000000000000000000000000000000000000000000000000000010020000",
+                "c63364070000000000000000"
+            ),
+            concat!(
+                "7800050400000000010000001100000000000000000000000000000000000000",
+                "0000000000000000000000000000000000000000000000000000000000000000",
+                "000000000000000000000000000000000000000000000000000000001c1e0000",
+                "0000000020010db800000000000000000001000200000000"
+            ),
+        ),
+        (
+            i32::MAX,
+            i32::MAX,
+            concat!(
+                "6c000504000000000100000011000000ffffff7fffffff7f0000000000000000",
+                "0000000000000000000000000000000000000000000000000000000000000000",
+                "0000000000000000000000000000000000000000000000000000000010020000",
+                "c63364070000000000000000"
+            ),
+            concat!(
+                "78000504000000000100000011000000ffffff7fffffff7f0000000000000000",
+                "0000000000000000000000000000000000000000000000000000000000000000",
+                "000000000000000000000000000000000000000000000000000000001c1e0000",
+                "0000000020010db800000000000000000001000200000000"
+            ),
+        ),
+    ];
+    for (seq, pid, h4, h6) in cases {
+        assert_eq!(
+            rt_get_request(seq, pid, v4),
+            unhex(h4),
+            "v4 seq {seq} pid {pid}"
+        );
+        assert_eq!(
+            rt_get_request6(seq, pid, v6),
+            unhex(h6),
+            "v6 seq {seq} pid {pid}"
+        );
+    }
+}
+
+/// The interface name of a route row is found by ifindex in the adapter list: the first adapter with that index, its
+/// FriendlyName or else its AdapterName, and `ifindex N` for an index no adapter has. The reference is the old way,
+/// a `Vec<Iface>` of every adapter searched by `Iface::index`, kept here so the direct lookup cannot drift from it.
+#[test]
+fn win_name_lookup_matches_iface_list() {
+    let mut bare = adapter(20, IF_TYPE_ETHERNET_CSMACD, "unused", &[]);
+    bare.friendly_name = None;
+    let adapters = vec![
+        adapter(
+            12,
+            IF_TYPE_ETHERNET_CSMACD,
+            "Ethernet",
+            &[ip(192, 0, 2, 10)],
+        ),
+        adapter(7, IF_TYPE_ETHERNET_CSMACD, "First seven", &[]),
+        adapter(7, IF_TYPE_IEEE80211, "Second seven", &[]),
+        bare.clone(),
+        adapter(
+            1,
+            IF_TYPE_SOFTWARE_LOOPBACK,
+            "Loopback",
+            &[ip(127, 0, 0, 1)],
+        ),
+    ];
+    let ifaces = ifaces_of(&adapters);
+    let reference = |ifindex: u32| {
+        ifaces
+            .iter()
+            .find(|i| i.index == ifindex)
+            .map_or_else(|| format!("ifindex {ifindex}"), |i| i.name.clone())
+    };
+    let known = [
+        (12, "Ethernet".to_string()),
+        (7, "First seven".to_string()),
+        (20, bare.adapter_name.clone()),
+        (1, "Loopback".to_string()),
+        (99, "ifindex 99".to_string()),
+        (0, "ifindex 0".to_string()),
+    ];
+    let v6 = |s: &str| s.parse::<std::net::Ipv6Addr>().unwrap();
+    for (ifindex, want) in &known {
+        assert_eq!(
+            &reference(*ifindex),
+            want,
+            "reference for ifindex {ifindex}"
+        );
+        let dst = ip(203, 0, 113, 5);
+        let best = lookup_from_best(fwd(*ifindex, 0, ip(192, 0, 2, 1), 5), dst, &adapters);
+        assert_eq!(&best.ifname, want, "v4 lookup, ifindex {ifindex}");
+        let row6 = Fwd6 {
+            ifindex: *ifindex,
+            prefix_len: 0,
+            next_hop: v6("fe80::1"),
+            metric: 5,
+            mib_loopback: false,
+            loopback_if: false,
+        };
+        let best6 = lookup6_from_best(row6, None, v6("2001:db8::1"), &[], &adapters);
+        assert_eq!(&best6.ifname, want, "v6 lookup, ifindex {ifindex}");
+    }
+    // Default routes: the same name per row, in metric order.
+    let rows: Vec<Fwd> = [99u32, 7, 20, 12]
+        .iter()
+        .enumerate()
+        .map(|(n, i)| fwd(*i, 0, ip(192, 0, 2, 1), n as u32))
+        .collect();
+    let names: Vec<String> = defaults_from_rows(rows, &adapters)
+        .into_iter()
+        .map(|r| r.ifname)
+        .collect();
+    assert_eq!(
+        names,
+        [99u32, 7, 20, 12].map(reference).to_vec(),
+        "default routes carry the reference names"
+    );
+    let rows6: Vec<Fwd6> = [99u32, 7, 20, 12]
+        .iter()
+        .enumerate()
+        .map(|(n, i)| Fwd6 {
+            ifindex: *i,
+            prefix_len: 0,
+            next_hop: v6("fe80::1"),
+            metric: n as u32,
+            mib_loopback: false,
+            loopback_if: false,
+        })
+        .collect();
+    let names6: Vec<String> = defaults6_from_rows(rows6, &adapters)
+        .into_iter()
+        .map(|r| r.ifname)
+        .collect();
+    assert_eq!(names6, names, "IPv6 default routes carry the same names");
+}

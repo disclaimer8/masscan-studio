@@ -429,7 +429,7 @@ fn netlink_constants_match_libc() {
 const RTA_GATEWAY_BIT: i32 = 0x2;
 const RTA_NETMASK_BIT: i32 = 0x4;
 const RTA_IFA_BIT: i32 = 0x20;
-const RTF_HOST: i32 = 0x4;
+const RTF_HOST: RtFlags = RtFlags(0x4);
 const SEQ: i32 = 5;
 const PID: i32 = 4100;
 
@@ -456,7 +456,7 @@ fn sdl(index: u16, name: &str, mac: Option<[u8; 6]>) -> Vec<u8> {
 
 /// Сообщение route socket: заголовок и sockaddr по возрастанию бита, каждый дополнен до `ROUNDUP(sa_len)`.
 fn rt_msg(
-    flags: i32,
+    flags: RtFlags,
     index: u16,
     sas: &[(i32, Vec<u8>)],
     pid: i32,
@@ -481,7 +481,7 @@ fn rt_msg(
     b[OFF_VERSION] = RTM_VERSION;
     b[OFF_TYPE] = RTM_GET;
     b[OFF_INDEX..OFF_INDEX + 2].copy_from_slice(&index.to_ne_bytes());
-    b[OFF_FLAGS..OFF_FLAGS + 4].copy_from_slice(&flags.to_ne_bytes());
+    b[OFF_FLAGS..OFF_FLAGS + 4].copy_from_slice(&flags.0.to_ne_bytes());
     b[OFF_ADDRS..OFF_ADDRS + 4].copy_from_slice(&addrs.to_ne_bytes());
     b[OFF_PID..OFF_PID + 4].copy_from_slice(&pid.to_ne_bytes());
     b[OFF_SEQ..OFF_SEQ + 4].copy_from_slice(&seq.to_ne_bytes());
@@ -514,7 +514,7 @@ fn rt_get_request_mirrors_the_c_oracle() {
     assert_eq!(usize::from(u16::from_ne_bytes([req[0], req[1]])), req.len());
     assert_eq!((req[OFF_VERSION], req[OFF_TYPE]), (RTM_VERSION, RTM_GET));
     let i32_at = |o: usize| i32::from_ne_bytes(req[o..o + 4].try_into().unwrap());
-    assert_eq!(i32_at(OFF_FLAGS), RTF_UP);
+    assert_eq!(i32_at(OFF_FLAGS), RTF_UP.0);
     assert_eq!(i32_at(OFF_ADDRS), RTA_DST_BIT | RTA_IFP_BIT);
     assert_eq!(
         (i32_at(OFF_PID), i32_at(OFF_SEQ), i32_at(OFF_ERRNO)),
@@ -650,7 +650,7 @@ fn rt_reply_gateway_sockaddr_dl_means_on_link() {
 
 #[test]
 fn rt_reply_rtf_local_or_lo0_is_local() {
-    let reply = |flags: i32, ifname: &str| {
+    let reply = |flags: RtFlags, ifname: &str| {
         let m = rt_msg(
             flags,
             1,
@@ -822,12 +822,12 @@ fn rt_msghdr_layout_and_constants_match_libc() {
     assert_eq!((RTA_DST_BIT, RTA_IFP_BIT), (libc::RTA_DST, libc::RTA_IFP));
     assert_eq!(
         [
-            RTF_UP,
-            RTF_GATEWAY,
-            RTF_REJECT,
-            RTF_LLINFO,
-            RTF_BLACKHOLE,
-            RTF_LOCAL
+            RTF_UP.0,
+            RTF_GATEWAY.0,
+            RTF_REJECT.0,
+            RTF_LLINFO.0,
+            RTF_BLACKHOLE.0,
+            RTF_LOCAL.0
         ],
         [
             libc::RTF_UP,
@@ -889,12 +889,12 @@ fn darwin_route_socket_constants_match_libc() {
     assert_eq!(RTA_IFP_BIT, libc::RTA_IFP);
     assert_eq!(
         [
-            RTF_UP,
-            RTF_GATEWAY,
-            RTF_REJECT,
-            RTF_LLINFO,
-            RTF_BLACKHOLE,
-            RTF_LOCAL
+            RTF_UP.0,
+            RTF_GATEWAY.0,
+            RTF_REJECT.0,
+            RTF_LLINFO.0,
+            RTF_BLACKHOLE.0,
+            RTF_LOCAL.0
         ],
         [
             libc::RTF_UP,
@@ -926,11 +926,11 @@ const M1_PEER_MAC: [u8; 6] = [0x02, 0xac, 0, 0, 0, 2];
 const M1_EN0_IP: Ipv4Addr = Ipv4Addr::new(192, 0, 2, 10);
 const M1_EN0_GW: Ipv4Addr = Ipv4Addr::new(192, 0, 2, 1);
 const M1_EN0_MAC: [u8; 6] = [0x02, 0xbb, 0, 0, 0, 14];
-const RTF_DONE: i32 = 0x40;
-const RTF_CLONING: i32 = 0x100;
-const RTF_STATIC: i32 = 0x800;
-const RTF_WASCLONED: i32 = 0x2_0000;
-const RTF_IFSCOPE: i32 = 0x100_0000;
+const RTF_DONE: RtFlags = RtFlags(0x40);
+const RTF_CLONING: RtFlags = RtFlags(0x100);
+const RTF_STATIC: RtFlags = RtFlags(0x800);
+const RTF_WASCLONED: RtFlags = RtFlags(0x2_0000);
+const RTF_IFSCOPE: RtFlags = RtFlags(0x100_0000);
 
 /// Тексты таблицы случаев дословно (rmasscan-lab `autodetect_verify.rs`): `LOCAL_TARGET` это текст после `[-] FAIL: `
 /// строки m05_user_no_adapter и её `Preflight::Refusal` (его ждёт `preflight_expectation("m05_user_no_adapter")`),
@@ -982,7 +982,7 @@ impl MacM1 {
 
     /// Ответ `RTM_GET` ядра к `dst` (самый длинный префикс). MAC в `RTAX_IFP` разбор не читает.
     fn reply(&self, dst: Ipv4Addr) -> Vec<u8> {
-        let msg = |flags: i32, index: u16, sas: &[(i32, Vec<u8>)]| {
+        let msg = |flags: RtFlags, index: u16, sas: &[(i32, Vec<u8>)]| {
             rt_msg(flags | RTF_DONE, index, sas, PID, SEQ, 0)
         };
         let mask = |len: u32| sin(Ipv4Addr::from(u32::MAX << (32 - len)));
@@ -1324,7 +1324,7 @@ fn mac_own_address_is_local_whatever_rtm_get_returned() {
         gateway: None,
         local: true,
     };
-    let feth = |flags: i32, gateway: Vec<u8>| {
+    let feth = |flags: RtFlags, gateway: Vec<u8>| {
         let m = rt_msg(
             RTF_UP | RTF_DONE | flags,
             M1_PEER,
@@ -1360,7 +1360,7 @@ fn mac_own_address_is_local_whatever_rtm_get_returned() {
     );
     assert_eq!(lookup_from_rt(None, ip(198, 18, 0, 1), &ifaces), None);
     let foreign = ip(192, 0, 2, 99);
-    let local_reply = |flags: i32, ifname: &str| {
+    let local_reply = |flags: RtFlags, ifname: &str| {
         let m = rt_msg(
             RTF_UP | RTF_DONE | flags,
             M1_EN0,
@@ -1580,12 +1580,12 @@ fn mac_m1_every_macos_case_detects_as_before_and_only_m05_reads_a_route() {
 fn m1_reply_flags_match_libc() {
     assert_eq!(
         [
-            RTF_HOST,
-            RTF_DONE,
-            RTF_CLONING,
-            RTF_STATIC,
-            RTF_WASCLONED,
-            RTF_IFSCOPE
+            RTF_HOST.0,
+            RTF_DONE.0,
+            RTF_CLONING.0,
+            RTF_STATIC.0,
+            RTF_WASCLONED.0,
+            RTF_IFSCOPE.0
         ],
         [
             libc::RTF_HOST,
@@ -1719,13 +1719,12 @@ fn win_adapter_iftype_71_is_ethernet_and_24_is_loopback() {
 #[test]
 fn fwd_row_iftype_24_or_own_unicast_is_local_the_mib_flag_alone_is_not() {
     let adapters = host_adapters();
-    let ifaces = ifaces_of(&adapters);
     // Флаг MIB `Loopback` строки сам по себе не делает чужой адрес локальным: это on-link маршрут интерфейса строки
     // (так Windows помечает /32 широковещательного адреса подсети), как RTN_BROADCAST на Linux.
     let mut flagged = fwd(12, 32, Ipv4Addr::UNSPECIFIED, 256);
     flagged.mib_loopback = true;
     assert_eq!(
-        route_from_best(&flagged, ip(192, 0, 2, 255), &ifaces),
+        route_from_best(&flagged, ip(192, 0, 2, 255), &adapters),
         Route {
             ifindex: 12,
             ifname: "Ethernet".into(),
@@ -1735,11 +1734,11 @@ fn fwd_row_iftype_24_or_own_unicast_is_local_the_mib_flag_alone_is_not() {
         "a MIB-flagged row to a foreign address is on-link"
     );
     // С флагом MIB и адресом адаптера назначение локально по адресу.
-    assert!(route_from_best(&flagged, ip(192, 0, 2, 10), &ifaces).local);
+    assert!(route_from_best(&flagged, ip(192, 0, 2, 10), &adapters).local);
     // IfType 24 интерфейса строки.
     let mut rows = [fwd(1, 8, Ipv4Addr::UNSPECIFIED, 256)];
     mark_loopback(&mut rows, &adapters);
-    let lo = route_from_best(&rows[0], ip(127, 0, 0, 1), &ifaces);
+    let lo = route_from_best(&rows[0], ip(127, 0, 0, 1), &adapters);
     assert_eq!(
         lo,
         Route {
@@ -1754,7 +1753,7 @@ fn fwd_row_iftype_24_or_own_unicast_is_local_the_mib_flag_alone_is_not() {
         route_from_best(
             &fwd(12, 32, Ipv4Addr::UNSPECIFIED, 256),
             ip(192, 0, 2, 10),
-            &ifaces
+            &adapters
         )
         .local
     );
@@ -1762,7 +1761,7 @@ fn fwd_row_iftype_24_or_own_unicast_is_local_the_mib_flag_alone_is_not() {
         route_from_best(
             &fwd(12, 32, Ipv4Addr::UNSPECIFIED, 256),
             ip(198, 51, 100, 20),
-            &ifaces
+            &adapters
         )
         .local
     );
@@ -1770,7 +1769,7 @@ fn fwd_row_iftype_24_or_own_unicast_is_local_the_mib_flag_alone_is_not() {
     let onlink = route_from_best(
         &fwd(12, 24, Ipv4Addr::UNSPECIFIED, 256),
         ip(192, 0, 2, 20),
-        &ifaces,
+        &adapters,
     );
     assert_eq!(
         onlink,
@@ -1784,25 +1783,24 @@ fn fwd_row_iftype_24_or_own_unicast_is_local_the_mib_flag_alone_is_not() {
     let via = route_from_best(
         &fwd(12, 0, ip(192, 0, 2, 1), 25),
         ip(203, 0, 113, 5),
-        &ifaces,
+        &adapters,
     );
     assert_eq!((via.gateway, via.local), (Some(ip(192, 0, 2, 1)), false));
     // Флаг MIB со шлюзом: строка не локальна, шлюз остаётся.
     let mut lgw = fwd(12, 0, ip(192, 0, 2, 1), 25);
     lgw.mib_loopback = true;
-    let r = route_from_best(&lgw, ip(203, 0, 113, 5), &ifaces);
+    let r = route_from_best(&lgw, ip(203, 0, 113, 5), &adapters);
     assert_eq!((r.gateway, r.local), (Some(ip(192, 0, 2, 1)), false));
     // Интерфейс IfType 24 отменяет шлюз.
     let mut rows = [fwd(1, 0, ip(192, 0, 2, 1), 25)];
     mark_loopback(&mut rows, &adapters);
-    let r = route_from_best(&rows[0], ip(203, 0, 113, 5), &ifaces);
+    let r = route_from_best(&rows[0], ip(203, 0, 113, 5), &adapters);
     assert_eq!((r.gateway, r.local), (None, true));
 }
 
 #[test]
 fn fwd_rows_prefix_zero_sorted_by_metric() {
     let adapters = host_adapters();
-    let ifaces = ifaces_of(&adapters);
     // Строка с префиксом 0 и флагом MIB `Loopback` на Ethernet: фильтр маршрутов по умолчанию её отбрасывает, как и
     // строку через IfType 24 (флаг MIB здесь значит то же, что до PF3).
     let mut mib_flagged = fwd(12, 0, ip(192, 0, 2, 254), 5);
@@ -1821,7 +1819,7 @@ fn fwd_rows_prefix_zero_sorted_by_metric() {
     mark_loopback(&mut rows, &adapters);
     assert_eq!(
         defaults_from_rows(table, &adapters),
-        defaults_from_table(&rows, &ifaces),
+        defaults_from_table(&rows, &adapters),
         "OsRoutes::default_routes is mark_loopback + defaults_from_table"
     );
     let r = |ifindex: u32, ifname: &str, gateway: Option<Ipv4Addr>| Route {
@@ -1831,7 +1829,7 @@ fn fwd_rows_prefix_zero_sorted_by_metric() {
         local: false,
     };
     assert_eq!(
-        defaults_from_table(&rows, &ifaces),
+        defaults_from_table(&rows, &adapters),
         vec![
             r(15, "Wi-Fi", Some(ip(198, 51, 100, 1))),
             r(15, "Wi-Fi", None),

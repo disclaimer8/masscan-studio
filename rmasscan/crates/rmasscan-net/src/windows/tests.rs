@@ -1023,10 +1023,10 @@ fn windows_dad_and_iftype_constants_match_windows_sys() {
     use windows_sys::Win32::Networking::WinSock as ws;
     assert_eq!(
         [
-            WIN_DAD_TENTATIVE,
-            WIN_DAD_DUPLICATE,
-            WIN_DAD_DEPRECATED,
-            WIN_DAD_PREFERRED
+            WIN_DAD_TENTATIVE.0,
+            WIN_DAD_DUPLICATE.0,
+            WIN_DAD_DEPRECATED.0,
+            WIN_DAD_PREFERRED.0
         ],
         [
             ws::IpDadStateTentative,

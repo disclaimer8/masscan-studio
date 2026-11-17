@@ -43,9 +43,10 @@ pub fn utc_offset_secs(unix: i64) -> Result<i32, NetError> {
         .and_then(|s| s.checked_mul(TICKS))
         .and_then(|t| u64::try_from(t).ok())
         .ok_or_else(|| NetError::System(format!("time {unix} out of FILETIME range")))?;
+    // Младшее и старшее слова по 32 бита (маска и сдвиг), бит в бит как прежние `as u32`.
     let utc_ft = FILETIME {
-        dwLowDateTime: utc_ticks as u32,
-        dwHighDateTime: (utc_ticks >> 32) as u32,
+        dwLowDateTime: u32::try_from(utc_ticks & 0xFFFF_FFFF).unwrap_or(u32::MAX),
+        dwHighDateTime: u32::try_from(utc_ticks >> 32).unwrap_or(u32::MAX),
     };
     let mut utc = SYSTEMTIME::default();
     // SAFETY: оба указателя на живые локальные структуры; функция только читает `utc_ft` и пишет `utc`.
@@ -99,5 +100,17 @@ mod tests {
         let t = now();
         assert_eq!(utc_offset_secs(t).unwrap(), utc_offset_secs(t).unwrap());
         assert_eq!(utc_offset_secs(0).unwrap(), utc_offset_secs(0).unwrap());
+    }
+
+    /// Смещение кратно 15 минутам (так у всех поясов) и в моменты, когда младшее слово `FILETIME` (100 нс от 1601
+    /// года) около 0, 2^31 и 2^32: неверно переведённое младшее слово сдвинуло бы момент на секунды и минуты.
+    #[cfg(windows)]
+    #[test]
+    fn utc_offset_keeps_all_32_bits_of_the_filetime_low_word() {
+        // Младшие слова 0x7e7c_8600, 0x8046_4980, 0xfe0a_5500, 0x006c_af00 (2026-09-21 UTC).
+        for t in [1_790_000_060, 1_790_000_063, 1_790_000_274, 1_790_000_278] {
+            let off = utc_offset_secs(t).unwrap();
+            assert_eq!(off % 900, 0, "{t}: {off}");
+        }
     }
 }

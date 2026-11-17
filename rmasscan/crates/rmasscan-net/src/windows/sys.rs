@@ -56,8 +56,11 @@ fn from_wide(buf: &[u16]) -> String {
 /// Системный каталог из WinAPI.
 pub(crate) fn system_directory() -> Result<String, NetError> {
     let mut buf = [0u16; 512];
+    // Длина массива 512 (тип) помещается в `u32`.
+    let cap = u32::try_from(buf.len()).unwrap_or(u32::MAX);
     // SAFETY: buf валиден на 512 элементов, длина передана верно.
-    let n = unsafe { GetSystemDirectoryW(buf.as_mut_ptr(), buf.len() as u32) } as usize;
+    let n = unsafe { GetSystemDirectoryW(buf.as_mut_ptr(), cap) };
+    let n = usize::try_from(n).unwrap_or(usize::MAX);
     if n == 0 || n >= buf.len() {
         // SAFETY: GetLastError без предусловий.
         let e = unsafe { GetLastError() };
@@ -74,18 +77,26 @@ struct OsModule {
     handle: usize,
 }
 
+impl OsModule {
+    /// `HMODULE` из числа: обратный перевод `expose_provenance` в `OsLoader::load`, равносилен прежнему `as`.
+    fn hmodule(&self) -> *mut c_void {
+        std::ptr::with_exposed_provenance_mut(self.handle)
+    }
+}
+
 // SAFETY: symbol() отдаёт только результат GetProcAddress живого HMODULE
 // (реальный экспорт; выгрузка лишь в Drop), нулевой результат это None.
 unsafe impl Module for OsModule {
     fn symbol(&self, name: &CStr) -> Option<*const c_void> {
         // SAFETY: handle это живой HMODULE (выгрузка только в Drop), name
         // NUL-терминирован.
-        let p = unsafe { GetProcAddress(self.handle as *mut c_void, name.as_ptr().cast()) };
+        let p = unsafe { GetProcAddress(self.hmodule(), name.as_ptr().cast()) };
+        // Указатель на функцию в указатель данных переводится только `as` (иначе `transmute`); адрес тот же.
         p.map(|f| f as *const c_void)
     }
 
     fn describe(&self) -> Result<Vec<DllInfo>, NetError> {
-        let wpcap_path = module_path(self.handle as *mut c_void)?;
+        let wpcap_path = module_path(self.hmodule())?;
         let mut out = vec![dll_info("wpcap.dll", &wpcap_path)?];
         let name = wide("Packet.dll");
         // SAFETY: name NUL-терминирована. GetModuleHandleW не увеличивает
@@ -103,14 +114,17 @@ unsafe impl Module for OsModule {
 impl Drop for OsModule {
     fn drop(&mut self) {
         // SAFETY: handle получен из LoadLibraryExW и освобождается ровно один раз.
-        unsafe { FreeLibrary(self.handle as *mut c_void) };
+        unsafe { FreeLibrary(self.hmodule()) };
     }
 }
 
 fn module_path(h: *mut c_void) -> Result<String, NetError> {
     let mut buf = vec![0u16; 1024];
+    // Длина 1024 (строка выше) помещается в `u32`.
+    let cap = u32::try_from(buf.len()).unwrap_or(u32::MAX);
     // SAFETY: buf валиден на 1024 элемента; h это живой модуль.
-    let n = unsafe { GetModuleFileNameW(h, buf.as_mut_ptr(), buf.len() as u32) } as usize;
+    let n = unsafe { GetModuleFileNameW(h, buf.as_mut_ptr(), cap) };
+    let n = usize::try_from(n).unwrap_or(usize::MAX);
     if n == 0 || n >= buf.len() {
         return Err(NetError::System("GetModuleFileNameW failed".into()));
     }
@@ -136,7 +150,7 @@ pub(crate) fn file_version(path: &str) -> Option<String> {
     if size == 0 {
         return None;
     }
-    let mut buf = vec![0u8; size as usize];
+    let mut buf = vec![0u8; usize::try_from(size).ok()?];
     // SAFETY: buf имеет ровно size байт.
     if unsafe { GetFileVersionInfoW(w.as_ptr(), 0, size, buf.as_mut_ptr().cast()) } == 0 {
         return None;
@@ -146,7 +160,10 @@ pub(crate) fn file_version(path: &str) -> Option<String> {
     let root = wide("\\");
     // SAFETY: buf это ресурс версии, root NUL-терминирован, p/len выходные.
     let ok = unsafe { VerQueryValueW(buf.as_ptr().cast(), root.as_ptr(), &mut p, &mut len) };
-    if ok == 0 || p.is_null() || (len as usize) < std::mem::size_of::<VS_FIXEDFILEINFO>() {
+    if ok == 0
+        || p.is_null()
+        || usize::try_from(len).unwrap_or(usize::MAX) < std::mem::size_of::<VS_FIXEDFILEINFO>()
+    {
         return None;
     }
     // SAFETY: p указывает внутрь buf, длина проверена; чтение без
@@ -599,7 +616,7 @@ pub(crate) fn forward_table() -> Result<Vec<Fwd>, NetError> {
     // NumEntries строк лежат подряд с `Table[0]` в том же выделении.
     let (n, base) = unsafe {
         (
-            (*table.0).NumEntries as usize,
+            usize::try_from((*table.0).NumEntries).unwrap_or(0),
             (&raw const (*table.0).Table).cast::<MIB_IPFORWARD_ROW2>(),
         )
     };
@@ -640,7 +657,7 @@ pub(crate) fn forward_table6() -> Result<Vec<Fwd6>, NetError> {
     // `Table[0]` в том же выделении.
     let (n, base) = unsafe {
         (
-            (*table.0).NumEntries as usize,
+            usize::try_from((*table.0).NumEntries).unwrap_or(0),
             (&raw const (*table.0).Table).cast::<MIB_IPFORWARD_ROW2>(),
         )
     };
@@ -660,9 +677,18 @@ pub(crate) fn os_version() -> Option<String> {
     use windows_sys::Wdk::System::SystemServices::RtlGetVersion;
     use windows_sys::Win32::System::SystemInformation::OSVERSIONINFOW;
 
+    /// `dwOSVersionInfoSize`: размер структуры как `DWORD`.
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "the assert proves that the size fits u32"
+    )]
+    const OSVERSIONINFOW_SIZE: u32 = {
+        assert!(std::mem::size_of::<OSVERSIONINFOW>() <= 0xFFFF_FFFF);
+        std::mem::size_of::<OSVERSIONINFOW>() as u32
+    };
     // SAFETY: структура из нулей допустима для OSVERSIONINFOW (целые и массив u16).
     let mut v: OSVERSIONINFOW = unsafe { std::mem::zeroed() };
-    v.dwOSVersionInfoSize = std::mem::size_of::<OSVERSIONINFOW>() as u32;
+    v.dwOSVersionInfoSize = OSVERSIONINFOW_SIZE;
     // SAFETY: v это валидная структура с заполненным размером.
     if unsafe { RtlGetVersion(&mut v) } != 0 {
         return None;
@@ -704,7 +730,9 @@ impl Loader for OsLoader {
                 _ => LoadFailure::Other(msg),
             });
         }
-        Ok(Box::new(OsModule { handle: h as usize }))
+        Ok(Box::new(OsModule {
+            handle: h.expose_provenance(),
+        }))
     }
 }
 

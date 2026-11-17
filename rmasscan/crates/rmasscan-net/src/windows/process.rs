@@ -22,6 +22,33 @@ use windows_sys::Win32::System::Threading::{
 
 use crate::{ProcessSample, TokenFlags};
 
+// Размеры структур Win32 как `DWORD` (`dwSize`, `cb`, длина буфера): `as` в `const` рядом с проверкой, что размер
+// помещается в `u32`.
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "the assert proves that the size fits u32"
+)]
+const THREADENTRY32_SIZE: u32 = {
+    assert!(size_of::<THREADENTRY32>() <= 0xFFFF_FFFF);
+    size_of::<THREADENTRY32>() as u32
+};
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "the assert proves that the size fits u32"
+)]
+const PROCESS_MEMORY_COUNTERS_SIZE: u32 = {
+    assert!(size_of::<PROCESS_MEMORY_COUNTERS>() <= 0xFFFF_FFFF);
+    size_of::<PROCESS_MEMORY_COUNTERS>() as u32
+};
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "the assert proves that the size fits u32"
+)]
+const TOKEN_ELEVATION_SIZE: u32 = {
+    assert!(size_of::<TOKEN_ELEVATION>() <= 0xFFFF_FFFF);
+    size_of::<TOKEN_ELEVATION>() as u32
+};
+
 fn ft_ms(f: &FILETIME) -> u64 {
     // FILETIME это 100-нс интервалы.
     ((u64::from(f.dwHighDateTime) << 32) | u64::from(f.dwLowDateTime)) / 10_000
@@ -40,7 +67,7 @@ fn thread_count() -> Option<u64> {
     let me = unsafe { GetCurrentProcessId() };
     // SAFETY: структура из нулей допустима для THREADENTRY32.
     let mut e: THREADENTRY32 = unsafe { std::mem::zeroed() };
-    e.dwSize = size_of::<THREADENTRY32>() as u32;
+    e.dwSize = THREADENTRY32_SIZE;
     let mut n = 0u64;
     let mut ok = true;
     // SAFETY: snap это живой снимок потоков, e имеет верный dwSize.
@@ -79,7 +106,7 @@ pub(crate) fn thread_ids() -> Option<Vec<u64>> {
     let me = unsafe { GetCurrentProcessId() };
     // SAFETY: структура из нулей допустима для THREADENTRY32.
     let mut e: THREADENTRY32 = unsafe { std::mem::zeroed() };
-    e.dwSize = size_of::<THREADENTRY32>() as u32;
+    e.dwSize = THREADENTRY32_SIZE;
     let mut ids = Vec::new();
     // SAFETY: snap это живой снимок потоков, e имеет верный dwSize.
     let mut more = unsafe { Thread32First(snap, &mut e) } != 0;
@@ -119,11 +146,11 @@ pub(crate) fn process_sample() -> ProcessSample {
 
     // SAFETY: структура из нулей допустима для PROCESS_MEMORY_COUNTERS.
     let mut pmc: PROCESS_MEMORY_COUNTERS = unsafe { std::mem::zeroed() };
-    pmc.cb = size_of::<PROCESS_MEMORY_COUNTERS>() as u32;
+    pmc.cb = PROCESS_MEMORY_COUNTERS_SIZE;
     // SAFETY: me валиден, pmc имеет размер cb.
     if unsafe { K32GetProcessMemoryInfo(me, &mut pmc, pmc.cb) } != 0 {
-        s.working_set_bytes = Some(pmc.WorkingSetSize as u64);
-        s.peak_working_set_bytes = Some(pmc.PeakWorkingSetSize as u64);
+        s.working_set_bytes = u64::try_from(pmc.WorkingSetSize).ok();
+        s.peak_working_set_bytes = u64::try_from(pmc.PeakWorkingSetSize).ok();
     }
     s.threads = thread_count();
     s
@@ -155,8 +182,8 @@ pub(crate) fn token_flags() -> TokenFlags {
         GetTokenInformation(
             token,
             TokenElevation,
-            (&mut el as *mut TOKEN_ELEVATION).cast(),
-            size_of::<TOKEN_ELEVATION>() as u32,
+            (&raw mut el).cast(),
+            TOKEN_ELEVATION_SIZE,
             &mut ret,
         )
     };

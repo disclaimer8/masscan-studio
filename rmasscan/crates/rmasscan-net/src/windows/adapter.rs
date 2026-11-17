@@ -74,8 +74,15 @@ pub(crate) const MAX_TX_FRAME: usize = 1518;
 pub(crate) const TX_BATCH_FRAMES: usize = 64;
 /// Байты очереди: `TX_BATCH_FRAMES` записей максимального размера, поэтому
 /// `pcap_sendqueue_queue` не может вернуть -1 на допустимой пачке.
-pub(crate) const TX_QUEUE_BYTES: u32 =
-    (TX_BATCH_FRAMES * (SENDQUEUE_RECORD_HEADER + MAX_TX_FRAME)) as u32;
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "64 records of 16 + 1518 bytes; the assert proves that the total fits u32"
+)]
+pub(crate) const TX_QUEUE_BYTES: u32 = {
+    let bytes = TX_BATCH_FRAMES * (SENDQUEUE_RECORD_HEADER + MAX_TX_FRAME);
+    assert!(bytes <= 0xFFFF_FFFF);
+    bytes as u32
+};
 
 const RX_SNAPLEN: i32 = 2048;
 const RX_BUFFER_BYTES: i32 = 4 << 20;
@@ -210,15 +217,19 @@ impl Tx for TxHalf {
         let bytes = self.handle.transmit_raw(&mut self.queue, false);
         let dur = t.elapsed();
         Counters::bump(&self.counters.tx_batches);
-        self.counters.tx_batch_max.fetch_max(n as u64, Relaxed);
+        self.counters
+            .tx_batch_max
+            .fetch_max(u64::try_from(n).unwrap_or(u64::MAX), Relaxed);
         self.note_duration(dur);
         let out = batch_outcome(n, queued, bytes);
         // Очередь не переживает вызов, в любом исходе.
         self.queue.clear();
-        self.counters.tx_sent.fetch_add(out.sent as u64, Relaxed);
+        self.counters
+            .tx_sent
+            .fetch_add(u64::try_from(out.sent).unwrap_or(u64::MAX), Relaxed);
         self.counters
             .tx_uncertain
-            .fetch_add((n - out.sent) as u64, Relaxed);
+            .fetch_add(u64::try_from(n - out.sent).unwrap_or(u64::MAX), Relaxed);
         Ok(out)
     }
 }

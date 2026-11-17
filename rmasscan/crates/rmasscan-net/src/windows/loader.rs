@@ -210,7 +210,7 @@ impl NpcapApi {
                 // экспорт `pcap_init` с сигнатурой `InitFn`, живой, пока жив
                 // module; указатель данных и fn-указатель одного размера.
                 let init = unsafe { std::mem::transmute::<*const c_void, InitFn>(p) };
-                let mut err = [0 as c_char; PCAP_ERRBUF_SIZE];
+                let mut err: [c_char; PCAP_ERRBUF_SIZE] = [0; PCAP_ERRBUF_SIZE];
                 // SAFETY: err имеет PCAP_ERRBUF_SIZE байт (требование API).
                 unsafe { init(PCAP_CHAR_ENC_UTF_8, err.as_mut_ptr()) == 0 }
             }

@@ -58,8 +58,8 @@ fn ip_attr(ty: u16, a: Ipv4Addr) -> Vec<u8> {
     rtattr(ty, &a.octets())
 }
 
-fn route_body(kind: u8, dst_len: u8, table: u8, attrs: &[Vec<u8>]) -> Vec<u8> {
-    let mut b = vec![AF_INET, dst_len, 0, 0, table, 4, 0, kind];
+fn route_body(kind: RouteKind, dst_len: u8, table: u8, attrs: &[Vec<u8>]) -> Vec<u8> {
+    let mut b = vec![AF_INET, dst_len, 0, 0, table, 4, 0, kind.0];
     b.extend(0u32.to_ne_bytes());
     for a in attrs {
         b.extend(a);
@@ -67,7 +67,7 @@ fn route_body(kind: u8, dst_len: u8, table: u8, attrs: &[Vec<u8>]) -> Vec<u8> {
     b
 }
 
-fn route_msg(kind: u8, dst_len: u8, table: u8, attrs: &[Vec<u8>]) -> Vec<u8> {
+fn route_msg(kind: RouteKind, dst_len: u8, table: u8, attrs: &[Vec<u8>]) -> Vec<u8> {
     nlmsg(RTM_NEWROUTE, 0, 1, &route_body(kind, dst_len, table, attrs))
 }
 
@@ -82,7 +82,7 @@ fn error_msg(code: i32) -> Vec<u8> {
 }
 
 fn nl(
-    kind: u8,
+    kind: RouteKind,
     dst_len: u8,
     table: u32,
     oif: Option<u32>,
@@ -95,6 +95,7 @@ fn nl(
         table,
         oif,
         gateway: gw,
+        prefsrc: None,
         priority: prio,
     }
 }
@@ -227,7 +228,7 @@ fn netlink_local_and_unreachable_kinds_are_kept() {
         &[ip_attr(RTA_GATEWAY, ip(192, 0, 2, 1))],
     ));
     let routes = parse_netlink_routes(&buf).unwrap();
-    let kinds: Vec<u8> = routes.iter().map(|r| r.kind).collect();
+    let kinds: Vec<RouteKind> = routes.iter().map(|r| r.kind).collect();
     assert_eq!(
         kinds,
         vec![
@@ -2259,7 +2260,7 @@ fn netlink_first_error_wins_as_on_base() {
         nl_malformed("short route attribute")
     );
 
-    let mut b6 = vec![10u8, 128, 0, 0, 254, 3, 0, RTN_UNICAST];
+    let mut b6 = vec![10u8, 128, 0, 0, 254, 3, 0, RTN_UNICAST.0];
     b6.extend(0u32.to_ne_bytes());
     b6.extend(attrs.iter().flatten());
     let v6 = nlmsg(RTM_NEWROUTE, 0, 1, &b6);
@@ -2296,7 +2297,7 @@ fn netlink_first_error_wins_as_on_base() {
 
     // То же для IPv6 и адресов IPv6.
     let bad6 = nlmsg(RTM_NEWROUTE, 0, 1, &{
-        let mut b = vec![10u8, 128, 0, 0, 254, 3, 0, RTN_UNICAST];
+        let mut b = vec![10u8, 128, 0, 0, 254, 3, 0, RTN_UNICAST.0];
         b.extend(0u32.to_ne_bytes());
         b.extend(bad_len);
         b

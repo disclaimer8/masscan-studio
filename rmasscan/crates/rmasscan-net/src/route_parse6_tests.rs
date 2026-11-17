@@ -43,8 +43,8 @@ fn rtattr(ty: u16, payload: &[u8]) -> Vec<u8> {
     b
 }
 
-fn route6_msg(kind: u8, dst_len: u8, table: u8, attrs: &[Vec<u8>]) -> Vec<u8> {
-    let mut b = vec![LINUX_AF_INET6, dst_len, 0, 0, table, 3, 0, kind];
+fn route6_msg(kind: RouteKind, dst_len: u8, table: u8, attrs: &[Vec<u8>]) -> Vec<u8> {
+    let mut b = vec![LINUX_AF_INET6, dst_len, 0, 0, table, 3, 0, kind.0];
     b.extend(0u32.to_ne_bytes());
     for a in attrs {
         b.extend(a);
@@ -129,7 +129,7 @@ fn netlink_ipv6_route_reply_parses_oif_gateway_and_prefsrc() {
         ],
     );
     // Чужое семейство (IPv4) в той же датаграмме: не маршрут IPv6.
-    let mut v4 = vec![AF_INET, 32, 0, 0, 254, 3, 0, RTN_UNICAST];
+    let mut v4 = vec![AF_INET, 32, 0, 0, 254, 3, 0, RTN_UNICAST.0];
     v4.extend(0u32.to_ne_bytes());
     v4.extend(rtattr(RTA_OIF, &7u32.to_ne_bytes()));
     buf.extend(nlmsg(RTM_NEWROUTE, 0, &v4));
@@ -236,7 +236,7 @@ fn netlink_ipv6_defaults_are_main_table_unicast_with_oif_by_priority() {
         &[rtattr(RTA_OIF, &4u32.to_ne_bytes())],
     ));
     buf.extend(done());
-    let d = netlink_defaults6(parse_netlink_routes6(&buf).unwrap());
+    let d = netlink_defaults(parse_netlink_routes6(&buf).unwrap());
     let gws: Vec<_> = d.iter().map(|r| (r.oif, r.gateway)).collect();
     assert_eq!(
         gws,
@@ -260,7 +260,7 @@ fn netlink_ipv6_addr_dump_skips_tentative_and_dadfailed() {
     ));
     buf.extend(addr6_msg(
         2,
-        IFA_F_TENTATIVE as u8,
+        IFA_F_TENTATIVE.0 as u8,
         0,
         &[rtattr(IFA_ADDRESS, &v6("2001:db8:1::4").octets())],
     ));
@@ -270,7 +270,7 @@ fn netlink_ipv6_addr_dump_skips_tentative_and_dadfailed() {
         0,
         &[
             rtattr(IFA_ADDRESS, &v6("2001:db8:1::5").octets()),
-            rtattr(IFA_FLAGS, &IFA_F_DEPRECATED.to_ne_bytes()),
+            rtattr(IFA_FLAGS, &IFA_F_DEPRECATED.0.to_ne_bytes()),
         ],
     ));
     buf.extend(addr6_msg(
@@ -279,7 +279,7 @@ fn netlink_ipv6_addr_dump_skips_tentative_and_dadfailed() {
         0,
         &[
             rtattr(IFA_ADDRESS, &v6("2001:db8:1::6").octets()),
-            rtattr(IFA_FLAGS, &(IFA_F_DADFAILED | 0x100).to_ne_bytes()),
+            rtattr(IFA_FLAGS, &(IFA_F_DADFAILED.0 | 0x100).to_ne_bytes()),
         ],
     ));
     buf.extend(addr6_msg(

@@ -49,11 +49,11 @@ fn netlink_constants_match_libc() {
     );
     assert_eq!(
         [
-            RTN_UNICAST,
-            RTN_LOCAL,
-            RTN_BLACKHOLE,
-            RTN_UNREACHABLE,
-            RTN_PROHIBIT
+            RTN_UNICAST.0,
+            RTN_LOCAL.0,
+            RTN_BLACKHOLE.0,
+            RTN_UNREACHABLE.0,
+            RTN_PROHIBIT.0
         ],
         [
             libc::RTN_UNICAST,
@@ -69,7 +69,7 @@ fn netlink_constants_match_libc() {
         [libc::IFA_ADDRESS, libc::IFA_LOCAL, libc::IFA_FLAGS]
     );
     assert_eq!(
-        [IFA_F_DADFAILED, IFA_F_DEPRECATED, IFA_F_TENTATIVE],
+        [IFA_F_DADFAILED.0, IFA_F_DEPRECATED.0, IFA_F_TENTATIVE.0],
         [
             libc::IFA_F_DADFAILED,
             libc::IFA_F_DEPRECATED,

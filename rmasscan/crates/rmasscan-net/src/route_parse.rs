@@ -77,15 +77,41 @@ mod netlink {
     pub(crate) const RTA_GATEWAY: u16 = 5;
     pub(crate) const RTA_PRIORITY: u16 = 6;
     pub(crate) const RTA_TABLE: u16 = 15;
-    pub(crate) const RTN_UNICAST: u8 = 1;
-    pub(crate) const RTN_LOCAL: u8 = 2;
-    pub(crate) const RTN_BLACKHOLE: u8 = 6;
-    pub(crate) const RTN_UNREACHABLE: u8 = 7;
-    pub(crate) const RTN_PROHIBIT: u8 = 8;
     pub(crate) const RT_TABLE_MAIN: u32 = 254;
     pub(crate) const RTA_HDRLEN: usize = 4;
     /// Биты `NLA_F_NESTED`/`NLA_F_NET_BYTEORDER` в `rta_type`.
     const NLA_TYPE_MASK: u16 = !(0x8000 | 0x4000);
+
+    /// `rtm_type` (`RTN_*`): вид маршрута.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(crate) struct RouteKind(pub u8);
+
+    impl std::fmt::Display for RouteKind {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            self.0.fmt(f)
+        }
+    }
+
+    pub(crate) const RTN_UNICAST: RouteKind = RouteKind(1);
+    pub(crate) const RTN_LOCAL: RouteKind = RouteKind(2);
+    pub(crate) const RTN_BLACKHOLE: RouteKind = RouteKind(6);
+    pub(crate) const RTN_UNREACHABLE: RouteKind = RouteKind(7);
+    pub(crate) const RTN_PROHIBIT: RouteKind = RouteKind(8);
+
+    /// Флаги адреса (`IFA_F_*`): `IFA_FLAGS` или 8-битный `ifa_flags`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(crate) struct IfaFlags(pub u32);
+
+    impl IfaFlags {
+        /// Все биты `other` выставлены.
+        pub(crate) const fn contains(self, other: IfaFlags) -> bool {
+            self.0 & other.0 == other.0
+        }
+    }
+
+    pub(crate) const IFA_F_DADFAILED: IfaFlags = IfaFlags(0x08);
+    pub(crate) const IFA_F_DEPRECATED: IfaFlags = IfaFlags(0x20);
+    pub(crate) const IFA_F_TENTATIVE: IfaFlags = IfaFlags(0x40);
 
     /// `NLMSG_ALIGN`/`RTA_ALIGN`: до кратного 4.
     fn align4(n: usize) -> usize {
@@ -148,19 +174,64 @@ mod netlink {
         }
     }
 
-    /// Маршрут из `RTM_NEWROUTE` (только `AF_INET`).
+    /// Семейство маршрутов: что отличает IPv4 от IPv6 в разборе (`rtm_family`, адрес в атрибутах, `RTA_PREFSRC`).
+    pub(crate) trait RouteFamily {
+        /// `rtm_family`.
+        const AF: u8;
+        type Addr: Copy;
+        /// Адрес из значения атрибута (сетевой порядок байт); `None`, если значение короче адреса.
+        fn addr_at(p: &[u8]) -> Option<Self::Addr>;
+        /// Читается ли `RTA_PREFSRC`. Это же выбирает порядок ошибок как на базе: семейство с `RTA_PREFSRC` (IPv6)
+        /// сначала проверяет границы всех атрибутов и лишь потом их значения, без него (IPv4) значения проверяются по
+        /// ходу, и короткое значение раньше испорченного `rta_len` побеждает.
+        const PREFSRC: bool;
+    }
+
+    /// Маркер `AF_INET`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(crate) struct V4;
+    /// Маркер `AF_INET6`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(crate) struct V6;
+
+    impl RouteFamily for V4 {
+        const AF: u8 = AF_INET;
+        type Addr = Ipv4Addr;
+        fn addr_at(p: &[u8]) -> Option<Ipv4Addr> {
+            ipv4_at(p, 0)
+        }
+        const PREFSRC: bool = false;
+    }
+
+    impl RouteFamily for V6 {
+        const AF: u8 = AF_INET6_LINUX;
+        type Addr = Ipv6Addr;
+        fn addr_at(p: &[u8]) -> Option<Ipv6Addr> {
+            ipv6_at(p, 0)
+        }
+        const PREFSRC: bool = true;
+    }
+
+    /// Маршрут из `RTM_NEWROUTE` одного семейства.
     #[derive(Debug, Clone, PartialEq, Eq)]
-    pub(crate) struct NlRoute {
-        /// `rtm_type` (`RTN_*`).
-        pub kind: u8,
+    pub(crate) struct NlRouteOf<F: RouteFamily> {
+        pub kind: RouteKind,
         pub dst_len: u8,
         /// `RTA_TABLE`, иначе `rtm_table`.
         pub table: u32,
         pub oif: Option<u32>,
-        pub gateway: Option<Ipv4Addr>,
+        pub gateway: Option<F::Addr>,
+        /// `RTA_PREFSRC`: в ответе на lookup это источник, который выбрало ядро (`rt6_fill_node`,
+        /// `ip6_route_get_saddr`). Только у IPv6, у IPv4 всегда `None`.
+        pub prefsrc: Option<F::Addr>,
         /// `RTA_PRIORITY` (метрика), 0 без атрибута.
         pub priority: u32,
     }
+
+    /// Маршрут `AF_INET`.
+    pub(crate) type NlRoute = NlRouteOf<V4>;
+    /// Маршрут `AF_INET6`.
+    pub(crate) type NlRoute6 = NlRouteOf<V6>;
 
     /// Отказ разбора: `NLMSG_ERROR` ядра (положительный errno) или искажённый ответ.
     #[derive(Debug, Clone, PartialEq, Eq)]
@@ -180,33 +251,51 @@ mod netlink {
         }
     }
 
-    /// Запрос `RTM_GETROUTE`: с `dst` это lookup одного адреса (`NLM_F_REQUEST`, `dst_len` 32, `RTA_DST`), без него
-    /// dump всех маршрутов IPv4 (`NLM_F_REQUEST | NLM_F_DUMP`).
-    pub(crate) fn netlink_route_request(seq: u32, dst: Option<Ipv4Addr>) -> Vec<u8> {
-        let attr_len = if dst.is_some() { RTA_HDRLEN + 4 } else { 0 };
-        let len = NLMSG_HDRLEN + RTMSG_LEN + attr_len;
+    /// Сообщение netlink: заголовок `nlmsghdr` (16 байт, `nlmsg_pid` 0: заполняет ядро) и полезная нагрузка.
+    pub(crate) fn nl_message(ty: u16, flags: u16, seq: u32, payload: &[u8]) -> Vec<u8> {
+        let len = NLMSG_HDRLEN + payload.len();
+        let mut b = Vec::with_capacity(len);
+        b.extend((len as u32).to_ne_bytes());
+        b.extend(ty.to_ne_bytes());
+        b.extend(flags.to_ne_bytes());
+        b.extend(seq.to_ne_bytes());
+        b.extend(0u32.to_ne_bytes());
+        b.extend(payload);
+        b
+    }
+
+    /// Запрос `RTM_GETROUTE`: с `dst` (сетевой порядок байт) это lookup одного адреса (`NLM_F_REQUEST`, `dst_len` =
+    /// 8 × длина адреса, `RTA_DST`), без него dump всех маршрутов семейства (`NLM_F_REQUEST | NLM_F_DUMP`).
+    pub(crate) fn route_request(family: u8, seq: u32, dst: Option<&[u8]>) -> Vec<u8> {
+        let rt = RtMsg {
+            family,
+            dst_len: dst.map_or(0, |d| (d.len() * 8) as u8),
+            ..RtMsg::default()
+        };
+        let mut payload = Vec::with_capacity(RTMSG_LEN + dst.map_or(0, |d| RTA_HDRLEN + d.len()));
+        payload.extend(rt.to_bytes());
+        if let Some(d) = dst {
+            payload.extend(((RTA_HDRLEN + d.len()) as u16).to_ne_bytes());
+            payload.extend(RTA_DST.to_ne_bytes());
+            payload.extend(d);
+        }
         let flags = match dst {
             Some(_) => NLM_F_REQUEST,
             None => NLM_F_REQUEST | NLM_F_DUMP,
         };
-        let mut b = Vec::with_capacity(len);
-        b.extend((len as u32).to_ne_bytes());
-        b.extend(RTM_GETROUTE.to_ne_bytes());
-        b.extend(flags.to_ne_bytes());
-        b.extend(seq.to_ne_bytes());
-        b.extend(0u32.to_ne_bytes()); // nlmsg_pid: заполняет ядро
-        let rt = RtMsg {
-            family: AF_INET,
-            dst_len: if dst.is_some() { 32 } else { 0 },
-            ..RtMsg::default()
-        };
-        b.extend(rt.to_bytes());
-        if let Some(d) = dst {
-            b.extend(((RTA_HDRLEN + 4) as u16).to_ne_bytes());
-            b.extend(RTA_DST.to_ne_bytes());
-            b.extend(d.octets());
-        }
-        b
+        nl_message(RTM_GETROUTE, flags, seq, &payload)
+    }
+
+    /// Запрос `RTM_GETROUTE` `AF_INET`: lookup `dst` или dump всех маршрутов IPv4.
+    pub(crate) fn netlink_route_request(seq: u32, dst: Option<Ipv4Addr>) -> Vec<u8> {
+        let o = dst.map(|d| d.octets());
+        route_request(AF_INET, seq, o.as_ref().map(|a| a.as_slice()))
+    }
+
+    /// Запрос `RTM_GETROUTE` `AF_INET6`: lookup `dst` или dump всех маршрутов IPv6.
+    pub(crate) fn netlink_route_request6(seq: u32, dst: Option<Ipv6Addr>) -> Vec<u8> {
+        let o = dst.map(|d| d.octets());
+        route_request(AF_INET6_LINUX, seq, o.as_ref().map(|a| a.as_slice()))
     }
 
     /// Сообщения датаграммы: `(nlmsg_type, тело)`; длины проверены.
@@ -228,48 +317,16 @@ mod netlink {
         Ok(out)
     }
 
-    /// Тело `RTM_NEWROUTE`: `rtmsg` и атрибуты; `None` для семейства не `AF_INET`.
-    fn parse_route(body: &[u8]) -> Result<Option<NlRoute>, NlError> {
-        let rt = RtMsg::from_bytes(body).ok_or_else(|| malformed("short rtmsg"))?;
-        if rt.family != AF_INET {
-            return Ok(None);
-        }
-        let mut r = NlRoute {
-            kind: rt.kind,
-            dst_len: rt.dst_len,
-            table: u32::from(rt.table),
-            oif: None,
-            gateway: None,
-            priority: 0,
-        };
-        let mut off = RTMSG_LEN;
-        while off < body.len() {
-            let rest = &body[off..];
-            let (Some(len), Some(ty)) = (u16_at(rest, 0), u16_at(rest, 2)) else {
-                return Err(malformed("truncated rtattr"));
-            };
-            let len = usize::from(len);
-            if len < RTA_HDRLEN || len > rest.len() {
-                return Err(malformed("rta_len out of bounds"));
-            }
-            let p = &rest[RTA_HDRLEN..len];
-            let short = || malformed("short route attribute");
-            match ty & NLA_TYPE_MASK {
-                RTA_OIF => r.oif = Some(u32_at(p, 0).ok_or_else(short)?),
-                RTA_GATEWAY => r.gateway = Some(ipv4_at(p, 0).ok_or_else(short)?),
-                RTA_PRIORITY => r.priority = u32_at(p, 0).ok_or_else(short)?,
-                RTA_TABLE => r.table = u32_at(p, 0).ok_or_else(short)?,
-                _ => {}
-            }
-            off += align4(len).min(rest.len());
-        }
-        Ok(Some(r))
-    }
-
-    /// Все `RTM_NEWROUTE` (`AF_INET`) одной датаграммы; `NLMSG_DONE` завершает разбор, `NLMSG_ERROR` с ненулевым кодом
-    /// это `Err(Kernel(errno))`, нулевой (ACK) пропускается; длины проверяются до каждого чтения.
-    pub(crate) fn parse_netlink_routes(buf: &[u8]) -> Result<Vec<NlRoute>, NlError> {
-        let mut out = Vec::new();
+    /// Тела сообщений типа `want` одной датаграммы, по порядку: `NLMSG_DONE` завершает разбор, `NLMSG_ERROR` с
+    /// ненулевым кодом это `Err(Kernel(errno))`, нулевой (ACK) пропускается, прочие типы пропускаются. Длины всех
+    /// заголовков проверяются до первого тела, а тело разбирается до перехода к следующему сообщению: от этого порядка
+    /// зависит, какая из двух ошибок побеждает (искажённое тело перед `NLMSG_ERROR` даёт `Malformed`, после него
+    /// `Kernel`).
+    fn for_each_payload(
+        buf: &[u8],
+        want: u16,
+        mut f: impl FnMut(&[u8]) -> Result<(), NlError>,
+    ) -> Result<(), NlError> {
         for (ty, body) in split_messages(buf)? {
             match ty {
                 NLMSG_DONE => break,
@@ -279,11 +336,108 @@ mod netlink {
                         return Err(NlError::Kernel(code.saturating_neg()));
                     }
                 }
-                RTM_NEWROUTE => out.extend(parse_route(body)?),
+                t if t == want => f(body)?,
                 _ => {}
             }
         }
+        Ok(())
+    }
+
+    /// Атрибуты `rtattr` тела после заголовка длиной `hdr`: `(тип без флагов NLA, полезная нагрузка)`; длины
+    /// проверяются до каждого чтения. После первой ошибки итератор пуст.
+    pub(crate) struct NlAttrs<'a> {
+        body: &'a [u8],
+        off: usize,
+    }
+
+    impl<'a> NlAttrs<'a> {
+        pub(crate) fn new(body: &'a [u8], hdr: usize) -> Self {
+            NlAttrs { body, off: hdr }
+        }
+    }
+
+    impl<'a> Iterator for NlAttrs<'a> {
+        type Item = Result<(u16, &'a [u8]), NlError>;
+
+        fn next(&mut self) -> Option<Self::Item> {
+            if self.off >= self.body.len() {
+                return None;
+            }
+            let rest = &self.body[self.off..];
+            let (Some(len), Some(ty)) = (u16_at(rest, 0), u16_at(rest, 2)) else {
+                self.off = self.body.len();
+                return Some(Err(malformed("truncated rtattr")));
+            };
+            let len = usize::from(len);
+            if len < RTA_HDRLEN || len > rest.len() {
+                self.off = self.body.len();
+                return Some(Err(malformed("rta_len out of bounds")));
+            }
+            self.off += align4(len).min(rest.len());
+            Some(Ok((ty & NLA_TYPE_MASK, &rest[RTA_HDRLEN..len])))
+        }
+    }
+
+    /// Тело `RTM_NEWROUTE`: `rtmsg` и атрибуты; `None` для другого семейства.
+    fn parse_route<F: RouteFamily>(body: &[u8]) -> Result<Option<NlRouteOf<F>>, NlError> {
+        let rt = RtMsg::from_bytes(body).ok_or_else(|| malformed("short rtmsg"))?;
+        if rt.family != F::AF {
+            return Ok(None);
+        }
+        let mut r = NlRouteOf::<F> {
+            kind: RouteKind(rt.kind),
+            dst_len: rt.dst_len,
+            table: u32::from(rt.table),
+            oif: None,
+            gateway: None,
+            prefsrc: None,
+            priority: 0,
+        };
+        let short = || malformed("short route attribute");
+        let mut apply = |ty: u16, p: &[u8]| -> Result<(), NlError> {
+            match ty {
+                RTA_OIF => r.oif = Some(u32_at(p, 0).ok_or_else(short)?),
+                RTA_GATEWAY => r.gateway = Some(F::addr_at(p).ok_or_else(short)?),
+                RTA_PREFSRC if F::PREFSRC => r.prefsrc = Some(F::addr_at(p).ok_or_else(short)?),
+                RTA_PRIORITY => r.priority = u32_at(p, 0).ok_or_else(short)?,
+                RTA_TABLE => r.table = u32_at(p, 0).ok_or_else(short)?,
+                _ => {}
+            }
+            Ok(())
+        };
+        let attrs = NlAttrs::new(body, RTMSG_LEN);
+        if F::PREFSRC {
+            for (ty, p) in attrs.collect::<Result<Vec<_>, _>>()? {
+                apply(ty, p)?;
+            }
+        } else {
+            for a in attrs {
+                let (ty, p) = a?;
+                apply(ty, p)?;
+            }
+        }
+        Ok(Some(r))
+    }
+
+    /// Все `RTM_NEWROUTE` семейства `F` одной датаграммы (правила [`for_each_payload`]).
+    fn parse_routes<F: RouteFamily>(buf: &[u8]) -> Result<Vec<NlRouteOf<F>>, NlError> {
+        let mut out = Vec::new();
+        for_each_payload(buf, RTM_NEWROUTE, |body| {
+            out.extend(parse_route::<F>(body)?);
+            Ok(())
+        })?;
         Ok(out)
+    }
+
+    /// Все `RTM_NEWROUTE` (`AF_INET`) одной датаграммы; `NLMSG_DONE` завершает разбор, `NLMSG_ERROR` с ненулевым кодом
+    /// это `Err(Kernel(errno))`, нулевой (ACK) пропускается; длины проверяются до каждого чтения.
+    pub(crate) fn parse_netlink_routes(buf: &[u8]) -> Result<Vec<NlRoute>, NlError> {
+        parse_routes::<V4>(buf)
+    }
+
+    /// Все `RTM_NEWROUTE` `AF_INET6` датаграммы (правила [`parse_netlink_routes`]).
+    pub(crate) fn parse_netlink_routes6(buf: &[u8]) -> Result<Vec<NlRoute6>, NlError> {
+        parse_routes::<V6>(buf)
     }
 
     /// Датаграмма завершает ответ (`NLMSG_DONE` или `NLMSG_ERROR`, или она искажена).
@@ -294,9 +448,10 @@ mod netlink {
         })
     }
 
-    /// Маршруты по умолчанию из dump: `RTN_UNICAST`, `dst_len` 0, таблица main, с `RTA_OIF`; по `priority`.
-    pub(crate) fn netlink_defaults(routes: Vec<NlRoute>) -> Vec<NlRoute> {
-        let mut d: Vec<NlRoute> = routes
+    /// Маршруты по умолчанию из dump: `RTN_UNICAST`, `dst_len` 0, таблица main, с `RTA_OIF` (маршрут IPv6 с
+    /// `RTA_MULTIPATH` без `RTA_OIF` не берётся); по `priority`.
+    pub(crate) fn netlink_defaults<F: RouteFamily>(routes: Vec<NlRouteOf<F>>) -> Vec<NlRouteOf<F>> {
+        let mut d: Vec<NlRouteOf<F>> = routes
             .into_iter()
             .filter(|r| {
                 r.kind == RTN_UNICAST
@@ -309,18 +464,32 @@ mod netlink {
         d
     }
 
-    /// Ответ lookup → [`Route`]: `RTN_LOCAL` это адрес хоста; `RTN_UNREACHABLE`/`BLACKHOLE`/`PROHIBIT` или без
-    /// `RTA_OIF` это «нет маршрута».
-    pub(crate) fn route_from_nl(r: &NlRoute, ifname: impl FnOnce(u32) -> String) -> Option<Route> {
+    /// Общая часть ответа lookup: `(ifindex, ifname, gateway, local)`. `RTN_LOCAL` это адрес хоста (шлюза нет);
+    /// `RTN_UNREACHABLE`/`BLACKHOLE`/`PROHIBIT` или без `RTA_OIF` это «нет маршрута».
+    #[allow(clippy::type_complexity)]
+    fn route_target<F: RouteFamily>(
+        r: &NlRouteOf<F>,
+        ifname: impl FnOnce(u32) -> String,
+    ) -> Option<(u32, String, Option<F::Addr>, bool)> {
         if matches!(r.kind, RTN_UNREACHABLE | RTN_BLACKHOLE | RTN_PROHIBIT) {
             return None;
         }
         let oif = r.oif?;
         let local = r.kind == RTN_LOCAL;
-        Some(Route {
-            ifindex: oif,
-            ifname: ifname(oif),
-            gateway: if local { None } else { r.gateway },
+        Some((
+            oif,
+            ifname(oif),
+            if local { None } else { r.gateway },
+            local,
+        ))
+    }
+
+    /// Ответ lookup → [`Route`] (правила [`route_target`]).
+    pub(crate) fn route_from_nl(r: &NlRoute, ifname: impl FnOnce(u32) -> String) -> Option<Route> {
+        route_target(r, ifname).map(|(ifindex, ifname, gateway, local)| Route {
+            ifindex,
+            ifname,
+            gateway,
             local,
         })
     }
@@ -335,155 +504,18 @@ mod netlink {
     pub(crate) const IFA_ADDRESS: u16 = 1;
     pub(crate) const IFA_LOCAL: u16 = 2;
     pub(crate) const IFA_FLAGS: u16 = 8;
-    pub(crate) const IFA_F_DADFAILED: u32 = 0x08;
-    pub(crate) const IFA_F_DEPRECATED: u32 = 0x20;
-    pub(crate) const IFA_F_TENTATIVE: u32 = 0x40;
     /// `sizeof(struct ifaddrmsg)`.
     const IFADDRMSG_LEN: usize = 8;
 
-    /// Маршрут из `RTM_NEWROUTE` (только `AF_INET6`).
-    #[derive(Debug, Clone, PartialEq, Eq)]
-    pub(crate) struct NlRoute6 {
-        /// `rtm_type` (`RTN_*`).
-        pub kind: u8,
-        pub dst_len: u8,
-        /// `RTA_TABLE`, иначе `rtm_table`.
-        pub table: u32,
-        pub oif: Option<u32>,
-        pub gateway: Option<Ipv6Addr>,
-        /// `RTA_PREFSRC`: в ответе на lookup это источник, который выбрало ядро (`rt6_fill_node`,
-        /// `ip6_route_get_saddr`).
-        pub prefsrc: Option<Ipv6Addr>,
-        /// `RTA_PRIORITY` (метрика), 0 без атрибута.
-        pub priority: u32,
-    }
-
-    /// Запрос `RTM_GETROUTE` `AF_INET6`: с `dst` lookup одного адреса (`dst_len` 128, `RTA_DST` 16 байт), без него dump
-    /// всех маршрутов IPv6.
-    pub(crate) fn netlink_route_request6(seq: u32, dst: Option<Ipv6Addr>) -> Vec<u8> {
-        let attr_len = if dst.is_some() { RTA_HDRLEN + 16 } else { 0 };
-        let len = NLMSG_HDRLEN + RTMSG_LEN + attr_len;
-        let flags = match dst {
-            Some(_) => NLM_F_REQUEST,
-            None => NLM_F_REQUEST | NLM_F_DUMP,
-        };
-        let mut b = Vec::with_capacity(len);
-        b.extend((len as u32).to_ne_bytes());
-        b.extend(RTM_GETROUTE.to_ne_bytes());
-        b.extend(flags.to_ne_bytes());
-        b.extend(seq.to_ne_bytes());
-        b.extend(0u32.to_ne_bytes());
-        let rt = RtMsg {
-            family: AF_INET6_LINUX,
-            dst_len: if dst.is_some() { 128 } else { 0 },
-            ..RtMsg::default()
-        };
-        b.extend(rt.to_bytes());
-        if let Some(d) = dst {
-            b.extend(((RTA_HDRLEN + 16) as u16).to_ne_bytes());
-            b.extend(RTA_DST.to_ne_bytes());
-            b.extend(d.octets());
-        }
-        b
-    }
-
-    /// Атрибуты `rtattr` тела после заголовка длиной `hdr`: `(тип без флагов NLA, полезная нагрузка)`; длины проверены.
-    fn attrs(body: &[u8], hdr: usize) -> Result<Vec<(u16, &[u8])>, NlError> {
-        let mut out = Vec::new();
-        let mut off = hdr;
-        while off < body.len() {
-            let rest = &body[off..];
-            let (Some(len), Some(ty)) = (u16_at(rest, 0), u16_at(rest, 2)) else {
-                return Err(malformed("truncated rtattr"));
-            };
-            let len = usize::from(len);
-            if len < RTA_HDRLEN || len > rest.len() {
-                return Err(malformed("rta_len out of bounds"));
-            }
-            out.push((ty & NLA_TYPE_MASK, &rest[RTA_HDRLEN..len]));
-            off += align4(len).min(rest.len());
-        }
-        Ok(out)
-    }
-
-    /// Тело `RTM_NEWROUTE` `AF_INET6`; `None` для другого семейства.
-    fn parse_route6(body: &[u8]) -> Result<Option<NlRoute6>, NlError> {
-        let rt = RtMsg::from_bytes(body).ok_or_else(|| malformed("short rtmsg"))?;
-        if rt.family != AF_INET6_LINUX {
-            return Ok(None);
-        }
-        let mut r = NlRoute6 {
-            kind: rt.kind,
-            dst_len: rt.dst_len,
-            table: u32::from(rt.table),
-            oif: None,
-            gateway: None,
-            prefsrc: None,
-            priority: 0,
-        };
-        let short = || malformed("short route attribute");
-        for (ty, p) in attrs(body, RTMSG_LEN)? {
-            match ty {
-                RTA_OIF => r.oif = Some(u32_at(p, 0).ok_or_else(short)?),
-                RTA_GATEWAY => r.gateway = Some(ipv6_at(p, 0).ok_or_else(short)?),
-                RTA_PREFSRC => r.prefsrc = Some(ipv6_at(p, 0).ok_or_else(short)?),
-                RTA_PRIORITY => r.priority = u32_at(p, 0).ok_or_else(short)?,
-                RTA_TABLE => r.table = u32_at(p, 0).ok_or_else(short)?,
-                _ => {}
-            }
-        }
-        Ok(Some(r))
-    }
-
-    /// Все `RTM_NEWROUTE` `AF_INET6` датаграммы (правила [`parse_netlink_routes`]).
-    pub(crate) fn parse_netlink_routes6(buf: &[u8]) -> Result<Vec<NlRoute6>, NlError> {
-        let mut out = Vec::new();
-        for (ty, body) in split_messages(buf)? {
-            match ty {
-                NLMSG_DONE => break,
-                NLMSG_ERROR => {
-                    let code = i32_at(body, 0).ok_or_else(|| malformed("short nlmsgerr"))?;
-                    if code != 0 {
-                        return Err(NlError::Kernel(code.saturating_neg()));
-                    }
-                }
-                RTM_NEWROUTE => out.extend(parse_route6(body)?),
-                _ => {}
-            }
-        }
-        Ok(out)
-    }
-
-    /// Маршруты IPv6 по умолчанию из dump: `RTN_UNICAST`, `dst_len` 0, таблица main, с `RTA_OIF` (маршрут с
-    /// `RTA_MULTIPATH` без `RTA_OIF` не берётся); по `priority`.
-    pub(crate) fn netlink_defaults6(routes: Vec<NlRoute6>) -> Vec<NlRoute6> {
-        let mut d: Vec<NlRoute6> = routes
-            .into_iter()
-            .filter(|r| {
-                r.kind == RTN_UNICAST
-                    && r.dst_len == 0
-                    && r.table == RT_TABLE_MAIN
-                    && r.oif.is_some()
-            })
-            .collect();
-        d.sort_by_key(|r| r.priority);
-        d
-    }
-
-    /// Ответ lookup IPv6 → [`RouteV6`] (правила [`route_from_nl`]); `RTA_PREFSRC` становится `source`.
+    /// Ответ lookup IPv6 → [`RouteV6`] (правила [`route_target`]); `RTA_PREFSRC` становится `source`.
     pub(crate) fn route6_from_nl(
         r: &NlRoute6,
         ifname: impl FnOnce(u32) -> String,
     ) -> Option<RouteV6> {
-        if matches!(r.kind, RTN_UNREACHABLE | RTN_BLACKHOLE | RTN_PROHIBIT) {
-            return None;
-        }
-        let oif = r.oif?;
-        let local = r.kind == RTN_LOCAL;
-        Some(RouteV6 {
-            ifindex: oif,
-            ifname: ifname(oif),
-            gateway: if local { None } else { r.gateway },
+        route_target(r, ifname).map(|(ifindex, ifname, gateway, local)| RouteV6 {
+            ifindex,
+            ifname,
+            gateway,
             source: r.prefsrc,
             local,
         })
@@ -495,61 +527,44 @@ mod netlink {
         pub index: u32,
         pub addr: Ipv6Addr,
         /// `IFA_FLAGS`, иначе 8-битный `ifa_flags`.
-        pub flags: u32,
+        pub flags: IfaFlags,
     }
 
     /// Dump `RTM_GETADDR` всех адресов `AF_INET6`.
     pub(crate) fn netlink_addr_request6(seq: u32) -> Vec<u8> {
-        let len = NLMSG_HDRLEN + IFADDRMSG_LEN;
-        let mut b = Vec::with_capacity(len);
-        b.extend((len as u32).to_ne_bytes());
-        b.extend(RTM_GETADDR.to_ne_bytes());
-        b.extend((NLM_F_REQUEST | NLM_F_DUMP).to_ne_bytes());
-        b.extend(seq.to_ne_bytes());
-        b.extend(0u32.to_ne_bytes());
-        b.extend([AF_INET6_LINUX, 0, 0, 0]);
-        b.extend(0u32.to_ne_bytes());
-        b
+        // `struct ifaddrmsg`: семейство и нули (`ifa_prefixlen`, `ifa_flags`, `ifa_scope`, `ifa_index`).
+        let mut payload = [0u8; IFADDRMSG_LEN];
+        payload[0] = AF_INET6_LINUX;
+        nl_message(RTM_GETADDR, NLM_F_REQUEST | NLM_F_DUMP, seq, &payload)
     }
 
     /// Все `RTM_NEWADDR` `AF_INET6` датаграммы: `IFA_LOCAL`, иначе `IFA_ADDRESS` (у IPv6 обычно только он).
     pub(crate) fn parse_netlink_addrs6(buf: &[u8]) -> Result<Vec<NlAddr6>, NlError> {
         let mut out = Vec::new();
-        for (ty, body) in split_messages(buf)? {
-            match ty {
-                NLMSG_DONE => break,
-                NLMSG_ERROR => {
-                    let code = i32_at(body, 0).ok_or_else(|| malformed("short nlmsgerr"))?;
-                    if code != 0 {
-                        return Err(NlError::Kernel(code.saturating_neg()));
-                    }
-                }
-                RTM_NEWADDR => {
-                    let hdr = body
-                        .get(..IFADDRMSG_LEN)
-                        .ok_or_else(|| malformed("short ifaddrmsg"))?;
-                    if hdr[0] != AF_INET6_LINUX {
-                        continue;
-                    }
-                    let index = u32_at(hdr, 4).ok_or_else(|| malformed("short ifaddrmsg"))?;
-                    let mut flags = u32::from(hdr[2]);
-                    let (mut address, mut local) = (None, None);
-                    let short = || malformed("short address attribute");
-                    for (ty, p) in attrs(body, IFADDRMSG_LEN)? {
-                        match ty {
-                            IFA_ADDRESS => address = Some(ipv6_at(p, 0).ok_or_else(short)?),
-                            IFA_LOCAL => local = Some(ipv6_at(p, 0).ok_or_else(short)?),
-                            IFA_FLAGS => flags = u32_at(p, 0).ok_or_else(short)?,
-                            _ => {}
-                        }
-                    }
-                    if let Some(addr) = local.or(address) {
-                        out.push(NlAddr6 { index, addr, flags });
-                    }
-                }
-                _ => {}
+        for_each_payload(buf, RTM_NEWADDR, |body| {
+            let hdr = body
+                .get(..IFADDRMSG_LEN)
+                .ok_or_else(|| malformed("short ifaddrmsg"))?;
+            if hdr[0] != AF_INET6_LINUX {
+                return Ok(());
             }
-        }
+            let index = u32_at(hdr, 4).ok_or_else(|| malformed("short ifaddrmsg"))?;
+            let mut flags = IfaFlags(u32::from(hdr[2]));
+            let (mut address, mut local) = (None, None);
+            let short = || malformed("short address attribute");
+            for (ty, p) in NlAttrs::new(body, IFADDRMSG_LEN).collect::<Result<Vec<_>, _>>()? {
+                match ty {
+                    IFA_ADDRESS => address = Some(ipv6_at(p, 0).ok_or_else(short)?),
+                    IFA_LOCAL => local = Some(ipv6_at(p, 0).ok_or_else(short)?),
+                    IFA_FLAGS => flags = IfaFlags(u32_at(p, 0).ok_or_else(short)?),
+                    _ => {}
+                }
+            }
+            if let Some(addr) = local.or(address) {
+                out.push(NlAddr6 { index, addr, flags });
+            }
+            Ok(())
+        })?;
         Ok(out)
     }
 
@@ -558,9 +573,13 @@ mod netlink {
     pub(crate) fn usable_addrs6(addrs: &[NlAddr6], index: u32) -> Vec<Ipv6Addr> {
         let mut v: Vec<&NlAddr6> = addrs
             .iter()
-            .filter(|a| a.index == index && a.flags & (IFA_F_TENTATIVE | IFA_F_DADFAILED) == 0)
+            .filter(|a| {
+                a.index == index
+                    && !a.flags.contains(IFA_F_TENTATIVE)
+                    && !a.flags.contains(IFA_F_DADFAILED)
+            })
             .collect();
-        v.sort_by_key(|a| a.flags & IFA_F_DEPRECATED != 0);
+        v.sort_by_key(|a| a.flags.contains(IFA_F_DEPRECATED));
         v.into_iter().map(|a| a.addr).collect()
     }
 }

@@ -25,9 +25,9 @@ use crate::NetError;
 use crate::discover::{Iface, Interfaces, Route, RouteTable, RouteV6};
 use crate::network_plan::InterfaceObservation;
 use crate::route_parse::{
-    NlError, NlRoute, NlRoute6, netlink_addr_request6, netlink_defaults, netlink_defaults6,
-    netlink_done, netlink_route_request, netlink_route_request6, parse_netlink_addrs6,
-    parse_netlink_routes, parse_netlink_routes6, route_from_nl, route6_from_nl, usable_addrs6,
+    NlError, NlRoute, NlRoute6, netlink_addr_request6, netlink_defaults, netlink_done,
+    netlink_route_request, netlink_route_request6, parse_netlink_addrs6, parse_netlink_routes,
+    parse_netlink_routes6, route_from_nl, route6_from_nl, usable_addrs6,
 };
 
 /// Буфер приёма: больше любой датаграммы dump ядра (`NLMSG_GOODSIZE` ≤ 8 КиБ, на новых ядрах до 32 КиБ).
@@ -290,7 +290,7 @@ impl RouteTable for OsRoutes {
 
     fn default_routes_v6(&self) -> Result<Vec<RouteV6>, NetError> {
         let routes = exchange6(None)?;
-        Ok(netlink_defaults6(routes)
+        Ok(netlink_defaults(routes)
             .iter()
             .filter_map(|r| route6_from_nl(r, ifname_of))
             .collect())

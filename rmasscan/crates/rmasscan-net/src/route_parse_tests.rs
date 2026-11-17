@@ -407,11 +407,11 @@ fn netlink_constants_match_libc() {
     );
     assert_eq!(
         [
-            RTN_UNICAST,
-            RTN_LOCAL,
-            RTN_BLACKHOLE,
-            RTN_UNREACHABLE,
-            RTN_PROHIBIT
+            RTN_UNICAST.0,
+            RTN_LOCAL.0,
+            RTN_BLACKHOLE.0,
+            RTN_UNREACHABLE.0,
+            RTN_PROHIBIT.0
         ],
         [
             libc::RTN_UNICAST,

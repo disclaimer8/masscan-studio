@@ -1823,6 +1823,31 @@ mod tests {
         assert!(e.to_string().contains("does not fit TCP"), "{e}");
     }
 
+    #[test]
+    fn fill_error_matches_base_for_each_kind() {
+        // Порт без построителя (O:n, I:n кроме I:0/ARP) отказывает `PortDoesNotFit` с индексом порта и портом
+        // источника на той же позиции, что у базы: первым идёт зонд `p.target`, отказ до сборки кадра.
+        for (ports, port_them) in [
+            ("80,O:6", 196_870),
+            ("80,I:1", 196_609),
+            ("80,I:600", 197_208),
+        ] {
+            let plan = ReadyPlan::new_cli_without_port_checks(
+                eff("198.18.2.0/30", ports, |_| {}),
+                nics(1),
+            )
+            .unwrap();
+            let want = PlanError::ProbeBuild(Box::new(PlanError::PortDoesNotFit {
+                port_them,
+                port_me: 40000,
+            }));
+            let mut cur = plan.cursor_for_nic(0, None).unwrap();
+            let sent = drain(&mut cur).len();
+            assert_eq!(sent, 3, "{ports}: refusal position");
+            assert_eq!(cur.build_error(), Some(want), "{ports}");
+        }
+    }
+
     /// Независимая проверка кадра SCTP INIT: сумма IP, CRC-32C (побитово, без таблицы), длины, порты и поля INIT.
     fn check_sctp_frame(p: &Probe) {
         let f = &p.frame;

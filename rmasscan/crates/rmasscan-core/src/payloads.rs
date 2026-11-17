@@ -81,108 +81,60 @@ impl CookieMutator {
     }
 }
 
-// --- ASN.1 для SNMP (proto-snmp.c:105-185). C читает `px[offset]` без проверки границ; здесь за границей 0. ---
-
-fn at(px: &[u8], i: u64) -> u8 {
-    usize::try_from(i)
-        .ok()
-        .and_then(|i| px.get(i))
-        .copied()
-        .unwrap_or(0)
-}
+// --- ASN.1 для SNMP (proto-snmp.c:105-185). Помощники читают срез-окно (в C это `px[..length]`) и возвращают значение
+// и смещение за ним. `None` стоит там, где C отдаёт сторож `0xFFFFFFFF` или тег 0 за концом окна: после этого
+// `snmp_set_cookie` C выходит, ничего не записав. ---
 
 /// proto-snmp.c:180 `asn1_tag`.
-fn asn1_tag(px: &[u8], length: u64, offset: &mut u64) -> u32 {
-    if *offset >= length {
-        return 0;
-    }
-    let t = u32::from(at(px, *offset));
-    *offset += 1;
-    t
+fn asn1_tag(px: &[u8], offset: usize) -> Option<(u8, usize)> {
+    px.get(offset).map(|&t| (t, offset + 1))
 }
 
-/// proto-snmp.c:106 `asn1_length`.
-fn asn1_length(px: &[u8], length: u64, offset: &mut u64) -> u64 {
-    let first = u64::from(at(px, *offset));
-    if *offset >= length || (first & 0x80 != 0 && *offset + (first & 0x7F) >= length) {
-        *offset = length;
-        return 0xFFFF_FFFF;
+/// proto-snmp.c:106 `asn1_length`: короткая форма или длинная из 1..=127 октетов внутри окна, значение не больше
+/// `0x10000`.
+fn asn1_length(px: &[u8], offset: usize) -> Option<(usize, usize)> {
+    let first = *px.get(offset)?;
+    if first & 0x80 == 0 {
+        return Some((usize::from(first), offset + 1));
     }
-    let mut result = first;
-    *offset += 1;
-    if result & 0x80 != 0 {
-        let mut length_of_length = result & 0x7F;
-        if length_of_length == 0 {
-            *offset = length;
-            return 0xFFFF_FFFF;
-        }
-        result = 0;
-        while length_of_length != 0 {
-            result = result * 256 + u64::from(at(px, *offset));
-            *offset += 1;
-            if result > 0x10000 {
-                *offset = length;
-                return 0xFFFF_FFFF;
-            }
-            length_of_length -= 1;
+    let n = usize::from(first & 0x7F);
+    if n == 0 {
+        return None;
+    }
+    let mut result = 0usize;
+    for &b in px.get(offset + 1..=offset + n)? {
+        result = result * 256 + usize::from(b);
+        if result > 0x10000 {
+            return None;
         }
     }
-    result
+    Some((result, offset + 1 + n))
 }
 
-/// proto-snmp.c:146 `asn1_integer`.
-fn asn1_integer(px: &[u8], length: u64, offset: &mut u64) -> u64 {
-    let tag = at(px, *offset);
-    *offset += 1;
+/// proto-snmp.c:146 `asn1_integer`: тег `0x02`, не больше 20 октетов внутри окна, значение по модулю 2^64 (`uint64_t`
+/// в C). C читает тег и за концом окна, но тогда `asn1_length` за ним всё равно отдаёт сторож.
+fn asn1_integer(px: &[u8], offset: usize) -> Option<(u64, usize)> {
+    let (tag, offset) = asn1_tag(px, offset)?;
     if tag != 0x02 {
-        *offset = length;
-        return 0xFFFF_FFFF;
+        return None;
     }
-    let int_length = asn1_length(px, length, offset);
-    if int_length == 0xFFFF_FFFF || *offset + int_length > length || int_length > 20 {
-        *offset = length;
-        return 0xFFFF_FFFF;
+    let (n, offset) = asn1_length(px, offset)?;
+    if n > 20 {
+        return None;
     }
-    let mut result = 0u64;
-    for _ in 0..int_length {
-        result = result
-            .wrapping_mul(256)
-            .wrapping_add(u64::from(at(px, *offset)));
-        *offset += 1;
-    }
-    result
+    let value = px
+        .get(offset..offset + n)?
+        .iter()
+        .fold(0u64, |r, &b| r.wrapping_mul(256).wrapping_add(u64::from(b)));
+    Some((value, offset + n))
 }
 
 /// proto-snmp.c:403 `snmp_set_cookie`: идёт по BER до request-id PDU и пишет туда `seqno` (старший бит чистится, чтобы
 /// INTEGER остался положительным).
 fn snmp_set_cookie(px: &mut [u8], seqno: u32) {
-    let mut length = px.len() as u64;
-    let mut offset = 0u64;
-    if asn1_tag(px, length, &mut offset) != 0x30 {
+    let Some((len, offset)) = snmp_request_id(px) else {
         return;
-    }
-    let outer = asn1_length(px, length, &mut offset);
-    if length > outer + offset {
-        length = outer + offset;
-    }
-    if asn1_integer(px, length, &mut offset) != 0 {
-        return; // версия 0
-    }
-    if asn1_tag(px, length, &mut offset) != 0x04 {
-        return; // community
-    }
-    let community_len = asn1_length(px, length, &mut offset);
-    offset += community_len;
-    let tag = asn1_tag(px, length, &mut offset);
-    if !(0xA0..=0xA5).contains(&tag) {
-        return;
-    }
-    let outer = asn1_length(px, length, &mut offset);
-    if length > outer + offset {
-        length = outer + offset;
-    }
-    asn1_tag(px, length, &mut offset); // тег request-id
-    let len = asn1_length(px, length, &mut offset);
+    };
     let be = seqno.to_be_bytes();
     let bytes: &[u8] = match len {
         1 => &[be[3] & 0x7F],
@@ -192,14 +144,38 @@ fn snmp_set_cookie(px: &mut [u8], seqno: u32) {
         5 => &[0, be[0], be[1], be[2], be[3]],
         _ => return,
     };
-    for (k, b) in bytes.iter().enumerate() {
-        if let Some(slot) = usize::try_from(offset + k as u64)
-            .ok()
-            .and_then(|i| px.get_mut(i))
-        {
-            *slot = *b;
-        }
+    // Граница записи — конец нагрузки, а не окна: длину request-id C с окном не сверяет.
+    for (slot, b) in px.iter_mut().skip(offset).zip(bytes) {
+        *slot = *b;
     }
+}
+
+/// Длина request-id и смещение его значения: SEQUENCE { INTEGER 0, OCTET STRING, PDU `0xA0..=0xA5` { тег, длина } }.
+/// Длины SEQUENCE и PDU только сужают окно; тег request-id не проверяется, как в C.
+fn snmp_request_id(px: &[u8]) -> Option<(usize, usize)> {
+    let (tag, offset) = asn1_tag(px, 0)?;
+    if tag != 0x30 {
+        return None;
+    }
+    let (outer, offset) = asn1_length(px, offset)?;
+    let px = &px[..px.len().min(offset + outer)];
+    let (version, offset) = asn1_integer(px, offset)?;
+    if version != 0 {
+        return None;
+    }
+    let (tag, offset) = asn1_tag(px, offset)?;
+    if tag != 0x04 {
+        return None; // community
+    }
+    let (community_len, offset) = asn1_length(px, offset)?;
+    let (tag, offset) = asn1_tag(px, offset + community_len)?;
+    if !(0xA0..=0xA5).contains(&tag) {
+        return None;
+    }
+    let (outer, offset) = asn1_length(px, offset)?;
+    let px = &px[..px.len().min(offset + outer)];
+    let (_, offset) = asn1_tag(px, offset)?;
+    asn1_length(px, offset)
 }
 
 /// Запись таблицы C (`struct PayloadUDP_Default`, templ-payloads.c:38): `buf` склеена из строковых литералов исходника.
@@ -897,7 +873,7 @@ impl PayloadTable {
         let mut lines = NmapLines {
             it: text.split((|b: &u8| *b == b'\n') as fn(&u8) -> bool),
             number: 0,
-            cur: Vec::new(),
+            cur: &[],
         };
         let mut added = 0;
         loop {
@@ -907,39 +883,36 @@ impl PayloadTable {
             if !lines.next_line() {
                 break;
             }
-            if !lines.cur.starts_with(b"udp") {
+            let Some(rest) = lines.cur.strip_prefix(b"udp") else {
                 return Err(lines.syntax("expected \"udp\""));
-            }
-            lines.cur.drain(..3);
-            trim(&mut lines.cur);
+            };
+            lines.cur = trim(rest);
             // [ports]
             if !lines.next_line() {
                 break;
             }
             let (ranges, rest_at) =
-                parse_ports_prefix(&lines.cur).map_err(|_| lines.syntax("expected ports"))?;
-            lines.cur.drain(..rest_at);
-            trim(&mut lines.cur);
+                parse_ports_prefix(lines.cur).map_err(|_| lines.syntax("expected ports"))?;
+            lines.cur = trim(&lines.cur[rest_at..]);
             // [C string]
             loop {
-                trim(&mut lines.cur);
+                lines.cur = trim(lines.cur);
                 if !lines.next_line() || lines.cur[0] != b'"' {
                     break;
                 }
-                let rest_at = parse_c_string(&mut buf, &lines.cur);
-                lines.cur.drain(..rest_at);
-                trim(&mut lines.cur);
+                let rest_at = parse_c_string(&mut buf, lines.cur);
+                lines.cur = trim(&lines.cur[rest_at..]);
             }
             // [source]
-            if lines.cur.starts_with(b"source") {
-                lines.cur.drain(..6);
-                trim(&mut lines.cur);
+            if let Some(rest) = lines.cur.strip_prefix(b"source") {
+                lines.cur = trim(rest);
                 if !lines.cur.first().is_some_and(u8::is_ascii_digit) {
                     return Err(lines.syntax("expected source port"));
                 }
+                // Позиция для `strtoul0` с прежней сигнатурой; остаток строки после числа отбрасывается.
                 let mut pos = 0;
-                source_port = strtoul0(&lines.cur, &mut pos) as u32;
-                lines.cur.clear();
+                source_port = strtoul0(lines.cur, &mut pos) as u32;
+                lines.cur = &[];
             }
             if !buf.is_empty() {
                 added += self.add(&buf, &ranges, source_port)?;
@@ -1005,15 +978,21 @@ impl PayloadTable {
 struct NmapLines<'a> {
     it: std::slice::Split<'a, u8, fn(&u8) -> bool>,
     number: usize,
-    cur: Vec<u8>,
+    /// Неразобранный остаток текущей строки.
+    cur: &'a [u8],
 }
 
-fn trim(line: &mut Vec<u8>) {
-    while line.last().is_some_and(|&c| is_c_space(c)) {
-        line.pop();
-    }
-    let n = line.iter().take_while(|&&c| is_c_space(c)).count();
-    line.drain(..n);
+/// `trim` (:13): пробелы `isspace` C (вместе с `\v`) с обоих концов.
+fn trim(line: &[u8]) -> &[u8] {
+    let start = line
+        .iter()
+        .position(|&c| !is_c_space(c))
+        .unwrap_or(line.len());
+    let end = line
+        .iter()
+        .rposition(|&c| !is_c_space(c))
+        .map_or(start, |i| i + 1);
+    &line[start..end]
 }
 
 impl NmapLines<'_> {
@@ -1025,15 +1004,13 @@ impl NmapLines<'_> {
         }
         for raw in self.it.by_ref() {
             self.number += 1;
-            self.cur = raw.to_vec();
-            trim(&mut self.cur);
+            self.cur = trim(raw);
             if matches!(self.cur.first(), Some(b'#' | b'/' | b';')) || self.cur.is_empty() {
-                self.cur.clear();
                 continue;
             }
             return true;
         }
-        self.cur.clear();
+        self.cur = &[];
         false
     }
 

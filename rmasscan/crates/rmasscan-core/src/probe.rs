@@ -34,8 +34,7 @@ use crate::scan::{
     transmit_scan_flow_v46,
 };
 use crate::targets::{
-    TEMPL_ARP, TEMPL_ICMP_ECHO, TEMPL_OPROTO_FIRST, TEMPL_OPROTO_LAST, TEMPL_SCTP, TEMPL_SCTP_LAST,
-    TEMPL_UDP, TEMPL_UDP_LAST,
+    PortProto, TEMPL_ARP, TEMPL_ICMP_ECHO, TEMPL_OPROTO_FIRST, TEMPL_OPROTO_LAST,
 };
 
 /// Раунды BlackRock, которые принимает runtime v1 (masscan по умолчанию).
@@ -310,6 +309,23 @@ impl Builder {
         })
     }
 
+    /// `(ip_me, port_me)` зонда `i` (main.c:379-384): ротация по cookie только при `ipv4_mask != 0 || port_mask != 0`,
+    /// иначе первый адрес и первый порт. Одинаково для всех видов протокола.
+    #[inline]
+    fn source(&self, i: u64, repeats: u64, xxx: u64) -> (u32, u32) {
+        let ipv4_mask = self.ipv4_mask;
+        if ipv4_mask == 0 && self.port_mask == 0 {
+            return (self.ip_me0, u32::from(self.first));
+        }
+        let (n_lo, n_hi) = split_u64(i.wrapping_add(repeats));
+        let (x_lo, x_hi) = split_u64(xxx);
+        let ck = syn_cookie_ipv4(n_lo, n_hi, x_lo, x_hi, self.entropy);
+        (
+            self.ip_me0.wrapping_add(((ck >> 16) as u32) & ipv4_mask),
+            u32::from(self.first).wrapping_add(ck as u32 & self.port_mask),
+        )
+    }
+
     fn fill(
         &self,
         p: &mut Probe,
@@ -320,117 +336,58 @@ impl Builder {
         port_them: u32,
     ) -> Result<(), PlanError> {
         p.target = TargetIp::V4(ip_them);
-        let ipv4_mask = self.ipv4_mask;
-        let (ip_me, port_me) = if ipv4_mask != 0 || self.port_mask != 0 {
-            let n = i.wrapping_add(repeats);
-            // main.c:379-384.
-            let ck = syn_cookie_ipv4(
-                n as u32,
-                (n >> 32) as u32,
-                xxx as u32,
-                (xxx >> 32) as u32,
-                self.entropy,
-            );
-            (
-                self.ip_me0.wrapping_add(((ck >> 16) as u32) & ipv4_mask),
-                u32::from(self.first).wrapping_add(ck as u32 & self.port_mask),
-            )
-        } else {
-            (self.ip_me0, u32::from(self.first))
-        };
-        if port_them == TEMPL_ARP {
+        let (ip_me, port_me) = self.source(i, repeats, xxx);
+        // Индекс порта разбирается один раз. Отказ идёт до сборки кадра и до остальных полей: порт источника вне
+        // 16 бит у любого вида, а у `I:n` и `O:n` без построителя ещё и сам индекс (в базе они падали в ветку TCP).
+        let doesnt_fit = || PlanError::PortDoesNotFit { port_them, port_me };
+        let port_me16 = u16::try_from(port_me).map_err(|_| doesnt_fit())?;
+        let (kind, port16) = PortProto::from_raw(port_them);
+        // main.c:389/:402: seqno = (unsigned)cookie. У ICMP Echo это только ip_id (templ-pkt.c:942), у ARP в кадр
+        // не попадает, но считается как у остальных, чтобы поток источников не зависел от типа скана.
+        let seqno = syn_cookie_ipv4(ip_them, port_them, ip_me, port_me, self.entropy) as u32;
+        let frame = &mut p.frame;
+        match kind {
             // templ-pkt.c:914-928: у ARP нет ни порта, ни cookie в кадре, только `spa = ip_me` и `tpa = ip_them`.
-            // Cookie и порт источника считаются как у остальных (main.c:389), чтобы поток источников адаптера
-            // не зависел от типа скана; в кадр они не попадают.
-            let port_me16 = u16::try_from(port_me)
-                .map_err(|_| PlanError::PortDoesNotFit { port_them, port_me })?;
-            let seqno = syn_cookie_ipv4(ip_them, port_them, ip_me, port_me, self.entropy) as u32;
-            self.arp.build_arp(ip_them, ip_me, &mut p.frame);
-            p.index = i;
-            p.ip_me = ip_me;
-            p.port_me = port_me16;
-            p.ip_them = ip_them;
-            p.port_them = 0;
-            p.port_index = port_them;
-            p.seqno = seqno;
-            return Ok(());
-        }
-        if port_them == TEMPL_ICMP_ECHO {
-            // main.c:389 даёт seqno с реальным port_me: он идёт только в ip_id (templ-pkt.c:942); [id|seq] кадра
-            // это cookie с port_me = 0 (templ-pkt.c:1067), его считает `build_echo`.
-            let port_me16 = u16::try_from(port_me)
-                .map_err(|_| PlanError::PortDoesNotFit { port_them, port_me })?;
-            let seqno = syn_cookie_ipv4(ip_them, port_them, ip_me, port_me, self.entropy) as u32;
-            self.icmp
-                .build_echo(ip_them, ip_me, seqno, self.entropy, &mut p.frame);
-            p.index = i;
-            p.ip_me = ip_me;
-            p.port_me = port_me16;
-            p.ip_them = ip_them;
-            // у ICMP порта получателя нет: индекс 196608 в u16 не помещается, как в кадре его нет вовсе
-            p.port_them = 0;
-            p.port_index = port_them;
-            p.seqno = seqno;
-            return Ok(());
-        }
-        if (TEMPL_UDP..=TEMPL_UDP_LAST).contains(&port_them) {
-            // templ-pkt.c:903-906: порт в кадре 16-битный (`port_them &= 0xFFFF`), а cookie (main.c:389) берётся по
-            // индексу `Templ_UDP + порт`. Нагрузка ищется по порту; нет записи - 0 байт.
-            let port16 = (port_them & 0xFFFF) as u16;
-            let port_me16 = u16::try_from(port_me)
-                .map_err(|_| PlanError::PortDoesNotFit { port_them, port_me })?;
-            let seqno = syn_cookie_ipv4(ip_them, port_them, ip_me, port_me, self.entropy) as u32;
-            self.udp.build_udp(
+            PortProto::Arp => self.arp.build_arp(ip_them, ip_me, frame),
+            // [id|seq] кадра это cookie с port_me = 0 (templ-pkt.c:1067), его считает `build_echo`.
+            PortProto::IcmpEcho => self
+                .icmp
+                .build_echo(ip_them, ip_me, seqno, self.entropy, frame),
+            // templ-pkt.c:903-906: порт в кадре 16-битный, cookie по индексу `Templ_UDP + порт`; нет записи в
+            // таблице нагрузок - 0 байт.
+            PortProto::Udp => self.udp.build_udp(
                 (ip_them, port16),
                 (ip_me, port_me16),
                 seqno,
                 self.payloads.get(port16),
-                &mut p.frame,
-            );
-            p.index = i;
-            p.ip_me = ip_me;
-            p.port_me = port_me16;
-            p.ip_them = ip_them;
-            p.port_them = port16;
-            p.port_index = port_them;
-            p.seqno = seqno;
-            return Ok(());
+                frame,
+            ),
+            // templ-pkt.c:907-910: initiate_tag INIT это cookie по индексу `Templ_SCTP + порт`.
+            PortProto::Sctp => {
+                self.sctp
+                    .build_init((ip_them, port16), (ip_me, port_me16), seqno, frame)
+            }
+            PortProto::Tcp => self
+                .tmpl
+                .build_syn(ip_them, port16, ip_me, port_me16, seqno, frame),
+            PortProto::IcmpOther(_) | PortProto::Oproto(_) => return Err(doesnt_fit()),
         }
-        if (TEMPL_SCTP..=TEMPL_SCTP_LAST).contains(&port_them) {
-            // templ-pkt.c:907-910: порт в кадре 16-битный (`port_them &= 0xFFFF`), cookie (main.c:389) берётся по
-            // индексу `Templ_SCTP + порт`; он же идёт в initiate_tag INIT, а приёмник сверяет с ним verification tag.
-            let port16 = (port_them & 0xFFFF) as u16;
-            let port_me16 = u16::try_from(port_me)
-                .map_err(|_| PlanError::PortDoesNotFit { port_them, port_me })?;
-            let seqno = syn_cookie_ipv4(ip_them, port_them, ip_me, port_me, self.entropy) as u32;
-            self.sctp
-                .build_init((ip_them, port16), (ip_me, port_me16), seqno, &mut p.frame);
-            p.index = i;
-            p.ip_me = ip_me;
-            p.port_me = port_me16;
-            p.ip_them = ip_them;
-            p.port_them = port16;
-            p.port_index = port_them;
-            p.seqno = seqno;
-            return Ok(());
-        }
-        let (Ok(port_them16), Ok(port_me16)) = (u16::try_from(port_them), u16::try_from(port_me))
-        else {
-            return Err(PlanError::PortDoesNotFit { port_them, port_me });
-        };
-        // main.c:389/:402: seqno = (unsigned)cookie.
-        let seqno = syn_cookie_ipv4(ip_them, port_them, ip_me, port_me, self.entropy) as u32;
-        self.tmpl
-            .build_syn(ip_them, port_them16, ip_me, port_me16, seqno, &mut p.frame);
         p.index = i;
         p.ip_me = ip_me;
         p.port_me = port_me16;
         p.ip_them = ip_them;
-        p.port_them = port_them16;
+        // у ARP и ICMP Echo порта получателя нет: индекс 196608 в u16 не помещается, в кадре его нет вовсе
+        p.port_them = port16;
         p.port_index = port_them;
         p.seqno = seqno;
         Ok(())
     }
+}
+
+/// Младшая и старшая половины `v` (аргументы cookie main.c:379-384).
+#[inline]
+fn split_u64(v: u64) -> (u32, u32) {
+    (v as u32, (v >> 32) as u32)
 }
 
 impl Builder {
@@ -1192,7 +1149,7 @@ mod tests {
     use super::*;
     use crate::config::{ScanConfig, validate};
     use crate::massip::MassIp;
-    use crate::targets::{add_target_string, parse_ports};
+    use crate::targets::{TEMPL_SCTP, TEMPL_UDP, add_target_string, parse_ports};
     use std::collections::BTreeSet;
 
     const IP_ME: u32 = 0x0aff_0001;

@@ -12,7 +12,7 @@
 use std::net::Ipv4Addr;
 use std::ops::ControlFlow;
 
-use crate::blackrock::{BlackRock, BlackRockError, SHUFFLE_LANES};
+use crate::blackrock::{BlackRock, BlackRockError, Divisors, SHUFFLE_LANES};
 use crate::massip::{MassIp, RangeOverflow, TargetIp};
 use crate::ranges6::format_ipv6_c;
 
@@ -291,15 +291,17 @@ pub(crate) fn transmit_indices(
 }
 
 /// Пары `(tag, m)` внутреннего итератора как `(tag, blackrock.shuffle(m))`, в том же порядке. Пустой буфер
-/// набирается до `SHUFFLE_LANES` пар: полная пачка идёт через `BlackRock::shuffle_batch`, неполная (конец потока)
-/// через скалярный `shuffle`. Буфер набирается лениво, только когда пуст; кто остановился раньше (`Break`),
-/// теряет уже перемешанные дорожки пачки, а внутренний итератор дальше пачки не читается. После первого `None`
-/// внутренний итератор больше не опрашивается (`exhausted`): поток кончается один раз, даже если внутренний
-/// итератор потом снова отдал бы пары. Буфер это упреждение: у `Shuffled<TransmitIndices>` следующий индекс
-/// показывает [`Shuffled::peek_index`], а не внутренний итератор.
+/// набирается до `SHUFFLE_LANES` пар: полная пачка идёт через `BlackRock::shuffle_batch_with` с делителями,
+/// построенными один раз в [`Shuffled::new`], неполная (конец потока) через скалярный `shuffle`. Буфер набирается
+/// лениво, только когда пуст; кто остановился раньше (`Break`), теряет уже перемешанные дорожки пачки, а внутренний
+/// итератор дальше пачки не читается. После первого `None` внутренний итератор больше не опрашивается (`exhausted`):
+/// поток кончается один раз, даже если внутренний итератор потом снова отдал бы пары. Буфер это упреждение: у
+/// `Shuffled<TransmitIndices>` следующий индекс показывает [`Shuffled::peek_index`], а не внутренний итератор.
 pub(crate) struct Shuffled<I> {
     inner: I,
     blackrock: BlackRock,
+    /// `blackrock.divisors()`: делители `a` и `b` для пачек.
+    divisors: Divisors,
     buf: [(u64, u64); SHUFFLE_LANES],
     head: usize,
     len: usize,
@@ -311,6 +313,7 @@ impl<I> Shuffled<I> {
     pub(crate) fn new(inner: I, blackrock: BlackRock) -> Self {
         Shuffled {
             inner,
+            divisors: blackrock.divisors(),
             blackrock,
             buf: [(0, 0); SHUFFLE_LANES],
             head: 0,
@@ -356,7 +359,9 @@ impl<I: Iterator<Item = (u64, u64)>> Shuffled<I> {
             self.len += 1;
         }
         if self.len == SHUFFLE_LANES {
-            let shuffled = self.blackrock.shuffle_batch(self.buf.map(|(_, m)| m));
+            let shuffled = self
+                .blackrock
+                .shuffle_batch_with(&self.divisors, self.buf.map(|(_, m)| m));
             for (slot, x) in self.buf.iter_mut().zip(shuffled) {
                 slot.1 = x;
             }

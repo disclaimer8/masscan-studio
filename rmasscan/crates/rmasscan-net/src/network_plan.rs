@@ -191,10 +191,13 @@ fn normalize(ranges: &[(Ipv4Addr, Ipv4Addr)]) -> Result<Vec<(u32, u32)>, NetErro
 }
 fn push_range(out: &mut Vec<(u32, u32)>, count: &mut u64, a: u64, b: u64) -> Result<(), NetError> {
     *count += b - a + 1;
-    if *count > MAX_PHYSICAL_CANDIDATES as u64 {
+    if *count > u64::try_from(MAX_PHYSICAL_CANDIDATES).unwrap_or(u64::MAX) {
         return Err(invalid("physical candidate address limit is 2048"));
     }
-    out.push((a as u32, b as u32));
+    // Младшие 32 бита, бит в бит как прежний `as u32`: концы диапазонов вызывающих это адреса IPv4 (`u32`), так что
+    // маска ничего не отрезает.
+    let low32 = |v: u64| u32::try_from(v & 0xFFFF_FFFF).unwrap_or(u32::MAX);
+    out.push((low32(a), low32(b)));
     Ok(())
 }
 pub(crate) fn unicast(a: Ipv4Addr) -> bool {

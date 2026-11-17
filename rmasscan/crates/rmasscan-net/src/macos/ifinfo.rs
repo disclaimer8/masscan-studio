@@ -315,7 +315,7 @@ pub(crate) fn merge(addrs: &[RawAddr], q: &dyn IfaceInfo) -> Vec<IfaceReport> {
             }
         };
         let r = &mut out[pos];
-        if a.flags & (libc::IFF_UP as u32) != 0 {
+        if a.flags & libc::IFF_UP.cast_unsigned() != 0 {
             r.up = true;
         }
         match a.kind {
@@ -398,7 +398,8 @@ fn prefix_from_mask(mask: Ipv4Addr) -> Option<u8> {
     let mask = u32::from(mask);
     let length = mask.leading_ones();
     let expected = u32::MAX.checked_shl(32 - length).unwrap_or(0);
-    (mask == expected).then_some(length as u8)
+    // `leading_ones` числа `u32` лежит в 0..=32 и помещается в `u8`.
+    (mask == expected).then_some(u8::try_from(length).unwrap_or(u8::MAX))
 }
 fn prefix_from_sockaddr(bytes: &[u8]) -> Option<u8> {
     let offset = std::mem::offset_of!(libc::sockaddr_in, sin_addr);

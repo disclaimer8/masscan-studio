@@ -39,6 +39,10 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use rmasscan_core::probe::AdapterBinding;
 use rmasscan_engine::AdapterPair;
 
+// Ширина `usize` на всех целях crate от 32 до 64 бит: переводы `u32` → `usize` и `usize` → `u64`
+// (`try_from(..).unwrap_or(MAX)`) не теряют значения, их запасная ветка недостижима.
+const _: () = assert!(usize::BITS >= u32::BITS && usize::BITS <= u64::BITS);
+
 #[cfg(target_os = "linux")]
 mod linux;
 

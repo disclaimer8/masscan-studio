@@ -170,7 +170,7 @@ impl Deadline {
     fn poll_ms(&self) -> i32 {
         let left = self.0.saturating_duration_since(Instant::now());
         let ms = left.as_nanos().div_ceil(1_000_000);
-        ms.min(IO_BUDGET.as_millis()) as i32
+        i32::try_from(ms.min(IO_BUDGET.as_millis())).unwrap_or(i32::MAX)
     }
 }
 
@@ -636,4 +636,18 @@ pub(crate) fn open(binding: &AdapterBinding) -> Result<OpenedAdapter, NetError> 
     check_binding(binding)?;
     super::ifinfo::verify_binding(&super::ifinfo::OsIface, binding)?;
     open_with(&mut super::sys::SysOpener, binding)
+}
+
+#[cfg(test)]
+mod deadline_tests {
+    use super::*;
+
+    /// Таймаут `poll` не больше `IO_BUDGET`, даже когда остаток дедлайна в мс не помещается в `i32`; прошедший
+    /// дедлайн даёт 0.
+    #[test]
+    fn poll_ms_is_capped_by_the_io_budget() {
+        let far = Deadline(Instant::now() + Duration::from_secs(30 * 86_400));
+        assert_eq!(far.poll_ms(), i32::try_from(IO_BUDGET.as_millis()).unwrap());
+        assert_eq!(Deadline(Instant::now()).poll_ms(), 0);
+    }
 }

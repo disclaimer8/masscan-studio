@@ -49,6 +49,18 @@ pub(crate) fn poll_one(
     }
 }
 
+/// `size_of::<T>()` как `socklen_t` (длина адреса или опции сокета). Размер сверяется с `socklen_t::MAX` при
+/// компиляции: тип, который не помещается, не собирается, поэтому `as` здесь значения не теряет.
+#[cfg(any(target_os = "linux", test))]
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "the const assert proves that size_of::<T>() fits socklen_t"
+)]
+pub(crate) const fn socklen_of<T>() -> libc::socklen_t {
+    const { assert!(std::mem::size_of::<T>() <= libc::socklen_t::MAX as usize) };
+    std::mem::size_of::<T>() as libc::socklen_t
+}
+
 /// `setsockopt` целого значения; `Err` несёт errno.
 #[cfg(any(target_os = "linux", test))]
 pub(crate) fn setsockopt_int(
@@ -65,7 +77,7 @@ pub(crate) fn setsockopt_int(
             level,
             name,
             (&raw const value).cast::<libc::c_void>(),
-            std::mem::size_of::<c_int>() as libc::socklen_t,
+            socklen_of::<c_int>(),
         )
     };
     if rc < 0 { Err(last_errno()) } else { Ok(()) }
@@ -82,6 +94,8 @@ pub(crate) fn install_handler(sig: c_int, handler: extern "C" fn(c_int)) -> Resu
     // на Linux `sa_restorer` (`Option` указателя на функцию, нулевой образ это `None`); нулевой образ каждого поля
     // допустим как начальное значение.
     let mut action: libc::sigaction = unsafe { std::mem::zeroed() };
+    // Адрес функции как целое `sighandler_t` (`size_t`): указатель на функцию переводится в адрес только `as`
+    // (иначе `transmute`), значение не меняется.
     action.sa_sigaction = handler as libc::sighandler_t;
     action.sa_flags = libc::SA_RESTART;
     // SAFETY: `sa_mask` это поле живой локальной `action`, указатель исключительный и действует весь вызов.
@@ -108,7 +122,7 @@ pub(crate) fn nl_kernel_addr() -> libc::sockaddr_nl {
 pub(crate) fn mac_from_c_chars(src: &[libc::c_char]) -> [u8; 6] {
     let mut mac = [0u8; 6];
     for (dst, src) in mac.iter_mut().zip(src) {
-        *dst = *src as u8;
+        *dst = u8::from_ne_bytes(src.to_ne_bytes());
     }
     mac
 }

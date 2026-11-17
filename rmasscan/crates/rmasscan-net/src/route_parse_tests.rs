@@ -312,6 +312,23 @@ fn netlink_error_message_is_err() {
     assert!(NlError::Kernel(101).to_string().starts_with("netlink: "));
 }
 
+/// `nlmsg_len` читается всеми 32 битами: длины, у которых младшие 16 бит дали бы точную длину сообщения, и `u32::MAX`
+/// отвергаются, а точная длина принимается.
+#[test]
+fn netlink_message_length_is_read_with_all_32_bits() {
+    let msg = route_msg(RTN_UNICAST, 32, 254, &[u32_attr(RTA_OIF, 2)]);
+    assert_eq!(parse_netlink_routes(&msg).map(|r| r.len()), Ok(1));
+    let exact = u32::try_from(msg.len()).unwrap();
+    for len in [exact | 0x1_0000, exact | 0x8000_0000, u32::MAX] {
+        let mut m = msg.clone();
+        m[0..4].copy_from_slice(&len.to_ne_bytes());
+        assert!(
+            matches!(parse_netlink_routes(&m), Err(NlError::Malformed(_))),
+            "nlmsg_len {len:#x}"
+        );
+    }
+}
+
 #[test]
 fn netlink_dump_keeps_only_dst_len_zero_sorted_by_priority() {
     let mut part1 = route_msg(

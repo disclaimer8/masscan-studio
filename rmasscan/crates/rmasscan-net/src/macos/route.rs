@@ -38,7 +38,7 @@ fn route_socket(family: libc::c_int) -> Result<OwnedFd, NetError> {
 }
 fn ready(fd: &OwnedFd, event: libc::c_short, wait: Duration) -> Result<bool, NetError> {
     // Floor to milliseconds; a sub-ms residual becomes a nonblocking poll.
-    let millis = wait.as_millis().min(50) as libc::c_int;
+    let millis = libc::c_int::try_from(wait.as_millis().min(50)).unwrap_or(libc::c_int::MAX);
     let (n, revents) = match poll_one(fd.as_fd(), event, millis) {
         Ok(r) => r,
         Err(libc::EINTR) => return Ok(false),
@@ -108,7 +108,7 @@ fn exchange(
     check_observation(deadline, cancelled)?;
     let fd = route_socket(family)?;
     let seq = SEQ.fetch_add(1, Ordering::Relaxed);
-    let pid = std::process::id() as i32;
+    let pid = std::process::id().cast_signed();
     let req = request(seq, pid);
     let sent = retry_until(deadline, cancelled, Instant::now, |wait| {
         if !ready(&fd, libc::POLLOUT, wait)? {

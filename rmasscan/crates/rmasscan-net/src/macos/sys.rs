@@ -81,7 +81,7 @@ pub(crate) const IFT_ETHER: u8 = 0x06;
 /// оставаться валидным на весь вызов. Размер `T` проверяется здесь, остальное
 /// гарантирует вызывающий.
 pub(crate) unsafe fn ioctl_ptr<T>(fd: RawFd, req: libc::c_ulong, arg: &mut T) -> Result<(), Errno> {
-    if ((req >> 16) & 0x1fff) as usize != std::mem::size_of::<T>() {
+    if usize::try_from((req >> 16) & 0x1fff).unwrap_or(usize::MAX) != std::mem::size_of::<T>() {
         return Err(libc::EINVAL);
     }
     // SAFETY: любое значение `fd` безопасно для памяти (неверный даёт EBADF); `arg`
@@ -178,7 +178,7 @@ impl BpfSetup for BpfFd {
             return Err(libc::EINVAL);
         }
         for (dst, src) in req.ifr_name.iter_mut().zip(bytes) {
-            *dst = *src as libc::c_char;
+            *dst = libc::c_char::from_ne_bytes([*src]);
         }
         // SAFETY: `req` это нулевой `ifreq` с именем интерфейса, BIOCSETIF читает
         // `struct ifreq` того же размера (сверяется внутри); `ifreq` без `bool`/enum.

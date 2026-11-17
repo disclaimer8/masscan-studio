@@ -37,7 +37,7 @@ mod bytes {
     }
 
     pub(super) fn i32_at(b: &[u8], at: usize) -> Option<i32> {
-        u32_at(b, at).map(|v| v as i32)
+        u32_at(b, at).map(u32::cast_signed)
     }
 
     /// Адрес IPv4 в сетевом порядке байт.
@@ -254,7 +254,12 @@ mod netlink {
     pub(crate) fn nl_message(ty: u16, flags: u16, seq: u32, payload: &[u8]) -> Vec<u8> {
         let len = NLMSG_HDRLEN + payload.len();
         let mut b = Vec::with_capacity(len);
-        b.extend((len as u32).to_ne_bytes());
+        // Младшие 32 бита, бит в бит как прежний `as u32`; запросы здесь короче сотни байт, маска ничего не отрезает.
+        b.extend(
+            u32::try_from(len & 0xFFFF_FFFF)
+                .unwrap_or(u32::MAX)
+                .to_ne_bytes(),
+        );
         b.extend(ty.to_ne_bytes());
         b.extend(flags.to_ne_bytes());
         b.extend(seq.to_ne_bytes());
@@ -269,13 +274,19 @@ mod netlink {
         debug_assert!(dst.is_none_or(|d| matches!(d.len(), 4 | 16)));
         let rt = RtMsg {
             family,
-            dst_len: dst.map_or(0, |d| (d.len() * 8) as u8),
+            // Младшие 8 и 16 бит, бит в бит как прежние `as u8`/`as u16`: адрес 4 или 16 байт (`debug_assert` выше), маски
+            // ничего не отрезают.
+            dst_len: dst.map_or(0, |d| u8::try_from((d.len() * 8) & 0xFF).unwrap_or(u8::MAX)),
             ..RtMsg::default()
         };
         let mut payload = Vec::with_capacity(RTMSG_LEN + dst.map_or(0, |d| RTA_HDRLEN + d.len()));
         payload.extend(rt.to_bytes());
         if let Some(d) = dst {
-            payload.extend(((RTA_HDRLEN + d.len()) as u16).to_ne_bytes());
+            payload.extend(
+                u16::try_from((RTA_HDRLEN + d.len()) & 0xFFFF)
+                    .unwrap_or(u16::MAX)
+                    .to_ne_bytes(),
+            );
             payload.extend(RTA_DST.to_ne_bytes());
             payload.extend(d);
         }
@@ -307,7 +318,7 @@ mod netlink {
             let (Some(len), Some(ty)) = (u32_at(rest, 0), u16_at(rest, 4)) else {
                 return Err(malformed("truncated nlmsghdr"));
             };
-            let len = len as usize;
+            let len = usize::try_from(len).unwrap_or(usize::MAX);
             if len < NLMSG_HDRLEN || len > rest.len() {
                 return Err(malformed("nlmsg_len out of bounds"));
             }
@@ -680,7 +691,9 @@ mod rtsock {
             (SIN6_LEN, AF_INET6_DARWIN, SIN6_ADDR)
         };
         let mut b = vec![0u8; RT_MSGHDR_LEN + sa_len];
-        let len = b.len() as u16;
+        // `sa_len` это `SIN_LEN` или `SIN6_LEN` (выбор выше): обе длины и оба сообщения помещаются в `u8` и `u16`.
+        const { assert!(SIN_LEN <= SIN6_LEN && SIN6_LEN <= 0xFF && RT_MSGHDR_LEN + SIN6_LEN <= 0xFFFF) };
+        let len = u16::try_from(b.len()).unwrap_or(u16::MAX);
         b[OFF_MSGLEN..OFF_MSGLEN + 2].copy_from_slice(&len.to_ne_bytes());
         b[OFF_VERSION] = RTM_VERSION;
         b[OFF_TYPE] = RTM_GET;
@@ -689,7 +702,7 @@ mod rtsock {
         b[OFF_PID..OFF_PID + 4].copy_from_slice(&pid.to_ne_bytes());
         b[OFF_SEQ..OFF_SEQ + 4].copy_from_slice(&seq.to_ne_bytes());
         let sa = &mut b[RT_MSGHDR_LEN..];
-        sa[0] = sa_len as u8;
+        sa[0] = u8::try_from(sa_len).unwrap_or(u8::MAX);
         sa[1] = family;
         sa[addr_at..addr_at + dst.len()].copy_from_slice(dst);
         b

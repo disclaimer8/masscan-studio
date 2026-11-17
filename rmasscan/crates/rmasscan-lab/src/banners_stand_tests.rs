@@ -10,9 +10,7 @@ use crate::{
     link::{END_PAYLOAD, START_PAYLOAD},
     pcap,
 };
-use rmasscan_core::stack::{
-    ConnAddrs, ConnKey, SegmentIn, SegmentOut, SourceRanges, StackOutput, TableParams,
-};
+use rmasscan_core::stack::{ConnAddrs, ConnKey, SegmentIn, SegmentOut, StackOutput, TableParams};
 use std::{path::PathBuf, sync::OnceLock};
 
 const T0: f64 = 1_900_000_000.0;
@@ -343,14 +341,22 @@ fn simulate(c: &StandCase) -> (Frames, Vec<Line>) {
     let builder = rmasscan_core::tcp_frame::TcpFrameBuilder::from_plan(&plan);
     let probes = crate::pair_verify::plan_probes(&plan).unwrap().0;
     let mut stack = rmasscan_proto::tcp_stack_factory(
-        rmasscan_proto::TcpBannerSettings::default(),
+        crate::banners_verify::tcp_case_settings(
+            &crate::banners_verify::tcp_case("t01_tcp4").unwrap(),
+        ),
         CONNECTION_TIMEOUT,
     )
     .new_table(TableParams {
         seed: 1,
         capacity: 4096,
         banner_byte_budget: 1 << 29,
-        source: SourceRanges::default(),
+        // The stand's own source (the case scans --source-port 40000, one port): ranges of another case's
+        // source would send the reconnect arithmetic to a wrong address.
+        source: rmasscan_core::stack::SourceRanges {
+            ports: (40000, 40000),
+            ipv4: Some((u32::from(st.scanner_ip), u32::from(st.scanner_ip))),
+            ipv6: None,
+        },
     });
     let src = st.scanner_ip;
     let key_of = |port: u16, sport: u16| ConnKey {
@@ -505,7 +511,14 @@ fn simulate(c: &StandCase) -> (Frames, Vec<Line>) {
             let i = conns
                 .iter()
                 .position(|pc| key_of(pc.port, pc.sport) == g.key)
-                .unwrap();
+                .unwrap_or_else(|| {
+                    panic!(
+                        "no conn for segment key {:?} flags {:#x}; conns {:?}",
+                        g.key,
+                        g.flags,
+                        conns.iter().map(|c| (c.port, c.sport)).collect::<Vec<_>>()
+                    )
+                });
             let pc = &mut conns[i];
             if g.flags & 0x04 != 0 {
                 pc.dead = true;
@@ -643,14 +656,14 @@ fn with_scanner_payload(sim: &mut StandSim, port: u16, payload: &[u8]) {
 fn the_case_table_scans_the_http_and_ssh_scenarios_with_the_stands_binding() {
     assert_eq!(
         WINDOWS.argv().join(" "),
-        "198.18.0.2 -p22,80 --banners --connection-timeout 8 --adapter-ip 198.18.0.1 --router-mac 02-57-4c-3d-2e-9b -oL output.txt --seed 1 --rate 100 --wait 14 --source-port 40000 --retries 0"
+        "198.18.0.2 -p22,80,443 --banners --connection-timeout 8 --adapter-ip 198.18.0.1 --router-mac 02-57-4c-3d-2e-9b -oL output.txt --seed 1 --rate 100 --wait 14 --source-port 40000 --retries 0"
     );
     assert_eq!(
         MACOS.argv().join(" "),
-        "198.18.0.2 -p2222,8080 --banners --connection-timeout 8 --adapter feth4201 --adapter-ip 198.18.0.1 --adapter-mac 02-ac-00-00-00-01 --router-ip 198.18.0.2 --router-mac 02-ac-00-00-00-02 -oL output.txt --seed 1 --rate 100 --wait 14 --source-port 40000 --retries 0"
+        "198.18.0.2 -p2222,8080,8443 --banners --connection-timeout 8 --adapter feth4201 --adapter-ip 198.18.0.1 --adapter-mac 02-ac-00-00-00-01 --router-ip 198.18.0.2 --router-mac 02-ac-00-00-00-02 -oL output.txt --seed 1 --rate 100 --wait 14 --source-port 40000 --retries 0"
     );
-    assert_eq!(WINDOWS.banners_arg(), "22,80");
-    assert_eq!(MACOS.banners_arg(), "2222=22,8080=80");
+    assert_eq!(WINDOWS.banners_arg(), "22,80,443");
+    assert_eq!(MACOS.banners_arg(), "2222=22,8080=80,8443=443");
     // The listener takes what the table says.
     for c in [WINDOWS, MACOS] {
         let b = crate::peer::banner_ports(&c.banners_arg()).unwrap();
@@ -669,7 +682,14 @@ fn the_case_table_scans_the_http_and_ssh_scenarios_with_the_stands_binding() {
             .iter()
             .map(|(p, _)| c.scenario(*p).unwrap().apps)
             .collect();
-        assert_eq!(apps, [&["ssh"][..], &["http.server", "title", "http"][..]]);
+        assert_eq!(
+            apps,
+            [
+                &["ssh"][..],
+                &["http.server", "title", "http"][..],
+                &["ssl", "X509CA", "X509"][..]
+            ]
+        );
         // The flags are the binding the autodetect window proved on the stand (w04, m03), plus the given source.
         let st = av::stand(c.plan);
         assert!(c.argv().contains(&av::dash(st.peer_mac)));
@@ -677,13 +697,16 @@ fn the_case_table_scans_the_http_and_ssh_scenarios_with_the_stands_binding() {
     }
     // The mapping is only sound because C sends the same on both ports: an HTTP scenario on a port without C's HTTP
     // hello, or SSH on a hello port, would be refused.
-    for ports in [[(2222, 22), (8081, 80)], [(23, 22), (8080, 80)]] {
+    for ports in [
+        [(2222, 22), (8081, 80), (8443, 443)],
+        [(23, 22), (8080, 80), (8443, 443)],
+    ] {
         let c = StandCase { ports, ..MACOS };
         assert!(!hello_table_problems(&c).is_empty(), "{ports:?}");
     }
     // A hello table that lost its line for a port whose scenario waits for the hello is a problem, not "no hello".
     let c = StandCase {
-        ports: [(2222, 22), (9999, 80)],
+        ports: [(2222, 22), (9999, 80), (8443, 443)],
         ..MACOS
     };
     let probs = hello_table_problems(&c);
@@ -706,7 +729,7 @@ fn both_stands_pass_with_cs_records_of_the_same_scenarios() {
         // The verdict is by records: C's, with the macOS ports mapped.
         assert_eq!(
             r["notes"]["banners_by_app"],
-            json!({"http": 1, "http.server": 1, "ssh": 1, "title": 1})
+            json!({"X509": 1, "X509CA": 1, "http": 1, "http.server": 1, "ssh": 1, "ssl": 1, "title": 1})
         );
         let refs = array(&run_of(&v, REFERENCE_DIR)["notes"]["c_records"]);
         assert_eq!(refs.len(), 6, "{refs:?}");
@@ -720,7 +743,10 @@ fn both_stands_pass_with_cs_records_of_the_same_scenarios() {
             assert_eq!(r["notes"]["wire"]["host_arp_replies"], 1);
             assert_eq!(r["notes"]["wire"]["rmasscan_arp_answers"], 1);
         } else {
-            assert_eq!(r["notes"]["port_map"], json!(["2222 -> 22", "8080 -> 80"]));
+            assert_eq!(
+                r["notes"]["port_map"],
+                json!(["2222 -> 22", "8080 -> 80", "8443 -> 443"])
+            );
         }
     }
 }
@@ -1286,7 +1312,7 @@ fn an_unexplained_frame_of_the_scanner_or_a_syn_off_the_plan_fails() {
                 remote: u32::from(PEER),
             },
             local_port: 40000,
-            remote_port: 443,
+            remote_port: 8443,
         },
         seq: 1,
         ack: 1,

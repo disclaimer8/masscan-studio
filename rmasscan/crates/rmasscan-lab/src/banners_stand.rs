@@ -94,7 +94,7 @@ pub struct StandCase {
     pub plan: Plan,
     pub tag: &'static str,
     /// (port scanned on this stand, port of its scenario in the Linux window), in `-p` order.
-    pub ports: [(u16, u16); 2],
+    pub ports: [(u16, u16); 3],
     /// The stand's binding flags, between the ports and `-oL`.
     pub flags: &'static [&'static str],
 }
@@ -103,7 +103,7 @@ pub struct StandCase {
 pub const WINDOWS: StandCase = StandCase {
     plan: Plan::Windows,
     tag: "wb01_banners",
-    ports: [(22, 22), (80, 80)],
+    ports: [(22, 22), (80, 80), (443, 443)],
     flags: &[
         "--adapter-ip",
         "198.18.0.1",
@@ -111,11 +111,12 @@ pub const WINDOWS: StandCase = StandCase {
         "02-57-4c-3d-2e-9b",
     ],
 };
-/// The macOS `feth` stand `m1`: `m03_user_router_mac`'s binding (user mode, BPF granted), HTTP on 8080, SSH on 2222.
+/// The macOS `feth` stand `m1`: `m03_user_router_mac`'s binding (user mode, BPF granted), HTTP on 8080, SSH on 2222,
+/// TLS on 8443 (the scenario of 443; C sends the same hello on both, so the mapping is sound by the hello table).
 pub const MACOS: StandCase = StandCase {
     plan: Plan::Macos,
     tag: "mb01_banners",
-    ports: [(2222, 22), (8080, 80)],
+    ports: [(2222, 22), (8080, 80), (8443, 443)],
     flags: &[
         "--adapter",
         "feth4201",
@@ -536,7 +537,14 @@ pub(crate) fn judge_reference(r: &mut Run, root: &Path, c: &StandCase) -> Option
             return None;
         }
     };
-    let ports: Vec<u16> = c.ports.iter().map(|x| x.1).collect();
+    let t01 = bv::tcp_case(REFERENCE_CASE)?;
+    let ref_ports: Vec<u16> = t01.port_list();
+    let ports: Vec<u16> = c
+        .ports
+        .iter()
+        .map(|x| x.1)
+        .filter(|p| ref_ports.contains(p))
+        .collect();
     let records: Vec<Rec> = doc
         .records
         .iter()
@@ -590,7 +598,9 @@ pub(crate) fn judge_reference(r: &mut Run, root: &Path, c: &StandCase) -> Option
                 payload_segments(
                     &frames,
                     lst.scanner_mac,
-                    t01.source(),
+                    bv::tcp_case(REFERENCE_CASE)
+                        .map(|t| t.source())
+                        .unwrap_or(lst.scanner_ip.into()),
                     IpAddr::V4(PEER),
                     p,
                     bv::SOURCE_PORT,
@@ -834,6 +844,7 @@ pub fn stand_wire(c: &StandCase, fr: &Frames, plan: &rmasscan_core::probe::Ready
                     ip: q.dst,
                     port: q.dp,
                     sport: q.sp,
+                    reconnect: false,
                     open: h.flags & 0x12 == 0x12,
                     reply_t: t,
                     reply_flags: h.flags,
@@ -1307,20 +1318,38 @@ pub(crate) fn judge_run(root: &Path, c: &StandCase, reference: Option<&CReferenc
                     .collect::<Vec<_>>()
             ),
         );
-        if let Some(rf) = reference
-            && rf.payloads.get(&lp) != Some(&mine)
-        {
-            wrong.push(format!(
-                "{}: rmasscan sent {:?}, C {:?}",
-                x.port,
-                mine.iter()
-                    .map(|p| bv::c_normalize_string(p))
-                    .collect::<Vec<_>>(),
-                rf.payloads.get(&lp).map(|v| v
-                    .iter()
-                    .map(|p| bv::c_normalize_string(p))
-                    .collect::<Vec<_>>())
-            ));
+        if let Some(rf) = reference {
+            match rf.payloads.get(&lp) {
+                Some(want) if want != &mine => {
+                    wrong.push(format!(
+                        "{}: rmasscan sent {:?}, C {:?}",
+                        x.port,
+                        mine.iter()
+                            .map(|p| bv::c_normalize_string(p))
+                            .collect::<Vec<_>>(),
+                        Some(
+                            want.iter()
+                                .map(|p| bv::c_normalize_string(p))
+                                .collect::<Vec<_>>(),
+                        )
+                    ));
+                }
+                None if lp == 443 => {
+                    // No C reference on this stand for TLS (the Linux window's reference case does not scan
+                    // 443): the first payload must be the ClientHello (a handshake record of 198 bytes).
+                    let ok = mine.first().is_some_and(|p| {
+                        p.len() == 198 && p.starts_with(b"\x16\x03\x01\x00\xc1\x01")
+                    });
+                    if !ok {
+                        wrong.push(format!(
+                            "{}: first payload is not the default ClientHello: {:?}",
+                            x.port,
+                            mine.first().map(|p| bv::c_normalize_string(p))
+                        ));
+                    }
+                }
+                _ => {}
+            }
         }
         if c.scenario(x.port).is_some_and(|sc| !sc.server_first()) {
             match x.scanner.iter().find(|g| !g.payload.is_empty()) {
@@ -1425,7 +1454,15 @@ pub(crate) fn judge_run(root: &Path, c: &StandCase, reference: Option<&CReferenc
         apps_bad.is_empty() && !w.conns.is_empty(),
         some4(&apps_bad),
     );
-    let mine: Vec<Rec> = doc.records.iter().map(|x| mapped(c, x)).collect();
+    let ref_ports: Vec<u16> = bv::tcp_case(REFERENCE_CASE)
+        .map(|t| t.port_list())
+        .unwrap_or_default();
+    let mine: Vec<Rec> = doc
+        .records
+        .iter()
+        .map(|x| mapped(c, x))
+        .filter(|x| ref_ports.contains(&x.port))
+        .collect();
     if let Some(rf) = reference {
         let (extra, lost) = (more(&mine, &rf.records), more(&rf.records, &mine));
         r.cap(

@@ -2,10 +2,12 @@
 
 ## Stage 1 exit criterion: offline generation >= 80% of C
 
-Result: **parity, about 0.96-0.99 loop for loop; the >= 80% criterion is met.**
-Against the manifest figure (C wall clock, 2,843,897 pps) the Rust median of the
-latest measurement is 2,882,526 pps (1.014), but that compares a bare loop with a
-whole process, so the loop-for-loop ratio is the honest one (see below).
+Historical (Stage 1, 2026-10-23; superseded, see the summary under
+"Native-Rust phase 1, rmasscan-core" below): **parity, about 0.96-0.99 loop for
+loop; the >= 80% criterion is met.** Against the manifest figure (C wall clock,
+2,843,897 pps) the Rust median of the Stage 1 measurement is 2,882,526 pps (1.014),
+but that compares a bare loop with a whole process, so the loop-for-loop ratio is
+the honest one (see below).
 
 ### Oracle (C masscan)
 
@@ -110,13 +112,27 @@ reading compares the reviewer's C user time (92.26 s) with the Rust loop time
   runs each: `offline_gen`, `cursor_1port`, `cursor_16port`, `cursor_mapped`):
   criterion =0.8.2 pulls `alloca` -> `cc` into the dev
   graph (`cargo tree -e normal,build,dev -p rmasscan-core`), which breaks the
-  no-C rule. The workloads are not comparable to the oracle; on an Apple
-  arm64 Mac `offline_gen` gives about 5.7 M pps in earlier measurements (informational only,
-  different hardware).
+  no-C rule. The workloads are not comparable to the oracle. On an Apple
+  arm64 Mac `offline_gen` gave about 5.7 M pps when the loop was added (Stage 1, 2026-10-23);
+  the native-core phase 1 Mac medians in the table below are 8.2 M pps at the task 2 base and
+  about 24-27 M pps from task 4 on (informational only, different hardware).
 - The ordinary `cargo test` runs only `small_workload_generates_every_target` and
   `small_cursor_workload_covers_every_target` (/24, 256 packets each) to keep the pipelines compiled and correct.
 
 ### Native-Rust phase 1, rmasscan-core
+
+Summary. On the oracle host (the N6005 bench host above), from the task 2 base
+(A dcacd335) to the task 12 head (B 47df646f): OFFLINE_GEN 2,820,742 -> 5,518,271 pps
+(x1.96) and OFFLINE_CURSOR 2,297,714 -> 4,816,459 pps (x2.10). The two ends come from
+different sessions (the task 2 row's `mA` and the task 12 row's `mB`), not from one
+paired run; a closing end-to-end A/B on the oracle host is planned and gets its own
+row. Kept as speed-ups (принято): tasks 3, 4, 5, 6a, 8, 10b and 10c (10c by the G-bench
+rule on the oracle host). Kept without a speed-up as idiom changes (нейтрально / без
+регрессии): tasks 7, 9, 12 and 14. Reverted (отклонено / откат): tasks 6b and 10a.
+Task 14 ran on a second host (AMD Ryzen 9 7900X3D), so its row is not comparable with
+the others. Tasks 0-1 (safety net), 11, 13 and 15-17 have no bench row by plan (receive
+path, stack frames, IPv6 excludes and parsers, none of them in the probe generation
+loop). Tasks 13-17 come after 47df646f and are not in the two numbers above.
 
 Paired measurements on the bench host, one row per task (method above). `A` is the
 last accepted code commit, `B` the commit under test; load average is the lowest
@@ -128,12 +144,12 @@ cursor_mapped).
 |------|---|---|---------------------|---------------|------------------------|---------------|----------|-------|-----------------------|----------|
 | 2 (base, A/A) | dcacd335 | dcacd335 | 2,820,742 / 2,824,016 | 1.001 (1.011, 1.002, 1.005, 1.000, 0.995) | 2,297,714 / 2,306,204 | 1.004 (1.064, 1.002, 1.005, 0.995, 1.006) | 0.24-1.62 (before runs 0.24-0.42) | equal (gen 34223905032, cursor 576472178750522997) | 8,228,928 / 6,989,610 / 6,543,468 / 5,123,407 pps | 5-pair ABBA, taskset -c 3: median ratios within 1.5 %, one pair (cursor pair 1, 1.064) outside 0.97-1.03 |
 | 2 (base, A/A, 3-pair, superseded) | 280f5c42 | 280f5c42 | 2,788,995 / 2,753,925 | 0.987 (0.971, 1.028, 1.002) | 2,307,003 / 2,279,264 | 0.988 (0.988, 0.977, 1.008) | 0.23-1.76 (before runs 0.23-0.29) | equal (gen 34223905032, cursor 576472068694419045) | 8,784,776 / 7,455,047 / 6,904,995 / 5,451,513 pps | A/A noise exceeds 1 % |
-| 3 (BlackRock round mask) | dcacd335 | c7a5bdf2 | 2,833,915 / 2,895,265 | 1.022 (1.021, 1.024, 1.017, 1.023, 1.027; B faster in 5 of 5) | 2,299,627 / 2,354,378 | 1.024 (1.030, 1.017, 1.033, 1.011, 1.031; B faster in 5 of 5) | 0.24-1.56 | equal (gen 34223905032, cursor 576472178750522997) | 8,140,773 / 6,492,735 / 6,298,843 / 4,983,702 pps | принято (правило пользователя от 2026-11-16: 5/5 пар и ≥ 1,5 %) |
+| 3 (BlackRock round mask) | dcacd335 | c7a5bdf2 (reverted in a9c99508, then re-landed with the same core tree as 78708334, the A of task 4) | 2,833,915 / 2,895,265 | 1.022 (1.021, 1.024, 1.017, 1.023, 1.027; B faster in 5 of 5) | 2,299,627 / 2,354,378 | 1.024 (1.030, 1.017, 1.033, 1.011, 1.031; B faster in 5 of 5) | 0.24-1.56 | equal (gen 34223905032, cursor 576472178750522997) | 8,140,773 / 6,492,735 / 6,298,843 / 4,983,702 pps | принято (правило пользователя от 2026-11-16: 5/5 пар и ≥ 1,5 %) |
 | 4 (BlackRock, 8 lanes in transmit and -sL) | 78708334 | 1d42d281 | 2,902,783 / 4,138,287 | 1.426 (1.425, 1.423, 1.426, 1.426, 1.427; B faster in 5 of 5) | 2,358,896 / 2,337,374 | 0.991 (0.992, 0.989, 0.991, 0.987, 0.991; B faster in 0 of 5) | 0.23-1.60 (before runs 0.23-0.43) | equal (gen 34223905032, cursor 576472178750522997) | 24,415,410 / 6,802,696 / 6,258,419 / 5,027,618 pps | принято (5/5 пар и mB/mA ≥ 1,03; CURSOR без регрессии ≥ 0,97, ProbeCursor не менялся; первый прогон ворот оборвался перед b.5 на сбросе ssh и повторён целиком) |
 | 5 (ProbeCursor on the shuffled stream with lookahead) | 1d42d281 | 22796d29 | 4,118,288 / 4,028,330 | 0.978 (0.992, 0.964, 0.978, 1.002, 1.002; B faster in 2 of 5) | 2,318,355 / 3,159,177 | 1.363 (1.363, 1.362, 1.365, 1.339, 1.363; B faster in 5 of 5) | 0.24-1.91 (before runs 0.24-0.81) | equal (gen 34223905032, cursor 576472178750522997) | 24,092,636 / 14,313,596 / 13,358,071 / 8,114,255 pps | принято (CURSOR: 5/5 пар и mB/mA ≥ 1,03; GEN без регрессии ≥ 0,97, пара 2 0,964 при load 0,81 перед b.2) |
 | 6a (ProbeCursor reuses probe buffers) | 22796d29 | f7c82137 | 4,116,946 / 4,166,895 | 1.012 (1.059, 1.008, 0.795, 1.003, 1.013; B faster in 4 of 5) | 3,076,896 / 3,712,251 | 1.206 (1.174, 1.174, 1.223, 1.218, 1.202; B faster in 5 of 5) | 0.24-0.29 before runs (3.08 after b.3) | equal (gen 34223905032, cursor 576472178750522997) | 24,188,070 / 18,610,127 / 15,931,286 / 9,414,841 pps | принято (CURSOR: 5/5 пар и mB/mA ≥ 1,03; GEN без регрессии ≥ 0,97, пара 3 0,795: b.3 шёл при скачке нагрузки хоста, uptime после прогона 3,08; OFFLINE_GEN у A 22796d29 равен 4,12 M, а не 4,03 M) |
 | 6b (sorted delivery table, `MODE=bench`, per-log median of three runs; loops offline_gen / cursor_1port / cursor_16port / cursor_mapped) | f7c82137 | 033c4e2a | 4,159,624 / 4,153,365; 3,678,797 / 3,666,602; 3,351,866 / 3,357,495; 2,646,297 / 2,643,735 | 0.998; 0.997; 1.002; cursor_mapped 0.999 (1.078, 0.999, 0.999, 0.964, 0.995; B faster in 1 of 5) | see left | см. слева | 0.25-0.72 before runs (1.23 highest in logs) | equal (offline_gen 534795568, 1port 9004079510931757, 16port 9009884609496714, mapped 9005616079306503) | 24,310,367 / 18,567,757 / 15,934,897 / 8,257,636 pps | отклонено (cursor_mapped 0,999 < 1,015; откат `git revert`) |
-| 7 (IPv4 header checksum over a slice) | f7c82137 | 89ca3f7a | 4,161,160 / 4,130,700 | 0.993 (0.965, 1.005, 0.993, 1.001, 0.985; B faster in 2 of 5) | 3,715,345 / 3,696,015 | 0.995 (0.986, 1.001, 1.015, 0.993, 0.994; B faster in 2 of 5) | 0.24-1.80 (all uptime lines in the logs; each run waited for under 0.3 first) | equal (gen 34223905032, cursor 576472178750522997) | 24,438,723 / 18,892,726 / 16,170,922 / 9,524,463 pps (median of 27 runs per loop) | нейтрально — оставлено как идиома (без ускорения) |
+| 7 (IPv4 header checksum over a slice) | f7c82137 | 89ca3f7a (reverted in d08e7e8b, then re-landed with the same core tree as ff28f4a5, the A of task 8) | 4,161,160 / 4,130,700 | 0.993 (0.965, 1.005, 0.993, 1.001, 0.985; B faster in 2 of 5) | 3,715,345 / 3,696,015 | 0.995 (0.986, 1.001, 1.015, 0.993, 0.994; B faster in 2 of 5) | 0.24-1.80 (all uptime lines in the logs; each run waited for under 0.3 first) | equal (gen 34223905032, cursor 576472178750522997) | 24,438,723 / 18,892,726 / 16,170,922 / 9,524,463 pps (median of 27 runs per loop) | нейтрально — оставлено как идиома (без ускорения) |
 | 8 (incremental IPv4 header sum, one header writer for the four IPv4 probe templates) | ff28f4a5 | 6949f51a | 4,190,161 / 4,406,058 | 1.052 (1.057, 1.054, 1.057, 1.039, 1.046; B faster in 5 of 5) | 3,676,409 / 3,823,478 | 1.040 (1.049, 1.064, 1.039, 1.028, 1.077; B faster in 5 of 5) | 0.25-1.28 (before runs 0.25-0.34; each run waited for under 0.3 first) | equal (gen 34223905032, cursor 576472178750522997) | 27,156,746 / 20,537,059 / 17,241,445 / 9,961,230 pps (A ff28f4a5 in the same session: 24,392,053 / 18,855,787 / 16,154,614 / 9,569,390) | принято (CURSOR: 5/5 пар и mB/mA ≥ 1,015, также ≥ 1,03; GEN без регрессии, тоже быстрее в 5 из 5) |
 | 9 (one-shot SipHash for cookies) | 6949f51a | bcd8efc8 | 4,391,825 / 4,376,236 | 0.996 (1.013, 0.990, 0.996, 1.003, 0.988; B faster in 2 of 5) | 3,844,402 / 3,851,174 | 1.002 (0.997, 1.001, 1.003, 1.005, 1.008; B faster in 4 of 5) | 0.24-1.32 (all uptime lines in the logs; each run waited for under 0.3 first) | equal (gen 34223905032, cursor 576472178750522997) | 27,022,100 / 20,523,304 / 17,226,727 / 9,859,111 pps (median of 9 runs per loop; cursor_16port, two cookies per probe, is 17,241,445 at task 8) | нейтрально — оставлено как идиома (без ускорения) |
 | 10a (transmit index reduced without a division when it is in range) | bcd8efc8 | 100f99ee | 4,390,271 / 4,440,158 | 1.011 (1.012, 0.997, 1.011, 1.020, 1.012; B faster in 4 of 5) | 3,870,266 / 3,883,636 | 1.003 (1.000, 1.009, 1.006, 0.989, 1.003; B faster in 3 of 5) | 0.23-1.37 (all uptime lines in the logs; each run waited for under 0.3 first) | equal (gen 34223905032, cursor 576472178750522997) | 27,298,454 / 20,554,680 / 17,250,456 / 10,004,821 pps (median of 9 runs per loop) | нет выигрыша, откат (`git revert`; GEN 1,011 при 4 из 5 пар ниже правила выигрыша, CURSOR 1,003; обе строки ≥ 0,97) |

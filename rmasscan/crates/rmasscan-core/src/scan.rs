@@ -147,6 +147,21 @@ fn list_bounds(
     (start, end, u64::from(shard.of)) // :14
 }
 
+/// main.c:329-333: ветка `%` и цикл вычитания дают одно и то же — остаток от деления значения `x` (уже свёрнутого по
+/// 2^64) на `range` (`range > 0`, иначе цикл не входит: `end == 0`). Без деления, когда `x` уже меньше `range` или
+/// хватает одного вычитания, иначе `%`: значение то же, что у `x % range`, а работа ограничена (цикл вычитания C
+/// растёт с retries).
+#[inline]
+fn reduce_mod(x: u64, range: u64) -> u64 {
+    if x < range {
+        x
+    } else if x - range < range {
+        x - range
+    } else {
+        x % range
+    }
+}
+
 /// Итератор transmit (main.c:280-333, :421-424).
 pub(crate) struct TransmitIndices {
     i: u64,
@@ -179,14 +194,12 @@ impl Iterator for TransmitIndices {
         }
         let cur = self.i;
         // main.c:328 `xXx = (i + (r--) * rate)`: r — unsigned, повышается до u64.
-        let mut x = self
-            .i
-            .wrapping_add(u64::from(self.r).wrapping_mul(self.rate));
+        let x = reduce_mod(
+            self.i
+                .wrapping_add(u64::from(self.r).wrapping_mul(self.rate)),
+            self.range,
+        );
         self.r = self.r.wrapping_sub(1);
-        // main.c:329-333: ветка `%` и цикл вычитания дают одно и то же —
-        // остаток от деления значения x (уже свёрнутого по 2^64) на range
-        // (range > 0, иначе цикл не входит: end == 0). Поэтому один `%`.
-        x %= self.range;
         // main.c:421-424
         if self.r == 0 {
             self.i = self.i.wrapping_add(self.increment);
@@ -755,6 +768,35 @@ mod tests {
         let got: Vec<(u64, u64)> =
             transmit_index_stream(range, ONE, 1, 0, 0, None, retries, rate).collect();
         assert_eq!(got, want);
+    }
+
+    fn splitmix(state: &mut u64) -> u64 {
+        *state = state.wrapping_add(0x9e37_79b9_7f4a_7c15);
+        let mut z = *state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        z ^ (z >> 31)
+    }
+
+    /// `reduce_mod` equals `%` at the edges of all three branches and on 10 000 random values per range (half of
+    /// them below `3 * range`, so the subtraction branch is hit for every range).
+    #[test]
+    fn reduce_mod_equals_modulo() {
+        let mut st = 0x5eed_u64;
+        for range in [1u64, 2, 3, 40, 1 << 28, (1 << 63) - 1] {
+            let mut xs = vec![0, range - 1, range, 2 * range - 1, 2 * range, u64::MAX];
+            for k in 0..10_000 {
+                let x = splitmix(&mut st);
+                xs.push(if k % 2 == 0 {
+                    x
+                } else {
+                    x % range.saturating_mul(3)
+                });
+            }
+            for x in xs {
+                assert_eq!(reduce_mod(x, range), x % range, "x {x} range {range}");
+            }
+        }
     }
 
     #[test]

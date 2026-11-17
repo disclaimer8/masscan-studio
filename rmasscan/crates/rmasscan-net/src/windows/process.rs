@@ -204,7 +204,22 @@ pub(crate) fn token_flags() -> TokenFlags {
 
 #[cfg(test)]
 mod tests {
-    use super::restricted_from;
+    use super::{current_thread_id, restricted_from, thread_count, thread_ids};
+
+    /// One Toolhelp snapshot: the calling thread is among the process's threads.
+    #[test]
+    fn thread_ids_contain_the_current_thread() {
+        let me = current_thread_id().expect("current thread id");
+        let ids = thread_ids().expect("a thread snapshot of a live process is not empty");
+        assert!(ids.contains(&me), "thread {me} not in {ids:?}");
+    }
+
+    /// One Toolhelp snapshot: a live process has at least one thread.
+    #[test]
+    fn thread_count_is_at_least_one() {
+        let n = thread_count();
+        assert!(n.is_some_and(|n| n >= 1), "{n:?}");
+    }
 
     #[test]
     fn restricted_result_zero_with_an_error_is_unknown() {

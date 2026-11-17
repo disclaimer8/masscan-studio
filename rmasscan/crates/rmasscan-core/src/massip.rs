@@ -562,6 +562,33 @@ mod tests {
         }
     }
 
+    /// massip.c:30-34 with one port: `pick` equals the `%`/`/` split (address `index % count_ipv4s`, port
+    /// `index / count_ipv4s`) at every index of three target lists (one address; scattered ranges; several hundred
+    /// addresses over many ranges), each with a single port.
+    #[test]
+    fn single_port_pick_equals_division() {
+        for (list, port) in [
+            ("192.0.2.1", "80"),
+            ("198.18.0.0/28,10.1.0.5-10.1.0.9,203.0.113.77", "U:53"),
+            (
+                "10.0.0.0/23,10.2.0.0/26,10.3.0.0/30,172.16.5.9,192.0.2.128/25",
+                "443",
+            ),
+        ] {
+            let mut t = MassIp::new();
+            t.add_target_string(list).unwrap();
+            targets::parse_ports(t.ports_mut(), port).unwrap();
+            t.optimize();
+            assert_eq!(t.count_ports(), 1, "{list}");
+            let n = t.count_ipv4s();
+            assert_eq!(t.range(), n, "{list}");
+            for index in 0..n {
+                let want = (t.ipv4().pick(index % n), t.ports().pick(index / n));
+                assert_eq!(t.pick(index), want, "{list} index {index}");
+            }
+        }
+    }
+
     #[test]
     #[should_panic(expected = "out of range")]
     fn pick_list_past_the_end_panics() {

@@ -86,12 +86,6 @@ mod netlink {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub(crate) struct RouteKind(pub u8);
 
-    impl std::fmt::Display for RouteKind {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            self.0.fmt(f)
-        }
-    }
-
     pub(crate) const RTN_UNICAST: RouteKind = RouteKind(1);
     pub(crate) const RTN_LOCAL: RouteKind = RouteKind(2);
     pub(crate) const RTN_BLACKHOLE: RouteKind = RouteKind(6);
@@ -174,17 +168,20 @@ mod netlink {
         }
     }
 
-    /// Семейство маршрутов: что отличает IPv4 от IPv6 в разборе (`rtm_family`, адрес в атрибутах, `RTA_PREFSRC`).
+    /// Семейство маршрутов: что отличает IPv4 от IPv6 в разборе (`rtm_family`, адрес в атрибутах, `RTA_PREFSRC`,
+    /// порядок проверки атрибутов).
     pub(crate) trait RouteFamily {
         /// `rtm_family`.
         const AF: u8;
         type Addr: Copy;
         /// Адрес из значения атрибута (сетевой порядок байт); `None`, если значение короче адреса.
         fn addr_at(p: &[u8]) -> Option<Self::Addr>;
-        /// Читается ли `RTA_PREFSRC`. Это же выбирает порядок ошибок как на базе: семейство с `RTA_PREFSRC` (IPv6)
-        /// сначала проверяет границы всех атрибутов и лишь потом их значения, без него (IPv4) значения проверяются по
-        /// ходу, и короткое значение раньше испорченного `rta_len` побеждает.
+        /// Читается ли `RTA_PREFSRC`; только это и значит константа.
         const PREFSRC: bool;
+        /// Порядок ошибок как на базе. `true` (IPv6): сначала проверяются границы всех атрибутов и лишь потом их
+        /// значения. `false` (IPv4): значения проверяются по ходу, и короткое значение раньше испорченного `rta_len`
+        /// побеждает.
+        const ATTRS_CHECKED_FIRST: bool;
     }
 
     /// Маркер `AF_INET`.
@@ -201,6 +198,7 @@ mod netlink {
             ipv4_at(p, 0)
         }
         const PREFSRC: bool = false;
+        const ATTRS_CHECKED_FIRST: bool = false;
     }
 
     impl RouteFamily for V6 {
@@ -210,6 +208,7 @@ mod netlink {
             ipv6_at(p, 0)
         }
         const PREFSRC: bool = true;
+        const ATTRS_CHECKED_FIRST: bool = true;
     }
 
     /// Маршрут из `RTM_NEWROUTE` одного семейства.
@@ -267,6 +266,7 @@ mod netlink {
     /// Запрос `RTM_GETROUTE`: с `dst` (сетевой порядок байт) это lookup одного адреса (`NLM_F_REQUEST`, `dst_len` =
     /// 8 × длина адреса, `RTA_DST`), без него dump всех маршрутов семейства (`NLM_F_REQUEST | NLM_F_DUMP`).
     pub(crate) fn route_request(family: u8, seq: u32, dst: Option<&[u8]>) -> Vec<u8> {
+        debug_assert!(dst.is_none_or(|d| matches!(d.len(), 4 | 16)));
         let rt = RtMsg {
             family,
             dst_len: dst.map_or(0, |d| (d.len() * 8) as u8),
@@ -406,7 +406,7 @@ mod netlink {
             Ok(())
         };
         let attrs = NlAttrs::new(body, RTMSG_LEN);
-        if F::PREFSRC {
+        if F::ATTRS_CHECKED_FIRST {
             for (ty, p) in attrs.collect::<Result<Vec<_>, _>>()? {
                 apply(ty, p)?;
             }

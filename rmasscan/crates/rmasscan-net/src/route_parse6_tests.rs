@@ -184,7 +184,12 @@ fn netlink_ipv6_route_kinds_local_unreachable_and_short_attributes() {
             &[rtattr(RTA_OIF, &1u32.to_ne_bytes())],
         ))
         .unwrap();
-        assert_eq!(route6_from_nl(&x[0], |_| "lo".into()), None, "kind {kind}");
+        assert_eq!(
+            route6_from_nl(&x[0], |_| "lo".into()),
+            None,
+            "kind {}",
+            kind.0
+        );
     }
     // Без RTA_OIF (например RTA_MULTIPATH) маршрута нет.
     let multi =

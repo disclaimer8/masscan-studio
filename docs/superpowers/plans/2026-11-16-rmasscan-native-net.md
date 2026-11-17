@@ -150,8 +150,9 @@ m_gate() {   # Mac
     && git diff --exit-code a275ea9e -- rmasscan/Cargo.lock studio/Cargo.lock
 }
 
-l_ship() {   # архив SHA на хост (stdin — полезная нагрузка, поэтому без -n)
-  git archive --format=tar --prefix="rnn-$1/" "$1" | "$TO" 600 ssh "$LINUX_HOST" 'mkdir -p ~/rnn && tar -x -C ~/rnn'
+l_ship() {   # архив ДЕРЕВА SHA на хост (stdin — полезная нагрузка, поэтому без -n); дерево, а не коммит: у файлов время
+  # распаковки, а не время коммита, иначе cargo принимал сборку другого коммита за свежую (BENCHMARKS.md, «Стенд S»)
+  git archive --format=tar --prefix="rnn-$1/" "$1^{tree}" | "$TO" 600 ssh "$LINUX_HOST" 'mkdir -p ~/rnn && tar -x -C ~/rnn'
 }
 l_cargo() {   # l_cargo LOG SHA args... : cargo на хосте под таймаутом на обеих сторонах
   local log=$1 sha=$2; shift 2
@@ -176,7 +177,7 @@ l_red() {   # l_red FILTER : коммит теста уже сделан
 # W: путь до гостя — ssh через хост VM на проброшенный порт (см. «Транспорт W-gate» ниже)
 wssh() { ssh -n -J "$VM_HOST" -p "$WIN_PORT" "$WIN_USER@127.0.0.1" "$@"; }
 wscp() { "$TO" 600 scp -q -J "$VM_HOST" -P "$WIN_PORT" "$@" "$WIN_USER@127.0.0.1:"; }
-w_ship() { git archive --format=zip -o "$EVID/rnn-$1.zip" "$1" && wscp "$EVID/rnn-$1.zip" "$EVID/rnn-test.ps1"; }
+w_ship() { git archive --format=zip -o "$EVID/rnn-$1.zip" "$1^{tree}" && wscp "$EVID/rnn-$1.zip" "$EVID/rnn-test.ps1"; }
 w_gate() {   # w_gate [-Workspace]
   local sha; sha=$(gate_sha) || return 1
   w_ship "$sha" && run "$EVID/w-$sha-test.log" wssh \
@@ -197,7 +198,9 @@ unsafe_count() {   # из rmasscan/crates/rmasscan-net; база 199
 
 `rnn-test.ps1` (в `$EVID`, в репозиторий не кладётся). Каждая команда `cargo` идёт отдельным процессом с ожиданием не
 дольше `-Limit` секунд; по истечении дерево процессов убивается и скрипт выходит с кодом 124. Весь вывод идёт в stdout
-ssh, и `run`/`red` на Mac проверяют его через `libtest_ok`.
+ssh, и `run`/`red` на Mac проверяют его через `libtest_ok`. Шаг лаборатории в госте — вся библиотека с `--features lab`,
+а не фильтр `--lib lab_io`, как в `m_gate`/`l_gate`: тесты `lab_io` есть только на Unix (`cfg(all(test, unix))`), и в
+Windows фильтр выполнял 0 тестов, что раздел «Global Constraints» считает провалом (решение контролёра по задаче 9).
 
 ```powershell
 param([Parameter(Mandatory)][string]$Zip, [int]$Limit = 5400, [string]$Filter = '', [switch]$Workspace)
@@ -218,7 +221,7 @@ $steps = if ($Filter) { @("test --locked -p rmasscan-net $Filter") } else {
   @('clippy --locked --workspace --all-targets -- -D warnings',
     'clippy --locked -p rmasscan-net --all-targets --features lab -- -D warnings',
     'test --locked -p rmasscan-net',
-    'test --locked -p rmasscan-net --features lab --lib lab_io',
+    'test --locked -p rmasscan-net --features lab --lib',
     'test --locked -p rmasscan-net --example wire_scan') }
 if ($Workspace) { $steps += 'test --locked --workspace' }
 foreach ($a in $steps) { $rc = Invoke-Cargo $a; if ($rc) { exit $rc } }
@@ -235,62 +238,32 @@ exit 0
 
 ## Замеры на стенде
 
-**Стенд S** — одноразовый скрипт на `$LINUX_HOST` в `mktemp -d /tmp/rmasscan-native-net.XXXX` (в репозиторий не
-кладётся; задача 1 записывает его итоговый текст в `BENCHMARKS.md`, дальше он берётся оттуда без изменений). Под
-`sudo -n` он поднимает изоляцию по правилам `scripts/wire-lab.sh`: две netns `rnn-a`/`rnn-b`, пара veth
-`rnn-va`/`rnn-vb` (qdisc по умолчанию, `noqueue`, как в матрице), без uplink, моста и NAT, IPv6 выключен на обоих
-концах, маршрута по умолчанию нет; MAC `02:aa:00:00:00:01`/`02:aa:00:00:00:02`, сканер `10.200.0.1/24` (адрес адаптера
-`10.200.0.100` не назначен), у пира 128 адресов `10.200.0.2-10.200.0.129/24` без слушателей (ядро пира отвечает RST на
-каждый SYN); проверка изоляции — `rmasscan-lab capture isolation`, как в `wire-lab.sh`; снятие —
-`trap 'trap - EXIT INT TERM; ip netns del rnn-a; ip netns del rnn-b' EXIT INT TERM`. Сканер всегда запускается под
-`taskset -c <набор>`; набор один на сессию и записан в тексте ячейки. Каждый прогон — под
-`timeout -k 10 <3 × ожидаемая длительность>`; срыв по таймауту — INVALID. Сессия целиком запускается из Mac как
-`"$TO" -k 60 7200 ssh -n "$LINUX_HOST" "sudo -n bash <скрипт> …"`.
-
-**Ячейка U.** `wire_scan` (release) из `ip netns exec rnn-a` с `--iface rnn-va --src-ip 10.200.0.100
---src-mac 02:aa:00:00:00:01 --router-mac 02:aa:00:00:00:02 --seed 1 --source-port 40000 --wait 1`. CPU потоков движка
-берётся из `workers.tx_cpu_ns`/`rx_cpu_ns` JSON (задача 1), а не из CPU всего процесса; значение `null` или `0`
-(`schedstat` печатает `0 0 0`, когда учёт выключен) делает прогон INVALID.
-
-- `U-TX` — `--rate 100000000 --targets 10.200.0.0/16 --ports 1-64` (4 194 304 пробы). Метрики: `timing.steady_pps`;
-  CPU потока TX на отправленный кадр; `net.tx_would_block`. Годный прогон: `reason == "Completed"`, `net.tx_sent`
-  равен числу проб, прирост RX-пакетов `rnn-vb` по `ip -s -j link` не меньше `net.tx_sent`,
-  `rx_health.kernel_drops == 0`.
-- `U-RX` — CPU потока RX на принятый кадр при фиксированной скорости `R_RX`, `--targets 10.200.0.2-10.200.0.129
-  --ports 1-P`, `P = ⌈11 · R_RX / 128⌉` (не меньше 10 с установившегося режима плюс разгон). `R_RX` выбирается в
-  калибровке сессии: наибольшая из лестницы 400 000, 300 000, 200 000, 150 000, 100 000 pps, на которой все прогоны
-  базы в калибровке годны. Годный прогон: `reason == "Completed"`, `rx_health.kernel_drops == 0`, `reply_unique` JSON
-  не меньше числа проб (на каждую пробу ровно один RST, адреса и порты различны). Движок обрывает скан на первой
-  потере ядра (`RxLoss`), поэтому прогон без ограничения скорости здесь не годен по определению. Для справки (не
-  ворота) после A/B по одному прогону каждой версии на каждой ступени лестницы сверху вниз; наибольшая ступень с
-  годным прогоном у каждой версии пишется в `BENCHMARKS.md`.
-- Негодный прогон — INVALID: никогда не PASS, в медианы не идёт. INVALID базы в калибровке — сессия не годна (для
-  `U-RX` — шаг вниз по лестнице, для `U-TX` — новая сессия). INVALID новой версии при годной базе — FAIL задачи.
-- **Протокол сессии** (одна сессия = один подъём стенда S, без перезапуска хоста): (1) калибровка «база против базы» —
-  5 пар чередованием (база, база); разброс `S_AA = |медиана₁ − медиана₂| / медиана` по каждой метрике; порог
-  `T = max(2 %, S_AA)`; (2) парные A/B — 5 пар чередованием (база, новая) в той же сессии; (3) C-оракул — отдельной
-  серией после A/B, только для справки. База — коммит ветки до первой правки задачи, новая — последний коммит задачи
-  (оба sha в заметках), сборка из `git archive` этих sha, как `L-gate`.
-- Ворота «без регрессии» (каждая метрика ячейки): отношение медиан новая/база (в сторону «лучше») не ниже `1 − T` и не
-  ниже 0,97, какой бы ни вышла `S_AA`; и не меньше чем в 4 из 5 пар новая версия не хуже своей пары больше чем на `T`.
-  Ворота «ускорение»: по целевой метрике задачи медиана новой версии лучше медианы базы больше чем на `T`, и не меньше
-  4 из 5 повторов новой версии лучше медианы базы; прочие метрики — «без регрессии». Если ворота «ускорение» не
-  пройдены, продуктовые коммиты задачи отменяются `git revert` (история не переписывается), отрицательный замер с `T`
-  пишется в `BENCHMARKS.md`, решение за пользователем.
+Стенд S, ячейки `U-TX` и `U-RX`, правила годности прогона, протокол сессии (тихое окно перед каждым прогоном и
+повтор шумных прогонов `U-TX`, калибровка «база против базы» и парные A/B в одной сессии, порядок пар ABBA, лестница
+`R_RX`, проверка позиции), порог `T = max(2 %, S_AA)`, ворота «без регрессии» и «ускорение», сборка каждого sha из
+`git archive` его дерева в свой target-каталог на диске хоста, `--distinct` и полный текст скрипта `stand-s.sh` — в
+`rmasscan/BENCHMARKS.md`, раздел «rmasscan-net: нативный Rust, фаза 1 (Linux-стенд)». С задачи 1 источник истины —
+он (решения контролёра в журнале задач), а не этот план; задачи плана берут стенд оттуда без изменений. Каждая сессия
+стенда, матрица и дымовой прогон адаптера (`--smoke` скрипта стенда) идут под замком стенда: хост общий с планом
+`rmasscan-native-core` и с чужими сервисами. Если ворота «ускорение» не пройдены, продуктовые коммиты задачи
+отменяются `git revert` (история не переписывается), отрицательный замер с `T` пишется в `BENCHMARKS.md`, решение за
+пользователем.
 
 **Матрица** (существующая, 40 ячеек) и полный набор Rust на коммите задачи; `$ORACLE` (путь на хосте) подставляется в
-команду на Mac:
+команду на Mac. Сборка идёт в свой target-каталог sha на диске хоста (`~/rnn-target-<sha>`, удаляется после матрицы),
+как в сессиях стенда: в общем каталоге дерево из `git archive` одного коммита получало сборку другого (`BENCHMARKS.md`,
+«Стенд S»). Внешний таймаут 36 000 с (сумма внутренних 34 200 с):
 
 ```bash
-SHA=$(gate_sha) && l_ship "$SHA" && "$TO" -k 60 30000 ssh -n "$LINUX_HOST" \
-  "cd ~/rnn/rnn-$SHA/rmasscan && export CARGO_TARGET_DIR=/tmp/rnn-target \
-  RMASSCAN_LAB_BIN=/tmp/rnn-target/release/rmasscan-lab OUT=\$(mktemp -d /tmp/rmasscan-native-net.XXXX) \
+SHA=$(gate_sha) && l_ship "$SHA" && "$TO" -k 60 36000 ssh -n "$LINUX_HOST" \
+  "cd ~/rnn/rnn-$SHA/rmasscan && export CARGO_TARGET_DIR=\$HOME/rnn-target-$SHA \
+  RMASSCAN_LAB_BIN=\$HOME/rnn-target-$SHA/release/rmasscan-lab OUT=\$(mktemp -d /tmp/rmasscan-native-net.XXXX) \
   && timeout -k 30 5400 ~/.cargo/bin/cargo build --locked --release -p rmasscan-lab \
   && timeout -k 30 5400 ~/.cargo/bin/cargo build --locked --release -p rmasscan-net --example wire_scan \
   && timeout -k 60 14400 scripts/wire-lab.sh --oracle '$ORACLE' --out \$OUT/perf --suite perf --reps 5 \
-       --rust-bin /tmp/rnn-target/release/examples/wire_scan \
+       --rust-bin \$CARGO_TARGET_DIR/release/examples/wire_scan \
   && timeout -k 60 7200 scripts/wire-lab.sh --oracle '$ORACLE' --out \$OUT/rust --suite rust \
-       --rust-bin /tmp/rnn-target/release/examples/wire_scan --fixtures tests/golden/wire \
+       --rust-bin \$CARGO_TARGET_DIR/release/examples/wire_scan --fixtures tests/golden/wire \
   && RMASSCAN_WIRE_RESULTS=\$OUT/rust RMASSCAN_WIRE_PERF_RESULTS=\$OUT/perf \
        timeout -k 30 1800 ~/.cargo/bin/cargo test --locked -p rmasscan-net --test linux_wire -- --ignored" \
   >"$EVID/matrix-$SHA.log" 2>&1 && libtest_ok "$EVID/matrix-$SHA.log"
@@ -300,12 +273,9 @@ SHA=$(gate_sha) && l_ship "$SHA" && "$TO" -k 60 30000 ssh -n "$LINUX_HOST" \
 `rust_kernel_drops_per_run` и `rust_rx_incomplete_runs` нули, набор `rust` без FAIL и NOT RUN, все `linux_wire
 --ignored` ok. `--suite rust` нужен задачам 13, 15 и 17 и приёмке; матрица — каждой задаче о скорости.
 
-**Дымовой прогон адаптера** (задачи 1, 6, 13, 15, 17): `cargo test --locked --release -p rmasscan-net --test linux_io
---no-run`, затем бинарник из вывода под `sudo -n ip netns exec rnn-a env RMASSCAN_LAB_IFACE=rnn-va
-RMASSCAN_LAB_IP=10.200.0.100 RMASSCAN_LAB_MAC=02:aa:00:00:00:01 RMASSCAN_LAB_PEER_MAC=02:aa:00:00:00:02 timeout -k 10
-600 <bin> --ignored --test-threads=1 --skip lab_open_without_privilege_is_permission_denied lab_` (итог —
-`libtest_ok`); `lab_open_without_privilege_is_permission_denied` отдельно под `setpriv --reuid=nobody --regid=nogroup
---clear-groups`, иначе он записывается NOT RUN.
+**Дымовой прогон адаптера** (задачи 1, 6, 13, 15, 17) — `--smoke` скрипта стенда S: бинарник `linux_io` из
+`cargo test --locked --release -p rmasscan-net --test linux_io --no-run`, все `lab_*` под root и тест без привилегий
+под `nobody` (`BENCHMARKS.md`, «Стенд S»).
 
 ## Review Focus
 
@@ -494,6 +464,11 @@ libpcap (кольцевой буфер в мегабайты по умолчан
   `rmasscan/README.md` (строка в «Отличиях от masscan»), `rmasscan/BENCHMARKS.md` (`U-RX` становится измеримой),
   спека `docs/superpowers/specs/2026-11-16-rmasscan-native-rust-design.md` (P5 в «Решениях пользователя») и этот план
   (задача 2b, P5 в «Goal» и «Global Constraints»)
+- Modify (harness, решение контролёра): `examples/wire_scan.rs` — идентификатор потока движка запоминается при первом
+  вызове, а не `readlink("/proc/thread-self")` на каждом `send`/`recv` (`6bc3ee59`)
+- Modify (исключение из запрета на `rmasscan-lab`, решение контролёра): `rmasscan/crates/rmasscan-lab/src/wire_suite.rs`
+  — случай `rx_overflow` сканирует только отвечающие адреса пира, чтобы буфер 8 MiB снова переполнялся (`2a7b7570`;
+  ветка 4c этот файл не меняет)
 
 **Поведение (точно):**
 - Только RX-сокет (тот, что получает `PACKET_IGNORE_OUTGOING`), сразу после `socket()` и до `bind`, просит буфер
@@ -525,7 +500,7 @@ libpcap (кольцевой буфер в мегабайты по умолчан
   (P5)`; ворота `m_gate`, `l_gate`, `w_gate` на его SHA; тесты страховки задачи 1 (тексты, флаги, счётчики) зелёные
   без правок.
 - [ ] **Step 4: стенд**, каждая сессия под замком стенда. Дымовой прогон (все `lab_*` ok, с новым). Калибровка `U-RX`
-  v3: база обеих сторон — коммит этой задачи (5 пар «база против базы», лестница `R_RX`); `U-RX` годна на какой-то
+  v3: база обеих сторон — коммит этой задачи (калибровка и лестница `R_RX` — по `BENCHMARKS.md`); `U-RX` годна на какой-то
   ступени, `S_AA`, `T`, `R_RX` пишутся в `BENCHMARKS.md` вместо «не измеряется»; если негодна на каждой ступени —
   остановка и отчёт с картиной потерь. `U-TX` «без регрессии» не нужна (TX не тронут). Матрица (40/40 VALID, потерь
   ядра нет; покрывает и задачу 2) и `--suite rust` (без FAIL и NOT RUN) — на коммите задачи.
@@ -1148,8 +1123,8 @@ sendqueue).
 - [ ] **Step 4: стенд** — сессия ячейки `U` HEAD против коммита задачи 1 (продукт тот же, что на `a275ea9e`, а harness
   уже даёт CPU потоков), C-оракул отдельной серией, матрица, `--suite rust`, дымовой прогон; итоговая строка в
   `BENCHMARKS.md`.
-- [ ] **Step 5:** удалить деревья `~/rnn/*` и `/tmp/rnn-target` на хосте, `rnn-*.zip`, `rnn-test.ps1`, распакованные
-  деревья и `rnn-target` в госте, `CARGO_TARGET_DIR` на Mac; `ps -Ao pid,%cpu,etime,command | awk '$2>80'` — своих
-  процессов нет.
+- [ ] **Step 5:** удалить деревья `~/rnn/*`, `/tmp/rnn-target` и target-каталоги сессий `~/rnn-target-*` на хосте,
+  `rnn-*.zip`, `rnn-test.ps1`, распакованные деревья и `rnn-target` в госте, `CARGO_TARGET_DIR` на Mac;
+  `ps -Ao pid,%cpu,etime,command | awk '$2>80'` — своих процессов нет.
 - [ ] **Step 6:** коммит `BENCHMARKS.md`: `docs(rmasscan): native-Rust phase 1 results for rmasscan-net`; финальное
   ревью ветки; push и PR — только с согласия пользователя.

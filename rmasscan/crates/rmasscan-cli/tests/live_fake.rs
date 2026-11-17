@@ -5467,6 +5467,91 @@ fn live_fake_tls_banner_end_to_end() {
     assert!(hello_b.payload.starts_with(b"\x16\x03\x01\x01\x1a"));
 }
 
+#[test]
+fn live_fake_incomplete_certificate_record_retains_output_on_fin_rst_and_finish() {
+    let mut stream = tls_stream_of("hello-noext");
+    stream.extend(tls_stream_of("complete-cert-truncated-record"));
+    for ending in [Some(PeerAct::Fin), Some(PeerAct::Rst), None] {
+        let mut on_data = data_acts(&stream);
+        on_data.extend(ending);
+        let mut backend = FakeBackend::new();
+        backend.tcp_peer = Some(TcpPeer::new(vec![(
+            443,
+            PeerScript {
+                on_data,
+                ..PeerScript::default()
+            },
+        )]));
+        let (result, out, log) = cli(
+            &backend,
+            &[
+                "198.51.100.1",
+                "-p443",
+                "--source-port",
+                "40000",
+                "--banners",
+                "--wait",
+                "20",
+                "-oL",
+                "-",
+            ],
+        );
+        result.unwrap();
+        assert!(log.contains("finished: Completed"), "{log}");
+        let lines = list_banners(&out, 443, T1);
+        assert!(
+            lines.iter().any(|l| l.ends_with(", early.test")),
+            "{lines:?}"
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.starts_with("X509 ") && l.len() == 1005),
+            "{lines:?}"
+        );
+    }
+}
+
+/// Every client gets 16 captured certificates and one SSL record. Exercise the
+/// production parser, stack flush and engine result queue together.
+#[test]
+fn live_fake_flushes_many_long_certificate_chains() {
+    let mut stream = tls_stream_of("hello-noext");
+    let certificates = tls_stream_of("two-cert-messages");
+    for _ in 0..8 {
+        stream.extend_from_slice(&certificates);
+    }
+    let mut backend = FakeBackend::new();
+    backend.tcp_peer = Some(TcpPeer::new(vec![(
+        443,
+        PeerScript {
+            on_data: data_acts(&stream),
+            ..PeerScript::default()
+        },
+    )]));
+    let (result, output, log) = cli(
+        &backend,
+        &[
+            "198.51.100.1-198.51.100.16",
+            "-p443",
+            "--source-port",
+            "40000",
+            "--banners",
+            "--wait",
+            "20",
+            "-oL",
+            "-",
+        ],
+    );
+    result.unwrap();
+    assert!(log.contains("finished: Completed"), "{log}");
+    for n in 1..=16 {
+        let lines = list_banners(&output, 443, Ipv4Addr::new(198, 51, 100, n));
+        assert_eq!(lines.len(), 17, "host {n}: {lines:?}");
+        assert_eq!(lines.iter().filter(|line| *line == "X509 YWJj").count(), 16);
+    }
+}
+
 /// Сервер говорит первым ServerHello до нашего hello: совпадение SSL3 отвергнуто закрытым гейтом
 /// (`is_sent_sslhello`), записи `ssl` нет; hello всё равно уходит по таймауту (справка B1.2, B5).
 #[test]

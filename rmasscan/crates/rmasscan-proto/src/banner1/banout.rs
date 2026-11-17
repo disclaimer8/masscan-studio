@@ -13,7 +13,8 @@
 //! записи C, а не куски потока с дырой посередине; неполную запись HEUR сессия в парсер не повторяет
 //! ([`super::session`]).
 
-use rmasscan_core::banner::MAX_BANNER_BYTES;
+use crate::app_id;
+use rmasscan_core::banner::{MAX_BANNER_BYTES, REPEATED_BANNER_RECORD_COST};
 
 use crate::tcp::app::ByteBudget;
 
@@ -28,6 +29,9 @@ struct Rec {
     bytes: Vec<u8>,
     lossy: bool,
     ended: bool,
+    // Monotonic C list placement: the newest tail node follows the head.
+    order: usize,
+    charged: bool,
 }
 
 /// Состояние потокового кодера base64, `struct BannerBase64` (`src/proto-banner1.h:47-51`): сколько байт текущей
@@ -54,7 +58,13 @@ const B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz012
 /// Буферы баннеров одного соединения (`tcb->banout`). Пустой вектор это свежий `banout_init`: пустая голова.
 #[derive(Debug, Default)]
 pub(crate) struct Banout {
+    // Only open records and the embedded head. All operations on this vector
+    // are bounded by the fixed number of application IDs.
     recs: Vec<Rec>,
+    ended: Vec<Rec>,
+    next_order: usize,
+    seen_certs: u8,
+    refused_certs: u8,
 }
 
 /// Ёмкость головы списка: `unsigned char banner[200]` (`src/proto-banout.h:20`). Голова встроена в TCB и не
@@ -75,7 +85,12 @@ impl Banout {
         self.commit_deferred_app(staged, budget, crate::app_id::MC);
     }
 
-    fn commit_deferred_app(&mut self, staged: &mut Banout, budget: &mut ByteBudget, app: u16) {
+    pub(super) fn commit_deferred_app(
+        &mut self,
+        staged: &mut Banout,
+        budget: &mut ByteBudget,
+        app: u16,
+    ) {
         // Переносится только запись `app`; байты любой другой отложенной записи возвращаются в бюджет.
         let mut rec = None;
         for r in std::mem::take(&mut staged.recs) {
@@ -97,8 +112,7 @@ impl Banout {
             && let Some(head) = self.recs.first_mut()
             && head.c_len.saturating_add(rec.c_len) >= HEAD_CAPACITY
         {
-            let moved = std::mem::take(head);
-            self.recs.insert(1, moved);
+            self.move_head();
             at = 1;
         }
         if let Some(target) = self.recs.get_mut(at) {
@@ -108,7 +122,12 @@ impl Banout {
             } else {
                 rec.bytes.len().min(room)
             };
-            budget.give(rec.bytes.len() - got);
+            let unused = rec.bytes.len() - got;
+            budget.give(unused);
+            if target.lossy {
+                budget.refuse(rec.bytes.len().min(room));
+            }
+
             rec.bytes.truncate(got);
             push_bounded(&mut target.bytes, &rec.bytes);
             target.lossy |= rec.lossy || got < rec.c_len;
@@ -130,13 +149,10 @@ impl Banout {
             return;
         };
         let at = self.new_proto(rec.app);
-        if at == 0 && rec.c_len >= HEAD_CAPACITY {
-            self.recs.insert(1, rec);
-            if let Some(head) = self.recs.first_mut() {
-                *head = Rec::default();
-            }
-        } else if let Some(target) = self.recs.get_mut(at) {
-            *target = rec;
+        let order = self.recs[at].order;
+        self.recs[at] = Rec { order, ..rec };
+        if at == 0 && self.recs[at].c_len >= HEAD_CAPACITY {
+            self.move_head();
         }
     }
 
@@ -152,15 +168,28 @@ impl Banout {
         }
         let mut at = match self.recs.iter().position(|r| r.app == app && !r.ended) {
             Some(i) => i,
-            None => self.new_proto(app),
+            None => {
+                let bit = Self::cert_bit(app);
+                let repeat = self.seen_certs & bit != 0;
+                if self.refused_certs & bit != 0
+                    || (repeat && !budget.reserve_record(REPEATED_BANNER_RECORD_COST))
+                {
+                    self.refused_certs |= bit;
+                    budget.refuse(px.len());
+                    return;
+                }
+                self.seen_certs |= bit;
+                let i = self.new_proto(app);
+                self.recs[i].charged = repeat;
+                i
+            }
         };
         if at == 0
             && let Some(head) = self.recs.first_mut()
             && head.c_len.saturating_add(px.len()) >= HEAD_CAPACITY
         {
             // `:269-273`: копия головы встаёт сразу за ней, голова `protocol = 0, length = 0`.
-            let moved = std::mem::take(head);
-            self.recs.insert(1, moved);
+            self.move_head();
             at = 1;
         }
         let Some(rec) = self.recs.get_mut(at) else {
@@ -245,13 +274,35 @@ impl Banout {
     /// `banout_end(banout, app)` (`src/proto-banout.c:163-171`): открытая непустая запись `app` завершается;
     /// следующее дописывание того же приложения откроет новую запись ([`Banout::append`]).
     pub(crate) fn end(&mut self, app: u16) {
-        if let Some(rec) = self
+        self.refused_certs &= !Self::cert_bit(app);
+        if let Some(i) = self
             .recs
-            .iter_mut()
-            .find(|r| r.app == app && !r.ended && r.c_len != 0)
+            .iter()
+            .position(|r| r.app == app && !r.ended && r.c_len != 0)
         {
-            rec.ended = true;
+            if i == 0 {
+                self.recs[i].ended = true;
+            } else {
+                let mut rec = self.recs.remove(i);
+                rec.ended = true;
+                self.ended.push(rec);
+            }
         }
+    }
+
+    fn cert_bit(app: u16) -> u8 {
+        match app {
+            app_id::X509_CERT => 1,
+            app_id::X509_CACERT => 2,
+            _ => 0,
+        }
+    }
+
+    fn move_head(&mut self) {
+        let mut moved = std::mem::take(&mut self.recs[0]);
+        self.next_order += 1;
+        moved.order = self.next_order;
+        self.recs.insert(1, moved);
     }
 
     /// Есть ли `needle` в сохранённых байтах записи `app` (`banout_is_contains`, `src/proto-banout.c:100-128`;
@@ -277,10 +328,12 @@ impl Banout {
                 0
             }
             Some(_) => {
+                self.next_order += 1;
                 self.recs.insert(
                     1,
                     Rec {
                         app,
+                        order: self.next_order,
                         ..Rec::default()
                     },
                 );
@@ -318,8 +371,17 @@ impl Banout {
     /// выдаётся.
     pub(crate) fn flush(&mut self, budget: &mut ByteBudget) -> Vec<(u16, Vec<u8>)> {
         let mut out = Vec::new();
-        for r in std::mem::take(&mut self.recs) {
+        let state = std::mem::take(self);
+        let mut open = state.recs.into_iter();
+        let head = open.next();
+        let mut tail = state.ended;
+        tail.extend(open);
+        tail.sort_unstable_by_key(|r| std::cmp::Reverse(r.order));
+        for r in head.into_iter().chain(tail) {
             budget.give(r.bytes.len());
+            if r.charged {
+                budget.give(REPEATED_BANNER_RECORD_COST);
+            }
             if r.app != 0 && r.c_len != 0 && !r.bytes.is_empty() {
                 out.push((r.app, r.bytes));
             }

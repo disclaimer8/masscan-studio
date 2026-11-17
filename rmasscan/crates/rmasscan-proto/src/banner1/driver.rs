@@ -118,7 +118,7 @@ pub fn tls_stream(
     let mut budget = ByteBudget::new(usize::MAX);
     let mut base64 = Base64Stream::default();
     let mut acts = Vec::new();
-    for seg in segments {
+    {
         let mut cx = ParseCx {
             banout: &mut banout,
             budget: &mut budget,
@@ -130,7 +130,10 @@ pub fn tls_stream(
             starttls: false,
             starttls_rest: Vec::new(),
         };
-        parser.parse(&mut cx, seg);
+        for seg in segments {
+            parser.parse(&mut cx, seg);
+        }
+        parser.flush(&mut cx);
     }
     StreamResult {
         app_proto: Some(crate::app::app_id::SSL3),

@@ -22,7 +22,7 @@ const DIR: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../tests/golden/tls-records"
 );
-const CASES: usize = 39;
+const CASES: usize = 43;
 
 fn read(path: &Path) -> Vec<u8> {
     fs::read(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
@@ -236,6 +236,53 @@ fn tls_golden_matches_c() {
                 c.name
             );
         }
+    }
+}
+
+/// SHA-256 over every nonempty prefix's C whole-stream output. Per prefix:
+/// record count (u32 BE), then application (u16 BE), length (u32 BE) and
+/// payload for each record in C order. Each digest covers 763 oracle calls.
+#[test]
+fn eof_at_each_byte_matches_c_with_and_without_capture() {
+    let input = cases()
+        .into_iter()
+        .find(|c| c.name == "complete-cert-truncated-record")
+        .unwrap()
+        .segments
+        .concat();
+    assert_eq!(input.len(), 763);
+    for (capture, expected) in [
+        (
+            true,
+            "08364c7fcecc2ec111e8a843ad99cf26e6fec14e160cb9b9763a3d9db3c89d68",
+        ),
+        (
+            false,
+            "3d43e557c0a2ad69e097b4eb9f4f408fcb97c8d8f7734f17e42cd0db19c9d93b",
+        ),
+    ] {
+        let mut hash = sha256::Sha256::new();
+        let flags = Flags {
+            cert: capture,
+            ..Flags::default()
+        };
+        for end in 1..=input.len() {
+            let prefix = &input[..end];
+            let whole = run(&flags, &[prefix]).records;
+            let split: Vec<_> = prefix.chunks(1).collect();
+            assert_eq!(
+                run(&flags, &split).records,
+                whole,
+                "prefix {end}, capture {capture}"
+            );
+            hash.update(&(whole.len() as u32).to_be_bytes());
+            for (app, bytes) in whole {
+                hash.update(&app.to_be_bytes());
+                hash.update(&(bytes.len() as u32).to_be_bytes());
+                hash.update(&bytes);
+            }
+        }
+        assert_eq!(hash.finish(), expected);
     }
 }
 

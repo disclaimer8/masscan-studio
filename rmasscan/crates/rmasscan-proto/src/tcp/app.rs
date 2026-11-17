@@ -4,7 +4,6 @@
 //! hello не шлёт никогда, сервер, заговоривший первым, hello не получает, пустой hello оставляет приложение в
 //! `App_SendNext`, где байты сервера подтверждаются, но не разбираются.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::tcb::{App, AppEvent, TcbCtl};
@@ -40,6 +39,16 @@ impl ByteBudget {
     pub(crate) fn refuse(&mut self, n: usize) {
         let lost = u64::try_from(n).unwrap_or(u64::MAX);
         self.dropped = self.dropped.saturating_add(lost);
+    }
+
+    /// Atomic metadata reservation. Loss counters count refused output bytes,
+    /// so a failed reservation leaves both the balance and counters untouched.
+    pub(crate) fn reserve_record(&mut self, bytes: usize) -> bool {
+        if self.left < bytes {
+            return false;
+        }
+        self.left -= bytes;
+        true
     }
 
     /// Вернуть `n` байт (сброс баннеров).
@@ -135,32 +144,6 @@ pub(crate) enum AppState {
     SendNext,
 }
 
-/// Hello таблицы по портам: один общий буфер на порт, пока сессии отдают те же байты (у C поток один на порт и
-/// `TCP__static` сегмент указывает на его байты, `src/stack-tcp-app.c:187`). Порт с другими байтами получает новый
-/// буфер; записей не больше, чем портов.
-#[derive(Debug, Default)]
-pub(crate) struct Hellos {
-    by_port: HashMap<u16, Arc<[u8]>>,
-}
-
-impl Hellos {
-    fn shared(&mut self, port: u16, bytes: &[u8]) -> Arc<[u8]> {
-        match self.by_port.get(&port) {
-            Some(buf) if **buf == *bytes => Arc::clone(buf),
-            _ => {
-                let buf: Arc<[u8]> = Arc::from(bytes);
-                self.by_port.insert(port, Arc::clone(&buf));
-                buf
-            }
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn get(&self, port: u16) -> Option<&Arc<[u8]>> {
-        self.by_port.get(&port)
-    }
-}
-
 /// `application_event` для одного события одного соединения: состояние приложения и сессия соединения, бюджет и
 /// hello таблицы. Наборы записей `banner_flush` из `APP_CLOSE` дописываются в `flushed` по одному на сброс (пустой
 /// сброс набора не даёт); записи из них делает таблица.
@@ -168,8 +151,6 @@ pub(crate) struct AppLayer<'a> {
     pub(crate) state: &'a mut AppState,
     pub(crate) session: &'a mut dyn Session,
     pub(crate) budget: &'a mut ByteBudget,
-    pub(crate) hellos: &'a mut Hellos,
-    pub(crate) remote_port: u16,
     pub(crate) flushed: &'a mut Vec<Vec<(u16, Vec<u8>)>>,
 }
 
@@ -201,14 +182,13 @@ impl AppLayer<'_> {
         if small {
             ctl.set_small_window();
         }
-        if let Some(hello) = hello.as_deref()
+        if let Some(hello) = hello
             && !hello.is_empty()
         {
-            let buf = self.hellos.shared(self.remote_port, hello);
-            ctl.send_shared(&buf);
-        }
-        if close_after {
-            ctl.close();
+            ctl.send_shared(&hello);
+            if close_after {
+                ctl.close();
+            }
         }
         *self.state = AppState::SendNext;
     }
@@ -294,19 +274,5 @@ mod tests {
         let mut z = ByteBudget::new(0);
         assert_eq!(z.take(usize::MAX), 0);
         assert_eq!(z.dropped(), u64::try_from(usize::MAX).unwrap_or(u64::MAX));
-    }
-
-    #[test]
-    fn hellos_share_one_buffer_per_port_while_bytes_match() {
-        let mut h = Hellos::default();
-        let a = h.shared(80, b"GET / HTTP/1.0\r\n\r\n");
-        let b = h.shared(80, b"GET / HTTP/1.0\r\n\r\n");
-        assert!(Arc::ptr_eq(&a, &b));
-        let c = h.shared(8080, b"GET / HTTP/1.0\r\n\r\n");
-        assert!(!Arc::ptr_eq(&a, &c), "another port, another buffer");
-        let d = h.shared(80, b"other");
-        assert_eq!(&*d, b"other");
-        assert!(!Arc::ptr_eq(&a, &d));
-        assert_eq!(h.by_port.len(), 2);
     }
 }

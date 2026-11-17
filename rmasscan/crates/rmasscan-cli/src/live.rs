@@ -950,9 +950,9 @@ fn tcp_stack_options(
     }
 }
 
-/// Сколько записей баннеров даёт одно соединение не больше: одна запись на тип приложения (banout, справка B3), больше
-/// всех у HTTP: `http`, `http.server`, `title` и `html` (`src/proto-http.c:487-691`).
-const RECORDS_PER_CONNECTION: usize = 4;
+/// One uncharged record per application ID, including the first certificate of
+/// each kind. Further certificate records reserve metadata from the table budget.
+const DISTINCT_BANNER_APPS: usize = rmasscan_proto::app_id::ERROR as usize;
 
 /// Очередь результатов при `--banners` (перенос ревью задачи 4, N3) поверх обычного запаса `base` (записи и байты, как
 /// без баннеров). Наборы баннеров посреди скана (тик таблицы, FIN, RST) кладутся без ожидания (Р7: приём не встаёт),
@@ -961,9 +961,15 @@ const RECORDS_PER_CONNECTION: usize = 4;
 /// соединений уже нет. Поэтому сверх запаса очередь вмещает такой всплеск целиком: по записям наибольший набор каждого
 /// соединения таблицы, по байтам весь бюджет баннеров таблицы ([`BANNER_BYTE_BUDGET`]). Это пределы, а не выделение.
 fn banner_queue(base: (usize, usize), table_capacity: usize) -> (usize, usize) {
+    let repeat_slots = if table_capacity == 0 {
+        0
+    } else {
+        BANNER_BYTE_BUDGET / rmasscan_core::banner::REPEATED_BANNER_RECORD_COST
+    };
     (
         base.0
-            .saturating_add(table_capacity.saturating_mul(RECORDS_PER_CONNECTION)),
+            .saturating_add(table_capacity.saturating_mul(DISTINCT_BANNER_APPS))
+            .saturating_add(repeat_slots),
         base.1.saturating_add(BANNER_BYTE_BUDGET),
     )
 }
@@ -1890,7 +1896,11 @@ mod tests {
         let base = (o.result_capacity, o.result_byte_capacity);
         assert_eq!(base, (4096, rmasscan_engine::DEFAULT_RESULT_BYTE_CAPACITY));
         let (entries, bytes) = banner_queue(base, 3400);
-        assert_eq!(entries, 4096 + 3400 * RECORDS_PER_CONNECTION);
+        assert_eq!(
+            entries,
+            4096 + 3400 * DISTINCT_BANNER_APPS
+                + BANNER_BYTE_BUDGET / rmasscan_core::banner::REPEATED_BANNER_RECORD_COST
+        );
         assert_eq!(
             bytes,
             rmasscan_engine::DEFAULT_RESULT_BYTE_CAPACITY + BANNER_BYTE_BUDGET

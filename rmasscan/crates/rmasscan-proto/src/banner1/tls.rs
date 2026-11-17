@@ -8,6 +8,7 @@
 
 use crate::app::app_id;
 
+use super::banout::Banout;
 use super::session::{ParseCx, Parser};
 use super::x509::X509;
 
@@ -83,11 +84,9 @@ struct Certs {
     cert_remaining: u32,
     count: u8,
     x509: X509,
-    /// Тело рукопожатия Certificate в пределах текущей TLS-записи: захват и имена обрабатываются на границе
-    /// записи, как у C на целом потоке. Без этого порядок записей `ssl`/`X509` зависел бы от нарезки на
-    /// сегменты (у C зависит от нарезки на вызовы; эталон Р13 — целый поток, справка §F E2.10). Не больше
-    /// одной записи: поле длины u16.
-    record_buf: Vec<u8>,
+    /// C appends the complete DER chunk to the capture before emitting its parsed
+    /// names. Stage only names until the certificate, handshake, record or input ends.
+    names: Banout,
 }
 
 /// Парсер TLS одного соединения (`ssl_parse_record` и под-парсеры).
@@ -107,6 +106,10 @@ pub(crate) struct Tls {
 impl Parser for Tls {
     fn parse(&mut self, cx: &mut ParseCx<'_>, px: &[u8]) {
         self.record(cx, px);
+    }
+
+    fn flush(&mut self, cx: &mut ParseCx<'_>) {
+        self.commit_names(cx);
     }
 }
 
@@ -160,7 +163,7 @@ impl Tls {
                     self.rec_remaining -= len as u32;
                     i = i.wrapping_add(len).wrapping_sub(1);
                     if self.rec_remaining == 0 {
-                        self.cert_record_end(cx);
+                        self.commit_names(cx);
                         self.step = RecStep::Start;
                     }
                 }
@@ -208,12 +211,13 @@ impl Tls {
                     let chunk = &px[i - 1..i - 1 + len];
                     match self.hs_type {
                         2 => self.server_hello(cx, chunk),
-                        11 => self.certs.record_buf.extend_from_slice(chunk),
+                        11 => self.server_cert(cx, chunk),
                         _ => {}
                     }
                     self.hs_remaining -= len as u32;
                     i = i.wrapping_add(len).wrapping_sub(1);
                     if self.hs_remaining == 0 {
+                        self.commit_names(cx);
                         self.hs_step = HsStep::Start;
                     }
                 }
@@ -372,15 +376,9 @@ impl Tls {
         }
     }
 
-    /// Граница TLS-записи: накопленное тело Certificate разбирается одним куском (см. `record_buf`).
-    fn cert_record_end(&mut self, cx: &mut ParseCx<'_>) {
-        if self.certs.record_buf.is_empty() {
-            return;
-        }
-        let buf = std::mem::take(&mut self.certs.record_buf);
-        self.server_cert(cx, &buf);
-        self.certs.record_buf = buf;
-        self.certs.record_buf.clear();
+    fn commit_names(&mut self, cx: &mut ParseCx<'_>) {
+        cx.banout
+            .commit_deferred_app(&mut self.certs.names, cx.budget, app_id::SSL3);
     }
 
     /// `parse_server_cert` (`:370-495`): трёхбайтные длины; первый сертификат в `X509`, остальные в
@@ -453,7 +451,13 @@ impl Tls {
                     if cx.tls_flags.capture_cert {
                         cx.append_base64(proto, &px[start..start + len]);
                     }
-                    self.certs.x509.feed(cx, &px[start..start + len]);
+                    if cx.tls_flags.capture_cert {
+                        std::mem::swap(cx.banout, &mut c.names);
+                        c.x509.feed(cx, &px[start..start + len]);
+                        std::mem::swap(cx.banout, &mut c.names);
+                    } else {
+                        c.x509.feed(cx, &px[start..start + len]);
+                    }
                     let c = &mut self.certs;
                     c.remaining -= len as u32;
                     c.cert_remaining -= len as u32;
@@ -465,6 +469,8 @@ impl Tls {
                     }
                     if c.cert_remaining == 0 {
                         if cx.tls_flags.capture_cert {
+                            cx.banout
+                                .commit_deferred_app(&mut c.names, cx.budget, app_id::SSL3);
                             cx.finalize_base64(proto);
                             cx.end_banner(proto);
                         }
@@ -561,6 +567,7 @@ impl Tls {
                     self.hs_remaining -= len as u32;
                     i = i.wrapping_add(len).wrapping_sub(1);
                     if self.hs_remaining == 0 {
+                        self.commit_names(cx);
                         self.hs_step = HsStep::Unknown;
                     }
                 }

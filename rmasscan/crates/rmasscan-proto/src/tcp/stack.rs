@@ -197,8 +197,8 @@ mod tests {
     /// `APP` столько, сколько дал бюджет.
     #[derive(Clone, Default)]
     struct Script {
-        hello: Option<Vec<u8>>,
-        next: Option<Vec<u8>>,
+        hello: Option<Arc<[u8]>>,
+        next: Option<Arc<[u8]>>,
         close_after: bool,
         small: bool,
         replies: Vec<(usize, Vec<SessionAction>)>,
@@ -208,7 +208,7 @@ mod tests {
     impl Script {
         fn hello(h: &[u8]) -> Script {
             Script {
-                hello: Some(h.to_vec()),
+                hello: Some(Arc::from(h)),
                 ..Script::default()
             }
         }
@@ -220,8 +220,8 @@ mod tests {
         /// Поток TLS для реконнекта: hello первого соединения, `next`, FIN за hello.
         fn tls_pair() -> Script {
             Script {
-                hello: Some(b"HELLO-A".to_vec()),
-                next: Some(b"HELLO-B".to_vec()),
+                hello: Some(Arc::from(&b"HELLO-A"[..])),
+                next: Some(Arc::from(&b"HELLO-B"[..])),
                 close_after: true,
                 ..Script::default()
             }
@@ -274,7 +274,7 @@ mod tests {
         fn new_reconnect_session(&self, _remote_port: u16) -> Option<Box<dyn Session>> {
             Some(Box::new(Stub {
                 desc: StreamDesc {
-                    hello: self.next.as_deref().map(Arc::from),
+                    hello: self.next.clone(),
                     close_after_hello: false,
                     next: None,
                     small_window: self.small,
@@ -290,9 +290,9 @@ mod tests {
         fn new_session(&self, _remote_port: u16) -> Box<dyn Session> {
             Box::new(Stub {
                 desc: StreamDesc {
-                    hello: self.hello.as_deref().map(Arc::from),
+                    hello: self.hello.clone(),
                     close_after_hello: self.close_after,
-                    next: self.next.as_deref().map(Arc::from),
+                    next: self.next.clone(),
                     small_window: self.small,
                     is_tls: self.next.is_some(),
                     sets_ssl_hello: self.next.is_some(),
@@ -1260,7 +1260,9 @@ mod tests {
     #[test]
     fn hello_buffer_shared_across_connections() {
         let hello: Vec<u8> = (0..3000u32).map(|i| (i % 251) as u8).collect();
-        let mut st = stack(&Script::hello(&hello));
+        let script = Script::hello(&hello);
+        let shared = script.hello.as_ref().expect("hello");
+        let mut st = stack(&script);
         for n in 1..=3 {
             synack(&mut st, T0, key(n));
         }
@@ -1269,19 +1271,15 @@ mod tests {
         for s in &out.segments {
             assert_eq!(s.payload, hello[..1400]);
         }
-        let shared = st.table.hellos().get(80).cloned().expect("port 80 hello");
-        assert_eq!(*shared, *hello);
         for n in 1..=3 {
             let tcb = st.table.tcb(&key(n)).expect("live");
             let spans: Vec<(usize, bool)> = tcb.queue_spans().iter().map(|s| (s.1, s.2)).collect();
             assert_eq!(spans, [(1400, false), (1400, false), (200, false)]);
             assert!(
-                tcb.queue_buffers().iter().all(|b| Arc::ptr_eq(b, &shared)),
+                tcb.queue_buffers().iter().all(|b| Arc::ptr_eq(b, shared)),
                 "conn {n}"
             );
         }
-        // Таблица и 3 x 3 сегмента, копий нет.
-        assert_eq!(Arc::strong_count(&shared), 1 + 1 + 9);
     }
 
     /// Финальное ревью, M1: посылка общего буфера (KEX SSH) встаёт в очередь каждого соединения без копии, а на провод
@@ -1398,8 +1396,7 @@ mod tests {
 
     /// Нижняя граница памяти соединения: запись карты с TCB, запись таймера и сама сессия баннера (её `Box` в
     /// соединении указывает на `Banner1Session`). Значения скана сессия не копирует, а держит одним `Arc` (M4 ревью
-    /// задачи 8): сессия не больше 80 байт (было 80 с копиями hello, `--capture html` и выбора парсера; в 4c
-    /// добавились состояние кодера base64 и `Arc` дескриптора потока, по одному на соединение).
+    /// задачи 8). Буферы повторных записей выделяют память только после приёма сертификата.
     #[test]
     fn memory_floor_counts_table_entry_tcb_and_session() {
         let floor = connection_memory_floor();
@@ -1412,7 +1409,7 @@ mod tests {
             floor >= size_of::<crate::tcp::tcb::Tcb>() + session,
             "{floor}"
         );
-        assert!((48..=80).contains(&session), "{session}");
+        assert!((48..=120).contains(&session), "{session}");
         assert!(floor < 1024, "{floor}");
     }
 
@@ -1788,5 +1785,185 @@ mod tests {
             ConnAddrs::V4 { remote, .. } => IpAddr::V4(Ipv4Addr::from(remote)),
             ConnAddrs::V6 { remote, .. } => IpAddr::V6(Ipv6Addr::from(remote)),
         }
+    }
+}
+
+#[cfg(test)]
+mod certificate_connections {
+    use super::*;
+    use crate::TcpBannerSettings;
+    use crate::banner1::session::BannerConfig;
+    use rmasscan_core::stack::{ConnAddrs, SourceRanges};
+    use std::collections::HashSet;
+
+    fn k(remote: u32, local_port: u16, remote_port: u16) -> ConnKey {
+        ConnKey {
+            addrs: ConnAddrs::V4 {
+                local: 0x0a000001,
+                remote,
+            },
+            local_port,
+            remote_port,
+        }
+    }
+    fn new(s: &TcpBannerSettings) -> TcpBannerStack {
+        new_stack(
+            Arc::new(BannerConfig::new(s)),
+            3000,
+            TableParams {
+                seed: 42,
+                capacity: 1024,
+                banner_byte_budget: 0,
+                source: SourceRanges {
+                    ports: (40000, 40016),
+                    ipv4: Some((0x0a000001, 0x0a000001)),
+                    ipv6: None,
+                },
+            },
+        )
+    }
+    fn synack(st: &mut TcpBannerStack, key: ConnKey, now: u64) {
+        st.on_segment(
+            now,
+            &SegmentIn {
+                key,
+                seq: 100,
+                ack: 1000,
+                flags: 0x12,
+                ttl: 64,
+                payload: &[],
+            },
+            &mut StackOutput::default(),
+        );
+    }
+    fn timeout(st: &mut TcpBannerStack, key: ConnKey, now: u64) -> StackOutput {
+        let mut out = StackOutput::default();
+        st.table.event(
+            &key,
+            super::super::tcb::What::Timeout,
+            &[],
+            101,
+            1000,
+            now,
+            &mut out,
+        );
+        out
+    }
+
+    #[test]
+    fn shared_first_hello_survives_reconnect_hello() {
+        let mut s = TcpBannerSettings::default();
+        s.hello_strings.push((443, vec![b'x'; 8192]));
+        let mut st = new(&s);
+        let mut first_buffers = HashSet::new();
+        for n in 1..=8 {
+            let first = k(0x0a000100 + n, 40000, 443);
+            let second = k(0x0a000100 + n, 40001, 443);
+            let base = u64::from(n - 1) * 3_000_000;
+            synack(&mut st, first, base);
+            let mut out = StackOutput::default();
+            st.on_tick(base + 1_000_000, &mut out);
+            let syn = out
+                .segments
+                .iter()
+                .find(|s| s.key == second && s.flags == 2)
+                .unwrap();
+            st.on_segment(
+                base + 1_000_000,
+                &SegmentIn {
+                    key: second,
+                    seq: 100,
+                    ack: syn.seq.wrapping_add(1),
+                    flags: 0x12,
+                    ttl: 64,
+                    payload: &[],
+                },
+                &mut StackOutput::default(),
+            );
+            st.on_tick(base + 2_000_000, &mut StackOutput::default());
+            st.on_tick(base + 3_000_000, &mut StackOutput::default());
+            let q = st.table.tcb(&first).unwrap().queue_buffers();
+            first_buffers.insert(q[0].as_ptr() as usize);
+        }
+        assert_eq!(
+            first_buffers.len(),
+            1,
+            "same scan/port/hello must share the immutable buffer across reconnect interleaving"
+        );
+    }
+
+    #[test]
+    fn certificate_records_respect_shared_budget_and_return_it_on_finish() {
+        let one = [22, 3, 3, 0, 11, 11, 0, 0, 7, 0, 0, 4, 0, 0, 1, 97];
+        let stream = one.repeat(2000);
+        for capture in [false, true] {
+            for limit in [0, 267] {
+                let mut settings = TcpBannerSettings::default();
+                settings.tls.capture_cert = capture;
+                let mut st = new_stack(
+                    Arc::new(BannerConfig::new(&settings)),
+                    30,
+                    TableParams {
+                        seed: 1,
+                        capacity: 200,
+                        banner_byte_budget: limit,
+                        source: SourceRanges::default(),
+                    },
+                );
+                let mut observed = StackOutput::default();
+                for n in 0..200 {
+                    synack(&mut st, k(0xc0000200 + n, 40000, 443), 0);
+                }
+                st.on_tick(3_000_000, &mut observed);
+                let hello = observed
+                    .segments
+                    .iter()
+                    .find(|s| !s.payload.is_empty())
+                    .unwrap();
+                let ack = hello.seq.wrapping_add(hello.payload.len() as u32);
+                for n in 0..200 {
+                    let key = k(0xc0000200 + n, 40000, 443);
+                    let mut seq = 101;
+                    for chunk in stream.chunks(1459) {
+                        let mut out = StackOutput::default();
+                        st.on_segment(
+                            3_000_001,
+                            &SegmentIn {
+                                key,
+                                seq,
+                                ack,
+                                flags: 0x18,
+                                ttl: 64,
+                                payload: chunk,
+                            },
+                            &mut out,
+                        );
+                        seq += chunk.len() as u32;
+                    }
+                }
+                let mut out = StackOutput::default();
+                assert!(!st.finish(200, &mut out));
+                let kept: usize = out.banners.iter().flatten().map(|r| r.payload.len()).sum();
+                let total = if capture { 200 * 2000 * 4 } else { 0 };
+                assert_eq!(st.stats().banner_bytes_dropped, (total - kept) as u64);
+                assert!(kept <= limit);
+                assert_eq!(st.table.budget().left(), limit);
+                assert_eq!(st.stats().tcbs_live, 0);
+            }
+        }
+    }
+
+    #[test]
+    fn empty_tls_hello_sends_no_fin_like_c() {
+        let mut s = TcpBannerSettings::default();
+        s.hello_strings.push((443, Vec::new()));
+        let mut st = new(&s);
+        let key = k(0x0a000123, 40000, 443);
+        synack(&mut st, key, 0);
+        let out = timeout(&mut st, key, 2_000_000);
+        assert!(
+            out.segments.is_empty(),
+            "C only closes inside the non-empty hello branch"
+        );
     }
 }

@@ -1212,7 +1212,15 @@ fn banners_warning_once_for_os_owned_source() {
         let log = run(&with(&udp, &[flag]));
         assert!(!log.contains("[-] warning"), "{flag}: {log}");
         assert!(!log.contains("[-] banners:"), "{flag}: {log}");
-        assert_eq!(bracketed(&log), plain, "{flag}: stderr as in 4a: {log}");
+        let mut expected = plain.clone();
+        if flag == "--banners" {
+            let port = expected
+                .iter_mut()
+                .find(|line| line.as_str() == "[+] source-port = 52345 (time)")
+                .expect("single default UDP source port");
+            *port = "[+] source-port = 52345-52361 (time)".to_string();
+        }
+        assert_eq!(bracketed(&log), expected, "{flag}: {log}");
     }
     let log = run(&["198.51.100.1", "-pU:53,T:80", "--wait", "1", "--banners"]);
     assert_eq!(log.matches("[-] warning: --banners").count(), 1, "{log}");

@@ -314,11 +314,11 @@ commented out (`:944-1022`). Version and serial integers are accumulated into `u
 - Any other event in SYN_SENT logs an UNHANDLED EVENT `ERRMSGip` (also deduplicated once).
 
 ### D3. Records from the second connection
-The second connection is an ordinary TCB: its banners flush as its own connection-banner set, its `open`
-status was already written by the SYN-spew path's first SYN-ACK. Its banner records carry the TTL logic of 4b
-(task 7 of 4b: TTL of the SYN-ACK that created the TCB); the placeholder `ttl=255` is overwritten by the
-normal create-on-SYNACK fields in C when the reply is processed (`stack_incoming_tcp` create path, TCP
-reference A3) — the lab verifier in task 12 confirms the record TTL against the oracle.
+The reconnect has its own connection-banner set. Its SYN-ACK can report a second open
+status because the local source port differs. C initializes the reconnect TCB with TTL
+255 in `_do_reconnect`. When its SYN-ACK arrives, `tcpcon_create_tcb` returns the existing
+TCB unchanged, so records from that connection retain TTL 255.
+
 
 ## E. Options and modes
 
@@ -409,9 +409,10 @@ reference A3) — the lab verifier in task 12 confirms the record TTL against th
   before feeding the same chunk to X.509, and chunks are bounded by the segment, so when the certificate
   record is the banout head and crosses the 200-byte head move while the first name is still ahead in the
   same chunk, C's flush order of `ssl` and `X509` records flips between whole and bytewise runs (task 4 case
-  `cert-early-subject`). Р13 golden = whole-stream order; rmasscan buffers each record's Certificate body and
-  processes it at the record boundary (record boundaries are a property of the stream, not of segmentation),
-  giving the whole-stream order in every split. Record contents are identical either way.
+  `cert-early-subject`). Р13 uses the whole-stream order. rmasscan streams the DER bytes into both decoders.
+  Captured names share the table budget and join the SSL record at the certificate, handshake, record,
+  or EOF boundary, before base64 padding at a complete certificate. An incomplete certificate emits
+  only complete base64 groups. Later handshakes see the committed names in their original order.
 
 ### F3. E3 — kept quirks (deterministic, reproduced)
 - SSLv3 ServerHello emits `vuln "SSL[v3] "` in every mode (B3 step 1).

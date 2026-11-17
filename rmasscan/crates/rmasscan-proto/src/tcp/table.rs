@@ -20,7 +20,7 @@ use rmasscan_core::banner::BannerRecord;
 use rmasscan_core::cookie::{syn_cookie_ipv4, syn_cookie_ipv6};
 use rmasscan_core::stack::{ConnAddrs, ConnKey, SourceRanges, StackOutput, StackStats};
 
-use super::app::{AppLayer, AppState, ByteBudget, Hellos, Session, Sessions};
+use super::app::{AppLayer, AppState, ByteBudget, Session, Sessions};
 use super::tcb::{Tcb, TcbResult, What, incoming};
 
 const SEC: u64 = 1_000_000;
@@ -46,7 +46,6 @@ pub(crate) struct Table {
     lifetime_secs: u32,
     capacity: usize,
     budget: ByteBudget,
-    hellos: Hellos,
     next_id: u64,
     created: u64,
     full: u64,
@@ -71,7 +70,6 @@ impl Table {
             lifetime_secs,
             capacity,
             budget: ByteBudget::new(banner_byte_budget),
-            hellos: Hellos::default(),
             next_id: 0,
             created: 0,
             full: 0,
@@ -227,8 +225,6 @@ impl Table {
                 state: &mut conn.app,
                 session: conn.session.as_mut(),
                 budget: &mut self.budget,
-                hellos: &mut self.hellos,
-                remote_port: key.remote_port,
                 flushed: &mut flushed,
             };
             incoming(
@@ -361,11 +357,6 @@ impl Table {
     #[cfg(test)]
     pub(crate) fn budget(&self) -> ByteBudget {
         self.budget
-    }
-
-    #[cfg(test)]
-    pub(crate) fn hellos(&self) -> &Hellos {
-        &self.hellos
     }
 
     /// Выделено под соединения: место в карте и записи таймеров.

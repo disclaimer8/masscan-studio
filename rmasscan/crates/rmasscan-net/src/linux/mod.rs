@@ -5,6 +5,7 @@
 //! Таблица маршрутов (rtnetlink) и интерфейсы (`if_nameindex` + ioctl) для
 //! обнаружения: модуль `route`.
 
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use rmasscan_core::packet::LinkType;

@@ -258,9 +258,13 @@ impl HelloTable {
     }
 
     /// Поток порта: `--hello-string` заменяет в потоке порта только hello и его длину, флаги и `next`
-    /// остаются от потока (`src/stack-tcp-core.c:595-616`, E3.5 справки TCP).
+    /// остаются от потока (`src/stack-tcp-core.c:595-616`, E3.5 справки TCP). Малое окно режима
+    /// heartbleed — проверка режима скана в SendFirst у C, а не потока (`banner_is_heartbleed`,
+    /// `src/stack-tcp-app.c:165-170`): бит стоит на каждом дескрипторе, включая свой hello на 65535,
+    /// куда цикл всех портов поток TLS не ставит.
     pub(crate) fn stream(&self, port: u16) -> StreamDesc {
         let mut desc = self.base_stream(port);
+        desc.small_window = self.tls_small_window;
         if let Some(h) = self.strings.get(&port) {
             desc.hello = Some(Arc::clone(h));
             // Копия потока это не `banner_ssl`: кладж SendFirst по указателю её не узнаёт (справка §A1).
@@ -481,6 +485,29 @@ mod tests {
             desc.next.as_deref(),
             Some(crate::banner1::tls_hello::tls_hello(TlsHelloKind::Tls13, 0).as_slice())
         );
+    }
+
+    /// Малое окно режима heartbleed стоит и на своём hello порта 65535: у C это проверка режима скана в
+    /// SendFirst (`banner_is_heartbleed`, `src/stack-tcp-app.c:165-170`), а не потока, и цикл всех портов
+    /// порт 65535 пропускает.
+    #[test]
+    fn heartbleed_custom_hello_port_65535_uses_small_window() {
+        let mut tls = TlsSettings::new(1_700_000_000);
+        tls.heartbleed = true;
+        let t = table(&TcpBannerSettings {
+            tls,
+            hello_strings: vec![(u16::MAX, b"custom".to_vec())],
+            ..TcpBannerSettings::default()
+        });
+        let desc = t.stream(u16::MAX);
+        assert_eq!(desc.hello.as_deref(), Some(&b"custom"[..]));
+        assert!(desc.small_window && !desc.is_tls && !desc.sets_ssl_hello);
+        // Без режима тот же дескриптор малого окна не несёт.
+        let t = table(&TcpBannerSettings {
+            hello_strings: vec![(u16::MAX, b"custom".to_vec())],
+            ..TcpBannerSettings::default()
+        });
+        assert!(!t.stream(u16::MAX).small_window);
     }
 
     /// Режим heartbleed: поток TLS на всех портах с hello режима и малым окном; второе соединение — статичный

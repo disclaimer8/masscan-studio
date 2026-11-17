@@ -5,7 +5,8 @@
 > коммита → замер (если задача о скорости).
 
 **Goal:** `rmasscan-net` пишется идиоматичным Rust и становится быстрее на горячем пути, каждое ускорение подтверждено
-замером; поведение не меняется, кроме трёх решённых пользователем изменений P1–P3 и удаления тестового спайка BPF.
+замером; поведение не меняется, кроме решённых пользователем изменений P1–P3, P5 (буфер приёма RX-сокета Linux,
+задача 2b) и удаления тестового спайка BPF.
 
 **Architecture:** сначала страховка (раскладка ABI, флаги сокетов, точные тексты ошибок, конкурентный тест счётчиков,
 микробенч адаптера, стенд и калибровка шума), затем правки, которые она охраняет: счётчики, переносимый разбор, общие
@@ -36,7 +37,8 @@ Windows; P1–P3 последними, у каждой своя ячейка с�
 
 - **Файлы.** Меняются только `rmasscan/crates/rmasscan-net/**` (включая `examples/`) и документы
   `rmasscan/README.md`, `rmasscan/BENCHMARKS.md`, `rmasscan/docs/macos-feth-lab.md`, `rmasscan/docs/rust-lab.md`,
-  `rmasscan/docs/windows-wire-lab.md`, `docs/experiments/2026-10-25-rmasscan-windows-sendqueue-acceptance.md`.
+  `rmasscan/docs/windows-wire-lab.md`, `docs/experiments/2026-10-25-rmasscan-windows-sendqueue-acceptance.md`;
+  задача 2b, кроме того, вписывает P5 в спеку и в этот план.
   `rmasscan-engine`, `-cli`, `-lab`, `-proto`, `-core` и `studio/` не меняются ни на байт: 4c меняет engine, cli, lab и
   proto на `feat/rmasscan-banners-4c`.
 - **Зависимости.** Новых нет, фич `windows-sys` не прибавляется, `Cargo.lock` и `studio/Cargo.lock` не меняются
@@ -44,7 +46,7 @@ Windows; P1–P3 последними, у каждой своя ячейка с�
 - **Публичный API заморожен.** Ни одна существующая `pub`-сигнатура не меняется; допустимы только новые элементы.
   `TxMode` и `NetStats` — исчерпывающие `pub`-типы: ни вариантов, ни полей не добавлять. Внутренние (`pub(crate)`)
   швы и типы меняются свободно.
-- **Поведение байт в байт вне P1–P3:** кадры на проводе и их порядок, чтение кадров, счётчики `NetStats`, семантика
+- **Поведение байт в байт вне P1–P3 и P5:** кадры на проводе и их порядок, чтение кадров, счётчики `NetStats`, семантика
   ОС (флаги сокетов, порядок вызовов, повторы EINTR/EAGAIN), тексты ошибок, результаты разбора. Тексты не меняются
   нигде, даже там, где их сейчас никто не сверяет.
 - **Тексты errno.** `errno_msg` печатает номер таблицей ОС хоста (`io::Error::from_raw_os_error`): номер Linux 11 на
@@ -472,6 +474,62 @@ RMASSCAN_LAB_IP=10.200.0.100 RMASSCAN_LAB_MAC=02:aa:00:00:00:01 RMASSCAN_LAB_PEE
 - [ ] **Step 5: замер.** Микробенч задачи 1 до/после (Mac, хост) — строка Mac «ранжирование, не ворота»; стенд —
   сессия по протоколу (`U-TX`: pps и CPU TX на кадр; `U-RX`: CPU RX на кадр при `R_RX`), матрица; строка в
   `BENCHMARKS.md`, коммит `docs(rmasscan): …` этой строки.
+
+### Задача 2b: P5 — буфер приёма RX-сокета Linux (решение пользователя 2026-11-16)
+
+Решение пользователя 2026-11-16 (в ответ на вопрос о буфере приёма после диагноза задачи 1): исправить в фазе 1,
+объявленным изменением поведения, как P1–P3. Диагноз (`BENCHMARKS.md`, «U-RX: не измеряется на этом стенде»): RX-сокет
+AF_PACKET живёт с буфером приёма по умолчанию (`rmem_default`, 212 992 байта на хосте стенда ≈ 190 кадров RST ≈ 2 мс
+при 100 000 ответов в секунду); паузы потока RX вне `recv` по 4–14 мс его переполняют, а движок считает любую потерю
+ядра фатальной (`RxLoss`), поэтому сканы с 25 000 ответов в секунду и больше обрываются за секунды. C принимает через
+libpcap (кольцевой буфер в мегабайты по умолчанию). Правило движка «остановка на первой потере» не меняется (движок —
+фаза 2 и 4c). Задача идёт сразу после задачи 2; калибровка `U-RX` v3 на её коммите — база RX-доказательства задачи 13.
+
+Проверяет: `L-gate` (код только Linux, RED через `l_red`), Mac и `W-gate` (остальное не задето); стенд: дымовой
+прогон, калибровка `U-RX` v3, матрица и `--suite rust`.
+
+**Files:**
+- Create: `src/linux/socket_tests.rs` (помощник на обычном сокете и шов запасного вызова)
+- Modify: `src/linux/socket.rs` (открытие RX-сокета), `tests/linux_io.rs` (лабораторный тест под привилегиями),
+  `rmasscan/README.md` (строка в «Отличиях от masscan»), `rmasscan/BENCHMARKS.md` (`U-RX` становится измеримой),
+  спека `docs/superpowers/specs/2026-11-16-rmasscan-native-rust-design.md` (P5 в «Решениях пользователя») и этот план
+  (задача 2b, P5 в «Goal» и «Global Constraints»)
+
+**Поведение (точно):**
+- Только RX-сокет (тот, что получает `PACKET_IGNORE_OUTGOING`), сразу после `socket()` и до `bind`, просит буфер
+  приёма `RX_SOCKET_BUFFER: c_int = 4 << 20` (4 MiB): сначала `setsockopt(SOL_SOCKET, SO_RCVBUFFORCE, 4 MiB)` (нужен
+  CAP_NET_ADMIN, снимает предел `rmem_max`), при отказе с `EPERM` — `setsockopt(SOL_SOCKET, SO_RCVBUF, 4 MiB)` (ядро
+  ограничивает его `2 · rmem_max`). Любой отказ этих вызовов игнорируется: открытие никогда не падает из-за буфера,
+  как и из-за `PACKET_IGNORE_OUTGOING`.
+- TX-сокет, тексты ошибок, `NetStats`, публичный API, все прочие системные вызовы и их порядок не меняются.
+- `unsafe`: нового блока в рабочем коде нет — один приватный помощник
+  `fn set_int_opt(fd: BorrowedFd<'_>, level: c_int, name: c_int, value: c_int) -> Result<(), Errno>` с единственным
+  блоком `setsockopt`, им же ставится `PACKET_IGNORE_OUTGOING`; `unsafe_count` остаётся 199.
+
+**Interfaces:**
+- Produces (приватно в `linux::socket`): `RX_SOCKET_BUFFER`, `set_int_opt` и шов
+  `fn request_rx_buffer(set: impl FnMut(c_int, c_int) -> Result<(), Errno>) -> Result<(), Errno>` (`set(name, value)`
+  это `setsockopt(SOL_SOCKET, name, value)`; итог последнего вызова, открытие его игнорирует).
+
+- [ ] **Step 1: тесты.** `src/linux/socket_tests.rs`: `set_int_opt` ставит `SO_RCVBUF` обычному сокету
+  `AF_INET`/`SOCK_DGRAM` без привилегий, и `getsockopt` читает больше исходного (не меньше 4 MiB без привилегий не
+  гарантировано: предел `rmem_max`); ошибка `setsockopt` возвращается как errno; шов `request_rx_buffer` с
+  подставными итогами: успех — один вызов `SO_RCVBUFFORCE`; `EPERM` — затем `SO_RCVBUF`; другой errno — без запасного
+  вызова. Лабораторный `#[ignore] lab_rx_socket_buffer_is_raised` (`tests/linux_io.rs`): после `open_explicit`
+  RX-сокет (новые сокеты `/proc/self/fd`, как в `lab_packet_sockets_are_nonblocking_and_cloexec`; RX — привязанный к
+  ETH_P_ALL по `getsockname`) даёт `getsockopt(SO_RCVBUF)` не меньше 4 MiB (ядро сообщает удвоенное), TX —
+  `rmem_default`.
+- [ ] **Step 2: коммит теста** `test(rmasscan-net): RX socket buffer request and fallback`; `l_red socket::tests` на его
+  SHA — FAIL (ошибка компиляции: помощников нет).
+- [ ] **Step 3: реализация** по «Поведению»; коммит `feat(rmasscan-net): 4 MiB receive buffer on the Linux RX socket
+  (P5)`; ворота `m_gate`, `l_gate`, `w_gate` на его SHA; тесты страховки задачи 1 (тексты, флаги, счётчики) зелёные
+  без правок.
+- [ ] **Step 4: стенд**, каждая сессия под замком стенда. Дымовой прогон (все `lab_*` ok, с новым). Калибровка `U-RX`
+  v3: база обеих сторон — коммит этой задачи (5 пар «база против базы», лестница `R_RX`); `U-RX` годна на какой-то
+  ступени, `S_AA`, `T`, `R_RX` пишутся в `BENCHMARKS.md` вместо «не измеряется»; если негодна на каждой ступени —
+  остановка и отчёт с картиной потерь. `U-TX` «без регрессии» не нужна (TX не тронут). Матрица (40/40 VALID, потерь
+  ядра нет; покрывает и задачу 2) и `--suite rust` (без FAIL и NOT RUN) — на коммите задачи.
+- [ ] **Step 5: документы** — коммит `docs(rmasscan): P5 in spec, plan, README; U-RX calibration v3`.
 
 ### Задача 3: переносимый разбор netlink без двойников
 

@@ -157,11 +157,20 @@ fn thread_cpu_ns() -> Option<u64> {
     }
 }
 
+/// Запоминает в `slot` ОС-идентификатор потока из `source` только пока `slot` пуст: обёртка спрашивает ОС один раз
+/// за поток, а не на каждом `send`/`recv` (на Linux это `readlink("/proc/thread-self")`, лишний системный вызов на
+/// кадр в обоих потоках измеряемого скана).
+fn note_thread(slot: &OnceLock<u64>, source: impl FnOnce() -> Option<u64>) {
+    if slot.get().is_none()
+        && let Some(id) = source()
+    {
+        let _ = slot.set(id);
+    }
+}
+
 impl IdRx {
     fn note(&self) {
-        if let Some(id) = rmasscan_net::lab_current_thread_id() {
-            let _ = self.tid.set(id);
-        }
+        note_thread(&self.tid, rmasscan_net::lab_current_thread_id);
     }
 }
 
@@ -425,9 +434,7 @@ impl Drop for HarnessTx {
 
 impl HarnessTx {
     fn note_tid(&self) {
-        if let Some(id) = rmasscan_net::lab_current_thread_id() {
-            let _ = self.tid.set(id);
-        }
+        note_thread(&self.tid, rmasscan_net::lab_current_thread_id);
     }
 
     /// Просит Pause; кадр N+1 остаётся у курсора.
@@ -2094,6 +2101,31 @@ mod tests {
                 && json.contains("\"rx_alive_after_join\":false"),
             "{json}"
         );
+    }
+
+    /// The engine thread id is resolved by the first `send`/`recv` of a wrapper and never again: before, every call
+    /// read `/proc/thread-self` (one extra system call per frame in both engine threads of the measured scan).
+    #[test]
+    fn thread_id_is_resolved_once_per_wrapper() {
+        let slot = OnceLock::new();
+        let calls = Cell::new(0);
+        for _ in 0..1000 {
+            note_thread(&slot, || {
+                calls.set(calls.get() + 1);
+                Some(42)
+            });
+        }
+        assert_eq!((calls.get(), slot.get()), (1, Some(&42)));
+        // A source that has no answer yet is asked again until it answers, then never.
+        let slot = OnceLock::new();
+        let calls = Cell::new(0);
+        for i in 0..5 {
+            note_thread(&slot, || {
+                calls.set(calls.get() + 1);
+                (i >= 2).then_some(7)
+            });
+        }
+        assert_eq!((calls.get(), slot.get()), (3, Some(&7)));
     }
 
     #[test]

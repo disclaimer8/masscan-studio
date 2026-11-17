@@ -73,6 +73,9 @@ pub(crate) fn setsockopt_int(
 
 /// Обработчик `handler` сигнала `sig` через `sigaction`: `SA_RESTART`, пустая маска, без `SA_RESETHAND` (обработчик
 /// остаётся на следующие сигналы). `Err` несёт errno.
+///
+/// `handler` обязан быть async-signal-safe (трогать только статические атомики и вызовы, допустимые в обработчике
+/// сигнала): его зовут `interrupt::on_sigint` и `lab_io::on_signal`, оба только записывают в статический атомик.
 pub(crate) fn install_handler(sig: c_int, handler: extern "C" fn(c_int)) -> Result<(), i32> {
     // SAFETY: поля `sigaction` это адрес обработчика (целое `sighandler_t`), `sigset_t` (массив целых), `sa_flags` и
     // на Linux `sa_restorer` (`Option` указателя на функцию, нулевой образ это `None`); нулевой образ каждого поля

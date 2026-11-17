@@ -96,7 +96,9 @@ impl DatagramIo for Socket {
     }
 
     fn recv(&mut self, buffer: &mut [u8]) -> Result<(usize, bool), i32> {
-        // The sender address; the kernel overwrites it on every receive (initial `nl_pid` 0, as the zeroed value was).
+        // The sender address (initial `nl_pid` 0, as the zeroed value was). With a zero-length address the kernel
+        // writes nothing, so correctness comes from the length check below (`len` must cover the whole address)
+        // rather than from the kernel overwriting `from`.
         let mut from = nl_kernel_addr();
         let mut len = mem::size_of_val(&from) as libc::socklen_t;
         // SAFETY: both output buffers have their true writable lengths. MSG_TRUNC

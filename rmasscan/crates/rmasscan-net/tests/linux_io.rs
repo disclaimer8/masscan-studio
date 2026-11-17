@@ -317,3 +317,91 @@ fn lab_packet_sockets_are_nonblocking_and_cloexec() {
     }
     drop(a);
 }
+
+/// One `c_int` socket option of descriptor `fd` of this process (`getsockopt`).
+fn int_sockopt(fd: u32, level: libc::c_int, name: libc::c_int) -> libc::c_int {
+    let mut value: libc::c_int = 0;
+    let mut len = std::mem::size_of::<libc::c_int>() as libc::socklen_t;
+    // SAFETY: `value` and `len` are live locals and `len` holds the size of `value`, so the kernel writes at most that
+    // many bytes; `fd` belongs to the adapter the caller holds open.
+    let rc = unsafe {
+        libc::getsockopt(
+            fd as libc::c_int,
+            level,
+            name,
+            (&raw mut value).cast::<libc::c_void>(),
+            &raw mut len,
+        )
+    };
+    assert_eq!(
+        rc,
+        0,
+        "getsockopt(fd {fd}): {}",
+        std::io::Error::last_os_error()
+    );
+    value
+}
+
+/// `sll_protocol` (host order) of the bound AF_PACKET socket `fd` (`getsockname`); `None` for another family.
+fn packet_protocol(fd: u32) -> Option<u16> {
+    // SAFETY: sockaddr_ll consists of integers and a byte array; the all-zero image is valid.
+    let mut sll: libc::sockaddr_ll = unsafe { std::mem::zeroed() };
+    let mut len = std::mem::size_of::<libc::sockaddr_ll>() as libc::socklen_t;
+    // SAFETY: `sll` and `len` are live locals and `len` holds the size of `sll`, so the kernel writes at most that many
+    // bytes; `fd` belongs to the adapter the caller holds open.
+    let rc = unsafe {
+        libc::getsockname(
+            fd as libc::c_int,
+            (&raw mut sll).cast::<libc::sockaddr>(),
+            &raw mut len,
+        )
+    };
+    assert_eq!(
+        rc,
+        0,
+        "getsockname(fd {fd}): {}",
+        std::io::Error::last_os_error()
+    );
+    (sll.sll_family == libc::AF_PACKET as u16).then(|| u16::from_be(sll.sll_protocol))
+}
+
+/// P5: the RX socket (bound to ETH_P_ALL) asks for a 4 MiB receive buffer (`SO_RCVBUFFORCE`, without CAP_NET_ADMIN
+/// `SO_RCVBUF`), and the kernel reports double what it stored; the TX socket (bound to protocol 0) keeps
+/// `net.core.rmem_default`. The two sockets are found as in `lab_packet_sockets_are_nonblocking_and_cloexec`, so this
+/// test too runs only in the adapter smoke run (`--test-threads=1`).
+#[test]
+#[ignore = "opens real AF_PACKET sockets: sealed lab only"]
+fn lab_rx_socket_buffer_is_raised() {
+    let l = lab();
+    let before = socket_fds();
+    let a = open_explicit(&lab_binding(&l)).expect("open");
+    let new: Vec<(u32, Option<u16>)> = socket_fds()
+        .difference(&before)
+        .map(|&fd| (fd, packet_protocol(fd)))
+        .collect();
+    let only = |protocol: u16| {
+        let fds: Vec<u32> = new
+            .iter()
+            .filter(|(_, p)| *p == Some(protocol))
+            .map(|(fd, _)| *fd)
+            .collect();
+        assert_eq!(
+            fds.len(),
+            1,
+            "AF_PACKET sockets of protocol {protocol:#06x}: {new:?}"
+        );
+        fds[0]
+    };
+    let (rx, tx) = (only(libc::ETH_P_ALL as u16), only(0));
+    let rx_buf = int_sockopt(rx, libc::SOL_SOCKET, libc::SO_RCVBUF);
+    let tx_buf = int_sockopt(tx, libc::SOL_SOCKET, libc::SO_RCVBUF);
+    let default: libc::c_int = std::fs::read_to_string("/proc/sys/net/core/rmem_default")
+        .expect("rmem_default")
+        .trim()
+        .parse()
+        .expect("number");
+    eprintln!("RX SO_RCVBUF {rx_buf}, TX SO_RCVBUF {tx_buf}, rmem_default {default}");
+    assert!(rx_buf >= 4 << 20, "RX SO_RCVBUF {rx_buf} is below 4 MiB");
+    assert_eq!(tx_buf, default, "the TX socket keeps rmem_default");
+    drop(a);
+}

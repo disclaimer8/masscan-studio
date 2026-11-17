@@ -253,3 +253,7 @@ impl IfaceInfo for OsIface {
         Ok((sa.sa_family, mac))
     }
 }
+
+#[cfg(test)]
+#[path = "socket_tests.rs"]
+mod tests;

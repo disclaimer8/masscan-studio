@@ -1011,6 +1011,38 @@ fn transmit_sync_true_is_passed_as_one() {
     with(|s| assert_eq!(s.sync_seen, [1]));
 }
 
+// ---------- sendpacket и getnonblock ----------
+
+/// `send_raw`: `Ok` only for rc 0, any other rc comes back as is (the adapter turns every `Err` into `Uncertain`).
+#[test]
+fn send_raw_is_ok_on_zero_and_the_raw_code_otherwise() {
+    reset(|s| s.send_rcs.extend([0, -1, 7]));
+    let api = good_api();
+    let mut h = PcapHandle::open(&api, &dev(DEV1), PARAMS).unwrap();
+    let frame = [0u8; 60];
+    assert_eq!(h.send_raw(&frame), Ok(()));
+    assert_eq!(h.send_raw(&frame), Err(-1));
+    assert_eq!(h.send_raw(&frame), Err(7));
+    with(|s| assert_eq!((s.send_calls, s.sent.len()), (3, 1)));
+}
+
+/// `get_nonblock`: a non-negative `pcap_getnonblock` code is `Ok(code == 1)`, a negative one is `Err(code)`.
+#[test]
+fn get_nonblock_is_ok_for_a_non_negative_code_and_err_otherwise() {
+    for (code, want) in [
+        (1, Ok(true)),
+        (0, Ok(false)),
+        (2, Ok(false)),
+        (-1, Err(-1)),
+        (-3, Err(-3)),
+    ] {
+        reset(|s| s.getnonblock_override = Some(code));
+        let api = good_api();
+        let mut h = PcapHandle::open(&api, &dev(DEV1), PARAMS).unwrap();
+        assert_eq!(h.get_nonblock(), want, "pcap_getnonblock {code}");
+    }
+}
+
 /// The IP Helper constants of the portable parser equal the `windows-sys` declarations.
 #[cfg(windows)]
 #[test]

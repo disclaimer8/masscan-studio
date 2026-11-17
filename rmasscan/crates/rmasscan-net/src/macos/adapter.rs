@@ -33,6 +33,7 @@
 //! * `rx_wrong_interface` всегда 0: структурно неприменимо, дескриптор
 //!   привязан к одному интерфейсу (`BIOCSETIF`), сравнивать нечего.
 
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use rmasscan_core::packet::LinkType;
@@ -47,9 +48,8 @@ use super::abi::{
     read_record_header,
 };
 use super::{Errno, errno_msg};
-use crate::counters::{RxSide, TxSide, counters};
 use crate::drop_counter::DropCounter;
-use crate::{NetError, NetStatsHandle, OpenedAdapter};
+use crate::{Counters, NetError, NetStatsHandle, OpenedAdapter};
 
 /// Внутренний бюджет одного вызова адаптера: 33 мс. `poll` округляется вверх, таймеры
 /// XNU опаздывают, а контракт 50 мс относится ко всему вызову. Живой спайк (задача 3,
@@ -157,6 +157,12 @@ fn is_again(e: Errno) -> bool {
     e == EAGAIN
 }
 
+fn publish_drops(counters: &Counters, total: u64) {
+    use std::sync::atomic::Ordering::{Relaxed, Release};
+    counters.kernel_drops.store(total, Relaxed);
+    counters.kernel_drops_known.store(true, Release);
+}
+
 /// Абсолютный дедлайн вызова. Фиксируется один раз; повторы не продлевают.
 struct Deadline(Instant);
 
@@ -186,7 +192,7 @@ impl Deadline {
 /// TX-половина. После фатальной ошибки дескриптор закрывается (`io = None`).
 pub(crate) struct TxHalf<I: BpfIo> {
     io: Option<I>,
-    counters: TxSide,
+    counters: Arc<Counters>,
 }
 
 enum TxStep {
@@ -197,7 +203,7 @@ enum TxStep {
 }
 
 impl<I: BpfIo> TxHalf<I> {
-    pub(crate) fn new(io: I, counters: TxSide) -> Self {
+    pub(crate) fn new(io: I, counters: Arc<Counters>) -> Self {
         Self {
             io: Some(io),
             counters,
@@ -241,7 +247,7 @@ impl<I: BpfIo> Tx for TxHalf<I> {
         };
         // Проверка ДО записи: кадр не уходит, исход известен.
         if !(MIN_TX_FRAME..=MAX_TX_FRAME).contains(&frame.len()) {
-            self.counters.error();
+            Counters::bump(&self.counters.tx_errors);
             return Err(IoError::new(format!(
                 "frame length {} is outside {MIN_TX_FRAME}..={MAX_TX_FRAME}; nothing was sent",
                 frame.len()
@@ -249,15 +255,20 @@ impl<I: BpfIo> Tx for TxHalf<I> {
         }
         match Self::step(io, frame, &deadline) {
             TxStep::Done(status) => {
-                self.counters.record(status);
+                let c = match status {
+                    SendStatus::Sent => &self.counters.tx_sent,
+                    SendStatus::WouldBlockUnsent => &self.counters.tx_would_block,
+                    SendStatus::Uncertain => &self.counters.tx_uncertain,
+                };
+                Counters::bump(c);
                 Ok(status)
             }
             TxStep::Rejected(msg) => {
-                self.counters.error();
+                Counters::bump(&self.counters.tx_errors);
                 Err(IoError::new(msg))
             }
             TxStep::Fatal(msg) => {
-                self.counters.error();
+                Counters::bump(&self.counters.tx_errors);
                 self.io = None; // закрывает fd
                 Err(IoError::new(msg))
             }
@@ -314,7 +325,7 @@ pub(crate) fn parse_record(
 pub(crate) struct RxHalf<I: BpfIo> {
     io: Option<I>,
     own_mac: [u8; 6],
-    counters: RxSide,
+    counters: Arc<Counters>,
     drops: DropCounter,
     /// Последняя прочитанная пачка: `rbuf[off..end]` ещё не разобрано.
     rbuf: Vec<u8>,
@@ -329,7 +340,12 @@ enum RxStep {
 }
 
 impl<I: BpfIo> RxHalf<I> {
-    pub(crate) fn new(io: I, own_mac: [u8; 6], counters: RxSide, baseline_drop: u32) -> Self {
+    pub(crate) fn new(
+        io: I,
+        own_mac: [u8; 6],
+        counters: Arc<Counters>,
+        baseline_drop: u32,
+    ) -> Self {
         let rbuf = vec![0u8; io.buffer_len()];
         Self {
             io: Some(io),
@@ -348,13 +364,13 @@ impl<I: BpfIo> RxHalf<I> {
         if let Some(io) = self.io.as_mut()
             && let Ok(st) = io.stats()
         {
-            self.counters.publish_drops(self.drops.update(st.bs_drop));
+            publish_drops(&self.counters, self.drops.update(st.bs_drop));
         }
     }
 
     /// Фатальная ошибка: итог потерь фиксируется, дескриптор закрывается.
     fn fatal(&mut self, msg: String) -> RxStep {
-        self.counters.error();
+        Counters::bump(&self.counters.rx_errors);
         self.flush_drops();
         self.io = None;
         RxStep::Fatal(msg)
@@ -370,19 +386,19 @@ impl<I: BpfIo> RxHalf<I> {
                         self.off = self.end;
                         return self.fatal(why.to_string());
                     }
-                    Ok(Record::Truncated) => self.counters.truncated(),
+                    Ok(Record::Truncated) => Counters::bump(&self.counters.rx_truncated),
                     Ok(Record::Frame { start, end }) => {
                         let frame = &self.rbuf[start..end];
                         if frame.len() < MIN_TX_FRAME {
                             // Короче Ethernet-заголовка: не кадр, никогда не `Some(0)`.
-                            self.counters.truncated();
+                            Counters::bump(&self.counters.rx_truncated);
                         } else if frame[6..12] == self.own_mac {
-                            self.counters.outgoing();
+                            Counters::bump(&self.counters.rx_outgoing);
                         } else if frame.len() > buffer.len() {
-                            self.counters.truncated();
+                            Counters::bump(&self.counters.rx_truncated);
                         } else {
                             buffer[..frame.len()].copy_from_slice(frame);
-                            self.counters.packet();
+                            Counters::bump(&self.counters.rx_packets);
                             return RxStep::Frame(frame.len());
                         }
                     }
@@ -476,7 +492,7 @@ impl<I: BpfIo> Rx for RxHalf<I> {
         match io.stats() {
             Ok(st) => {
                 let total = self.drops.update(st.bs_drop);
-                self.counters.publish_drops(total);
+                publish_drops(&self.counters, total);
                 Ok(RxHealth {
                     kernel_drops: Some(total),
                 })
@@ -633,13 +649,18 @@ pub(crate) fn open_with<O: BpfOpener>(
     let mut tx = open_device(opener)?;
     configure_tx(&mut tx, name)?;
 
-    let (tx_side, rx_side, shared) = counters();
+    let counters = Arc::new(Counters::default());
     Ok(OpenedAdapter {
         io: AdapterPair {
-            tx: Box::new(TxHalf::new(tx, tx_side)),
-            rx: Box::new(RxHalf::new(rx, binding.source_mac, rx_side, baseline)),
+            tx: Box::new(TxHalf::new(tx, Arc::clone(&counters))),
+            rx: Box::new(RxHalf::new(
+                rx,
+                binding.source_mac,
+                Arc::clone(&counters),
+                baseline,
+            )),
         },
-        stats: NetStatsHandle::new(shared),
+        stats: NetStatsHandle::new(counters),
         tx_mode: crate::TxMode::Single,
     })
 }

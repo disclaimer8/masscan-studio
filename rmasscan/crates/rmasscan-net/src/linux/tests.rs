@@ -7,7 +7,6 @@ use std::time::Instant;
 
 use super::*;
 use crate::NetStats;
-use crate::counters::Counters;
 
 const IFINDEX: u32 = 7;
 
@@ -114,6 +113,10 @@ impl PacketIo for Fake {
     }
 }
 
+fn counters() -> Arc<Counters> {
+    Arc::new(Counters::default())
+}
+
 fn snap(c: &Arc<Counters>) -> NetStats {
     NetStatsHandle::new(Arc::clone(c)).snapshot()
 }
@@ -127,8 +130,8 @@ fn tx(
     Arc<Counters>,
 ) {
     let (f, s, d) = fake(script);
-    let (tx_side, _rx_side, c) = counters();
-    (TxHalf::new(f, tx_side), s, d, c)
+    let c = counters();
+    (TxHalf::new(f, Arc::clone(&c)), s, d, c)
 }
 
 fn rx(
@@ -140,8 +143,8 @@ fn rx(
     Arc<Counters>,
 ) {
     let (f, s, d) = fake(script);
-    let (_tx_side, rx_side, c) = counters();
-    (RxHalf::new(f, IFINDEX, rx_side), s, d, c)
+    let c = counters();
+    (RxHalf::new(f, IFINDEX, Arc::clone(&c)), s, d, c)
 }
 
 const FRAME: [u8; 58] = [0xAB; 58];
@@ -1052,9 +1055,9 @@ fn stats_snapshot_is_monotonic_and_exact_under_concurrent_tx_and_rx() {
         stats: std::iter::repeat_n(ks(0), 64).collect(),
         ..Default::default()
     });
-    let (tx_side, rx_side, c) = counters();
-    let mut t = TxHalf::new(tx_io, tx_side);
-    let mut r = RxHalf::new(rx_io, IFINDEX, rx_side);
+    let c = counters();
+    let mut t = TxHalf::new(tx_io, Arc::clone(&c));
+    let mut r = RxHalf::new(rx_io, IFINDEX, Arc::clone(&c));
     let handle = NetStatsHandle::new(Arc::clone(&c));
     let tx_done = &AtomicBool::new(false);
     let rx_done = &AtomicBool::new(false);
@@ -1147,9 +1150,9 @@ const BENCH_CALLS: u32 = 1_000_000;
 #[ignore = "microbenchmark: cargo test --release -p rmasscan-net adapter_hot_path -- --ignored --nocapture"]
 fn adapter_hot_path_two_threads() {
     let frame60 = [0x5a_u8; 60];
-    let (tx_side, rx_side, c) = counters();
-    let mut t = TxHalf::new(BenchIo { frame: frame60 }, tx_side);
-    let mut r = RxHalf::new(BenchIo { frame: frame60 }, IFINDEX, rx_side);
+    let c = counters();
+    let mut t = TxHalf::new(BenchIo { frame: frame60 }, Arc::clone(&c));
+    let mut r = RxHalf::new(BenchIo { frame: frame60 }, IFINDEX, Arc::clone(&c));
     let start = std::sync::Barrier::new(2);
     let (tx_time, rx_time) = std::thread::scope(|s| {
         let tx_thread = s.spawn(|| {

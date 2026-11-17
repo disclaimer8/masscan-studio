@@ -12,8 +12,7 @@ use rmasscan_core::packet::LinkType;
 use rmasscan_core::probe::AdapterBinding;
 use rmasscan_engine::{AdapterPair, IoError, MAX_IO_TIMEOUT, Rx, RxHealth, SendStatus, Tx};
 
-use crate::counters::{RxSide, TxSide, counters};
-use crate::{NetError, NetStatsHandle, OpenedAdapter};
+use crate::{Counters, NetError, NetStatsHandle, OpenedAdapter};
 
 #[allow(unsafe_code)]
 mod socket;
@@ -121,7 +120,7 @@ fn errno_msg(op: &str, e: Errno) -> String {
 /// TX-половина. После фатальной ошибки fd закрывается (`io = None`).
 pub(crate) struct TxHalf<I: PacketIo> {
     io: Option<I>,
-    counters: TxSide,
+    counters: Arc<Counters>,
 }
 
 enum TxStep {
@@ -130,7 +129,7 @@ enum TxStep {
 }
 
 impl<I: PacketIo> TxHalf<I> {
-    pub(crate) fn new(io: I, counters: TxSide) -> Self {
+    pub(crate) fn new(io: I, counters: Arc<Counters>) -> Self {
         Self {
             io: Some(io),
             counters,
@@ -182,11 +181,16 @@ impl<I: PacketIo> Tx for TxHalf<I> {
         };
         match Self::step(io, frame, &deadline) {
             TxStep::Done(status) => {
-                self.counters.record(status);
+                let c = match status {
+                    SendStatus::Sent => &self.counters.tx_sent,
+                    SendStatus::WouldBlockUnsent => &self.counters.tx_would_block,
+                    SendStatus::Uncertain => &self.counters.tx_uncertain,
+                };
+                Counters::bump(c);
                 Ok(status)
             }
             TxStep::Fatal(msg) => {
-                self.counters.error();
+                Counters::bump(&self.counters.tx_errors);
                 self.io = None; // закрывает fd
                 Err(IoError::new(msg))
             }
@@ -198,7 +202,7 @@ impl<I: PacketIo> Tx for TxHalf<I> {
 pub(crate) struct RxHalf<I: PacketIo> {
     io: Option<I>,
     ifindex: i32,
-    counters: RxSide,
+    counters: Arc<Counters>,
     since_stats: u64,
 }
 
@@ -209,7 +213,7 @@ enum RxStep {
 }
 
 impl<I: PacketIo> RxHalf<I> {
-    pub(crate) fn new(io: I, ifindex: u32, counters: RxSide) -> Self {
+    pub(crate) fn new(io: I, ifindex: u32, counters: Arc<Counters>) -> Self {
         Self {
             io: Some(io),
             ifindex: ifindex as i32,
@@ -220,18 +224,21 @@ impl<I: PacketIo> RxHalf<I> {
 
     /// ЕДИНСТВЕННОЕ место, читающее PACKET_STATISTICS. Чтение сбрасывает
     /// счётчик ядра, поэтому дельта сразу прибавляется к накопленному итогу
-    /// (`RxSide::add_kernel_drops`) и больше нигде не учитывается: периодический
+    /// (`Counters::kernel_drops`) и больше нигде не учитывается: периодический
     /// сброс в `recv`, `health` и `Drop` лишь разные вызывающие одной функции.
     /// Неудачное чтение ядро не сбрасывает, значит при ошибке ничего не теряется.
     /// Возвращает накопленный итог.
     fn collect_kernel_stats(&mut self) -> Result<u64, Errno> {
+        use std::sync::atomic::Ordering::{Relaxed, Release};
         self.since_stats = 0;
         let Some(io) = self.io.as_mut() else {
             return Err(libc::EBADF);
         };
         let s = io.packet_stats()?;
         let delta = u64::from(s.drops);
-        Ok(self.counters.add_kernel_drops(delta))
+        let total = self.counters.kernel_drops.fetch_add(delta, Relaxed) + delta;
+        self.counters.kernel_drops_known.store(true, Release);
+        Ok(total)
     }
 
     /// Фоновая сборка для актуальности снимка. Ошибку не скрывает навсегда:
@@ -244,7 +251,7 @@ impl<I: PacketIo> RxHalf<I> {
     fn step(
         io: &mut I,
         ifindex: i32,
-        counters: &mut RxSide,
+        counters: &Counters,
         buffer: &mut [u8],
         deadline: &Deadline,
     ) -> RxStep {
@@ -252,13 +259,13 @@ impl<I: PacketIo> RxHalf<I> {
             match io.recv(buffer) {
                 Ok(meta) => {
                     if meta.pkttype == PACKET_OUTGOING {
-                        counters.outgoing();
+                        Counters::bump(&counters.rx_outgoing);
                     } else if meta.ifindex != ifindex {
-                        counters.wrong_interface();
+                        Counters::bump(&counters.rx_wrong_interface);
                     } else if meta.len > buffer.len() {
-                        counters.truncated();
+                        Counters::bump(&counters.rx_truncated);
                     } else {
-                        counters.packet();
+                        Counters::bump(&counters.rx_packets);
                         return RxStep::Frame(meta.len);
                     }
                     // Отброшенный кадр не продлевает вызов.
@@ -299,7 +306,7 @@ impl<I: PacketIo> Rx for RxHalf<I> {
         let Some(io) = self.io.as_mut() else {
             return Err(closed_error());
         };
-        match Self::step(io, self.ifindex, &mut self.counters, buffer, &deadline) {
+        match Self::step(io, self.ifindex, &self.counters, buffer, &deadline) {
             RxStep::Frame(n) => {
                 self.since_stats += 1;
                 if self.since_stats >= STATS_EVERY {
@@ -312,7 +319,7 @@ impl<I: PacketIo> Rx for RxHalf<I> {
                 Ok(None)
             }
             RxStep::Fatal(msg) => {
-                self.counters.error();
+                Counters::bump(&self.counters.rx_errors);
                 self.flush_kernel_stats();
                 self.io = None;
                 Err(IoError::new(msg))
@@ -407,13 +414,13 @@ pub(crate) fn open(binding: &AdapterBinding) -> Result<OpenedAdapter, NetError> 
     let tx = socket::PacketFd::open(ifindex, 0).map_err(|e| map_open_error("tx socket", e))?;
     let rx = socket::PacketFd::open(ifindex, socket::ETH_P_ALL_BE)
         .map_err(|e| map_open_error("rx socket", e))?;
-    let (tx_side, rx_side, shared) = counters();
+    let counters = Arc::new(Counters::default());
     Ok(OpenedAdapter {
         io: AdapterPair {
-            tx: Box::new(TxHalf::new(tx, tx_side)),
-            rx: Box::new(RxHalf::new(rx, ifindex, rx_side)),
+            tx: Box::new(TxHalf::new(tx, Arc::clone(&counters))),
+            rx: Box::new(RxHalf::new(rx, ifindex, Arc::clone(&counters))),
         },
-        stats: NetStatsHandle::new(shared),
+        stats: NetStatsHandle::new(counters),
         tx_mode: crate::TxMode::Single,
     })
 }

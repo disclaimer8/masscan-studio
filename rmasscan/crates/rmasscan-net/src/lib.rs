@@ -32,6 +32,7 @@
 #![deny(clippy::undocumented_unsafe_blocks)]
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use rmasscan_core::probe::AdapterBinding;
 use rmasscan_engine::AdapterPair;
@@ -43,9 +44,6 @@ mod linux;
 // части (`abi`, `adapter`) собираются и в тестах других платформ (seam-тесты).
 #[cfg(any(target_os = "macos", test))]
 mod macos;
-
-// Счётчики `NetStats`: блоки TX и RX на разных строках кэша, у каждого один писатель.
-mod counters;
 
 // Общий счётчик потерь 32-битного драйверного счётчика (Npcap, BPF).
 #[cfg(any(windows, target_os = "macos", test))]
@@ -282,11 +280,39 @@ pub struct NetStats {
     pub tx_over_budget: u64,
 }
 
+#[derive(Default)]
+pub(crate) struct Counters {
+    pub tx_sent: AtomicU64,
+    pub tx_would_block: AtomicU64,
+    pub tx_uncertain: AtomicU64,
+    pub tx_errors: AtomicU64,
+    pub rx_packets: AtomicU64,
+    pub rx_truncated: AtomicU64,
+    pub rx_outgoing: AtomicU64,
+    pub rx_wrong_interface: AtomicU64,
+    pub rx_errors: AtomicU64,
+    pub kernel_drops: AtomicU64,
+    pub kernel_drops_known: AtomicBool,
+    pub tx_batches: AtomicU64,
+    pub tx_batch_max: AtomicU64,
+    pub tx_over_budget: AtomicU64,
+}
+
+#[cfg_attr(
+    not(any(target_os = "linux", windows, target_os = "macos")),
+    allow(dead_code)
+)]
+impl Counters {
+    pub(crate) fn bump(c: &AtomicU64) {
+        c.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
 /// Дескриптор статистики. Не владеет fd; счётчики живут в общем `Arc`,
 /// поэтому handle переживает закрытие сокетов. Чтение ничего не сбрасывает.
 #[derive(Clone)]
 pub struct NetStatsHandle {
-    counters: Arc<counters::Counters>,
+    counters: Arc<Counters>,
 }
 
 impl NetStatsHandle {
@@ -294,12 +320,31 @@ impl NetStatsHandle {
         not(any(target_os = "linux", windows, target_os = "macos")),
         allow(dead_code)
     )]
-    pub(crate) fn new(counters: Arc<counters::Counters>) -> Self {
+    pub(crate) fn new(counters: Arc<Counters>) -> Self {
         Self { counters }
     }
 
     pub fn snapshot(&self) -> NetStats {
-        self.counters.snapshot()
+        let c = &self.counters;
+        let get = |a: &AtomicU64| a.load(Ordering::Relaxed);
+        NetStats {
+            tx_sent: get(&c.tx_sent),
+            tx_would_block: get(&c.tx_would_block),
+            tx_uncertain: get(&c.tx_uncertain),
+            tx_errors: get(&c.tx_errors),
+            rx_packets: get(&c.rx_packets),
+            rx_truncated: get(&c.rx_truncated),
+            rx_outgoing: get(&c.rx_outgoing),
+            rx_wrong_interface: get(&c.rx_wrong_interface),
+            rx_errors: get(&c.rx_errors),
+            kernel_drops: c
+                .kernel_drops_known
+                .load(Ordering::Acquire)
+                .then(|| get(&c.kernel_drops)),
+            tx_batches: get(&c.tx_batches),
+            tx_batch_max: get(&c.tx_batch_max),
+            tx_over_budget: get(&c.tx_over_budget),
+        }
     }
 }
 

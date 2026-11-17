@@ -3403,10 +3403,14 @@ mod tests {
             c.iter().filter(|s| s.origin == Origin::Golden).count(),
             cases
         );
-        // Every scenario with a server stream (the silent 3389 server has none).
+        // Silent peers have no decoder input.
         assert_eq!(
             c.iter().filter(|s| s.origin == Origin::Scenario).count(),
-            TCP_SCENARIOS.len() - 1 + x509_builtin_seeds().len()
+            TCP_SCENARIOS
+                .iter()
+                .filter(|scenario| !scenario.stream().is_empty())
+                .count()
+                + x509_builtin_seeds().len()
         );
         for f in TCP_FAMILIES.iter().filter(|f| family_app(f).is_some()) {
             for origin in [Origin::Scenario, Origin::Golden] {

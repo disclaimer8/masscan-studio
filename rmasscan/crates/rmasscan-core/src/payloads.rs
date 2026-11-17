@@ -1217,6 +1217,10 @@ fn udp_payload(frame: &[u8]) -> Option<(u16, &[u8])> {
 mod tests {
     use super::*;
     use crate::udp_c_vectors::{C_FORCED, C_FRAMES, C_RAW};
+    use proptest::prelude::*;
+    use proptest::sample::Index;
+    use proptest::test_runner::{Config, TestRunner};
+    use std::cell::Cell;
 
     fn unhex(s: &str) -> Vec<u8> {
         (0..s.len() / 2)
@@ -1374,6 +1378,314 @@ mod tests {
             m.apply(&mut p, seq);
             assert_eq!(p, vec![0u8; n], "{m:?}");
         }
+    }
+
+    /// Копия базы (`a275ea9e`, payloads.rs:85-202) дословно: `at`, `asn1_tag`, `asn1_length`, `asn1_integer` со
+    /// смещением `&mut u64` и сторожем `0xFFFF_FFFF` и `snmp_set_cookie` над ними. Эталон
+    /// `snmp_cookie_matches_old_helpers`.
+    mod old {
+        fn at(px: &[u8], i: u64) -> u8 {
+            usize::try_from(i)
+                .ok()
+                .and_then(|i| px.get(i))
+                .copied()
+                .unwrap_or(0)
+        }
+
+        /// proto-snmp.c:180 `asn1_tag`.
+        fn asn1_tag(px: &[u8], length: u64, offset: &mut u64) -> u32 {
+            if *offset >= length {
+                return 0;
+            }
+            let t = u32::from(at(px, *offset));
+            *offset += 1;
+            t
+        }
+
+        /// proto-snmp.c:106 `asn1_length`.
+        fn asn1_length(px: &[u8], length: u64, offset: &mut u64) -> u64 {
+            let first = u64::from(at(px, *offset));
+            if *offset >= length || (first & 0x80 != 0 && *offset + (first & 0x7F) >= length) {
+                *offset = length;
+                return 0xFFFF_FFFF;
+            }
+            let mut result = first;
+            *offset += 1;
+            if result & 0x80 != 0 {
+                let mut length_of_length = result & 0x7F;
+                if length_of_length == 0 {
+                    *offset = length;
+                    return 0xFFFF_FFFF;
+                }
+                result = 0;
+                while length_of_length != 0 {
+                    result = result * 256 + u64::from(at(px, *offset));
+                    *offset += 1;
+                    if result > 0x10000 {
+                        *offset = length;
+                        return 0xFFFF_FFFF;
+                    }
+                    length_of_length -= 1;
+                }
+            }
+            result
+        }
+
+        /// proto-snmp.c:146 `asn1_integer`.
+        fn asn1_integer(px: &[u8], length: u64, offset: &mut u64) -> u64 {
+            let tag = at(px, *offset);
+            *offset += 1;
+            if tag != 0x02 {
+                *offset = length;
+                return 0xFFFF_FFFF;
+            }
+            let int_length = asn1_length(px, length, offset);
+            if int_length == 0xFFFF_FFFF || *offset + int_length > length || int_length > 20 {
+                *offset = length;
+                return 0xFFFF_FFFF;
+            }
+            let mut result = 0u64;
+            for _ in 0..int_length {
+                result = result
+                    .wrapping_mul(256)
+                    .wrapping_add(u64::from(at(px, *offset)));
+                *offset += 1;
+            }
+            result
+        }
+
+        /// proto-snmp.c:403 `snmp_set_cookie`: идёт по BER до request-id PDU и пишет туда `seqno` (старший бит чистится, чтобы
+        /// INTEGER остался положительным).
+        pub(super) fn snmp_set_cookie(px: &mut [u8], seqno: u32) {
+            let mut length = px.len() as u64;
+            let mut offset = 0u64;
+            if asn1_tag(px, length, &mut offset) != 0x30 {
+                return;
+            }
+            let outer = asn1_length(px, length, &mut offset);
+            if length > outer + offset {
+                length = outer + offset;
+            }
+            if asn1_integer(px, length, &mut offset) != 0 {
+                return; // версия 0
+            }
+            if asn1_tag(px, length, &mut offset) != 0x04 {
+                return; // community
+            }
+            let community_len = asn1_length(px, length, &mut offset);
+            offset += community_len;
+            let tag = asn1_tag(px, length, &mut offset);
+            if !(0xA0..=0xA5).contains(&tag) {
+                return;
+            }
+            let outer = asn1_length(px, length, &mut offset);
+            if length > outer + offset {
+                length = outer + offset;
+            }
+            asn1_tag(px, length, &mut offset); // тег request-id
+            let len = asn1_length(px, length, &mut offset);
+            let be = seqno.to_be_bytes();
+            let bytes: &[u8] = match len {
+                1 => &[be[3] & 0x7F],
+                2 => &[be[2] & 0x7F, be[3]],
+                3 => &[be[1] & 0x7F, be[2], be[3]],
+                4 => &[be[0] & 0x7F, be[1], be[2], be[3]],
+                5 => &[0, be[0], be[1], be[2], be[3]],
+                _ => return,
+            };
+            for (k, b) in bytes.iter().enumerate() {
+                if let Some(slot) = usize::try_from(offset + k as u64)
+                    .ok()
+                    .and_then(|i| px.get_mut(i))
+                {
+                    *slot = *b;
+                }
+            }
+        }
+    }
+
+    /// Байты, на которых ветвится разбор BER: теги, короткие и длинные длины, границы диапазона тегов PDU.
+    const BER_BYTES: &[u8] = &[
+        0x00, 0x01, 0x02, 0x04, 0x05, 0x14, 0x30, 0x7f, 0x80, 0x81, 0x82, 0x83, 0x84, 0x9f, 0xa0,
+        0xa1, 0xa5, 0xa6, 0xff,
+    ];
+
+    fn ber_byte() -> impl Strategy<Value = u8> {
+        prop_oneof![any::<u8>(), proptest::sample::select(BER_BYTES)]
+    }
+
+    /// Длина BER в генераторе: точная (короткая форма или `0x82`), больше точной на 1–100 в короткой форме (поле
+    /// уходит за конец), точная в длинной форме из 1–4 октетов или сырые байты.
+    #[derive(Clone, Debug)]
+    enum Len {
+        Exact,
+        Over(u8),
+        Long(u8),
+        Raw(Vec<u8>),
+    }
+
+    /// Длины, на которых база отдаёт сторож `0xFFFF_FFFF` или уводит смещение за конец.
+    fn raw_len() -> impl Strategy<Value = Vec<u8>> {
+        prop_oneof![
+            Just(vec![0x80]),                   // длина длины 0
+            Just(vec![0x83, 0x01, 0x00, 0x00]), // 0x10000: ещё не сторож
+            Just(vec![0x83, 0x01, 0x00, 0x01]), // 0x10001: сторож
+            Just(vec![0xff]),                   // 127 октетов длины, за концом
+            (0x81u8..=0x84, proptest::collection::vec(any::<u8>(), 0..=4))
+                .prop_map(|(h, t)| std::iter::once(h).chain(t).collect()),
+            proptest::collection::vec(ber_byte(), 1..=3),
+        ]
+    }
+
+    fn len_enc() -> impl Strategy<Value = Len> {
+        prop_oneof![
+            12 => Just(Len::Exact),
+            2 => (1u8..=100).prop_map(Len::Over),
+            2 => (1u8..=4).prop_map(Len::Long),
+            2 => raw_len().prop_map(Len::Raw),
+        ]
+    }
+
+    fn encode_len(n: usize, how: &Len) -> Vec<u8> {
+        match how {
+            Len::Exact if n < 0x80 => vec![n as u8],
+            Len::Exact => vec![0x82, (n >> 8) as u8, n as u8],
+            Len::Over(d) => vec![(n + usize::from(*d)) as u8],
+            Len::Long(k) => std::iter::once(0x80 | k)
+                .chain((0..*k).rev().map(|i| (n >> (8 * u32::from(i))) as u8))
+                .collect(),
+            Len::Raw(b) => b.clone(),
+        }
+    }
+
+    fn tag_or_any(t: u8) -> impl Strategy<Value = u8> {
+        prop_oneof![9 => Just(t), 1 => ber_byte()]
+    }
+
+    /// SEQUENCE { INTEGER версия, OCTET STRING community, PDU { INTEGER request-id, хвост } } с произвольными тегами и
+    /// длинами. Версия бывает пустой, из 20 и 21 нулевого октета и из 9 октетов `01 00 .. 00` (по модулю 2^64 это 0).
+    /// Длина community чаще обычного уходит за конец или даёт сторож.
+    fn snmp_message() -> impl Strategy<Value = Vec<u8>> {
+        let version = prop_oneof![
+            4 => Just(vec![0u8]),
+            1 => Just(vec![]),
+            1 => Just(vec![0u8; 20]),
+            1 => Just(vec![0u8; 21]),
+            1 => Just(vec![1, 0, 0, 0, 0, 0, 0, 0, 0]),
+            2 => proptest::collection::vec(prop_oneof![3 => Just(0u8), 1 => any::<u8>()], 0..=24),
+        ];
+        let community_len = prop_oneof![
+            2 => len_enc(),
+            1 => (1u8..=100).prop_map(Len::Over),
+            1 => raw_len().prop_map(Len::Raw),
+        ];
+        let pdu_tag =
+            prop_oneof![6 => 0xa0u8..=0xa5, 1 => Just(0x9f), 1 => Just(0xa6), 1 => any::<u8>()];
+        (
+            (tag_or_any(0x30), len_enc()),
+            (tag_or_any(0x02), len_enc(), version),
+            (
+                tag_or_any(0x04),
+                community_len,
+                proptest::collection::vec(any::<u8>(), 0..10),
+            ),
+            (pdu_tag, len_enc()),
+            (
+                tag_or_any(0x02),
+                len_enc(),
+                proptest::collection::vec(any::<u8>(), 0..=7),
+            ),
+            proptest::collection::vec(any::<u8>(), 0..24),
+        )
+            .prop_map(
+                |((t0, l0), (t1, l1, v), (t2, l2, c), (t3, l3), (t4, l4, id), rest)| {
+                    let tlv = |t: u8, l: &Len, body: &[u8]| {
+                        [&[t][..], &encode_len(body.len(), l), body].concat()
+                    };
+                    let pdu = tlv(t3, &l3, &[tlv(t4, &l4, &id), rest].concat());
+                    tlv(t0, &l0, &[tlv(t1, &l1, &v), tlv(t2, &l2, &c), pdu].concat())
+                },
+            )
+    }
+
+    /// Вход мутатора: нагрузка порта 161 с 0–4 заменами (три из четырёх в первых 22 байтах, где идёт разбор), сообщение
+    /// из `snmp_message` или случайные 0..64 байт (любые, из `BER_BYTES` или из них же с `0x30` первым). Затем в трети
+    /// случаев ещё 1–3 замены и в четверти обрезка до случайной длины `0..=len`.
+    fn snmp_input() -> impl Strategy<Value = Vec<u8>> {
+        let base = PayloadTable::builtin().get(161).unwrap().payload.to_vec();
+        let n = base.len();
+        let p161 =
+            proptest::collection::vec((prop_oneof![3 => 0..22usize, 1 => 0..n], ber_byte()), 0..5)
+                .prop_map(move |subs| {
+                    let mut p = base.clone();
+                    for (i, b) in subs {
+                        p[i] = b;
+                    }
+                    p
+                });
+        let random = prop_oneof![
+            proptest::collection::vec(any::<u8>(), 0..64),
+            proptest::collection::vec(ber_byte(), 0..64),
+            proptest::collection::vec(ber_byte(), 1..64).prop_map(|mut v| {
+                v[0] = 0x30;
+                v
+            }),
+        ];
+        (
+            prop_oneof![3 => p161, 4 => snmp_message(), 2 => random],
+            prop_oneof![
+                2 => Just(vec![]),
+                1 => proptest::collection::vec((any::<Index>(), ber_byte()), 1..=3),
+            ],
+            prop_oneof![3 => Just(None), 1 => any::<Index>().prop_map(Some)],
+        )
+            .prop_map(|(mut p, subs, cut)| {
+                if !p.is_empty() {
+                    for (i, b) in subs {
+                        let k = i.index(p.len());
+                        p[k] = b;
+                    }
+                }
+                if let Some(c) = cut {
+                    p.truncate(c.index(p.len() + 1));
+                }
+                p
+            })
+    }
+
+    const SNMP_PIN_CASES: u32 = 50_000;
+
+    /// Мутатор SNMP равен копии базы `old::snmp_set_cookie` байт в байт на входах `snmp_input` при любом `seqno`
+    /// (случайном и граничном). Не меньше десятой части входов база действительно переписывает: генератор доходит до
+    /// записи request-id, а не отсеивается на первых тегах.
+    #[test]
+    fn snmp_cookie_matches_old_helpers() {
+        let seqno = prop_oneof![
+            4 => any::<u32>(),
+            1 => proptest::sample::select(&[0, 1, 0x7f, 0x80, 0x7fff_ffff, 0x8000_0000, u32::MAX][..]),
+        ];
+        let mut runner = TestRunner::new(Config {
+            cases: SNMP_PIN_CASES,
+            failure_persistence: None,
+            ..Config::default()
+        });
+        let written = Cell::new(0u32);
+        runner
+            .run(&(snmp_input(), seqno), |(px, seqno)| {
+                let mut got = px.clone();
+                CookieMutator::Snmp.apply(&mut got, seqno);
+                let mut want = px.clone();
+                old::snmp_set_cookie(&mut want, seqno);
+                prop_assert_eq!(&got, &want, "input {:02x?} seqno {:#x}", px, seqno);
+                written.set(written.get() + u32::from(want != px));
+                Ok(())
+            })
+            .unwrap();
+        assert!(
+            written.get() >= SNMP_PIN_CASES / 10,
+            "only {} of {SNMP_PIN_CASES} inputs reach the request-id write",
+            written.get()
+        );
     }
 
     // Синтаксис `nmap-payloads`: короткая рукописная проверка, не строки из файла Nmap.

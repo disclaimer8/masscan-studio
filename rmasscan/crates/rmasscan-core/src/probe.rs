@@ -546,11 +546,17 @@ pub fn for_each_probe_nic_with_payloads<B>(
     }
 }
 
+/// Пары `(адрес, MAC)` по возрастанию адреса.
+type MacTable = Box<[(u32, [u8; 6])]>;
+
 #[derive(Debug)]
 struct PlanInner {
     effective: EffectiveConfig,
     nics: Vec<NicBinding>,
     destinations: Option<BTreeMap<u32, [u8; 6]>>,
+    /// Те же пары, что в `destinations`, отсортированные по адресу: `load_one` ищет двоичным поиском в плоском массиве,
+    /// а не обходит дерево на каждый зонд. Строится из карты один раз в [`ReadyPlan::build`].
+    destination_macs: Option<MacTable>,
     range: u64,
     blackrock: BlackRock,
     /// По одному на адаптер (у каждого свои адреса и порты источника).
@@ -809,11 +815,15 @@ impl ReadyPlan {
         }
         let blackrock = BlackRock::try_new(range, effective.seed(), effective.blackrock_rounds())
             .map_err(ScanError::from)?;
+        let destination_macs = destinations
+            .as_ref()
+            .map(|map| map.iter().map(|(&ip, &mac)| (ip, mac)).collect());
         Ok(ReadyPlan {
             inner: Arc::new(PlanInner {
                 effective,
                 nics,
                 destinations,
+                destination_macs,
                 range,
                 blackrock,
                 builders,
@@ -1060,10 +1070,13 @@ impl ProbeCursor {
             Ok(()) => {
                 // The map is keyed by IPv4 and applies to IPv4 frames only; an IPv6 frame keeps the
                 // `next_hop_mac_ipv6` its template wrote (a plan with a map refuses IPv6 targets anyway).
-                if let (Some(destinations), TargetIp::V4(ip)) = (&inner.destinations, target) {
+                if let (Some(macs), TargetIp::V4(ip)) = (&inner.destination_macs, target) {
                     // Constructor guarantees complete immutable coverage and Ethernet framing.
                     // Only L2 destination bytes change; cookies and IP/TCP checksums stay intact.
-                    p.frame[..6].copy_from_slice(&destinations[&ip]);
+                    let at = macs
+                        .binary_search_by_key(&ip, |&(k, _)| k)
+                        .expect("destination map covers every target");
+                    p.frame[..6].copy_from_slice(&macs[at].1);
                 }
                 self.loaded.push_back(p);
                 true

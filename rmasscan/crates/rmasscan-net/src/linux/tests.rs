@@ -1,10 +1,13 @@
-//! Поведение через syscall-шов: никаких реальных сокетов.
+//! Поведение через syscall-шов: никаких реальных сокетов (кроме проверки флагов сокета ioctl, она только на Linux).
+//! Тесты идут на любой ОС: errno это номера Linux из `abi`, ожидаемый текст errno строится той же функцией хоста
+//! (`os`), а нижние границы времени проверяются только на Linux.
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+use super::abi::errno::{EACCES, EBADF, EIO, ENETDOWN, ENODEV, ENOPROTOOPT, ENXIO, EPERM};
 use super::*;
 use crate::NetStats;
 
@@ -109,7 +112,7 @@ impl PacketIo for Fake {
             .unwrap()
             .stats
             .pop_front()
-            .unwrap_or(Err(libc::ENOPROTOOPT))
+            .unwrap_or(Err(ENOPROTOOPT))
     }
 }
 
@@ -186,10 +189,10 @@ fn tx_confirmed_eagain_until_deadline_is_would_block_unsent() {
         Ok(SendStatus::WouldBlockUnsent)
     );
     let e = t0.elapsed();
-    assert!(
-        e >= Duration::from_millis(19) && e < Duration::from_millis(20) + SLACK,
-        "{e:?}"
-    );
+    // Нижняя граница времени проверяется только на Linux, верхняя на любой ОС.
+    #[cfg(target_os = "linux")]
+    assert!(e >= Duration::from_millis(19), "{e:?}");
+    assert!(e < Duration::from_millis(20) + SLACK, "{e:?}");
     assert_eq!(snap(&c).tx_would_block, 1);
 }
 
@@ -346,7 +349,7 @@ fn tx_partial_send_is_uncertain_and_keeps_fd_open() {
 #[test]
 fn tx_fatal_error_closes_the_fd_and_later_calls_fail_without_syscalls() {
     let (mut t, s, dropped, c) = tx(Script {
-        sends: [Err(libc::ENETDOWN)].into(),
+        sends: [Err(ENETDOWN)].into(),
         ..Default::default()
     });
     let e = t.send(&FRAME, MS50).unwrap_err();
@@ -401,10 +404,9 @@ fn rx_empty_times_out_within_the_deadline() {
     let t0 = Instant::now();
     assert_eq!(r.recv(&mut buf, Duration::from_millis(20)), Ok(None));
     let e = t0.elapsed();
-    assert!(
-        e >= Duration::from_millis(19) && e < Duration::from_millis(20) + SLACK,
-        "{e:?}"
-    );
+    #[cfg(target_os = "linux")]
+    assert!(e >= Duration::from_millis(19), "{e:?}");
+    assert!(e < Duration::from_millis(20) + SLACK, "{e:?}");
     assert!(
         s.lock().unwrap().recv_calls < 50,
         "must sleep in poll, not spin"
@@ -427,8 +429,10 @@ fn rx_readiness_without_packet_keeps_waiting_until_deadline() {
         ..Default::default()
     });
     let mut buf = [0u8; 16];
+    #[cfg(target_os = "linux")]
     let t0 = Instant::now();
     assert_eq!(r.recv(&mut buf, Duration::from_millis(20)), Ok(None));
+    #[cfg(target_os = "linux")]
     assert!(t0.elapsed() >= Duration::from_millis(19));
     assert!(s.lock().unwrap().recv_calls >= 3);
 }
@@ -581,7 +585,7 @@ fn rx_flood_of_dropped_frames_cannot_extend_the_deadline() {
 #[test]
 fn rx_fatal_error_closes_fd_and_later_calls_fail() {
     let (mut r, s, dropped, c) = rx(Script {
-        recvs: [Err(libc::ENETDOWN)].into(),
+        recvs: [Err(ENETDOWN)].into(),
         ..Default::default()
     });
     let mut buf = [0u8; 8];
@@ -661,7 +665,7 @@ fn health_reports_cumulative_drops_from_resetting_deltas() {
 #[test]
 fn health_error_never_returns_a_cached_zero() {
     let (mut r, _, _, c) = rx(Script {
-        stats: [ks(0), Err(libc::ENOPROTOOPT)].into(),
+        stats: [ks(0), Err(ENOPROTOOPT)].into(),
         ..Default::default()
     });
     assert_eq!(r.health(MS50).unwrap().kernel_drops, Some(0));
@@ -676,7 +680,7 @@ fn health_error_never_returns_a_cached_zero() {
 #[test]
 fn health_error_after_a_good_periodic_flush_is_still_an_error() {
     let (mut r, _, _, _) = rx(Script {
-        stats: [ks(4), Err(libc::EIO)].into(),
+        stats: [ks(4), Err(EIO)].into(),
         ..Default::default()
     });
     let mut buf = [0u8; 8];
@@ -711,7 +715,7 @@ fn drop_after_health_with_failing_read_keeps_the_total() {
 #[test]
 fn health_after_fatal_error_reports_the_closed_adapter() {
     let (mut r, _, _, _) = rx(Script {
-        recv_forever: Some(libc::EIO),
+        recv_forever: Some(EIO),
         stats: [ks(1)].into(),
         ..Default::default()
     });
@@ -840,6 +844,8 @@ fn hostile_interface_names_never_reach_the_os() {
 
 // ---------------------------------------------------------------- socket flags
 
+/// Настоящий сокет и `fcntl`: только на Linux.
+#[cfg(target_os = "linux")]
 #[test]
 fn hw_addr_ioctl_socket_keeps_its_flags() {
     use std::os::fd::AsFd;
@@ -885,22 +891,22 @@ fn error_texts_are_byte_identical() {
         "interface does not match the binding: no such interface \"veth-a\""
     );
     let mut q = FakeIface::ok();
-    q.hw_err = Some(libc::ENODEV);
+    q.hw_err = Some(ENODEV);
     assert_eq!(
         text(&q, &binding()),
         "interface does not match the binding: interface \"veth-a\" disappeared"
     );
     let mut q = FakeIface::ok();
-    q.index_err = Some(libc::EIO);
+    q.index_err = Some(EIO);
     assert_eq!(
         text(&q, &binding()),
-        format!("system error: if_nametoindex: {}", os(libc::EIO))
+        format!("system error: if_nametoindex: {}", os(EIO))
     );
     let mut q = FakeIface::ok();
-    q.hw_err = Some(libc::EIO);
+    q.hw_err = Some(EIO);
     assert_eq!(
         text(&q, &binding()),
-        format!("system error: SIOCGIFHWADDR: {}", os(libc::EIO))
+        format!("system error: SIOCGIFHWADDR: {}", os(EIO))
     );
     let mut q = FakeIface::ok();
     q.family = 772;
@@ -911,16 +917,16 @@ fn error_texts_are_byte_identical() {
     // map_open_error: the kind of each errno and the text of each kind.
     for (e, kind) in [
         (
-            libc::EPERM,
+            EPERM,
             "permission denied (raw packet access needs elevated privileges)",
         ),
         (
-            libc::EACCES,
+            EACCES,
             "permission denied (raw packet access needs elevated privileges)",
         ),
-        (libc::ENODEV, "interface does not match the binding"),
-        (libc::ENXIO, "interface does not match the binding"),
-        (libc::EIO, "system error"),
+        (ENODEV, "interface does not match the binding"),
+        (ENXIO, "interface does not match the binding"),
+        (EIO, "system error"),
     ] {
         assert_eq!(
             map_open_error("rx socket", e).to_string(),
@@ -931,12 +937,12 @@ fn error_texts_are_byte_identical() {
 
     // TX
     let (mut t, _, _, _) = tx(Script {
-        sends: [Err(libc::ENETDOWN)].into(),
+        sends: [Err(ENETDOWN)].into(),
         ..Default::default()
     });
     assert_eq!(
         t.send(&FRAME, MS50).unwrap_err().message,
-        format!("send: {}", os(libc::ENETDOWN))
+        format!("send: {}", os(ENETDOWN))
     );
     assert_eq!(t.send(&FRAME, MS50).unwrap_err().message, CLOSED);
     let (mut t, _, _, _) = tx(Script {
@@ -950,23 +956,23 @@ fn error_texts_are_byte_identical() {
     );
     let (mut t, _, _, _) = tx(Script {
         sends: [Err(EAGAIN)].into(),
-        polls: [Err(libc::EBADF)].into(),
+        polls: [Err(EBADF)].into(),
         ..Default::default()
     });
     assert_eq!(
         t.send(&FRAME, MS50).unwrap_err().message,
-        format!("poll(POLLOUT): {}", os(libc::EBADF))
+        format!("poll(POLLOUT): {}", os(EBADF))
     );
 
     // RX
     let mut buf = [0u8; 16];
     let (mut r, _, _, _) = rx(Script {
-        recvs: [Err(libc::ENETDOWN)].into(),
+        recvs: [Err(ENETDOWN)].into(),
         ..Default::default()
     });
     assert_eq!(
         r.recv(&mut buf, MS50).unwrap_err().message,
-        format!("recvfrom: {}", os(libc::ENETDOWN))
+        format!("recvfrom: {}", os(ENETDOWN))
     );
     assert_eq!(r.recv(&mut buf, MS50).unwrap_err().message, CLOSED);
     assert_eq!(r.health(MS50).unwrap_err().message, CLOSED);
@@ -979,20 +985,20 @@ fn error_texts_are_byte_identical() {
         "poll(POLLIN): socket error"
     );
     let (mut r, _, _, _) = rx(Script {
-        polls: [Err(libc::EBADF)].into(),
+        polls: [Err(EBADF)].into(),
         ..Default::default()
     });
     assert_eq!(
         r.recv(&mut buf, MS50).unwrap_err().message,
-        format!("poll(POLLIN): {}", os(libc::EBADF))
+        format!("poll(POLLIN): {}", os(EBADF))
     );
     let (mut r, _, _, _) = rx(Script {
-        stats: [Err(libc::ENOPROTOOPT)].into(),
+        stats: [Err(ENOPROTOOPT)].into(),
         ..Default::default()
     });
     assert_eq!(
         r.health(MS50).unwrap_err().message,
-        format!("getsockopt(PACKET_STATISTICS): {}", os(libc::ENOPROTOOPT))
+        format!("getsockopt(PACKET_STATISTICS): {}", os(ENOPROTOOPT))
     );
 }
 

@@ -3,6 +3,7 @@
 
 use std::mem::{offset_of, size_of};
 
+use super::abi::{self, errno};
 use super::socket::SLL_MIN_LEN;
 use crate::route_parse::{
     AF_INET, AF_INET6_LINUX, AF_UNSPEC, ARPHRD_ETHER, IFA_ADDRESS, IFA_F_DADFAILED,
@@ -135,6 +136,46 @@ fn observation_constants_and_offsets_match_libc() {
             offset_of!(libc::ifaddrmsg, ifa_family),
             offset_of!(libc::ifaddrmsg, ifa_prefixlen),
             offset_of!(libc::ifaddrmsg, ifa_index)
+        ]
+    );
+}
+
+/// Номера `linux::abi`: переносимая логика адаптера (`TxHalf`, `RxHalf`, `verify_binding`) и её тесты читают их без
+/// `libc`, поэтому собираются на любой ОС; здесь каждый сверяется с `libc` Linux.
+#[test]
+fn abi_numbers_match_libc() {
+    assert_eq!(abi::ARPHRD_ETHER, libc::ARPHRD_ETHER);
+    assert_eq!(abi::PACKET_OUTGOING, libc::PACKET_OUTGOING);
+    assert_eq!(
+        [
+            errno::EPERM,
+            errno::EINTR,
+            errno::EIO,
+            errno::ENXIO,
+            errno::EBADF,
+            errno::EAGAIN,
+            errno::EWOULDBLOCK,
+            errno::EACCES,
+            errno::ENODEV,
+            errno::EPROTO,
+            errno::ENOPROTOOPT,
+            errno::ENETDOWN,
+            errno::ENOBUFS
+        ],
+        [
+            libc::EPERM,
+            libc::EINTR,
+            libc::EIO,
+            libc::ENXIO,
+            libc::EBADF,
+            libc::EAGAIN,
+            libc::EWOULDBLOCK,
+            libc::EACCES,
+            libc::ENODEV,
+            libc::EPROTO,
+            libc::ENOPROTOOPT,
+            libc::ENETDOWN,
+            libc::ENOBUFS
         ]
     );
 }

@@ -120,19 +120,25 @@ AF_PACKET кадры с незаконченной суммой, движок и
 момента — этот раздел, а не план.
 
 Сессия целиком запускается с Mac под общим замком стенда (хост делится с планом `rmasscan-native-core`), после сборки
-на хосте из `git archive` (`l_ship`) нужных sha в каталог сессии `$D`:
+на хосте из `git archive` дерева (`l_ship`, архив `<sha>^{tree}`) нужных sha в каталог сессии `$D`:
 
 ```bash
-# на хосте, для каждого sha: wire_scan (release) -> $D/wire_scan-<sha>; один раз rmasscan-lab -> $D/rmasscan-lab;
-# для дымового прогона: cargo test --locked --release -p rmasscan-net --test linux_io --no-run -> $D/linux_io-<sha>
+# на хосте, каждый sha в СВОЙ target-каталог на диске хоста (CARGO_TARGET_DIR=~/rnn-target-<sha>, удаляется после
+# сессии): wire_scan (release) -> $D/wire_scan-<sha>; один раз rmasscan-lab -> $D/rmasscan-lab; для дымового прогона:
+# cargo test --locked --release -p rmasscan-net --test linux_io --no-run -> $D/linux_io-<sha>
 "$TO" -k 60 7200 ssh -n "$LINUX_HOST" "sudo -n bash $D/stand-s.sh --out $D/s --lab-bin $D/rmasscan-lab \
-  [--smoke $D/linux_io-<sha>] --base $D/wire_scan-<база> [--new $D/wire_scan-<новая>] [--cells tx,rx] [--qdisc noqueue]"
+  [--smoke $D/linux_io-<sha>] --base $D/wire_scan-<база> [--new $D/wire_scan-<новая> [--distinct]] [--cells tx,rx] \
+  [--qdisc noqueue]"
 ```
 
-Каждый sha собирается в свой target-каталог (`CARGO_TARGET_DIR=/tmp/rnn-target-<sha>`, не общий): `git archive`
-ставит всем файлам время коммита, а cargo узнаёт членов workspace по относительному пути и времени файлов, поэтому в
-общем каталоге дерево, собранное вторым, молча получает сборку первого (задача 2b: `linux_io` нового коммита совпал
-байт в байт с базовым). Хэши бинарников в `stand.txt` у разных sha обязаны различаться.
+Сборки не делят target-каталог. `git archive` коммита ставит всем файлам время коммита, а cargo узнаёт членов
+workspace по относительному пути и времени файлов, поэтому в общем каталоге дерево, собранное вторым, молча получало
+сборку первого: две сессии `U-TX` задачи 2 сравнивали один и тот же бинарник (ниже), а в задаче 2b `linux_io` нового
+коммита совпал байт в байт с базовым. Отсюда три правила (решение контролёра 2026-11-17): `l_ship` архивирует дерево
+(время файлов — время распаковки), каждый sha собирается в свой каталог `~/rnn-target-<sha>`, и если деревья базы и
+новой различаются (`git diff --quiet <база> <новая> -- rmasscan` не ноль), сессия идёт с `--distinct`: при равных
+sha256 двух `wire_scan` скрипт останавливается до первого прогона (сессия INVALID). Хэши бинарников пишутся в
+`stand.txt`.
 Каталог `$D` создаётся с правами 755 (дымовой прогон запускает тест без привилегий от `nobody`). Итог сессии:
 `$D/s/summary.json` (медианы, `S_AA`, `T`, `R_RX`, отношения и вердикты), `$D/s/runs.jsonl` (каждый прогон: метрики,
 годность и причины негодности), `$D/s/session.log`, `isolation.json`, `stand.txt`, `smoke-*.log`; сырые JSON
@@ -169,7 +175,8 @@ RMASSCAN_LAB_IP=10.200.0.200 RMASSCAN_LAB_MAC=02:aa:00:00:00:01 RMASSCAN_LAB_PEE
   (таймаут `3 × (пробы / R_RX + 4)` с). Метрика: CPU потока RX на принятый кадр `workers.rx_cpu_ns / net.rx_packets`,
   нс (меньше — лучше). Годный прогон: код выхода 0, `reason == "Completed"`, `rx_health.kernel_drops == 0`,
   `reply_unique` не меньше числа проб, оба `*_cpu_ns` больше нуля. `R_RX` выбирается в калибровке сессии: наибольшая
-  ступень лестницы 400 000, 300 000, 200 000, 150 000, 100 000 pps, на которой все прогоны базы годны (на первом
+  ступень лестницы 400 000, 300 000, 200 000, 150 000, 100 000, 75 000, 50 000 pps (две нижние — с задачи 2b),
+  на которой все прогоны базы годны (на первом
   негодном прогоне ступени скрипт спускается на следующую). Движок обрывает скан на первой потере ядра (`RxLoss`),
   поэтому прогон без ограничения скорости здесь не годен по определению. Для справки (не ворота) после A/B — по одному
   прогону каждой версии на каждой ступени сверху вниз; наибольшая ступень с годным прогоном у каждой версии пишется
@@ -180,10 +187,12 @@ RMASSCAN_LAB_IP=10.200.0.200 RMASSCAN_LAB_MAC=02:aa:00:00:00:01 RMASSCAN_LAB_PEE
 Одна сессия = один подъём стенда S, без перезапуска хоста, под замком стенда:
 
 1. (задачи 1, 6, 13, 15, 17) дымовой прогон адаптера `--smoke`;
-2. калибровка «база против базы»: по каждой ячейке 5 пар чередованием (`base1`, `base2`) одного и того же
-   бинарника базы. По каждой метрике `S_AA = |медиана₁ − медиана₂| / медиана` (медиана₁ — прогонов `base1`,
+2. калибровка «база против базы»: по каждой ячейке 5 пар одного и того же бинарника базы в порядке ABBA (пара i
+   нечётная — `base1`, `base2`; чётная — `base2`, `base1`). По каждой метрике `S_AA = |медиана₁ − медиана₂| / медиана` (медиана₁ — прогонов `base1`,
    медиана₂ — `base2`, медиана — всех десяти; при нулевой медиане `S_AA = 0`), порог `T = max(2 %, S_AA)`;
-3. парные A/B (`--new`): 5 пар чередованием (база, новая) в той же сессии; затем справочная лестница `U-RX`;
+3. парные A/B (`--new`): 5 пар в той же сессии в порядке ABBA (нечётная пара — база, новая; чётная — новая, база;
+   с задачи 2b: при постоянном порядке «база, затем новая» две сессии одинаковых бинарников дали `r` 0,948 и 1,020,
+   то есть эффект порядка до ~5 %, которого калибровка не видела); затем справочная лестница `U-RX`;
 4. C-оракул (`--oracle`) — отдельной серией после A/B, только для справки (время и прирост пакетов пира, не ворота).
 
 База — коммит ветки до первой правки задачи, новая — последний коммит задачи (оба sha в заметках задачи), сборка из
@@ -237,7 +246,8 @@ RMASSCAN_LAB_IP=10.200.0.200 RMASSCAN_LAB_MAC=02:aa:00:00:00:01 RMASSCAN_LAB_PEE
 ### Вторая сессия калибровки (задача 1, v2)
 
 2026-11-16, тот же хост и те же условия (`taskset -c 2,3`, qdisc `noqueue`, замок стенда общий с
-`rmasscan-native-core`), адрес адаптера `10.200.0.200`, скрипт — текст ниже (sha256 `92ff19af…`). Бинарники из
+`rmasscan-native-core`), адрес адаптера `10.200.0.200`, скрипт v2 (sha256 `92ff19af…`: текст ниже до правок задачи
+2b — порядок пар, лестница, `--distinct`). Бинарники из
 `git archive` коммита `0c06159d` (продуктовый код тот же, что в `27015f52`).
 
 - **Дымовой прогон:** `lab_*` под root — 6 из 6 ok, тест без привилегий под `nobody` — ok; изоляция подтверждена,
@@ -297,7 +307,7 @@ RMASSCAN_LAB_IP=10.200.0.200 RMASSCAN_LAB_MAC=02:aa:00:00:00:01 RMASSCAN_LAB_PEE
 ### U-RX после P5: калибровка v3 (задача 2b)
 
 2026-11-17, тот же хост и те же условия (ядро 7.0.0-38, `taskset -c 2,3`, qdisc `noqueue`, замок стенда общий с
-`rmasscan-native-core`), скрипт — текст ниже (sha256 `92ff19af…`), `--cells rx --smoke`. База обеих сторон
+`rmasscan-native-core`), скрипт v2 (sha256 `92ff19af…`), `--cells rx --smoke`. База обеих сторон
 калибровки — коммит `f3ddc64b` (P5: RX-сокет просит буфер приёма 4 MiB, `SO_RCVBUFFORCE`, без `CAP_NET_ADMIN` —
 `SO_RCVBUF`). Бинарники из `git archive`, каждый sha в своём target-каталоге (`wire_scan` sha256 `a441b720…`).
 
@@ -355,12 +365,22 @@ RMASSCAN_LAB_IP=10.200.0.200 RMASSCAN_LAB_MAC=02:aa:00:00:00:01 RMASSCAN_LAB_PEE
 | 1 | `0c06159d` | U-TX | `tx_would_block` | 2,00 % (`S_AA` 0) | 0 (0–0) | — | калибровка сессии 2 |
 | 1 | `0c06159d` | U-RX | CPU RX, нс/кадр | — | — (все ступени INVALID: `RxLoss` через ~0,3 с) | — | сессия 2 не годна для U-RX, см. диагностику |
 | 1 | `6ed758b7` | U-RX | CPU RX, нс/кадр | — | — | — | не измеряется на этом стенде: буфер приёма по умолчанию, поднять в netns нельзя |
-| 2 | `c7f2c726` | U-TX | `steady_pps` | 2,00 % (`S_AA` 0,19 %) | 205 948 (189 562–206 439) | 195 149 (185 083–205 963) | **без регрессии не пройдено**: `r` 0,948 < 0,98, в 1 из 5 пар; ускорения нет |
-| 2 | `c7f2c726` | U-TX | CPU TX, нс/кадр | 2,00 % (`S_AA` 0,22 %) | 4 896 (4 774–5 155) | 5 062 (4 800–5 281) | **без регрессии не пройдено**: `r` 0,967 < 0,98, в 1 из 5 пар; ускорения нет |
-| 2 | `c7f2c726` | U-TX | `tx_would_block` | 2,00 % (`S_AA` 0) | 0 (0–0) | 0 (0–0) | без регрессии: пройдено |
-| 2 | `c7f2c726` | U-TX | `steady_pps` | 2,20 % (`S_AA` 2,20 %) | 190 957 (185 624–215 726) | 194 801 (183 460–208 909) | без регрессии: пройдено (повтор), `r` 1,020, 4 из 5 |
-| 2 | `c7f2c726` | U-TX | CPU TX, нс/кадр | 2,00 % (`S_AA` 1,65 %) | 5 120 (4 687–5 253) | 5 076 (4 731–5 311) | без регрессии: пройдено (повтор), `r` 1,009, 4 из 5 |
+| 2 | `c7f2c726` | U-TX | `steady_pps` | 2,00 % (`S_AA` 0,19 %) | 205 948 (189 562–206 439) | 195 149 (185 083–205 963) | **A/A одинаковых бинарников (устаревшая сборка)**: `r` 0,948, в 1 из 5 пар (эффект порядка «база, затем новая») |
+| 2 | `c7f2c726` | U-TX | CPU TX, нс/кадр | 2,00 % (`S_AA` 0,22 %) | 4 896 (4 774–5 155) | 5 062 (4 800–5 281) | **A/A одинаковых бинарников (устаревшая сборка)**: `r` 0,967, в 1 из 5 пар |
+| 2 | `c7f2c726` | U-TX | `tx_would_block` | 2,00 % (`S_AA` 0) | 0 (0–0) | 0 (0–0) | **A/A одинаковых бинарников (устаревшая сборка)**: 0 и 0 |
+| 2 | `c7f2c726` | U-TX | `steady_pps` | 2,20 % (`S_AA` 2,20 %) | 190 957 (185 624–215 726) | 194 801 (183 460–208 909) | **A/A одинаковых бинарников (устаревшая сборка)**: повтор, `r` 1,020, 4 из 5 |
+| 2 | `c7f2c726` | U-TX | CPU TX, нс/кадр | 2,00 % (`S_AA` 1,65 %) | 5 120 (4 687–5 253) | 5 076 (4 731–5 311) | **A/A одинаковых бинарников (устаревшая сборка)**: повтор, `r` 1,009, 4 из 5 |
+| 2 | `c7f2c726` | U-TX | `steady_pps` | 2,00 % (`S_AA` 1,00 %) | 214 153 (210 354–216 084) | 206 541 (195 115–216 487) | **без регрессии не пройдено**: `r` 0,964 < 0,98, 3 из 5 пар; ускорения нет (настоящие сборки, ABBA) |
+| 2 | `c7f2c726` | U-TX | CPU TX, нс/кадр | 2,00 % (`S_AA` 0,99 %) | 4 630 (4 592–4 758) | 4 802 (4 583–5 031) | **без регрессии не пройдено**: `r` 0,964 < 0,98, 3 из 5 пар; ускорения нет (настоящие сборки, ABBA) |
+| 2 | `c7f2c726` | U-TX | `tx_would_block` | 2,00 % (`S_AA` 0) | 0 (0–0) | 0 (0–0) | без регрессии: пройдено (настоящие сборки, ABBA) |
 | 2b | `f3ddc64b` | U-RX | CPU RX, нс/кадр | — | — (все ступени INVALID: `RxLoss` через 1,7–12,8 с; на 100 000 pps годны 3 из 4, CPU RX 7 584–8 815) | — | калибровка v3 не годна: предел CPU двух ядер; буфер RX 8 388 608 вместо 212 992 |
+
+**Две первые сессии задачи 2 — A/A одинаковых бинарников (устаревшая сборка).** В обеих `stand.txt` хоста даёт для
+`wire_scan-36725aa2` и `wire_scan-c7f2c726` один и тот же sha256 `2880276b…` (бинарник базы): оба дерева собирались в
+общий target-каталог из `git archive` коммитов, и cargo взял для второго дерева сборку первого (см. «Стенд S»). Их
+числа ниже остаются как есть: это две сессии «база против базы» в порядке «база, затем новая», и `r` 0,948 и 1,020
+показывают эффект порядка и дрейфа до ~5 %, которого калибровка (`S_AA` 0,19–2,20 %) не видела. Поэтому с задачи 2b
+пары идут в порядке ABBA. Результат задачи 2 — третья сессия (ниже, «Задача 2: настоящие сборки»).
 
 Задача 2 (счётчики TX и RX на разных строках кэша), сессия U-TX 2026-11-16: база `36725aa2`, новая `c7f2c726`, `taskset -c 2,3`,
 qdisc `noqueue`, все 20 прогонов годны, `namespaces_left=0`. Калибровка 5 пар «база против базы»: `steady_pps`
@@ -385,7 +405,22 @@ CPU TX, нс/кадр: 5 251 / 5 146, 5 120 / 4 731, 4 687 / 5 076, 5 253 / 5 31
 новая/база около 0,98 (медиана) и 0,99 (среднее) по обеим метрикам. Аудит диффа не нашёл добавленной работы на пути TX
 (записи встраиваются, порядки памяти не менялись). Ускорения нет. Результат U-TX не однозначен. Матрица 4×5 для задачи 2 не
 запускалась (решение контролёра: матрица задачи 2b покрывает 2 и 2b); `U-RX` для задачи 2 не измерялась, стенд её не измеряет
-(задача 1). Строки таблицы по первой сессии остаются как есть.
+(задача 1). Строки таблицы по первой сессии остаются как есть. (Итог этого абзаца отменён: обе сессии сравнивали
+один бинарник, см. выше.)
+
+**Задача 2: настоящие сборки (2026-11-17, сессия задачи 2b).** База `36725aa2`, новая `c7f2c726` (обе со старым
+harness), скрипт стенда S — текст ниже (ABBA, `--distinct`), `--cells tx`, `taskset -c 2,3`, qdisc `noqueue`; каждый
+sha собран из `git archive` дерева в свой target-каталог; sha256 `wire_scan` базы `2880276b…`, новой `6ec56607…`
+(различаются, проверка `--distinct` пройдена). Все 20 прогонов годны, каждый получает 8 192 RST, `namespaces_left=0`.
+Калибровка (ABBA): `steady_pps` медиана 215 227 (214 078–220 926), медиана₁ 217 089, медиана₂ 214 934, `S_AA` 1,00 %;
+CPU TX 4 604 нс/кадр (4 509–4 633), `S_AA` 0,99 %; `T` 2 % по обеим. A/B (пары 1, 3, 5 — база первой; 2, 4 — новая
+первой), база / новая, `steady_pps`: 216 084 / 205 268, 212 188 / 195 115, 214 570 / 216 487, 214 153 / 210 110,
+210 354 / 206 541; `r` по парам 0,950, 0,920, 1,009, 0,981, 0,982; медианы 214 153 / 206 541, `r` 0,964. CPU TX,
+нс/кадр: 4 592 / 4 833, 4 758 / 5 031, 4 623 / 4 583, 4 630 / 4 719, 4 714 / 4 802; `r` по парам 0,950, 0,946, 1,009,
+0,981, 0,982; медианы 4 630 / 4 802, `r` 0,964. `tx_would_block` 0 везде. **Ворота «без регрессии» не пройдены** на
+`steady_pps` и CPU TX на кадр (`r` 0,964 < 0,98, не хуже `T` только 3 пары из 5) при годной базе; ускорения нет.
+По `steady_pps` новая версия хуже на 1,8–8,0 % в 4 парах из 5, по CPU TX на кадр — на 1,8–5,4 %, при обоих порядках; продуктовые коммиты задачи 2 не отменялись (решение
+за контролёром).
 
 ### microbench (ranking only)
 
@@ -440,12 +475,13 @@ Windows (шов, запуск на Mac, `--test-threads=1`, 5 запусков �
 #   --base BIN     wire_scan of the base commit: calibration "base vs base" of each cell (U-RX: picks R_RX)
 #   --new BIN      wire_scan of the task commit: paired A/B after the calibration, then the U-RX reference ladder
 #   --cells LIST   tx,rx (default), tx or rx
-#   --pairs N      pairs per series (default 5)
+#   --pairs N      pairs per series (default 5); pair i runs in ABBA order: odd i base-first, even i new-first
+#   --distinct     base and new come from different trees: equal sha256 of the two binaries = FATAL (stale build)
 #   --oracle BIN   C masscan: one reference series per cell after A/B (never a gate)
 set -euo pipefail
 export LC_ALL=C
 
-OUT=""; LAB_BIN=""; CPUS=2,3; QDISC=noqueue; SMOKE=""; BASE=""; NEW=""; CELLS=tx,rx; PAIRS=5; ORACLE=""
+OUT=""; LAB_BIN=""; CPUS=2,3; QDISC=noqueue; SMOKE=""; BASE=""; NEW=""; CELLS=tx,rx; PAIRS=5; ORACLE=""; DISTINCT=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --out) OUT=$2; shift 2 ;;
@@ -458,6 +494,7 @@ while [ $# -gt 0 ]; do
     --cells) CELLS=$2; shift 2 ;;
     --pairs) PAIRS=$2; shift 2 ;;
     --oracle) ORACLE=$2; shift 2 ;;
+    --distinct) DISTINCT=1; shift ;;
     *) echo "unknown argument: $1" >&2; exit 64 ;;
   esac
 done
@@ -468,6 +505,10 @@ fatal() { echo "FATAL: $*" >&2; exit 2; }
 [ ! -e "$OUT" ] || fatal "$OUT exists: every session gets a new --out"
 [ -n "$NEW" ] && [ -z "$BASE" ] && fatal "--new needs --base"
 for b in "$SMOKE" "$BASE" "$NEW" "$ORACLE"; do [ -z "$b" ] || [ -x "$b" ] || fatal "not executable: $b"; done
+if [ "$DISTINCT" = 1 ]; then
+  [ -n "$NEW" ] || fatal "--distinct needs --new"
+  [ "$(sha256sum <"$BASE")" != "$(sha256sum <"$NEW")" ] || fatal "--distinct: base and new binaries are identical (stale build)"
+fi
 case ",$CELLS," in *,tx,*|*,rx,*) ;; *) fatal "--cells must name tx and/or rx" ;; esac
 for t in ip tc ethtool taskset timeout python3 setpriv; do command -v "$t" >/dev/null || fatal "missing $t"; done
 for ns in rnn-a rnn-b; do [ ! -e "/run/netns/$ns" ] || fatal "namespace $ns exists: another stand is up or an old one was not torn down"; done
@@ -479,7 +520,7 @@ NS_A=rnn-a; NS_B=rnn-b; IF_A=rnn-va; IF_B=rnn-vb
 MAC_A=02:aa:00:00:00:01; MAC_B=02:aa:00:00:00:02; IP_A=10.200.0.1; IP_ADAPTER=10.200.0.200   # outside the peer range
 SCAN=(--iface "$IF_A" --src-ip "$IP_ADAPTER" --src-mac "$MAC_A" --router-mac "$MAC_B" --seed 1 --source-port 40000 --wait 1)
 TX_RATE=100000000; TX_TARGETS=10.200.0.0/16; TX_PORTS=1-64; TX_PROBES=4194304; TX_EXPECT=20
-RX_TARGETS=10.200.0.2-10.200.0.129; RX_LADDER="400000 300000 200000 150000 100000"
+RX_TARGETS=10.200.0.2-10.200.0.129; RX_LADDER="400000 300000 200000 150000 100000 75000 50000"
 rx_ports() { echo $(( (11 * $1 + 127) / 128 )); }   # P = ceil(11 * R_RX / 128): >= 10 s steady plus the ramp
 
 # ---- topology ----------------------------------------------------------------------------------------------
@@ -608,6 +649,7 @@ run_u() {  # run_u CELL VERSION SERIES PAIR BIN RATE : one scanner run of cell U
   judge "$f" "$cell" "$version" "$series" "$pair" "$rate" "$probes" "$rc" "$((v1 - v0))" "$(python3 -c "print(round($t1 - $t0, 3))")" \
     | tee -a "$OUT/session.log"
 }
+abba() { if [ $(( $1 % 2 )) = 1 ]; then echo "$2 $3"; else echo "$3 $2"; fi; }   # abba PAIR A B : odd A B, even B A
 valid_of() { python3 -c 'import json,sys; print("1" if json.loads(open(sys.argv[1]).read().splitlines()[-1])["valid"] else "0")' "$OUT/runs.jsonl"; }
 
 # ---- the session: calibration, A/B, reference ladder, oracle ------------------------------------------------
@@ -616,14 +658,14 @@ if [ -n "$BASE" ]; then
   for cell in tx rx; do
     case ",$CELLS," in *",$cell,"*) ;; *) continue ;; esac
     if [ "$cell" = tx ]; then
-      for p in $(seq 1 "$PAIRS"); do for v in base1 base2; do
+      for p in $(seq 1 "$PAIRS"); do for v in $(abba "$p" base1 base2); do
         run_u tx "$v" cal "$p" "$BASE" "$TX_RATE"
         [ "$(valid_of)" = 1 ] || fatal "U-TX calibration run INVALID: the session is not valid (start a new session)"
       done; done
     else
       for r in $RX_LADDER; do
         ok=1
-        for p in $(seq 1 "$PAIRS"); do for v in base1 base2; do
+        for p in $(seq 1 "$PAIRS"); do for v in $(abba "$p" base1 base2); do
           [ "$ok" = 1 ] || continue
           run_u rx "$v" cal "$p" "$BASE" "$r"; [ "$(valid_of)" = 1 ] || ok=0
         done; done
@@ -639,7 +681,9 @@ if [ -n "$NEW" ]; then
   for cell in tx rx; do
     case ",$CELLS," in *",$cell,"*) ;; *) continue ;; esac
     rate=$TX_RATE; [ "$cell" = tx ] || rate=$RRX
-    for p in $(seq 1 "$PAIRS"); do run_u "$cell" base ab "$p" "$BASE" "$rate"; run_u "$cell" new ab "$p" "$NEW" "$rate"; done
+    for p in $(seq 1 "$PAIRS"); do for v in $(abba "$p" base new); do
+      if [ "$v" = base ]; then run_u "$cell" base ab "$p" "$BASE" "$rate"; else run_u "$cell" new ab "$p" "$NEW" "$rate"; fi
+    done; done
   done
   case ",$CELLS," in *,rx,*)
     for r in $RX_LADDER; do run_u rx base ladder 0 "$BASE" "$r"; run_u rx new ladder 0 "$NEW" "$r"; done ;; esac

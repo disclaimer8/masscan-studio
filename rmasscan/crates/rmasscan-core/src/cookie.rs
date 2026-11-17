@@ -5,13 +5,10 @@
 //! источник тестовых векторов.
 
 use siphasher::sip::SipHasher24;
-use std::hash::Hasher;
 
 /// SipHash-2-4 с ключом `k0, k1` (в C ключ - `uint64_t[2]`, crypto-siphash24.c:128).
 pub fn siphash24(data: &[u8], k0: u64, k1: u64) -> u64 {
-    let mut h = SipHasher24::new_with_keys(k0, k1);
-    h.write(data);
-    h.finish()
+    SipHasher24::new_with_keys(k0, k1).hash(data)
 }
 
 /// syn-cookie.c:135-151.

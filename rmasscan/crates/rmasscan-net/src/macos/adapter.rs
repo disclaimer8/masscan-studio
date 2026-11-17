@@ -280,45 +280,65 @@ impl<I: BpfIo> Tx for TxHalf<I> {
 
 /// Результат разбора одной записи буфера.
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) enum Record {
-    /// Кадр целиком (`caplen == datalen`) лежит в `buf[start..end]`.
-    Frame { start: usize, end: usize },
+pub(crate) enum Record<'a> {
+    /// Кадр целиком (`caplen == datalen`).
+    Frame(&'a [u8]),
     /// Кадр усечён ядром (`caplen != datalen`): не выдаётся.
     Truncated,
 }
 
-/// Разбирает запись по смещению `*off` внутри `buf[..end]` и продвигает `*off`
-/// на `bpf_wordalign(bh_hdrlen + bh_caplen)`. `Err` значит, что раскладка
-/// нарушена и дальнейшему содержимому доверять нельзя.
-pub(crate) fn parse_record(
-    buf: &[u8],
-    off: &mut usize,
+/// Курсор по записям одной прочитанной пачки: разбирает запись по смещению
+/// `off` внутри `buf[..end]` и продвигает `off` на
+/// `bpf_wordalign(bh_hdrlen + bh_caplen)`. После `Err` курсор пуст: раскладка
+/// нарушена, остатку буфера доверять нельзя.
+#[derive(Debug)]
+pub(crate) struct RecordCursor {
+    off: usize,
     end: usize,
-) -> Result<Record, &'static str> {
-    let rest = buf
-        .get(*off..end)
-        .ok_or("BPF record offset is outside the read buffer")?;
-    let hdr = read_record_header(rest).ok_or("BPF record header is shorter than 18 bytes")?;
-    let hdrlen = usize::from(hdr.hdrlen);
-    if !(SIZEOF_BPF_HDR..=MAX_HDRLEN).contains(&hdrlen) {
-        return Err("BPF bh_hdrlen is outside 18..=64");
+}
+
+impl RecordCursor {
+    pub(crate) fn new(end: usize) -> Self {
+        Self { off: 0, end }
     }
-    let caplen = usize::try_from(hdr.caplen).map_err(|_| "BPF bh_caplen does not fit usize")?;
-    let total = hdrlen
-        .checked_add(caplen)
-        .filter(|t| *t <= rest.len())
-        .ok_or("BPF record extends past the read buffer")?;
-    let start = *off + hdrlen;
-    let frame_end = *off + total;
-    // Последняя запись может не содержать завершающего выравнивания.
-    *off = (*off + bpf_wordalign(total)).min(end);
-    if hdr.caplen != hdr.datalen {
-        return Ok(Record::Truncated);
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.off >= self.end
     }
-    Ok(Record::Frame {
-        start,
-        end: frame_end,
-    })
+
+    pub(crate) fn next<'b>(&mut self, buf: &'b [u8]) -> Option<Result<Record<'b>, &'static str>> {
+        if self.is_empty() {
+            return None;
+        }
+        let parsed = self.parse(buf);
+        if parsed.is_err() {
+            self.off = self.end;
+        }
+        Some(parsed)
+    }
+
+    fn parse<'b>(&mut self, buf: &'b [u8]) -> Result<Record<'b>, &'static str> {
+        let rest = buf
+            .get(self.off..self.end)
+            .ok_or("BPF record offset is outside the read buffer")?;
+        let hdr = read_record_header(rest).ok_or("BPF record header is shorter than 18 bytes")?;
+        let hdrlen = usize::from(hdr.hdrlen);
+        if !(SIZEOF_BPF_HDR..=MAX_HDRLEN).contains(&hdrlen) {
+            return Err("BPF bh_hdrlen is outside 18..=64");
+        }
+        let caplen = usize::try_from(hdr.caplen).map_err(|_| "BPF bh_caplen does not fit usize")?;
+        let total = hdrlen
+            .checked_add(caplen)
+            .filter(|t| *t <= rest.len())
+            .ok_or("BPF record extends past the read buffer")?;
+        let frame = &rest[hdrlen..total];
+        // Последняя запись может не содержать завершающего выравнивания.
+        self.off = (self.off + bpf_wordalign(total)).min(self.end);
+        if hdr.caplen != hdr.datalen {
+            return Ok(Record::Truncated);
+        }
+        Ok(Record::Frame(frame))
+    }
 }
 
 /// RX-половина.
@@ -327,10 +347,9 @@ pub(crate) struct RxHalf<I: BpfIo> {
     own_mac: [u8; 6],
     counters: Arc<Counters>,
     drops: DropCounter,
-    /// Последняя прочитанная пачка: `rbuf[off..end]` ещё не разобрано.
+    /// Последняя прочитанная пачка; курсор указывает на неразобранный остаток.
     rbuf: Vec<u8>,
-    off: usize,
-    end: usize,
+    cursor: RecordCursor,
 }
 
 enum RxStep {
@@ -353,8 +372,7 @@ impl<I: BpfIo> RxHalf<I> {
             counters,
             drops: DropCounter::new(baseline_drop),
             rbuf,
-            off: 0,
-            end: 0,
+            cursor: RecordCursor::new(0),
         }
     }
 
@@ -379,16 +397,12 @@ impl<I: BpfIo> RxHalf<I> {
     fn step(&mut self, buffer: &mut [u8], deadline: &Deadline) -> RxStep {
         loop {
             // 1. Уже прочитанные записи.
-            if self.off < self.end {
-                match parse_record(&self.rbuf, &mut self.off, self.end) {
-                    Err(why) => {
-                        // Остаток буфера недостоверен.
-                        self.off = self.end;
-                        return self.fatal(why.to_string());
-                    }
+            if let Some(record) = self.cursor.next(&self.rbuf) {
+                match record {
+                    // Курсор уже пуст: остаток буфера недостоверен.
+                    Err(why) => return self.fatal(why.to_string()),
                     Ok(Record::Truncated) => Counters::bump(&self.counters.rx_truncated),
-                    Ok(Record::Frame { start, end }) => {
-                        let frame = &self.rbuf[start..end];
+                    Ok(Record::Frame(frame)) => {
                         if frame.len() < MIN_TX_FRAME {
                             // Короче Ethernet-заголовка: не кадр, никогда не `Some(0)`.
                             Counters::bump(&self.counters.rx_truncated);
@@ -415,8 +429,7 @@ impl<I: BpfIo> RxHalf<I> {
             };
             match io.read(&mut self.rbuf) {
                 Ok(n) if n > 0 && n <= self.rbuf.len() => {
-                    self.off = 0;
-                    self.end = n;
+                    self.cursor = RecordCursor::new(n);
                 }
                 Ok(n) if n > self.rbuf.len() => {
                     return self.fatal(format!(

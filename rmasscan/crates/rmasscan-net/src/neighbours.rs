@@ -9,6 +9,17 @@ use rmasscan_core::throttle::Clock;
 use rmasscan_engine::{AdapterPair, SendStatus};
 use std::{collections::BTreeMap, net::Ipv4Addr, time::Duration};
 pub const NEIGHBOUR_BUDGET: Duration = Duration::from_secs(35);
+/// `NEIGHBOUR_BUDGET` in clock microseconds (the clock counts microseconds).
+const BUDGET_US: u64 = NEIGHBOUR_BUDGET.as_secs() * 1_000_000;
+const _: () = assert!(BUDGET_US == 35_000_000);
+/// Minimum spacing between two requests to one hop, and the response window after the final one.
+const RETRY_SPACING_US: u64 = 1_000_000;
+/// Gap before the next request after one was sent (the 100 requests/s ceiling).
+const SEND_GAP_US: u64 = 10_000;
+/// Retry delay after the adapter reported `WouldBlockUnsent`.
+const WOULD_BLOCK_RETRY_US: u64 = 1_000;
+/// Upper bound of every single send/receive timeout.
+const IO_SLICE_US: u64 = 50_000;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NeighbourReport {
     pub destinations: BTreeMap<Ipv4Addr, [u8; 6]>,
@@ -44,7 +55,7 @@ pub fn resolve_neighbours(
     plan.validate_executable()?;
     let start = clock.now_micros();
     let deadline = start
-        .checked_add(35_000_000)
+        .checked_add(BUDGET_US)
         .ok_or_else(|| invalid("neighbour deadline overflow"))?;
     check(clock, deadline, cancelled)?;
     let source_mac = plan
@@ -95,11 +106,15 @@ pub fn resolve_neighbours(
             let due = next_send.max(if pass == 0 {
                 start
             } else {
-                last.saturating_add(1_000_000)
+                last.saturating_add(RETRY_SPACING_US)
             });
             if due <= now {
                 // A final attempt without its response opportunity cannot become a local miss.
-                if pass == 2 && now.checked_add(1_000_000).is_none_or(|t| t >= deadline) {
+                if pass == 2
+                    && now
+                        .checked_add(RETRY_SPACING_US)
+                        .is_none_or(|t| t >= deadline)
+                {
                     return Err(invalid(
                         "neighbour deadline cannot provide final response window",
                     ));
@@ -107,7 +122,7 @@ pub fn resolve_neighbours(
                 let p = pending
                     .get_mut(&ip)
                     .ok_or_else(|| invalid("missing ARP target"))?;
-                let timeout = Duration::from_micros(50_000.min(deadline - now));
+                let timeout = Duration::from_micros(IO_SLICE_US.min(deadline - now));
                 match io
                     .tx
                     .send(&p.arp.request_frame(), timeout)
@@ -118,10 +133,11 @@ pub fn resolve_neighbours(
                         p.sent += 1;
                         p.last = sent_at;
                         requests_sent += 1;
-                        next_send = sent_at.saturating_add(10_000);
+                        next_send = sent_at.saturating_add(SEND_GAP_US);
                     }
                     SendStatus::WouldBlockUnsent => {
-                        next_send = check(clock, deadline, cancelled)?.saturating_add(1_000);
+                        next_send =
+                            check(clock, deadline, cancelled)?.saturating_add(WOULD_BLOCK_RETRY_US);
                     }
                     SendStatus::Uncertain => {
                         return Err(invalid("uncertain ARP send; preparation aborted"));
@@ -134,7 +150,7 @@ pub fn resolve_neighbours(
         } else {
             let end = unresolved
                 .iter()
-                .map(|(_, _, last)| last.saturating_add(1_000_000))
+                .map(|(_, _, last)| last.saturating_add(RETRY_SPACING_US))
                 .max()
                 .unwrap_or(now);
             if end >= deadline {
@@ -148,8 +164,11 @@ pub fn resolve_neighbours(
             end
         };
         let now = check(clock, deadline, cancelled)?;
-        let timeout =
-            Duration::from_micros(wake.saturating_sub(now).min(deadline - now).min(50_000));
+        let timeout = Duration::from_micros(
+            wake.saturating_sub(now)
+                .min(deadline - now)
+                .min(IO_SLICE_US),
+        );
         let got = io
             .rx
             .recv(&mut buf, timeout)

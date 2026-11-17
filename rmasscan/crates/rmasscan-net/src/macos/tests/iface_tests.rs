@@ -7,10 +7,11 @@ use rmasscan_core::packet::LinkType;
 use rmasscan_core::probe::AdapterBinding;
 
 use crate::NetError;
+use crate::discover::DARWIN_MASKED_MAC;
 use crate::macos::Errno;
 use crate::macos::ifinfo::{
-    AddrKind, IfaceInfo, LinkInfo, MASKED_MAC, OsIface, RawAddr, iface_exists, link_from_bytes,
-    merge, nic_mac, verify_binding,
+    AddrKind, IfaceInfo, LinkInfo, OsIface, RawAddr, iface_exists, link_from_bytes, merge, nic_mac,
+    verify_binding,
 };
 use crate::macos::sys::IFT_ETHER;
 
@@ -277,8 +278,8 @@ fn masked_placeholder_mac_is_unknown_never_a_value() {
         sdl_type: IFT_ETHER,
         mac: Some(mac),
     };
-    assert_eq!(link(MASKED_MAC).visible_mac(), None);
-    assert!(link(MASKED_MAC).masked());
+    assert_eq!(link(DARWIN_MASKED_MAC).visible_mac(), None);
+    assert!(link(DARWIN_MASKED_MAC).masked());
     assert_eq!(link(MAC).visible_mac(), Some(MAC));
     assert!(!link(MAC).masked());
 
@@ -290,11 +291,11 @@ fn masked_placeholder_mac_is_unknown_never_a_value() {
         }]
     };
     let fake = FakeIface::ok();
-    let masked = merge(addrs(MASKED_MAC), &fake);
+    let masked = merge(&addrs(DARWIN_MASKED_MAC), &fake);
     assert_eq!(masked[0].mac, None);
     assert!(masked[0].mac_masked);
     assert!(masked[0].ethernet);
-    let real = merge(addrs(MAC), &fake);
+    let real = merge(&addrs(MAC), &fake);
     assert_eq!(real[0].mac, Some(MAC));
     assert!(!real[0].mac_masked);
 }

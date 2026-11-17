@@ -24,8 +24,8 @@ use crate::macos::abi::errno::{
 };
 use crate::macos::abi::{BpfInsn, BpfStat, SIZEOF_BPF_HDR};
 use crate::macos::adapter::{
-    BACKOFF_MAX, IO_BUDGET, MAX_TX_FRAME, MIN_TX_FRAME, Readiness, Record, check_binding,
-    drop_all_filter, open_with, own_mac_filter, parse_record,
+    BACKOFF_MAX, IO_BUDGET, MAX_TX_FRAME, MIN_TX_FRAME, Readiness, Record, RecordCursor,
+    check_binding, drop_all_filter, open_with, own_mac_filter,
 };
 
 const OUR_MAC: [u8; 6] = [0x02, 0xac, 0x00, 0x00, 0x00, 0x01];
@@ -339,16 +339,27 @@ fn parse_record_advances_by_wordalign_and_tolerates_a_missing_final_pad() {
     let f = peer_frame(61);
     let mut data = record(SIZEOF_BPF_HDR, &f);
     data.truncate(SIZEOF_BPF_HDR + 61);
-    let mut off = 0;
-    let r = parse_record(&data, &mut off, data.len()).unwrap();
+    let mut cur = RecordCursor::new(data.len());
+    let r = cur.next(&data).unwrap().unwrap();
+    assert_eq!(r, Record::Frame(&data[SIZEOF_BPF_HDR..SIZEOF_BPF_HDR + 61]));
+    assert!(cur.is_empty());
+    assert!(cur.next(&data).is_none());
+}
+
+#[test]
+fn cursor_is_empty_after_a_malformed_record() {
+    let good = peer_frame(60);
+    let mut batch = raw_record(17, 60, 60, &good);
+    batch.extend(record(SIZEOF_BPF_HDR, &good));
+    let mut cur = RecordCursor::new(batch.len());
+    assert!(!cur.is_empty());
     assert_eq!(
-        r,
-        Record::Frame {
-            start: SIZEOF_BPF_HDR,
-            end: SIZEOF_BPF_HDR + 61
-        }
+        cur.next(&batch),
+        Some(Err("BPF bh_hdrlen is outside 18..=64"))
     );
-    assert_eq!(off, data.len());
+    // Остаток буфера недостоверен: вторая (годная) запись не выдаётся.
+    assert!(cur.is_empty());
+    assert!(cur.next(&batch).is_none());
 }
 
 #[test]
@@ -1613,15 +1624,14 @@ fn error_texts_are_byte_identical() {
 
     // every text of the record walk (`bh_caplen` always fits a 64-bit usize)
     let good = peer_frame(60);
-    let mut off = 8;
+    // `end` past the buffer: the offset is outside the read buffer.
     assert_eq!(
-        parse_record(&[0u8; 32], &mut off, 4),
-        Err("BPF record offset is outside the read buffer")
+        RecordCursor::new(40).next(&[0u8; 32]),
+        Some(Err("BPF record offset is outside the read buffer"))
     );
-    let mut off = 0;
     assert_eq!(
-        parse_record(&[0u8; 10], &mut off, 10),
-        Err("BPF record header is shorter than 18 bytes")
+        RecordCursor::new(10).next(&[0u8; 10]),
+        Some(Err("BPF record header is shorter than 18 bytes"))
     );
     for (rec, why) in [
         (
@@ -1633,8 +1643,7 @@ fn error_texts_are_byte_identical() {
             "BPF record extends past the read buffer",
         ),
     ] {
-        let mut off = 0;
-        assert_eq!(parse_record(&rec, &mut off, rec.len()), Err(why));
+        assert_eq!(RecordCursor::new(rec.len()).next(&rec), Some(Err(why)));
         // ... and the adapter reports it verbatim.
         let w = world();
         let mut a = open_pair(&w);

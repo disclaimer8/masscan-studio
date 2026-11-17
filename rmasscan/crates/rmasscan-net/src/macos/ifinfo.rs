@@ -11,7 +11,7 @@ use rmasscan_core::probe::AdapterBinding;
 
 use super::sys::IFT_ETHER;
 use super::{Errno, errno_msg};
-use crate::discover::Iface;
+use crate::discover::{DARWIN_MASKED_MAC, Iface};
 use crate::{IfaceReport, NetError};
 
 /// Канальный уровень интерфейса (из AF_LINK).
@@ -21,18 +21,14 @@ pub(crate) struct LinkInfo {
     pub mac: Option<[u8; 6]>,
 }
 
-/// Плейсхолдер, который macOS 27 отдаёт непривилегированному процессу вместо MAC
-/// Ethernet-интерфейсов (измерено: `getifaddrs` и `NET_RT_IFLIST`).
-pub(crate) const MASKED_MAC: [u8; 6] = [2, 0, 0, 0, 0, 0];
-
 impl LinkInfo {
     /// Измеренный MAC: плейсхолдер не считается значением.
     pub(crate) fn visible_mac(&self) -> Option<[u8; 6]> {
-        self.mac.filter(|m| *m != MASKED_MAC)
+        self.mac.filter(|m| *m != DARWIN_MASKED_MAC)
     }
 
     pub(crate) fn masked(&self) -> bool {
-        self.mac == Some(MASKED_MAC)
+        self.mac == Some(DARWIN_MASKED_MAC)
     }
 }
 
@@ -258,7 +254,7 @@ pub(crate) fn all_ipv6_addrs() -> Result<Vec<Ipv6Addr>, Errno> {
 
 /// Сводка по интерфейсам для инвентаря (порядок первого появления имени).
 pub(crate) fn interfaces() -> Result<Vec<IfaceReport>, Errno> {
-    Ok(merge(raw_addrs()?, &OsIface))
+    Ok(merge(&raw_addrs()?, &OsIface))
 }
 
 /// Те же интерфейсы в терминах обнаружения ([`Iface`]): `device_id` это имя, описания нет; плейсхолдер MAC это
@@ -281,7 +277,7 @@ pub(crate) fn iface_from_report(r: IfaceReport) -> Iface {
     }
 }
 
-pub(crate) fn merge(addrs: Vec<RawAddr>, q: &dyn IfaceInfo) -> Vec<IfaceReport> {
+pub(crate) fn merge(addrs: &[RawAddr], q: &dyn IfaceInfo) -> Vec<IfaceReport> {
     let mut out: Vec<IfaceReport> = Vec::new();
     for a in addrs {
         let pos = match out.iter().position(|r| r.name == a.name) {
@@ -408,7 +404,7 @@ fn prefix_from_sockaddr(bytes: &[u8]) -> Option<u8> {
     prefix_from_mask(Ipv4Addr::from(octets))
 }
 fn observations(addrs: Vec<RawAddr>, q: &dyn IfaceInfo) -> Vec<InterfaceObservation> {
-    let reports = merge(addrs.clone(), q);
+    let reports = merge(&addrs, q);
     reports
         .into_iter()
         .map(|r| {

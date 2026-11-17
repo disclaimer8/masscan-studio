@@ -10,10 +10,10 @@ use crate::NetError;
 use crate::discover::DARWIN_MASKED_MAC;
 use crate::macos::Errno;
 use crate::macos::ifinfo::{
-    AddrKind, IfaceInfo, LinkInfo, OsIface, RawAddr, iface_exists, link_from_bytes, merge, nic_mac,
-    verify_binding,
+    AddrKind, IfaceInfo, LinkInfo, OsIface, RawAddr, addr_kind, iface_exists, link_from_bytes,
+    merge, nic_mac, verify_binding,
 };
-use crate::macos::sys::IFT_ETHER;
+use crate::macos::sys::{BpfFd, IFT_ETHER};
 
 const IFINDEX: u32 = 9;
 const MAC: [u8; 6] = [2, 0xac, 0, 0, 0, 1];
@@ -304,4 +304,146 @@ fn masked_placeholder_mac_is_unknown_never_a_value() {
 fn iface_existence_does_not_depend_on_the_mac() {
     assert_eq!(iface_exists("lo0"), Some(true));
     assert_eq!(iface_exists("nope0"), Some(false));
+}
+
+#[test]
+fn open_node_of_a_missing_index_is_enoent() {
+    // No privileges needed: the node does not exist, so `open` fails before any permission check.
+    assert_eq!(BpfFd::open_node(100_000).err(), Some(libc::ENOENT));
+}
+
+/// `sockaddr_in`: len, family, port, address, 8 bytes of padding (`len` 16 as the OS reports it).
+fn sin(len: usize, a: [u8; 4]) -> Vec<u8> {
+    let mut r = vec![0u8; len.max(2)];
+    r[0] = len as u8;
+    r[1] = libc::AF_INET as u8;
+    for (i, b) in a.iter().enumerate() {
+        if 4 + i < len {
+            r[4 + i] = *b;
+        }
+    }
+    r
+}
+
+/// Netmask record of `len` bytes: `[len, 2, 0, 0, 255, …]` with the first `ones` octets set.
+fn mask(len: usize, ones: usize) -> Vec<u8> {
+    let mut r = vec![0u8; len];
+    for (i, b) in r.iter_mut().enumerate() {
+        *b = match i {
+            0 => len as u8,
+            1 => libc::AF_INET as u8,
+            4..=7 if i - 4 < ones => 255,
+            _ => 0,
+        };
+    }
+    r
+}
+
+#[test]
+fn addr_kind_reads_a_full_v4_record_with_its_prefix() {
+    let a = sin(16, [198, 51, 100, 9]);
+    let m = mask(16, 3);
+    assert_eq!(
+        addr_kind(Some(&a), Some(&m)),
+        AddrKind::V4 {
+            address: "198.51.100.9".parse().unwrap(),
+            prefix: Some(24)
+        }
+    );
+}
+
+#[test]
+fn addr_kind_v4_boundary_is_eight_bytes() {
+    let a8 = sin(8, [10, 0, 0, 1]);
+    assert_eq!(
+        addr_kind(Some(&a8), None),
+        AddrKind::V4 {
+            address: "10.0.0.1".parse().unwrap(),
+            prefix: None
+        }
+    );
+    let a7 = sin(7, [10, 0, 0, 1]);
+    assert_eq!(addr_kind(Some(&a7), None), AddrKind::Other);
+}
+
+#[test]
+fn addr_kind_netmask_lengths_decode_as_on_base() {
+    let a = sin(16, [10, 1, 2, 3]);
+    let want = |prefix| AddrKind::V4 {
+        address: "10.1.2.3".parse().unwrap(),
+        prefix,
+    };
+    // Darwin sends 0.0.0.0 as a zero-length record; an empty slice is allowed and means no prefix.
+    assert_eq!(addr_kind(Some(&a), Some(&[])), want(None));
+    assert_eq!(addr_kind(Some(&a), Some(&[1])), want(None));
+    assert_eq!(addr_kind(Some(&a), Some(&mask(5, 1))), want(Some(8)));
+    assert_eq!(addr_kind(Some(&a), Some(&mask(6, 2))), want(Some(16)));
+    assert_eq!(addr_kind(Some(&a), Some(&mask(7, 3))), want(Some(24)));
+    assert_eq!(addr_kind(Some(&a), Some(&mask(8, 4))), want(Some(32)));
+    assert_eq!(
+        addr_kind(Some(&a), Some(&[8, 2, 0, 0, 255, 0, 255, 0])),
+        want(None)
+    );
+}
+
+#[test]
+fn addr_kind_reads_v6_without_the_kame_zone() {
+    let mut a = vec![0u8; 28];
+    a[0] = 28;
+    a[1] = libc::AF_INET6 as u8;
+    let ip: std::net::Ipv6Addr = "fe80::1".parse().unwrap();
+    a[8..24].copy_from_slice(&ip.octets());
+    a[10] = 0;
+    a[11] = 4; // KAME embeds the zone index in s6_addr[2..4]
+    assert_eq!(addr_kind(Some(&a), None), AddrKind::V6(ip));
+    a[0] = 23; // one byte short of the address field (sin6_addr ends at 24)
+    assert_eq!(addr_kind(Some(&a), None), AddrKind::Other);
+}
+
+#[test]
+fn addr_kind_reads_a_link_record() {
+    let mut data = b"en0".to_vec();
+    data.extend_from_slice(&MAC);
+    let rec = dl(20, IFT_ETHER, 3, 6, &data);
+    assert_eq!(
+        addr_kind(Some(&rec), None),
+        AddrKind::Link(LinkInfo {
+            sdl_type: IFT_ETHER,
+            mac: Some(MAC)
+        })
+    );
+}
+
+#[test]
+fn addr_kind_short_or_missing_addresses_are_other() {
+    assert_eq!(addr_kind(None, None), AddrKind::Other);
+    // sa_len 0 and 1: only the two header bytes are read (the family is byte 1), nothing is parsed.
+    for len in [0u8, 1] {
+        for fam in [libc::AF_INET, libc::AF_INET6, 18] {
+            assert_eq!(addr_kind(Some(&[len, fam as u8]), None), AddrKind::Other);
+        }
+    }
+    // A record whose sa_len claims more than the slice holds must not panic.
+    assert_eq!(
+        addr_kind(Some(&[16, libc::AF_INET as u8, 0, 0, 1, 2]), None),
+        AddrKind::Other
+    );
+}
+
+#[test]
+fn addr_kind_is_the_same_from_an_unaligned_offset() {
+    let a = sin(16, [172, 16, 0, 5]);
+    let m = mask(7, 3);
+    let aligned = addr_kind(Some(&a), Some(&m));
+    let (mut ba, mut bm) = (vec![0xEEu8], vec![0xEEu8]);
+    ba.extend_from_slice(&a);
+    bm.extend_from_slice(&m);
+    assert_eq!(addr_kind(Some(&ba[1..]), Some(&bm[1..])), aligned);
+    assert_eq!(
+        aligned,
+        AddrKind::V4 {
+            address: "172.16.0.5".parse().unwrap(),
+            prefix: Some(24)
+        }
+    );
 }

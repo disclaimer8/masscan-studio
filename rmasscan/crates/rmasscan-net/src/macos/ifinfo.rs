@@ -77,6 +77,90 @@ impl IfAddrs {
     }
 }
 
+/// Запись списка `getifaddrs` как срезы байт внутри списка (живут не дольше [`IfAddrs`]).
+pub(crate) struct Entry<'a> {
+    pub name: &'a CStr,
+    pub flags: u32,
+    /// `max(sa_len, 2)` байт: семейство это байт 1 при любом `sa_len`, как читалось `sa_family`.
+    pub addr: Option<&'a [u8]>,
+    /// Ровно `sa_len` байт; пустой срез допустим (Darwin шлёт маску 0.0.0.0 с `sa_len` 0).
+    pub netmask: Option<&'a [u8]>,
+}
+
+impl IfAddrs {
+    /// Записи списка с непустым именем, в порядке `getifaddrs`.
+    fn entries(&self) -> Vec<Entry<'_>> {
+        let mut out = Vec::new();
+        let mut cur = self.0;
+        while !cur.is_null() {
+            // SAFETY: `cur` это элемент списка, который живёт до `Drop` у `self`, а `&self` заимствован на весь
+            // срок возвращённых записей.
+            let e = unsafe { &*cur };
+            cur = e.ifa_next;
+            if e.ifa_name.is_null() {
+                continue;
+            }
+            // SAFETY: `ifa_name` не null и это NUL-terminated строка внутри списка.
+            let name = unsafe { CStr::from_ptr(e.ifa_name) };
+            let addr = (!e.ifa_addr.is_null()).then(|| {
+                // SAFETY: `ifa_addr` не null и указывает на `sockaddr` внутри списка; первые два байта
+                // (`sa_len`, `sa_family`) валидны всегда, поэтому читается `max(sa_len, 2)` байт записи.
+                unsafe {
+                    let len = usize::from((*e.ifa_addr).sa_len).max(2);
+                    std::slice::from_raw_parts(e.ifa_addr.cast::<u8>(), len)
+                }
+            });
+            let netmask = (!e.ifa_netmask.is_null()).then(|| {
+                // SAFETY: `ifa_netmask` не null и указывает на запись внутри списка; Darwin может опустить
+                // хвостовые нулевые байты, поэтому читается ровно `sa_len` байт (возможно 0).
+                unsafe {
+                    let len = usize::from((*e.ifa_netmask).sa_len);
+                    std::slice::from_raw_parts(e.ifa_netmask.cast::<u8>(), len)
+                }
+            });
+            out.push(Entry {
+                name,
+                flags: e.ifa_flags,
+                addr,
+                netmask,
+            });
+        }
+        out
+    }
+}
+
+/// Разбор адреса `getifaddrs` из байт записи, без допущений о выравнивании. Длина записи это байт 0 (`sa_len`),
+/// семейство байт 1; разбор идёт по первым `sa_len` байтам (но не дальше среза). `None` и записи короче минимума
+/// семейства это [`AddrKind::Other`]. Префикс IPv4 берётся из маски (`None` без маски).
+pub(crate) fn addr_kind(addr: Option<&[u8]>, netmask: Option<&[u8]>) -> AddrKind {
+    const SIN_MIN: usize = std::mem::offset_of!(libc::sockaddr_in, sin_addr) + 4;
+    const SIN6_MIN: usize = std::mem::offset_of!(libc::sockaddr_in6, sin6_addr) + 16;
+    let Some(addr) = addr else {
+        return AddrKind::Other;
+    };
+    let (Some(&len), Some(&family)) = (addr.first(), addr.get(1)) else {
+        return AddrKind::Other;
+    };
+    let sa_len = usize::from(len);
+    let rec = &addr[..sa_len.min(addr.len())];
+    match i32::from(family) {
+        libc::AF_LINK => link_from_bytes(rec).map_or(AddrKind::Other, AddrKind::Link),
+        libc::AF_INET if sa_len >= SIN_MIN && rec.len() >= SIN_MIN => {
+            let offset = std::mem::offset_of!(libc::sockaddr_in, sin_addr);
+            let mut octets = [0u8; 4];
+            octets.copy_from_slice(&rec[offset..offset + 4]);
+            AddrKind::V4 {
+                address: Ipv4Addr::from(octets),
+                prefix: netmask.and_then(prefix_from_sockaddr),
+            }
+        }
+        libc::AF_INET6 if sa_len >= SIN6_MIN => {
+            crate::route_parse::in6_from_sockaddr(rec).map_or(AddrKind::Other, AddrKind::V6)
+        }
+        _ => AddrKind::Other,
+    }
+}
+
 impl Drop for IfAddrs {
     fn drop(&mut self) {
         if self.0.is_null() {
@@ -123,80 +207,12 @@ fn raw_addrs_until(deadline: Instant, cancelled: &dyn Fn() -> bool) -> Result<Ve
     let list = IfAddrs::get()?;
     check()?;
     let mut out = Vec::new();
-    let mut cur = list.0;
-    while !cur.is_null() {
+    for e in list.entries() {
         check()?;
-        // SAFETY: `cur` это элемент списка, живущего до конца `list`.
-        let e = unsafe { &*cur };
-        cur = e.ifa_next;
-        if e.ifa_name.is_null() {
-            continue;
-        }
-        // SAFETY: `ifa_name` не null и это NUL-terminated строка внутри списка.
-        let name = unsafe { CStr::from_ptr(e.ifa_name) }
-            .to_string_lossy()
-            .into_owned();
-        let kind = if e.ifa_addr.is_null() {
-            AddrKind::Other
-        } else {
-            // SAFETY: `ifa_addr` не null и указывает на `sockaddr`, чей первый
-            // байт `sa_len` это размер записи; заголовок sockaddr (2 байта)
-            // всегда валиден.
-            let (family, sa_len) = unsafe {
-                (
-                    i32::from((*e.ifa_addr).sa_family),
-                    usize::from((*e.ifa_addr).sa_len),
-                )
-            };
-            const SIN_MIN: usize = std::mem::offset_of!(libc::sockaddr_in, sin_addr) + 4;
-            const SIN6_MIN: usize = std::mem::offset_of!(libc::sockaddr_in6, sin6_addr) + 16;
-            match family {
-                libc::AF_LINK => {
-                    // SAFETY: запись занимает ровно `sa_len` байт по указателю
-                    // `ifa_addr` внутри списка, живущего до конца `list`; срез
-                    // копируется в owned-типы до выхода из итерации.
-                    let rec =
-                        unsafe { std::slice::from_raw_parts(e.ifa_addr.cast::<u8>(), sa_len) };
-                    link_from_bytes(rec).map_or(AddrKind::Other, AddrKind::Link)
-                }
-                libc::AF_INET if sa_len >= SIN_MIN => {
-                    // SAFETY: проверено `sa_len >= offsetof(sin_addr) + 4`, то
-                    // есть поле `sin_addr` целиком внутри записи. `ifa_addr` выровнен
-                    // как `sockaddr` (выделен `getifaddrs`), чего достаточно для `sockaddr_in`
-                    // (поля читаются по выровненным смещениям).
-                    let s_addr =
-                        unsafe { (*e.ifa_addr.cast::<libc::sockaddr_in>()).sin_addr.s_addr };
-                    let prefix = if e.ifa_netmask.is_null() {
-                        None
-                    } else {
-                        // SAFETY: getifaddrs owns this netmask. Darwin may omit trailing zero
-                        // bytes, so read only sa_len bytes and zero-fill missing IPv4 octets.
-                        let len = unsafe { usize::from((*e.ifa_netmask).sa_len) };
-                        // SAFETY: sa_len is the size of this owned sockaddr record.
-                        let bytes =
-                            unsafe { std::slice::from_raw_parts(e.ifa_netmask.cast::<u8>(), len) };
-                        prefix_from_sockaddr(bytes)
-                    };
-                    AddrKind::V4 {
-                        address: Ipv4Addr::from(u32::from_be(s_addr)),
-                        prefix,
-                    }
-                }
-                libc::AF_INET6 if sa_len >= SIN6_MIN => {
-                    // SAFETY: запись занимает ровно `sa_len` байт по указателю `ifa_addr` внутри списка, живущего до
-                    // конца `list`; `sa_len >= offsetof(sin6_addr) + 16` проверено, срез только читается и сразу
-                    // разбирается в owned `Ipv6Addr` (безопасный `in6_from_sockaddr` сам проверяет длину и семейство).
-                    let rec =
-                        unsafe { std::slice::from_raw_parts(e.ifa_addr.cast::<u8>(), sa_len) };
-                    crate::route_parse::in6_from_sockaddr(rec).map_or(AddrKind::Other, AddrKind::V6)
-                }
-                _ => AddrKind::Other,
-            }
-        };
         out.push(RawAddr {
-            name,
-            flags: e.ifa_flags,
-            kind,
+            name: e.name.to_string_lossy().into_owned(),
+            flags: e.flags,
+            kind: addr_kind(e.addr, e.netmask),
         });
     }
     Ok(out)
@@ -513,6 +529,26 @@ mod prefix_tests {
         );
         assert_eq!(prefix_from_sockaddr(&[8, 2, 0, 0, 255, 0, 255, 0]), None);
         assert_eq!(prefix_from_sockaddr(&[]), None);
+    }
+    #[test]
+    fn real_list_entries_include_loopback_v4_with_its_netmask() {
+        let list = IfAddrs::get().unwrap();
+        let entries = list.entries();
+        let lo = entries
+            .iter()
+            .find(|e| {
+                e.name.to_bytes() == b"lo0" && addr_kind(e.addr, e.netmask) != AddrKind::Other
+            })
+            .expect("lo0 has addresses");
+        assert!(entries.iter().any(|e| {
+            e.name.to_bytes() == b"lo0"
+                && addr_kind(e.addr, e.netmask)
+                    == AddrKind::V4 {
+                        address: Ipv4Addr::LOCALHOST,
+                        prefix: Some(8),
+                    }
+        }));
+        assert_ne!(lo.flags & (libc::IFF_UP as u32), 0);
     }
     /// Pins the base decoder: Darwin may trim trailing zero octets of a netmask record, so a record of
     /// `sa_len` bytes is zero-filled up to the IPv4 address field; an empty or 1-byte record is no mask.

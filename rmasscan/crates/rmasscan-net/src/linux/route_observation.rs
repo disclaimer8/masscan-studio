@@ -2,8 +2,8 @@
 //! Separate from legacy CLI enumeration so its interface/address selection stays unchanged.
 use super::*;
 use crate::network_plan::{Ipv4Prefix, check_observation};
-use crate::route_parse::{RTN_LOCAL, RTN_UNICAST};
-use crate::unix_sys::poll_one;
+use crate::route_parse::{AF_INET, RTN_LOCAL, RTN_UNICAST};
+use crate::unix_sys::{poll_one, socklen_of};
 use std::collections::BTreeMap;
 use std::os::fd::AsFd;
 use std::time::Duration;
@@ -19,6 +19,15 @@ const RTM_NEWLINK: u16 = 16;
 const RTM_GETLINK: u16 = 18;
 const RTM_NEWADDR: u16 = 20;
 const RTM_GETADDR: u16 = 22;
+/// `AF_UNSPEC` as the one-byte family of `ifinfomsg`.
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "AF_UNSPEC is 0; the assert proves that it fits the family byte"
+)]
+const AF_UNSPEC: u8 = {
+    assert!(libc::AF_UNSPEC >= 0 && libc::AF_UNSPEC <= 0xFF);
+    libc::AF_UNSPEC as u8
+};
 
 fn malformed(message: &str) -> NetError {
     NetError::System(format!("netlink observation: malformed {message}"))
@@ -70,7 +79,7 @@ impl DatagramIo for Socket {
     fn ready(&mut self, write: bool, wait: Duration) -> Result<bool, i32> {
         let event = if write { libc::POLLOUT } else { libc::POLLIN };
         // Floor rather than round up: a residual shorter than 1ms is nonblocking.
-        let millis = wait.min(SLICE).as_millis() as libc::c_int;
+        let millis = libc::c_int::try_from(wait.min(SLICE).as_millis()).unwrap_or(libc::c_int::MAX);
         let (n, revents) = poll_one(self.0.as_fd(), event, millis)?;
         if revents & (libc::POLLERR | libc::POLLHUP | libc::POLLNVAL) != 0 {
             return Err(libc::EIO);
@@ -89,7 +98,7 @@ impl DatagramIo for Socket {
                 request.len(),
                 0,
                 (&raw const kernel).cast(),
-                mem::size_of_val(&kernel) as libc::socklen_t,
+                socklen_of::<libc::sockaddr_nl>(),
             )
         };
         usize::try_from(n).map_err(|_| last_errno())
@@ -100,7 +109,7 @@ impl DatagramIo for Socket {
         // writes nothing, so correctness comes from the length check below (`len` must cover the whole address)
         // rather than from the kernel overwriting `from`.
         let mut from = nl_kernel_addr();
-        let mut len = mem::size_of_val(&from) as libc::socklen_t;
+        let mut len = socklen_of::<libc::sockaddr_nl>();
         // SAFETY: both output buffers have their true writable lengths. MSG_TRUNC
         // reports the datagram's true size, which the caller checks before slicing.
         let n = unsafe {
@@ -116,7 +125,7 @@ impl DatagramIo for Socket {
         let n = usize::try_from(n).map_err(|_| last_errno())?;
         Ok((
             n,
-            len as usize >= mem::size_of_val(&from)
+            len >= socklen_of::<libc::sockaddr_nl>()
                 && i32::from(from.nl_family) == libc::AF_NETLINK
                 && from.nl_pid == 0,
         ))
@@ -168,7 +177,7 @@ fn messages(bytes: &[u8], seq: u32) -> Result<Vec<&[u8]>, NetError> {
         if rest.len() < HEADER_LEN {
             return Err(malformed("netlink header"));
         }
-        let len = u32_at(rest, 0)? as usize;
+        let len = usize::try_from(u32_at(rest, 0)?).unwrap_or(usize::MAX);
         if len < HEADER_LEN || len > rest.len() {
             return Err(malformed("netlink length"));
         }
@@ -236,7 +245,7 @@ fn exchange_until(
             let kind = u16_at(message, 4)?;
             if kind == NLMSG_DONE {
                 if message.len() > HEADER_LEN {
-                    let error = u32_at(message, HEADER_LEN)? as i32;
+                    let error = u32_at(message, HEADER_LEN)?.cast_signed();
                     if error != 0 {
                         return Err(sys("netlink dump", error.saturating_neg()));
                     }
@@ -317,14 +326,16 @@ fn dump_request(kind: u16, seq: u32) -> Vec<u8> {
     // ifinfomsg is 16 bytes, ifaddrmsg 8 bytes; family is the first field of both.
     let payload_len = if kind == RTM_GETLINK { 16 } else { 8 };
     let mut request = vec![0; HEADER_LEN + payload_len];
-    request[..4].copy_from_slice(&((HEADER_LEN + payload_len) as u32).to_ne_bytes());
+    // 24 or 32 bytes: `payload_len` is one of the two literals above.
+    let total = u32::try_from(HEADER_LEN + payload_len).unwrap_or(u32::MAX);
+    request[..4].copy_from_slice(&total.to_ne_bytes());
     request[4..6].copy_from_slice(&kind.to_ne_bytes());
     request[6..8].copy_from_slice(&0x301u16.to_ne_bytes()); // REQUEST | DUMP
     request[8..12].copy_from_slice(&seq.to_ne_bytes());
     request[HEADER_LEN] = if kind == RTM_GETADDR {
-        libc::AF_INET as u8
+        AF_INET
     } else {
-        libc::AF_UNSPEC as u8
+        AF_UNSPEC
     };
     request
 }
@@ -345,7 +356,7 @@ fn attributes(mut bytes: &[u8]) -> Result<Vec<(u16, &[u8])>, NetError> {
 
 fn check_kernel_error(message: &[u8]) -> Result<(), NetError> {
     if u16_at(message, 4)? == NLMSG_ERROR {
-        let error = u32_at(message, HEADER_LEN)? as i32;
+        let error = u32_at(message, HEADER_LEN)?.cast_signed();
         if error != 0 {
             return Err(sys("netlink interface dump", error.saturating_neg()));
         }
@@ -370,7 +381,7 @@ fn observations(
             return Err(malformed("ifinfomsg"));
         }
         let index = u32_at(body, 4)?;
-        if index == 0 || index > i32::MAX as u32 {
+        if index == 0 || index > i32::MAX.cast_unsigned() {
             return Err(malformed("interface index"));
         }
         let ethernet = u16_at(body, 2)? == libc::ARPHRD_ETHER;
@@ -402,7 +413,7 @@ fn observations(
                     mac,
                     mac_masked: false,
                     ethernet,
-                    up: u32_at(body, 8)? & libc::IFF_UP as u32 != 0,
+                    up: u32_at(body, 8)? & libc::IFF_UP.cast_unsigned() != 0,
                     ipv4: Vec::new(),
                 },
                 ipv4_prefixes: Vec::new(),
@@ -418,7 +429,7 @@ fn observations(
         if body.len() < 8 {
             return Err(malformed("ifaddrmsg"));
         }
-        if body[0] != libc::AF_INET as u8 {
+        if body[0] != AF_INET {
             continue;
         }
         let length = body[1];

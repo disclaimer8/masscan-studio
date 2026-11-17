@@ -106,13 +106,24 @@ pub(crate) fn install_handler(sig: c_int, handler: extern "C" fn(c_int)) -> Resu
     if rc != 0 { Err(last_errno()) } else { Ok(()) }
 }
 
+/// `AF_NETLINK` как `sa_family_t` (`u16` на Linux).
+#[cfg(target_os = "linux")]
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "AF_NETLINK is 16; the assert proves that it fits sa_family_t"
+)]
+const AF_NETLINK_FAMILY: libc::sa_family_t = {
+    assert!(libc::AF_NETLINK >= 0 && libc::AF_NETLINK <= 0xFFFF);
+    libc::AF_NETLINK as libc::sa_family_t
+};
+
 /// Адрес ядра для netlink: `AF_NETLINK`, `nl_pid` 0 (ядро), без групп.
 #[cfg(target_os = "linux")]
 pub(crate) fn nl_kernel_addr() -> libc::sockaddr_nl {
     // SAFETY: `sockaddr_nl` состоит из целых полей (одно из них закрытый паддинг, поэтому литерал структуры
     // невозможен); нулевой образ корректен: `nl_pid` 0 это ядро, `nl_groups` 0 это без групп.
     let mut addr: libc::sockaddr_nl = unsafe { std::mem::zeroed() };
-    addr.nl_family = libc::AF_NETLINK as libc::sa_family_t;
+    addr.nl_family = AF_NETLINK_FAMILY;
     addr
 }
 

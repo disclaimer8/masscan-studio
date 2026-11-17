@@ -15,7 +15,7 @@ use std::mem;
 use std::os::fd::{AsFd, AsRawFd, OwnedFd};
 
 use super::{Errno, IfaceInfo, KernelStats, PacketIo, Readiness, RecvMeta};
-use crate::unix_sys::{last_errno, poll_one, setsockopt_int, socket};
+use crate::unix_sys::{last_errno, poll_one, setsockopt_int, socket, socklen_of};
 
 /// Буфер приёма, который просит RX-сокет (P5): 4 MiB. С буфером по умолчанию (`net.core.rmem_default`, около
 /// 208 KiB, ≈190 кадров RST) пауза потока RX в несколько миллисекунд при десятках тысяч ответов в секунду
@@ -36,7 +36,24 @@ fn request_rx_buffer(
 }
 
 /// ETH_P_ALL в сетевом порядке байт для `sll_protocol`.
-pub(super) const ETH_P_ALL_BE: u16 = (libc::ETH_P_ALL as u16).to_be();
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "ETH_P_ALL is 3; the assert proves that it fits u16"
+)]
+pub(super) const ETH_P_ALL_BE: u16 = {
+    assert!(libc::ETH_P_ALL >= 0 && libc::ETH_P_ALL <= 0xFFFF);
+    (libc::ETH_P_ALL as u16).to_be()
+};
+
+/// `AF_PACKET` как `sll_family` (`c_ushort`).
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "AF_PACKET is 17; the assert proves that it fits c_ushort"
+)]
+const AF_PACKET_FAMILY: libc::c_ushort = {
+    assert!(libc::AF_PACKET >= 0 && libc::AF_PACKET <= 0xFFFF);
+    libc::AF_PACKET as libc::c_ushort
+};
 
 /// Минимальный размер адреса, при котором доступны `sll_ifindex` и
 /// `sll_pkttype` (offsetof(sll_addr) == 12).
@@ -81,18 +98,14 @@ impl PacketFd {
             });
         }
 
-        let addr = sockaddr_ll(
-            libc::AF_PACKET as libc::c_ushort,
-            protocol_be,
-            ifindex as libc::c_int,
-        );
+        let addr = sockaddr_ll(AF_PACKET_FAMILY, protocol_be, ifindex.cast_signed());
         // SAFETY: `addr` живёт до конца вызова, указатель и длина описывают
         // именно этот объект; fd валиден (владеет OwnedFd).
         let rc = unsafe {
             libc::bind(
                 fd.as_raw_fd(),
                 (&raw const addr).cast::<libc::sockaddr>(),
-                mem::size_of::<libc::sockaddr_ll>() as libc::socklen_t,
+                socklen_of::<libc::sockaddr_ll>(),
             )
         };
         if rc < 0 {
@@ -135,7 +148,7 @@ impl PacketIo for PacketFd {
 
     fn recv(&mut self, buf: &mut [u8]) -> Result<RecvMeta, Errno> {
         let mut sll = sockaddr_ll(0, 0, 0);
-        let mut slen = mem::size_of::<libc::sockaddr_ll>() as libc::socklen_t;
+        let mut slen = socklen_of::<libc::sockaddr_ll>();
         // SAFETY: буфер описан срезом (ptr+len одного объекта, ядро пишет не
         // более len байт); `sll` и `slen` это живые локальные объекты, `slen`
         // содержит их реальный размер. MSG_TRUNC заставляет вернуть
@@ -151,7 +164,7 @@ impl PacketIo for PacketFd {
             )
         };
         let len = usize::try_from(n).map_err(|_| last_errno())?;
-        if (slen as usize) < SLL_MIN_LEN {
+        if usize::try_from(slen).unwrap_or(usize::MAX) < SLL_MIN_LEN {
             // Без pkttype нельзя отличить исходящий кадр: не выдаём его.
             return Err(libc::EPROTO);
         }
@@ -177,7 +190,7 @@ impl PacketIo for PacketFd {
             tp_packets: 0,
             tp_drops: 0,
         };
-        let mut len = mem::size_of::<libc::tpacket_stats>() as libc::socklen_t;
+        let mut len = socklen_of::<libc::tpacket_stats>();
         // SAFETY: `st` и `len` живые локальные объекты; len равен размеру st,
         // ядро запишет не более len байт.
         let rc = unsafe {
@@ -192,7 +205,7 @@ impl PacketIo for PacketFd {
         if rc < 0 {
             return Err(last_errno());
         }
-        if (len as usize) < mem::size_of::<libc::tpacket_stats>() {
+        if len < socklen_of::<libc::tpacket_stats>() {
             return Err(libc::EPROTO);
         }
         Ok(KernelStats { drops: st.tp_drops })
@@ -221,7 +234,7 @@ pub(super) fn ifreq_for(name: &str) -> Result<libc::ifreq, Errno> {
     // (в т.ч. нулевой указатель ifru_data) корректен.
     let mut ifr: libc::ifreq = unsafe { mem::zeroed() };
     for (dst, src) in ifr.ifr_name.iter_mut().zip(bytes) {
-        *dst = *src as libc::c_char;
+        *dst = libc::c_char::from_ne_bytes([*src]);
     }
     Ok(ifr)
 }
@@ -245,7 +258,7 @@ impl IfaceInfo for OsIface {
         let sock = ioctl_socket()?;
         // SAFETY: `ifr` живой ifreq с NUL-терминированным именем; для
         // SIOCGIFHWADDR ядро читает имя и пишет sockaddr в тот же объект.
-        let rc = unsafe { libc::ioctl(sock.as_raw_fd(), libc::SIOCGIFHWADDR as _, &raw mut ifr) };
+        let rc = unsafe { libc::ioctl(sock.as_raw_fd(), libc::SIOCGIFHWADDR, &raw mut ifr) };
         if rc < 0 {
             return Err(last_errno());
         }

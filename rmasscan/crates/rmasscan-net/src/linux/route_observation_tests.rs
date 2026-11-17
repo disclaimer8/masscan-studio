@@ -464,3 +464,17 @@ fn error_texts_are_byte_identical() {
         "system error: netlink observation retry limit exceeded"
     );
 }
+
+/// `nlmsg_len` is read with all 32 bits: lengths whose low 16 bits would give the exact length, and `u32::MAX`, are
+/// rejected; the exact length is accepted.
+#[test]
+fn netlink_length_is_read_with_all_32_bits() {
+    let msg = message(RTM_NEWLINK, 0, 7, &[0; 4]);
+    assert_eq!(messages(&msg, 7).unwrap(), [msg.as_slice()]);
+    let exact = u32::try_from(msg.len()).unwrap();
+    for len in [exact | 0x1_0000, exact | 0x8000_0000, u32::MAX] {
+        let mut m = msg.clone();
+        m[0..4].copy_from_slice(&len.to_ne_bytes());
+        assert!(messages(&m, 7).is_err(), "nlmsg_len {len:#x}");
+    }
+}

@@ -96,7 +96,7 @@ impl Deadline {
     fn poll_ms(&self) -> i32 {
         let left = self.0.saturating_duration_since(Instant::now());
         let ms = left.as_micros().div_ceil(1000);
-        ms.min(MAX_IO_TIMEOUT.as_millis()) as i32
+        i32::try_from(ms.min(MAX_IO_TIMEOUT.as_millis())).unwrap_or(i32::MAX)
     }
 }
 
@@ -199,7 +199,7 @@ impl<I: PacketIo> RxHalf<I> {
     pub(crate) fn new(io: I, ifindex: u32, counters: Arc<Counters>) -> Self {
         Self {
             io: Some(io),
-            ifindex: ifindex as i32,
+            ifindex: ifindex.cast_signed(),
             counters,
             since_stats: 0,
         }

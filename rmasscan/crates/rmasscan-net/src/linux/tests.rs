@@ -1170,3 +1170,15 @@ fn adapter_hot_path_two_threads() {
         (u64::from(BENCH_CALLS), u64::from(BENCH_CALLS))
     );
 }
+
+/// Таймаут `poll` не больше `MAX_IO_TIMEOUT`, даже когда остаток дедлайна в мс не помещается в `i32`; прошедший
+/// дедлайн даёт 0.
+#[test]
+fn poll_ms_is_capped_by_the_io_bound() {
+    let far = Deadline(Instant::now() + Duration::from_secs(30 * 86_400));
+    assert_eq!(
+        far.poll_ms(),
+        i32::try_from(MAX_IO_TIMEOUT.as_millis()).unwrap()
+    );
+    assert_eq!(Deadline(Instant::now()).poll_ms(), 0);
+}

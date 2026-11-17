@@ -15,7 +15,6 @@
 //! `socket` и адрес ядра `sockaddr_nl` берутся из общих примитивов `crate::unix_sys`.
 
 use std::ffi::CStr;
-use std::mem;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::os::fd::{AsRawFd, OwnedFd};
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -30,7 +29,7 @@ use crate::route_parse::{
     netlink_route_request, netlink_route_request6, parse_netlink_addrs6, parse_netlink_routes,
     parse_netlink_routes6, route_from_nl, route6_from_nl, usable_addrs6,
 };
-use crate::unix_sys::{last_errno, mac_from_c_chars, nl_kernel_addr, socket};
+use crate::unix_sys::{last_errno, mac_from_c_chars, nl_kernel_addr, socket, socklen_of};
 
 /// Буфер приёма: больше любой датаграммы dump ядра (`NLMSG_GOODSIZE` ≤ 8 КиБ, на новых ядрах до 32 КиБ).
 const RECV_BUF: usize = 64 * 1024;
@@ -87,7 +86,7 @@ impl Netlink {
                 libc::SOL_SOCKET,
                 libc::SO_RCVTIMEO,
                 (&raw const tv).cast::<libc::c_void>(),
-                mem::size_of::<libc::timeval>() as libc::socklen_t,
+                socklen_of::<libc::timeval>(),
             )
         };
         if rc < 0 {
@@ -108,7 +107,7 @@ impl Netlink {
                     req.len(),
                     0,
                     (&raw const kernel).cast::<libc::sockaddr>(),
-                    mem::size_of::<libc::sockaddr_nl>() as libc::socklen_t,
+                    socklen_of::<libc::sockaddr_nl>(),
                 )
             };
             match usize::try_from(n) {
@@ -127,7 +126,7 @@ impl Netlink {
             // в него ничего не пишет; корректность здесь держится на том, что читается только `nl_pid`, а он 0 в
             // обоих случаях (ядро ответило само или адрес не записан).
             let mut from = nl_kernel_addr();
-            let mut flen = mem::size_of::<libc::sockaddr_nl>() as libc::socklen_t;
+            let mut flen = socklen_of::<libc::sockaddr_nl>();
             // SAFETY: буфер описан срезом (ядро пишет не более len байт); `from` и `flen` живые локальные объекты,
             // `flen` равен их размеру. MSG_TRUNC возвращает ИСТИННУЮ длину датаграммы.
             let n = unsafe {
@@ -218,13 +217,13 @@ fn is_no_route(errno: i32) -> bool {
 
 /// Имя интерфейса по индексу (`if_indextoname`); исчезнувший интерфейс называется индексом.
 fn ifname_of(index: u32) -> String {
-    let mut buf = [0 as libc::c_char; libc::IF_NAMESIZE];
+    let mut buf: [libc::c_char; libc::IF_NAMESIZE] = [0; libc::IF_NAMESIZE];
     // SAFETY: буфер на IF_NAMESIZE символов, как требует if_indextoname; функция пишет в него не больше.
     let p = unsafe { libc::if_indextoname(index, buf.as_mut_ptr()) };
     if p.is_null() {
         return format!("ifindex {index}");
     }
-    let bytes = buf.map(|c| c as u8);
+    let bytes = buf.map(|c| u8::from_ne_bytes(c.to_ne_bytes()));
     CStr::from_bytes_until_nul(&bytes).map_or_else(
         |_| format!("ifindex {index}"),
         |c| c.to_string_lossy().into_owned(),
@@ -337,7 +336,7 @@ impl IfSock {
         let mut ifr = ifreq_for(name)?;
         // SAFETY: `ifr` живой ifreq с NUL-terminated именем; для SIOCGIF* ядро читает имя и пишет результат в тот же
         // объект; fd валиден.
-        let rc = unsafe { libc::ioctl(self.0.as_raw_fd(), req as _, &raw mut ifr) };
+        let rc = unsafe { libc::ioctl(self.0.as_raw_fd(), req, &raw mut ifr) };
         if rc < 0 { Err(last_errno()) } else { Ok(ifr) }
     }
 
@@ -355,12 +354,8 @@ impl IfSock {
                 // sockaddr_in: sa_data[0..2] порт, sa_data[2..6] адрес в сетевом порядке.
                 (i32::from(sa.sa_family) == libc::AF_INET)
                     .then(|| {
-                        Ipv4Addr::new(
-                            sa.sa_data[2] as u8,
-                            sa.sa_data[3] as u8,
-                            sa.sa_data[4] as u8,
-                            sa.sa_data[5] as u8,
-                        )
+                        let b = sa.sa_data.map(|c| u8::from_ne_bytes(c.to_ne_bytes()));
+                        Ipv4Addr::new(b[2], b[3], b[4], b[5])
                     })
                     .into_iter()
                     .collect()

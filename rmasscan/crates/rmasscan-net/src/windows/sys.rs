@@ -804,7 +804,7 @@ mod tests {
 
     /// A borrowed table over a synthetic buffer; `num_entries` never exceeds the rows the buffer holds.
     fn synthetic<const N: usize>(t: &SyntheticTable<N>) -> TableRef<'_> {
-        assert!(usize::try_from(t.num_entries).is_ok_and(|n| n <= N));
+        assert!(usize::try_from(t.num_entries).is_ok_and(|n| n <= t.rows.len()));
         TableRef {
             head: std::ptr::NonNull::from(t).cast(),
             _owner: std::marker::PhantomData,
@@ -816,18 +816,22 @@ mod tests {
     /// `Loopback` as is, `loopback_if` always false.
     #[test]
     fn forward_rows_decode_a_synthetic_table_for_both_families() {
-        use windows_sys::Win32::NetworkManagement::IpHelper::MIB_IPFORWARD_ROW2;
+        use windows_sys::Win32::NetworkManagement::IpHelper::{
+            IP_ADDRESS_PREFIX, MIB_IPFORWARD_ROW2,
+        };
         use windows_sys::Win32::Networking::WinSock::{
             AF_INET, AF_INET6, IN_ADDR, IN_ADDR_0, IN6_ADDR, IN6_ADDR_0, SOCKADDR_IN, SOCKADDR_IN6,
         };
 
-        let row = |ifindex: u32, prefix_len: u8, metric: u32, loopback: bool| {
-            let mut r = MIB_IPFORWARD_ROW2::default();
-            r.InterfaceIndex = ifindex;
-            r.DestinationPrefix.PrefixLength = prefix_len;
-            r.Metric = metric;
-            r.Loopback = loopback;
-            r
+        let row = |ifindex: u32, prefix_len: u8, metric: u32, loopback: bool| MIB_IPFORWARD_ROW2 {
+            InterfaceIndex: ifindex,
+            DestinationPrefix: IP_ADDRESS_PREFIX {
+                PrefixLength: prefix_len,
+                ..Default::default()
+            },
+            Metric: metric,
+            Loopback: loopback,
+            ..Default::default()
         };
         let via4 = |r: &mut MIB_IPFORWARD_ROW2, gw: Ipv4Addr| {
             r.NextHop.Ipv4 = SOCKADDR_IN {

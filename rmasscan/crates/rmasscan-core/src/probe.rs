@@ -957,6 +957,7 @@ impl ReadyPlan {
             nic_index: nic_index as usize,
             stream,
             loaded: VecDeque::new(),
+            spare: Vec::new(),
             ended: false,
             failed: None,
             repeats: 0,
@@ -980,6 +981,9 @@ pub struct ProbeCursor {
     stream: Shuffled<TransmitIndices>,
     /// Загруженные, ещё не подтверждённые probe, по порядку индексов.
     loaded: VecDeque<Probe>,
+    /// Подтверждённые probe с их буферами кадров: `load_one` берёт отсюда, а не заводит новый `Vec` на зонд. `fill` и
+    /// `fill_v6` перезаписывают все поля `Probe`, `build_*` начинают с `out.clear()`, поэтому прежнее содержимое не видно.
+    spare: Vec<Probe>,
     /// Поток кончился или probe не построился: новых probe нет. Липкий, чтобы
     /// пропущенный индекс не сдвинул последовательность.
     ended: bool,
@@ -1044,7 +1048,7 @@ impl ProbeCursor {
         let builder = &inner.builders[self.nic_index];
         // main.c:336-373: индексы `< range_ipv6` это цели IPv6 (`Builder::fill_v6`), остальные IPv4.
         let (target, port, xxx) = inner.effective.massip().pick_transmit(xxx);
-        let mut p = Probe::default();
+        let mut p = self.spare.pop().unwrap_or_default();
         // `ReadyPlan::new` и `new_cli` отклоняют порты без построителя заранее, поэтому отказ здесь это
         // нарушение инварианта или адаптер без `source_ipv6`/`next_hop_mac_ipv6` у цели IPv6. Он не паникует и не
         // выдаётся за конец скана: курсор останавливается и хранит причину, а движок завершает запуск отказом.
@@ -1065,6 +1069,7 @@ impl ProbeCursor {
                 true
             }
             Err(e) => {
+                self.spare.push(p);
                 self.ended = true;
                 self.failed = Some(e);
                 false
@@ -1172,7 +1177,7 @@ impl ProbeCursor {
             self.loaded.len()
         );
         let k = k.min(self.loaded.len());
-        self.loaded.drain(..k);
+        self.spare.extend(self.loaded.drain(..k));
         self.refresh_position();
     }
 

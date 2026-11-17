@@ -354,23 +354,23 @@ fn addr_kind_reads_a_full_v4_record_with_its_prefix() {
 
 #[test]
 fn addr_kind_v4_boundary_is_eight_bytes() {
-    let a8 = sin(8, [10, 0, 0, 1]);
+    let a8 = sin(8, [192, 0, 2, 1]);
     assert_eq!(
         addr_kind(Some(&a8), None),
         AddrKind::V4 {
-            address: "10.0.0.1".parse().unwrap(),
+            address: "192.0.2.1".parse().unwrap(),
             prefix: None
         }
     );
-    let a7 = sin(7, [10, 0, 0, 1]);
+    let a7 = sin(7, [192, 0, 2, 1]);
     assert_eq!(addr_kind(Some(&a7), None), AddrKind::Other);
 }
 
 #[test]
 fn addr_kind_netmask_lengths_decode_as_on_base() {
-    let a = sin(16, [10, 1, 2, 3]);
+    let a = sin(16, [198, 51, 100, 3]);
     let want = |prefix| AddrKind::V4 {
-        address: "10.1.2.3".parse().unwrap(),
+        address: "198.51.100.3".parse().unwrap(),
         prefix,
     };
     // Darwin sends 0.0.0.0 as a zero-length record; an empty slice is allowed and means no prefix.
@@ -432,7 +432,7 @@ fn addr_kind_short_or_missing_addresses_are_other() {
 
 #[test]
 fn addr_kind_is_the_same_from_an_unaligned_offset() {
-    let a = sin(16, [172, 16, 0, 5]);
+    let a = sin(16, [203, 0, 113, 5]);
     let m = mask(7, 3);
     let aligned = addr_kind(Some(&a), Some(&m));
     let (mut ba, mut bm) = (vec![0xEEu8], vec![0xEEu8]);
@@ -442,7 +442,7 @@ fn addr_kind_is_the_same_from_an_unaligned_offset() {
     assert_eq!(
         aligned,
         AddrKind::V4 {
-            address: "172.16.0.5".parse().unwrap(),
+            address: "203.0.113.5".parse().unwrap(),
             prefix: Some(24)
         }
     );

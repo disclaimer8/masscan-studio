@@ -103,16 +103,18 @@ impl IfAddrs {
             // SAFETY: `ifa_name` не null и это NUL-terminated строка внутри списка.
             let name = unsafe { CStr::from_ptr(e.ifa_name) };
             let addr = (!e.ifa_addr.is_null()).then(|| {
-                // SAFETY: `ifa_addr` не null и указывает на `sockaddr` внутри списка; первые два байта
-                // (`sa_len`, `sa_family`) валидны всегда, поэтому читается `max(sa_len, 2)` байт записи.
+                // SAFETY: `ifa_addr` не null и указывает на `sockaddr` внутри списка. Контракт ОС: `getifaddrs`
+                // копирует каждую запись с её `sa_len`, поэтому читаемы `sa_len` байт, а заголовок адреса (`sa_len`,
+                // `sa_family`) занимает минимум 2 байта; отсюда читается `max(sa_len, 2)` байт записи.
                 unsafe {
                     let len = usize::from((*e.ifa_addr).sa_len).max(2);
                     std::slice::from_raw_parts(e.ifa_addr.cast::<u8>(), len)
                 }
             });
             let netmask = (!e.ifa_netmask.is_null()).then(|| {
-                // SAFETY: `ifa_netmask` не null и указывает на запись внутри списка; Darwin может опустить
-                // хвостовые нулевые байты, поэтому читается ровно `sa_len` байт (возможно 0).
+                // SAFETY: `ifa_netmask` не null и указывает на запись внутри списка. Контракт ОС тот же: `getifaddrs`
+                // копирует запись с её `sa_len`, поэтому читаемы `sa_len` байт; Darwin может опустить хвостовые
+                // нулевые байты, поэтому читается ровно `sa_len` байт (возможно 0).
                 unsafe {
                     let len = usize::from((*e.ifa_netmask).sa_len);
                     std::slice::from_raw_parts(e.ifa_netmask.cast::<u8>(), len)
@@ -154,7 +156,7 @@ pub(crate) fn addr_kind(addr: Option<&[u8]>, netmask: Option<&[u8]>) -> AddrKind
                 prefix: netmask.and_then(prefix_from_sockaddr),
             }
         }
-        libc::AF_INET6 if sa_len >= SIN6_MIN => {
+        libc::AF_INET6 if sa_len >= SIN6_MIN && rec.len() >= SIN6_MIN => {
             crate::route_parse::in6_from_sockaddr(rec).map_or(AddrKind::Other, AddrKind::V6)
         }
         _ => AddrKind::Other,

@@ -377,10 +377,14 @@ reference A3) — the lab verifier in task 12 confirms the record TTL against th
 - **E1.1 small-window checksum on IPv6.** `tcp_set_window` recomputes with an IPv4 pseudo-header (§A3), so
   C's heartbleed-mode IPv6 frames carry a wrong TCP checksum (class г). Ours are computed per family.
 - **E1.2 length forms beyond 0x82 in X.509.** C wraps a u16 for 0x83+ and underflows `length_of_length` for
-  0x80 (C3), producing deterministic garbage field boundaries. If the Rust walk instead fails the field
-  closed on `length_of_length == 0 || > 2`, the difference is named here and decided on oracle cases in
-  task 3 (default: fail closed — the wrapped lengths read sibling bytes as the wrong fields but stay inside
-  the certificate buffer, so this is a fidelity question, not safety).
+  0x80 (C3), producing deterministic garbage field boundaries. Task 3 mirrored the wrapping exactly (the
+  oracle cases and the 240-case mutation differential decided it): not a difference.
+- **E1.3 certificate list shorter than a certificate.** When the Certificate list's total length ends inside
+  a certificate body, `parse_server_cert` computes zero-length chunks with `i += len-1` and never advances:
+  C loops forever on the whole and bytewise feeds alike (task 12 fuzzing found it in our hang, the oracle
+  confirms C's). A hang is class б (unreachable); the Rust parser consumes such bytes and terminates with
+  whatever was captured up to the list's end. Pinned by a unit test, not an oracle case (the oracle run
+  itself hangs).
 - No TLS/X.509 memory-safety defect was found re-reading 4c scope (consistent with the TLS/SMB reference §7:
   the confirmed OOBs are SMB/NTLMSSP, 4d). The record and handshake layers clamp every dispatch by the two
   remainings; the X.509 stack cannot walk past the certificate because every byte decrements

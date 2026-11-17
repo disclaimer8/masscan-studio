@@ -973,8 +973,11 @@ fn run_udp(rest: &[String]) -> Result<i32, String> {
 
 // ------------------------------------------------------------------ fuzz tcp (sub-stage 4b)
 
-/// The families of `fuzz tcp`: the eleven parsers of 4b with `force_app`, the framework, the stack.
-pub const TCP_FAMILIES: [&str; 13] = [
+/// The families of `fuzz tcp`: the eleven parsers of 4b and TLS/X.509 of 4c with `force_app`, the framework,
+/// the stack. The `x509` family feeds DER bytes to `rmasscan_proto::x509_stream` instead of `banner_stream`
+/// (its marker force_app is the X509 application number, and the certificate count comes from the input's
+/// first byte, so the split and the whole run share it).
+pub const TCP_FAMILIES: [&str; 15] = [
     "http",
     "ftp",
     "smtp",
@@ -986,6 +989,8 @@ pub const TCP_FAMILIES: [&str; 13] = [
     "rdp",
     "memcached",
     "minecraft",
+    "tls",
+    "x509",
     "framework",
     "stack",
 ];
@@ -1033,6 +1038,8 @@ pub fn family_app(family: &str) -> Option<(u16, u16)> {
         "rdp" => (app_id::RDP, 3389),
         "memcached" => (app_id::MEMCACHED, 11211),
         "minecraft" => (app_id::MC, 25565),
+        "tls" => (app_id::SSL3, 443),
+        "x509" => (app_id::X509_CERT, 443),
         _ => return None,
     })
 }
@@ -1060,6 +1067,7 @@ fn family_of_port(port: u16) -> Option<&'static str> {
         3389 => "rdp",
         11211 => "memcached",
         25565 => "minecraft",
+        443 => "tls",
         _ => return None,
     })
 }
@@ -1088,8 +1096,12 @@ pub struct TcpSeed {
     pub origin: Origin,
 }
 impl TcpSeed {
-    /// The family of the parser the classifier picks on the whole stream, else the port's.
+    /// The family of the parser the classifier picks on the whole stream, else the port's. Port 444 is the
+    /// marker of the x509 family's DER seeds (no parser family serves it; `family_app` knows it by force_app).
     pub fn family(&self) -> Option<&'static str> {
+        if self.port == 444 {
+            return Some("x509");
+        }
         let r = std::panic::catch_unwind(|| {
             banner_stream(
                 &settings(self.capture_html),
@@ -1188,6 +1200,67 @@ pub fn tcp_golden_seeds(dir: &Path) -> Result<Vec<TcpSeed>, String> {
         });
     }
     Ok(out)
+}
+
+/// The DER certificates of an x509 golden directory (`tests/golden/x509`): its manifest's case inputs
+/// (`x509-input v1`: a count and `der` hex lines), port 444 as x509_stream reads them by the marker.
+pub fn x509_golden_seeds(dir: &Path) -> Result<Vec<TcpSeed>, String> {
+    let man: Value = serde_json::from_slice(
+        &fs::read(dir.join("manifest.json")).map_err(|e| format!("{}: {e}", dir.display()))?,
+    )
+    .map_err(|e| format!("manifest.json: {e}"))?;
+    let cases = man["cases"]
+        .as_array()
+        .ok_or("manifest.json has no cases")?;
+    let mut out = Vec::new();
+    for c in cases {
+        let input = c["input"]
+            .as_str()
+            .ok_or_else(|| format!("a case without input: {}", c["name"]))?;
+        let text = fs::read_to_string(dir.join(input)).map_err(|e| format!("{input}: {e}"))?;
+        let mut der = Vec::new();
+        for l in text.lines() {
+            if let Some(hex) = l.strip_prefix("der ") {
+                der.extend(unhex(hex.trim())?);
+            }
+        }
+        der.truncate(MAX_STREAM);
+        out.push(TcpSeed {
+            port: 444,
+            capture_html: false,
+            stream: der,
+            origin: Origin::Golden,
+        });
+    }
+    Ok(out)
+}
+
+/// DER seeds built in (four input files of the x509 goldens, embedded): the x509 family has no stand
+/// scenario of its own, and a fuzz run without `--corpus` still has its corpus.
+pub fn x509_builtin_seeds() -> Vec<TcpSeed> {
+    const INPUTS: [&str; 4] = [
+        include_str!("../../../tests/golden/x509/cases/google-leaf.in.txt"),
+        include_str!("../../../tests/golden/x509/cases/case3-leaf.in.txt"),
+        include_str!("../../../tests/golden/x509/cases/mini-cn.in.txt"),
+        include_str!("../../../tests/golden/x509/cases/mini-san.in.txt"),
+    ];
+    INPUTS
+        .iter()
+        .map(|text| {
+            let mut der = Vec::new();
+            for l in text.lines() {
+                if let Some(hex) = l.strip_prefix("der ") {
+                    der.extend(unhex(hex.trim()).expect("embedded x509 input"));
+                }
+            }
+            TcpSeed {
+                port: 444,
+                capture_html: false,
+                stream: der,
+                origin: Origin::Scenario,
+            }
+        })
+        .collect()
 }
 
 /// A record: the application and its bytes.
@@ -2220,10 +2293,30 @@ fn result_diff(whole: &StreamResult, split: &StreamResult) -> String {
 }
 
 fn check_stream(t: &Target, i: &StreamInput) -> Checked {
-    let s = settings(i.capture_html);
+    let mut s = settings(i.capture_html);
+    // The tls family's vuln mode comes from the input's first byte, so the whole and split runs share it
+    // and the modes (probe, session-id and alert checks) are exercised across the run.
+    if i.force_app == Some(app_id::SSL3) {
+        match i.stream.first().copied().unwrap_or(0) % 4 {
+            1 => s.tls.heartbleed = true,
+            2 => s.tls.ticketbleed = true,
+            3 => s.tls.poodle_sslv3 = true,
+            _ => {}
+        }
+        s.tls.capture_heartbleed = i.capture_html;
+    }
     let run = |segs: &[&[u8]]| {
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            (t.stream)(&s, i.port, i.force_app, segs)
+            if i.force_app == Some(app_id::X509_CERT) {
+                let count = 1 + u32::from(i.stream.first().copied().unwrap_or(0) % 3);
+                rmasscan_proto::StreamResult {
+                    app_proto: Some(app_id::SSL3),
+                    records: rmasscan_proto::x509_stream(count, segs),
+                    actions: Vec::new(),
+                }
+            } else {
+                (t.stream)(&s, i.port, i.force_app, segs)
+            }
         }))
     };
     let segs = i.segments();
@@ -2786,8 +2879,12 @@ fn run_tcp(rest: &[String]) -> Result<i32, String> {
     };
     let common = Common::parse(&o)?;
     let mut corpus = tcp_scenario_seeds();
+    corpus.extend(x509_builtin_seeds());
     for d in o.get("corpus").into_iter().flatten() {
-        corpus.extend(tcp_golden_seeds(Path::new(d))?);
+        match tcp_golden_seeds(Path::new(d)) {
+            Ok(seeds) => corpus.extend(seeds),
+            Err(tcp_err) => corpus.extend(x509_golden_seeds(Path::new(d)).map_err(|_| tcp_err)?),
+        }
     }
     for f in o.get("pcap").into_iter().flatten() {
         corpus.extend(tcp_capture_seeds(
@@ -2821,6 +2918,13 @@ mod tests {
     fn tcp_corpus() -> Vec<TcpSeed> {
         let mut c = tcp_scenario_seeds();
         c.extend(tcp_golden_seeds(&tcp_golden_dir()).unwrap());
+        c.extend(x509_builtin_seeds());
+        c.extend(
+            x509_golden_seeds(
+                &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/golden/x509"),
+            )
+            .unwrap(),
+        );
         c
     }
 
@@ -3145,7 +3249,15 @@ mod tests {
         let man: Value =
             serde_json::from_slice(&fs::read(tcp_golden_dir().join("manifest.json")).unwrap())
                 .unwrap();
-        let cases = man["cases"].as_array().unwrap().len();
+        let xman: Value = serde_json::from_slice(
+            &fs::read(
+                Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/golden/x509/manifest.json"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let cases =
+            man["cases"].as_array().unwrap().len() + xman["cases"].as_array().unwrap().len();
         assert_eq!(
             c.iter().filter(|s| s.origin == Origin::Golden).count(),
             cases
@@ -3153,7 +3265,7 @@ mod tests {
         // Every scenario with a server stream (the silent 3389 server has none).
         assert_eq!(
             c.iter().filter(|s| s.origin == Origin::Scenario).count(),
-            TCP_SCENARIOS.len() - 1
+            TCP_SCENARIOS.len() - 1 + x509_builtin_seeds().len()
         );
         for f in TCP_FAMILIES.iter().filter(|f| family_app(f).is_some()) {
             for origin in [Origin::Scenario, Origin::Golden] {
@@ -3940,7 +4052,7 @@ mod tests {
         fs::remove_dir_all(&dir).unwrap();
     }
 
-    /// The short mode of R15 for 4b: ten seconds over the thirteen TCP families find nothing, and every family gets
+    /// The short mode of R15 for 4b: ten seconds over the fifteen TCP families find nothing, and every family gets
     /// past its parser's first checks (records, sends and closes; the stack creates connections, sends, flushes and
     /// compares delivered streams with the framework).
     #[test]
@@ -3962,7 +4074,10 @@ mod tests {
                 "{fam}: {} inputs, {s:?}",
                 o.inputs
             );
-            if !matches!(fam, "http" | "rdp" | "memcached" | "framework") {
+            if !matches!(
+                fam,
+                "http" | "rdp" | "memcached" | "framework" | "tls" | "x509"
+            ) {
                 assert!(s.with_actions > 0, "{fam}: {s:?}");
             }
             if fam == "stack" {

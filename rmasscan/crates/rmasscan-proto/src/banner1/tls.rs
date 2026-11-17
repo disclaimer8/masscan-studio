@@ -457,9 +457,12 @@ impl Tls {
                     let c = &mut self.certs;
                     c.remaining -= len as u32;
                     c.cert_remaining -= len as u32;
-                    // len == 0 (пустой сертификат или исчерпанный список): тот же байт читается заново в
-                    // следующем состоянии, как `i += len-1` у C.
-                    i = i.wrapping_add(len).wrapping_sub(1);
+                    // len == 0 из-за пустого сертификата: тот же байт читается заново как длина следующего,
+                    // как `i += len-1` у C. len == 0 из-за исчерпанного списка (`remaining`): C потребляет
+                    // байт пустым куском и идёт дальше — перечитывание зависло бы на нём навсегда.
+                    if len > 0 || c.cert_remaining == 0 {
+                        i = i.wrapping_add(len).wrapping_sub(1);
+                    }
                     if c.cert_remaining == 0 {
                         if cx.tls_flags.capture_cert {
                             cx.finalize_base64(proto);

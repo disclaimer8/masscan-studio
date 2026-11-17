@@ -339,3 +339,39 @@ fn tls_never_panics() {
         let _ = &mut streams;
     }
 }
+
+/// Список сертификатов короче длины первого сертификата: C на этом входе зависает в `parse_server_cert`
+/// (кусок длины 0 без продвижения индекса; оракул подтвердил hang на обоих прогонах). Исправление класса E1
+/// (справка §F): байт за исчерпанным списком потребляется, разбор завершается; частичный захват первых
+/// байтов сертификата остаётся, как у C до зависания.
+#[test]
+fn cert_list_shorter_than_cert_terminates() {
+    fn rec(t: u8, p: &[u8]) -> Vec<u8> {
+        let mut v = vec![t, 3, 3];
+        v.extend_from_slice(&(p.len() as u16).to_be_bytes());
+        v.extend_from_slice(p);
+        v
+    }
+    fn hs(t: u8, b: &[u8]) -> Vec<u8> {
+        let mut v = vec![t];
+        v.extend_from_slice(&(b.len() as u32).to_be_bytes()[1..]);
+        v.extend_from_slice(b);
+        v
+    }
+    let mut hello = vec![3u8, 3];
+    hello.extend(0u8..32);
+    hello.extend_from_slice(&[0, 0xc0, 0x2f, 0]);
+    let mut certs = (10u32).to_be_bytes()[1..].to_vec();
+    certs.extend_from_slice(&(100u32).to_be_bytes()[1..]);
+    certs.extend_from_slice(&[0u8; 120]);
+    let stream = [rec(22, &hs(2, &hello)), rec(22, &hs(11, &certs))].concat();
+    let r = tls_stream(true, false, false, false, false, false, &[&stream]);
+    assert_eq!(
+        r.records.iter().map(|(a, _)| *a).collect::<Vec<_>>(),
+        [9, 15]
+    );
+    // By byte: the same, and it terminates (the regression this pins).
+    let segs: Vec<&[u8]> = stream.chunks(1).collect();
+    let r2 = tls_stream(true, false, false, false, false, false, &segs);
+    assert_eq!(r2.records, r.records);
+}

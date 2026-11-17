@@ -168,6 +168,13 @@ fn name(app: u16) -> &'static str {
         25 => "memcached",
         28 => "coap",
         35 => "isakmp",
+        9 => "ssl",
+        15 => "X509",
+        16 => "X509CA",
+        20 => "vuln",
+        21 => "heartbleed",
+        22 => "ticketbleed",
+        24 => "safe",
         _ => panic!("app {app}"),
     }
 }
@@ -693,9 +700,7 @@ struct PeerConn {
 /// writes (C's IPv6 ttl stale). Time advances in 1 ms ticks; the stack is ticked every 10 ms.
 fn tcp_wire(c: &TcpCase, who: Who, t0: f64) -> (Frames, Vec<SimRec>, (usize, usize, usize)) {
     use rmasscan_core::{
-        stack::{
-            ConnAddrs, ConnKey, SegmentIn, SegmentOut, SourceRanges, StackOutput, TableParams,
-        },
+        stack::{ConnAddrs, ConnKey, SegmentIn, SegmentOut, StackOutput, TableParams},
         tcp_frame::TcpFrameBuilder,
     };
     let st = stand();
@@ -704,16 +709,13 @@ fn tcp_wire(c: &TcpCase, who: Who, t0: f64) -> (Frames, Vec<SimRec>, (usize, usi
     let probes = tcp_plan_stream(c).unwrap();
     let src = c.source();
     let mut stack = c.banners.then(|| {
-        rmasscan_proto::tcp_stack_factory(
-            rmasscan_proto::TcpBannerSettings::default(),
-            c.connection_timeout.unwrap_or(0),
-        )
-        .new_table(TableParams {
-            seed: 1,
-            capacity: 4096,
-            banner_byte_budget: 1 << 29,
-            source: SourceRanges::default(),
-        })
+        rmasscan_proto::tcp_stack_factory(tcp_case_settings(c), c.connection_timeout.unwrap_or(0))
+            .new_table(TableParams {
+                seed: 1,
+                capacity: 4096,
+                banner_byte_budget: 1 << 29,
+                source: tcp_case_source_ranges(c),
+            })
     });
     let isn0: u32 = if who == Who::Oracle {
         0x7000_0000
@@ -741,6 +743,7 @@ fn tcp_wire(c: &TcpCase, who: Who, t0: f64) -> (Frames, Vec<SimRec>, (usize, usi
     };
     let mut fr: Frames = vec![(t0, marker(&st, START_PAYLOAD))];
     let mut recs: Vec<SimRec> = Vec::new();
+    let mut status_written: std::collections::BTreeSet<usize> = Default::default();
     let mut conns: Vec<PeerConn> = probes
         .iter()
         .map(|p| {
@@ -981,10 +984,14 @@ fn tcp_wire(c: &TcpCase, who: Who, t0: f64) -> (Frames, Vec<SimRec>, (usize, usi
             let first_reply =
                 h.flags & 0x12 == 0x12 && h.seq.wrapping_add(1) == pc.snd_nxt && !pc.established
                     || h.flags == 0x14 && h.seq == 0;
-            if first_reply && !recs.iter().any(|r| matches!(r, SimRec::TcpStatus { ip, port, .. } if *ip == pc.ip && *port == pc.port))
-                && (h.flags & 0x12 == 0x12)
-            {
-                recs.push(SimRec::TcpStatus { ip: pc.ip, port: pc.port, ts: at as u32, ttl: ttl_of(pc.ip) });
+            if first_reply && !status_written.contains(&i) && (h.flags & 0x12 == 0x12) {
+                status_written.insert(i);
+                recs.push(SimRec::TcpStatus {
+                    ip: pc.ip,
+                    port: pc.port,
+                    ts: at as u32,
+                    ttl: ttl_of(pc.ip),
+                });
             }
             let fresh = (h.flags & 0x12 == 0x12 && (at - pc.reply_t).abs() < 1e-6)
                 || (h.flags == 0x14 && h.seq == 0);
@@ -1031,10 +1038,59 @@ fn tcp_wire(c: &TcpCase, who: Who, t0: f64) -> (Frames, Vec<SimRec>, (usize, usi
         }
         for (at, g) in sent {
             fr.push((at, builder.build(&g)));
-            let i = conns
+            let i = match conns
                 .iter()
                 .position(|pc| key_of(pc.ip, pc.port, pc.sport) == g.key)
-                .unwrap();
+            {
+                Some(i) => i,
+                // The stack's own SYN (the TLS second connection, task 7): the peer kernel accepts it and
+                // runs the scenario script on it, as its socket would.
+                None if g.flags == 0x02 => {
+                    let (ip, sport) = match g.key.addrs {
+                        ConnAddrs::V4 { remote, .. } => {
+                            (IpAddr::V4(remote.into()), g.key.local_port)
+                        }
+                        ConnAddrs::V6 { remote, .. } => {
+                            (IpAddr::V6(remote.into()), g.key.local_port)
+                        }
+                    };
+                    let idx = conns.len();
+                    let isn = isn0.wrapping_add((idx as u32) << 20);
+                    conns.push(PeerConn {
+                        ip,
+                        port: g.key.remote_port,
+                        sport,
+                        syn_seq: g.seq,
+                        sc: tcp_scenario(g.key.remote_port, ip),
+                        snd_nxt: isn.wrapping_add(1),
+                        rcv_nxt: g.seq.wrapping_add(1),
+                        established: false,
+                        pc: 0,
+                        ready_at: 0.0,
+                        unread: 0,
+                        eof: false,
+                        done: false,
+                        dead: false,
+                        end_at: None,
+                        reply_t: at + 0.001,
+                    });
+                    pending.push((
+                        at + 0.001,
+                        idx,
+                        peer_seg(
+                            ip,
+                            src,
+                            (g.key.remote_port, sport),
+                            isn,
+                            g.seq.wrapping_add(1),
+                            0x12,
+                            &[],
+                        ),
+                    ));
+                    continue;
+                }
+                None => panic!("segment of no connection: {g:?}"),
+            };
             to_peer(&mut conns[i], &g, at, &mut pending, i, src);
         }
         for flush in out.banners {
@@ -1753,7 +1809,10 @@ fn the_case_table_is_the_window_of_the_plan() {
             "t06_noreset",
             "t07_resolve_arp",
             "t08_resolve_ndp",
-            "t09_quiet_timers"
+            "t09_quiet_timers",
+            "t10_tls4",
+            "t11_tls6",
+            "t12_heartbleed"
         ]
     );
     let s = steps("b01_banners").unwrap();
@@ -1854,7 +1913,10 @@ fn tcp_scenarios_make_the_declared_banners_and_their_scripts_follow_the_parsers(
     let settings = TcpBannerSettings::default();
     for sc in &TCP_SCENARIOS {
         // The product's parsers on the server's whole stream, in the script's segments (C's flush order, B3).
-        let r = banner_stream(&settings, sc.port, None, &sc.sends());
+        // A TLS scenario's classification needs the sent hello the offline driver has no step for (the
+        // classifier's SSL3 gate, B1.2), so its parser is forced, as the fuzzer's tls family forces it.
+        let force = (sc.port == 443).then_some(rmasscan_proto::app_id::SSL3);
+        let r = banner_stream(&settings, sc.port, force, &sc.sends());
         let apps: Vec<&str> = r.records.iter().map(|(a, _)| name(*a)).collect();
         assert_eq!(apps, sc.apps, "{}:{} {}", sc.port, sc.peer, sc.about);
         // Every Recv or Peek waits for one segment of the scanner: a hello (B4, when the server waits) or a send of
@@ -2031,7 +2093,7 @@ fn the_tcp_cases_scan_from_their_own_source_with_one_argv_for_both_scanners() {
     assert!(after("--tcp-ips").ends_with("fd00:198:18::5"));
     assert_eq!(
         after("--tcp-ports"),
-        "21,22,23,25,80,110,143,3389,5900,11211,25565"
+        "21,22,23,25,80,110,143,443,3389,5900,11211,25565"
     );
     assert_eq!(after("--heartbeat-iface"), "veth-b");
     assert_eq!(after("--heartbeat-dst"), "02:aa:00:00:00:01");

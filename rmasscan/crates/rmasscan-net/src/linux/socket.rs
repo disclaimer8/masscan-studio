@@ -10,7 +10,7 @@
 
 use std::ffi::CString;
 use std::mem;
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd};
 
 use super::{Errno, IfaceInfo, KernelStats, PacketIo, Readiness, RecvMeta};
 
@@ -18,6 +18,44 @@ fn last_errno() -> Errno {
     std::io::Error::last_os_error()
         .raw_os_error()
         .unwrap_or(libc::EIO)
+}
+
+/// Буфер приёма, который просит RX-сокет (P5): 4 MiB. С буфером по умолчанию (`net.core.rmem_default`, около
+/// 208 KiB, ≈190 кадров RST) пауза потока RX в несколько миллисекунд при десятках тысяч ответов в секунду
+/// переполняет очередь сокета, а движок считает любую потерю ядра фатальной (`RxLoss`).
+const RX_SOCKET_BUFFER: libc::c_int = 4 << 20;
+
+/// `setsockopt` целого значения; `Err` несёт errno.
+fn set_int_opt(
+    fd: BorrowedFd<'_>,
+    level: libc::c_int,
+    name: libc::c_int,
+    value: libc::c_int,
+) -> Result<(), Errno> {
+    // SAFETY: указатель и длина описывают живой `value`; `fd` заимствован, поэтому открыт всё время вызова.
+    let rc = unsafe {
+        libc::setsockopt(
+            fd.as_raw_fd(),
+            level,
+            name,
+            (&raw const value).cast::<libc::c_void>(),
+            mem::size_of::<libc::c_int>() as libc::socklen_t,
+        )
+    };
+    if rc < 0 { Err(last_errno()) } else { Ok(()) }
+}
+
+/// Запрос буфера приёма RX-сокета через `set(name, value)` = `setsockopt(SOL_SOCKET, name, value)`: сначала
+/// `SO_RCVBUFFORCE` (нужен CAP_NET_ADMIN, снимает предел `net.core.rmem_max`), при `EPERM` — `SO_RCVBUF` (ядро
+/// ограничивает его `rmem_max`). Ядро хранит и отдаёт `getsockopt` удвоенное значение. Возвращает итог последнего
+/// вызова; открытие сокета его игнорирует.
+fn request_rx_buffer(
+    mut set: impl FnMut(libc::c_int, libc::c_int) -> Result<(), Errno>,
+) -> Result<(), Errno> {
+    match set(libc::SO_RCVBUFFORCE, RX_SOCKET_BUFFER) {
+        Err(libc::EPERM) => set(libc::SO_RCVBUF, RX_SOCKET_BUFFER),
+        r => r,
+    }
 }
 
 /// ETH_P_ALL в сетевом порядке байт для `sll_protocol`.
@@ -51,6 +89,13 @@ impl PacketFd {
         // SAFETY: `raw` только что вернул socket(), он >= 0 и больше нигде не
         // хранится, поэтому OwnedFd становится единственным владельцем.
         let fd = unsafe { OwnedFd::from_raw_fd(raw) };
+        if protocol_be == ETH_P_ALL_BE {
+            // Только RX-сокет, до bind (после bind кадры уже идут в очередь): буфер приёма 4 MiB (P5). Любой отказ
+            // безвреден, как у PACKET_IGNORE_OUTGOING ниже: сокет остаётся с буфером по умолчанию.
+            let _ = request_rx_buffer(|name, value| {
+                set_int_opt(fd.as_fd(), libc::SOL_SOCKET, name, value)
+            });
+        }
 
         // SAFETY: sockaddr_ll состоит из целых и массива u8; нулевой образ
         // корректен.
@@ -79,18 +124,8 @@ impl PacketFd {
             // (SOL_PACKET, 23, Linux 4.20+) отбрасывает их в ядре. На старых ядрах setsockopt
             // безвредно падает, и запасным остаётся user-space фильтр PACKET_OUTGOING.
             const PACKET_IGNORE_OUTGOING: libc::c_int = 23;
-            let one: libc::c_int = 1;
-            // SAFETY: указатель и длина описывают живой `one`; fd валиден (владеет OwnedFd).
             // Результат намеренно игнорируется (см. выше).
-            let _ = unsafe {
-                libc::setsockopt(
-                    fd.as_raw_fd(),
-                    libc::SOL_PACKET,
-                    PACKET_IGNORE_OUTGOING,
-                    (&raw const one).cast::<libc::c_void>(),
-                    mem::size_of::<libc::c_int>() as libc::socklen_t,
-                )
-            };
+            let _ = set_int_opt(fd.as_fd(), libc::SOL_PACKET, PACKET_IGNORE_OUTGOING, 1);
         }
         Ok(PacketFd { fd })
     }

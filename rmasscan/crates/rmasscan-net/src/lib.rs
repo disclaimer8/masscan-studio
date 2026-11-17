@@ -48,7 +48,9 @@ use rmasscan_engine::AdapterPair;
 // (`try_from(..).unwrap_or(MAX)`) не теряют значения, их запасная ветка недостижима.
 const _: () = assert!(usize::BITS >= u32::BITS && usize::BITS <= u64::BITS);
 
-#[cfg(target_os = "linux")]
+// Linux: AF_PACKET. `unsafe` только в `linux::{socket, route}`, они и `open` собираются только на Linux; переносимая
+// логика адаптера (номера Linux в `linux::abi`, без `libc`) собирается и в тестах других платформ (seam-тесты).
+#[cfg(any(target_os = "linux", test))]
 mod linux;
 
 // macOS: BPF (`/dev/bpf*`). `unsafe` только в `macos::{sys, ifinfo, process}`. Переносимые

@@ -4,23 +4,37 @@
 //! private-модуле `socket`, а тесты подставляют синтетический `PacketIo`.
 //! Таблица маршрутов (rtnetlink) и интерфейсы (`if_nameindex` + ioctl) для
 //! обнаружения: модуль `route`.
+//!
+//! Только Linux: `socket`, `route` и `open`. Остальное не зависит от `libc` (номера Linux в `abi`) и собирается в
+//! тестах на любой ОС, поэтому тесты адаптера идут и на Mac, и на Windows.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use rmasscan_core::packet::LinkType;
 use rmasscan_core::probe::AdapterBinding;
-use rmasscan_engine::{AdapterPair, IoError, MAX_IO_TIMEOUT, Rx, RxHealth, SendStatus, Tx};
+#[cfg(target_os = "linux")]
+use rmasscan_engine::AdapterPair;
+use rmasscan_engine::{IoError, MAX_IO_TIMEOUT, Rx, RxHealth, SendStatus, Tx};
 
+#[cfg(target_os = "linux")]
+use crate::OpenedAdapter;
 use crate::adapter_common::{
     Errno, Readiness, closed_error, errno_msg, map_setup_errno, valid_ifname,
 };
-use crate::{Counters, NetError, NetStatsHandle, OpenedAdapter};
+use crate::{Counters, NetError, NetStatsHandle};
 
+// Номера Linux без `libc`: errno, `ARPHRD_ETHER`, `PACKET_OUTGOING`.
+mod abi;
+use abi::errno::{EAGAIN, EBADF, EINTR, ENODEV, EWOULDBLOCK};
+use abi::{ARPHRD_ETHER, PACKET_OUTGOING};
+
+#[cfg(target_os = "linux")]
 #[allow(unsafe_code)]
 mod socket;
 
 // Обнаружение в процессе: rtnetlink (маршруты) и ioctl интерфейсов; `unsafe` только вокруг вызовов libc.
+#[cfg(target_os = "linux")]
 #[allow(unsafe_code)]
 pub(crate) mod route;
 
@@ -60,11 +74,6 @@ pub(crate) trait IfaceInfo {
     fn link_family(&self, name: &str) -> Result<u16, Errno>;
 }
 
-const EAGAIN: Errno = libc::EAGAIN;
-const EWOULDBLOCK: Errno = libc::EWOULDBLOCK;
-const EINTR: Errno = libc::EINTR;
-const ARPHRD_ETHER: u16 = libc::ARPHRD_ETHER;
-const PACKET_OUTGOING: u8 = libc::PACKET_OUTGOING;
 /// Максимальная пауза между повторами после EINTR (против busy-spin).
 pub(crate) const EINTR_BACKOFF_MAX: Duration = Duration::from_millis(1);
 /// Раз в столько принятых кадров забираем статистику ядра.
@@ -215,7 +224,7 @@ impl<I: PacketIo> RxHalf<I> {
         use std::sync::atomic::Ordering::{Relaxed, Release};
         self.since_stats = 0;
         let Some(io) = self.io.as_mut() else {
-            return Err(libc::EBADF);
+            return Err(EBADF);
         };
         let s = io.packet_stats()?;
         let delta = u64::from(s.drops);
@@ -353,7 +362,7 @@ pub(crate) fn verify_binding(q: &dyn IfaceInfo, binding: &AdapterBinding) -> Res
         .ok_or_else(|| NetError::InterfaceMismatch(format!("no such interface {name:?}")))?;
     let family = match q.link_family(name) {
         Ok(f) => f,
-        Err(libc::ENODEV) => {
+        Err(ENODEV) => {
             return Err(NetError::InterfaceMismatch(format!(
                 "interface {name:?} disappeared"
             )));
@@ -375,6 +384,7 @@ fn map_open_error(op: &str, e: Errno) -> NetError {
     map_setup_errno(op, e)
 }
 
+#[cfg(target_os = "linux")]
 pub(crate) fn open(binding: &AdapterBinding) -> Result<OpenedAdapter, NetError> {
     let ifindex = verify_binding(&socket::OsIface, binding)?;
     // TX не принимает ничего (protocol 0), RX слушает ETH_P_ALL только после

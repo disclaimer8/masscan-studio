@@ -22,6 +22,7 @@ use std::time::Instant;
 
 use super::socket::ifreq_for;
 use crate::NetError;
+use crate::adapter_common::errno_msg;
 use crate::discover::{Iface, Interfaces, Route, RouteTable, RouteV6};
 use crate::network_plan::InterfaceObservation;
 use crate::route_parse::{
@@ -44,7 +45,7 @@ static SEQ: AtomicU32 = AtomicU32::new(1);
 mod observation;
 
 fn sys(op: &str, e: i32) -> NetError {
-    NetError::System(format!("{op}: {}", std::io::Error::from_raw_os_error(e)))
+    NetError::System(errno_msg(op, e))
 }
 
 /// Отказ обмена: ошибка сокета или ответ ядра (`NLMSG_ERROR`, искажённые байты).

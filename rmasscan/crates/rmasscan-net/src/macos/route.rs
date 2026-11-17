@@ -1,6 +1,7 @@
 //! Darwin read-only routing observations. PF_ROUTE handles are nonblocking;
 //! one absolute <=1s deadline covers writes, readiness, EINTR and foreign replies.
 use super::ifinfo;
+use crate::adapter_common::errno_msg;
 use crate::network_plan::{InterfaceObservation, check_observation};
 use crate::route_parse::{
     LO0, RtReply, defaults_from_rt, defaults6_from_rt, lookup_from_rt, lookup6_from_rt,
@@ -18,7 +19,7 @@ use std::time::{Duration, Instant};
 const BUF_LEN: usize = 4096;
 static SEQ: AtomicI32 = AtomicI32::new(1);
 fn sys(op: &str, e: i32) -> NetError {
-    NetError::System(format!("{op}: {}", std::io::Error::from_raw_os_error(e)))
+    NetError::System(errno_msg(op, e))
 }
 /// Сокет `PF_ROUTE` с фильтром семейства `family` (`AF_INET` или `AF_INET6`).
 /// Без `SOCK_CLOEXEC`: `FD_CLOEXEC` не ставится, а `O_NONBLOCK` ставит `fcntl` после открытия.

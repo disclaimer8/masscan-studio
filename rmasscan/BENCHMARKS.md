@@ -181,7 +181,9 @@ RMASSCAN_LAB_IP=10.200.0.200 RMASSCAN_LAB_MAC=02:aa:00:00:00:01 RMASSCAN_LAB_PEE
   негодном прогоне ступени скрипт спускается на следующую). Движок обрывает скан на первой потере ядра (`RxLoss`),
   поэтому прогон без ограничения скорости здесь не годен по определению. Для справки (не ворота) после A/B — по одному
   прогону каждой версии на каждой ступени сверху вниз; наибольшая ступень с годным прогоном у каждой версии пишется
-  в таблицу.
+  в таблицу. `R_RX` — метка ступени (`--rate`), а не достигнутая скорость: когда отвечает каждая проба, стенд на
+  `6bc3ee59` даёт 125–137 тыс. ответов в секунду при `R_RX` 300 000, а ступень 400 000 не прошла по таймауту ячейки
+  (`3 × (пробы / R_RX + 4)` считает от метки), не по потерям.
 
 ### Протокол сессии, годность и ворота
 
@@ -194,7 +196,10 @@ RMASSCAN_LAB_IP=10.200.0.200 RMASSCAN_LAB_MAC=02:aa:00:00:00:01 RMASSCAN_LAB_PEE
 3. парные A/B (`--new`): 5 пар в той же сессии в порядке ABBA (нечётная пара — база, новая; чётная — новая, база;
    с задачи 2b: при постоянном порядке «база, затем новая» две сессии одинаковых бинарников дали `r` 0,948 и 1,020,
    то есть эффект порядка до ~5 %, которого калибровка не видела); затем справочная лестница `U-RX`;
-4. C-оракул (`--oracle`) — отдельной серией после A/B, только для справки (время и прирост пакетов пира, не ворота).
+4. (по решению контролёра, `--perf-stat N`) серия `perf`: ещё N прогонов каждой версии в порядке ABBA под
+   `perf stat -x, -e instructions:u,cycles:u`, вне ворот и вне медиан A/B; в `summary.json` — команды и такты
+   пространства пользователя на отправленный кадр (медианы и новая/база);
+5. C-оракул (`--oracle`) — отдельной серией после A/B, только для справки (время и прирост пакетов пира, не ворота).
 
 База — коммит ветки до первой правки задачи, новая — последний коммит задачи (оба sha в заметках задачи), сборка из
 `git archive` этих sha. Негодный прогон — INVALID: никогда не PASS, в медианы не идёт. INVALID базы в калибровке —
@@ -395,9 +400,12 @@ RX-доказательства задачи 13. Числа до и после `
 | 2 | `c7f2c726` | U-TX | `tx_would_block` | 2,00 % (`S_AA` 0) | 0 (0–0) | 0 (0–0) | **A/A одинаковых бинарников (устаревшая сборка)**: 0 и 0 |
 | 2 | `c7f2c726` | U-TX | `steady_pps` | 2,20 % (`S_AA` 2,20 %) | 190 957 (185 624–215 726) | 194 801 (183 460–208 909) | **A/A одинаковых бинарников (устаревшая сборка)**: повтор, `r` 1,020, 4 из 5 |
 | 2 | `c7f2c726` | U-TX | CPU TX, нс/кадр | 2,00 % (`S_AA` 1,65 %) | 5 120 (4 687–5 253) | 5 076 (4 731–5 311) | **A/A одинаковых бинарников (устаревшая сборка)**: повтор, `r` 1,009, 4 из 5 |
-| 2 | `c7f2c726` | U-TX | `steady_pps` | 2,00 % (`S_AA` 1,00 %) | 214 153 (210 354–216 084) | 206 541 (195 115–216 487) | **без регрессии не пройдено**: `r` 0,964 < 0,98, 3 из 5 пар; ускорения нет (настоящие сборки, ABBA) |
-| 2 | `c7f2c726` | U-TX | CPU TX, нс/кадр | 2,00 % (`S_AA` 0,99 %) | 4 630 (4 592–4 758) | 4 802 (4 583–5 031) | **без регрессии не пройдено**: `r` 0,964 < 0,98, 3 из 5 пар; ускорения нет (настоящие сборки, ABBA) |
-| 2 | `c7f2c726` | U-TX | `tx_would_block` | 2,00 % (`S_AA` 0) | 0 (0–0) | 0 (0–0) | без регрессии: пройдено (настоящие сборки, ABBA) |
+| 2 | `c7f2c726` | U-TX | `steady_pps` | 2,00 % (`S_AA` 1,00 %) | 214 153 (210 354–216 084) | 206 541 (195 115–216 487) | **без регрессии не пройдено**: `r` 0,964 < 0,98, 3 из 5 пар; ускорения нет (настоящие сборки, ABBA, старый harness) |
+| 2 | `c7f2c726` | U-TX | CPU TX, нс/кадр | 2,00 % (`S_AA` 0,99 %) | 4 630 (4 592–4 758) | 4 802 (4 583–5 031) | **без регрессии не пройдено**: `r` 0,964 < 0,98, 3 из 5 пар; ускорения нет (настоящие сборки, ABBA, старый harness) |
+| 2 | `c7f2c726` | U-TX | `tx_would_block` | 2,00 % (`S_AA` 0) | 0 (0–0) | 0 (0–0) | без регрессии: пройдено (настоящие сборки, ABBA, старый harness) |
+| 2 (диагн.) | `6bc3ee59` против `d6b1abcb` | U-TX | `steady_pps` | 3,81 % (`S_AA` 3,81 %) | 363 137 (321 044–367 179) | 359 805 (333 957–369 703) | **без регрессии не пройдено**: `r` 0,991, но 3 из 5 пар (исправленный harness); правило → откат |
+| 2 (диагн.) | `6bc3ee59` против `d6b1abcb` | U-TX | CPU TX, нс/кадр | 3,88 % (`S_AA` 3,88 %) | 2 695 (2 662–3 011) | 2 775 (2 637–2 949) | **без регрессии не пройдено**: `r` 0,971, 3 из 5 пар (исправленный harness); правило → откат |
+| 2 (диагн.) | `6bc3ee59` против `d6b1abcb` | U-TX | `instructions:u` на кадр (`perf stat`, 3 + 3) | — | 3 325,1 (3 325,1–3 325,2) | 3 325,1 (3 325,05–3 325,10) | новая/база 1,000 ≤ 1,01 (`cycles:u` на кадр 2 633 / 2 556, 0,971) |
 | 2b | `f3ddc64b` | U-RX | CPU RX, нс/кадр | — | — (все ступени INVALID: `RxLoss` через 1,7–12,8 с; на 100 000 pps годны 3 из 4, CPU RX 7 584–8 815) | — | калибровка v3, старый harness: не годна (предел CPU двух ядер); P5: буфер RX 8 388 608 вместо 212 992 |
 | 2b | `6bc3ee59` | U-RX | CPU RX, нс/кадр | 3,42 % (`S_AA` 3,42 %) | 5 347 (5 176–5 512) при `R_RX` 300 000 | — | калибровка v3 годна: 10 из 10, 0 потерь ядра; 400 000 — таймаут ячейки |
 
@@ -448,6 +456,33 @@ CPU TX 4 604 нс/кадр (4 509–4 633), `S_AA` 0,99 %; `T` 2 % по обеи
 По `steady_pps` новая версия хуже на 1,8–8,0 % в 4 парах из 5, по CPU TX на кадр — на 1,8–5,4 %, при обоих порядках; продуктовые коммиты задачи 2 не отменялись (решение
 за контролёром).
 
+**Задача 2: диагностика по заранее заданному правилу (2026-11-17).** Правило контролёра (записано до сессии): задача 2
+остаётся, только если сессия `U-TX` проходит «без регрессии» по `steady_pps` и CPU TX на кадр **и** команды
+пространства пользователя на отправленный кадр новая/база ≤ 1,01; иначе — откат. Новая (B) — `6bc3ee59` (счётчики
+задачи 2, P5, исправленный harness), база (A) — `d6b1abcb`: `6bc3ee59` с отменёнными `bbfa1ceb` и `c7f2c726`
+(временная ветка, удалена; откат в порядке правила дал конфликт modify/delete `counters.rs`, решён удалением файла;
+семь файлов задачи 2 в A байт в байт равны `36725aa2`, остальное — `6bc3ee59`, то есть P5 и исправленный harness на
+обеих сторонах). Скрипт стенда S — текст ниже (`--cells tx --distinct --perf-stat 3`); sha256 `wire_scan` A
+`614c6001…`, B `c9969092…`. Все 26 прогонов годны, каждый получает 8 192 RST.
+
+- Калибровка (ABBA): `steady_pps` медиана 366 448 (312 612–380 218), медиана₁ 374 810, медиана₂ 360 843, `S_AA`
+  3,81 %; CPU TX 2 674 нс/кадр (2 585–3 083), `S_AA` 3,88 %; `T` 3,81 % и 3,88 %.
+- A/B (пары 1, 3, 5 — A первой; 2, 4 — B первой), A / B, `steady_pps`: 366 083 / 333 957, 321 044 / 366 198,
+  363 137 / 359 805, 326 490 / 369 703, 367 179 / 338 318; медианы 363 137 / 359 805, `r` 0,991, не хуже `T` 3 пары из
+  5. CPU TX, нс/кадр: 2 676 / 2 899, 2 996 / 2 670, 2 695 / 2 775, 3 011 / 2 637, 2 662 / 2 949; медианы 2 695 / 2 775,
+  `r` 0,971, 3 из 5. `tx_would_block` 0. **Ворота «без регрессии» не пройдены** (обе метрики: 3 пары из 5 при пороге 4).
+- `perf stat` (3 + 3 прогона вне ворот, ABBA): `instructions:u` на отправленный кадр A 3 325,10 / 3 325,22 / 3 325,11,
+  B 3 325,05 / 3 325,09 / 3 325,10 — медианы 3 325,11 и 3 325,09, B/A 1,000; `cycles:u` на кадр A 2 553 / 2 633 / 2 689,
+  B 2 556 / 2 565 / 2 541, медианы 2 633 / 2 556, B/A 0,971.
+- **Решение по правилу: откат** задачи 2 (`8245c31a` отменяет `c7f2c726`, `03448d8c` — `bbfa1ceb`), отрицательный
+  результат.
+- Наблюдение (не меняет решения): в этой сессии скорость зависит от позиции прогона — нечётные прогоны (1-й, 3-й, …)
+  быстрые, чётные медленнее, медианы 367 179 и 338 318 (−7,9 %); второй прогон медленнее первого во всех 10 парах
+  калибровки и A/B. При 5 парах ABBA новая версия стоит второй в 3 парах, база — в 2, поэтому «3 из 5» и сдвиг медиан
+  против B объясняются позицией, а команд на кадр у A и B поровну. В сессии со старым harness (215 тыс. pps, выше)
+  такого эффекта нет (медианы нечётных и чётных 214 711 и 214 871, второй медленнее в 3 парах из 10), и там B хуже в 4
+  парах из 5 при обоих порядках.
+
 ### Матрица 4×5 и `--suite rust` (задачи 2 и 2b, коммит `6bc3ee59`)
 
 2026-11-17, команда «Матрица» плана (внешний таймаут 36 000 с) со своим target-каталогом на диске хоста (удалён
@@ -465,6 +500,13 @@ CPU TX 4 604 нс/кадр (4 509–4 633), `S_AA` 0,99 %; `T` 2 % по обеи
   `lab_all_recorded_checks_pass_none_failed_none_not_run` (`linux_wire --ignored`) — FAILED (5 из 6 ok). Это прямое
   следствие P5, а не регрессия; сам случай живёт в `rmasscan-lab`, которую этот план не меняет. Как вернуть
   воспроизведение переполнения (дольше простой или больше ответов в случае, например), решает контролёр.
+- **Исправление случая (коммит `2a7b7570`, решение контролёра, исключение из запрета на `rmasscan-lab`):**
+  `rx_overflow` сканирует только отвечающие адреса `10.200.0.2-10.200.0.5` × порты 1–10 000 (40 000 проб, около
+  25 000 ответов за 2,5 с простоя против ≈7 500 кадров буфера), остальные аргументы прежние. `--suite rust` на этом
+  дереве (свой target-каталог, `wire_scan` `c9969092…`, `rmasscan-lab` `11d71b53…`): `Failed(RxLoss { kernel_drops:
+  15844 })`, код 3, отправлено 24 580 из 40 000, checkpoint нет; все четыре проверки `rxloss` PASS, **145 из 145
+  проверок PASS** (три проверки после «reproduced» теперь выполняются), `linux_wire --ignored` 6 из 6 ok (тест
+  матрицы — по результатам perf `6bc3ee59`; матрица не перезапускалась: случай на неё не влияет).
 
 ### microbench (ranking only)
 
@@ -521,11 +563,13 @@ Windows (шов, запуск на Mac, `--test-threads=1`, 5 запусков �
 #   --cells LIST   tx,rx (default), tx or rx
 #   --pairs N      pairs per series (default 5); pair i runs in ABBA order: odd i base-first, even i new-first
 #   --distinct     base and new come from different trees: equal sha256 of the two binaries = FATAL (stale build)
+#   --perf-stat N  after A/B: N more runs of each version (ABBA, series "perf", never in the gate statistics) under
+#                  perf stat -x, -e instructions:u,cycles:u; summary: user-space instructions and cycles per sent frame
 #   --oracle BIN   C masscan: one reference series per cell after A/B (never a gate)
 set -euo pipefail
 export LC_ALL=C
 
-OUT=""; LAB_BIN=""; CPUS=2,3; QDISC=noqueue; SMOKE=""; BASE=""; NEW=""; CELLS=tx,rx; PAIRS=5; ORACLE=""; DISTINCT=0
+OUT=""; LAB_BIN=""; CPUS=2,3; QDISC=noqueue; SMOKE=""; BASE=""; NEW=""; CELLS=tx,rx; PAIRS=5; ORACLE=""; DISTINCT=0; PERFSTAT=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --out) OUT=$2; shift 2 ;;
@@ -539,6 +583,7 @@ while [ $# -gt 0 ]; do
     --pairs) PAIRS=$2; shift 2 ;;
     --oracle) ORACLE=$2; shift 2 ;;
     --distinct) DISTINCT=1; shift ;;
+    --perf-stat) PERFSTAT=$2; shift 2 ;;
     *) echo "unknown argument: $1" >&2; exit 64 ;;
   esac
 done
@@ -549,6 +594,10 @@ fatal() { echo "FATAL: $*" >&2; exit 2; }
 [ ! -e "$OUT" ] || fatal "$OUT exists: every session gets a new --out"
 [ -n "$NEW" ] && [ -z "$BASE" ] && fatal "--new needs --base"
 for b in "$SMOKE" "$BASE" "$NEW" "$ORACLE"; do [ -z "$b" ] || [ -x "$b" ] || fatal "not executable: $b"; done
+if [ "$PERFSTAT" != 0 ]; then
+  [ -n "$NEW" ] || fatal "--perf-stat needs --new"
+  command -v perf >/dev/null || fatal "missing perf"
+fi
 if [ "$DISTINCT" = 1 ]; then
   [ -n "$NEW" ] || fatal "--distinct needs --new"
   [ "$(sha256sum <"$BASE")" != "$(sha256sum <"$NEW")" ] || fatal "--distinct: base and new binaries are identical (stale build)"
@@ -673,10 +722,11 @@ print(f"{rec['file']}: {'VALID' if rec['valid'] else ('REFERENCE' if version == 
 PY
 }
 run_u() {  # run_u CELL VERSION SERIES PAIR BIN RATE : one scanner run of cell U; prints the judge line
-  local cell=$1 version=$2 series=$3 pair=$4 bin=$5 rate=$6 targets ports probes expect f rc=0 v0 v1 t0 t1
+  local cell=$1 version=$2 series=$3 pair=$4 bin=$5 rate=$6 targets ports probes expect f rc=0 v0 v1 t0 t1 pre=()
   if [ "$cell" = tx ]; then targets=$TX_TARGETS; ports=$TX_PORTS; probes=$TX_PROBES; expect=$TX_EXPECT
   else ports=1-$(rx_ports "$rate"); targets=$RX_TARGETS; probes=$((128 * $(rx_ports "$rate"))); expect=$(( probes / rate + 4 )); fi
   IDX=$((IDX + 1)); f="$OUT/runs/$(printf %03d "$IDX")-$cell-$series-$version-$rate.json"
+  [ "$series" = perf ] && pre=(perf stat -x, -e instructions:u,cycles:u -o "$f.perf" --)
   sleep 1   # the previous run's tail (replies, backlog) is over before the next starts
   v0=$(vb_rx); t0=$(date +%s.%N)
   if [ "$version" = oracle ]; then
@@ -685,7 +735,7 @@ run_u() {  # run_u CELL VERSION SERIES PAIR BIN RATE : one scanner run of cell U
       --router-mac "$MAC_B" --source-port 40000 --seed 1 --wait 1 >"$f.out" 2>"$f.err" || rc=$?
     printf '{"reason":"oracle","net":{"tx_sent":null,"rx_packets":null,"tx_would_block":null},"rx_health":{"kernel_drops":null},"reply_unique":null,"timing":{"steady_pps":null},"workers":{}}\n' >"$f"
   else
-    timeout -k 10 $((3 * expect)) ip netns exec "$NS_A" taskset -c "$CPUS" "$bin" "${SCAN[@]}" \
+    timeout -k 10 $((3 * expect)) ip netns exec "$NS_A" taskset -c "$CPUS" "${pre[@]}" "$bin" "${SCAN[@]}" \
       --rate "$rate" --targets "$targets" --ports "$ports" 2>"$f.err" \
       | sed -E 's/"replies":\[[^]]*\]/"replies":"(dropped by stand-s)"/' >"$f" || rc=${PIPESTATUS[0]}
   fi
@@ -731,6 +781,13 @@ if [ -n "$NEW" ]; then
   done
   case ",$CELLS," in *,rx,*)
     for r in $RX_LADDER; do run_u rx base ladder 0 "$BASE" "$r"; run_u rx new ladder 0 "$NEW" "$r"; done ;; esac
+  for cell in tx rx; do
+    case ",$CELLS," in *",$cell,"*) ;; *) continue ;; esac
+    rate=$TX_RATE; [ "$cell" = tx ] || rate=$RRX
+    for p in $(seq 1 "$PERFSTAT"); do for v in $(abba "$p" base new); do
+      if [ "$v" = base ]; then run_u "$cell" base perf "$p" "$BASE" "$rate"; else run_u "$cell" new perf "$p" "$NEW" "$rate"; fi
+    done; done
+  done
 fi
 if [ -n "$ORACLE" ]; then
   [ ! -e /etc/masscan/masscan.conf ] || fatal "/etc/masscan/masscan.conf exists: the oracle would read it"
@@ -785,6 +842,35 @@ for cell in ("tx", "rx"):
                  new_runs_better_than_base_median=beats_base_median,
                  no_regression=ratio >= 1 - t and ratio >= 0.97 and pairs_ok >= len(nv) - 1,
                  speedup=ratio > 1 + t and beats_base_median >= len(nv) - 1)
+def perf_counts(path):
+    c = {}
+    try:
+        for line in open(path):
+            f = line.strip().split(",")
+            if len(f) >= 3 and f[2] in ("instructions:u", "cycles:u") and f[0].isdigit():
+                c[f[2]] = int(f[0])
+    except OSError:
+        pass
+    return c
+ps = [r for r in runs if r["series"] == "perf"]
+if ps:
+    out["perf_stat"] = {}
+    for cell in ("tx", "rx"):
+        per = {}
+        for r in (r for r in ps if r["cell"] == cell):
+            c = perf_counts(sys.argv[1].rsplit("/", 1)[0] + "/runs/" + r["file"] + ".perf")
+            frames = r.get("tx_sent") if cell == "tx" else r.get("rx_packets")
+            row = {"pair": r["pair"], "valid": r["valid"], "frames": frames, **c}
+            if frames and "instructions:u" in c and "cycles:u" in c:
+                row["instructions_u_per_frame"] = c["instructions:u"] / frames
+                row["cycles_u_per_frame"] = c["cycles:u"] / frames
+            per.setdefault(r["version"], []).append(row)
+        if not per: continue
+        e = out["perf_stat"][cell] = {"runs": per}
+        for m in ("instructions_u_per_frame", "cycles_u_per_frame"):
+            med = {v: statistics.median([x[m] for x in rows if m in x and x["valid"]]) for v, rows in per.items()
+                   if any(m in x and x["valid"] for x in rows)}
+            e[m] = {"median": med, "new_over_base": med["new"] / med["base"] if "base" in med and "new" in med else None}
 lad = [r for r in runs if r["series"] == "ladder"]
 if lad:
     out["ladder_highest_valid"] = {v: max([r["rate"] for r in lad if r["version"] == v and r["valid"]], default=None)
@@ -800,6 +886,9 @@ for cell, c in out["cells"].items():
             line += " | " + e["verdict"]
         print(line)
 if lad: print("ladder (highest valid step):", out["ladder_highest_valid"])
+for cell, e in out.get("perf_stat", {}).items():
+    for m in ("instructions_u_per_frame", "cycles_u_per_frame"):
+        print(f"perf stat U-{cell.upper()} {m}: median {e[m]['median']} new/base {e[m]['new_over_base']}")
 PY
 ```
 <!-- stand-s.sh end -->

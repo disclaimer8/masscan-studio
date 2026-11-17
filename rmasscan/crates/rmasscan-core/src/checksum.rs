@@ -35,12 +35,20 @@ fn checksum_calculate(buf: &[u8]) -> u32 {
 /// C читает `px[i+1]` без проверки границ; здесь отсутствующий байт - 0.
 pub fn ip_header_checksum(px: &[u8], offset_ip: usize, max: usize) -> u16 {
     let header_length = ((byte(px, offset_ip) & 0xF) * 4) as usize;
-    let max = max.min(offset_ip + header_length);
+    let end = max.min(offset_ip + header_length);
+    // Слова с `offset_ip` шагом 2, пока `i < end`; слово на `end - 1` читает и
+    // байт `end`, поэтому срез идёт до чётной границы от `offset_ip`, а не до
+    // `end`. Байты за `px.len()` - 0.
+    let span = end.saturating_sub(offset_ip);
+    let start = offset_ip.min(px.len());
+    let stop = (offset_ip + 2 * span.div_ceil(2)).min(px.len());
+    let (pairs, rest) = px[start..stop].as_chunks::<2>();
     let mut xsum = 0u32;
-    let mut i = offset_ip;
-    while i < max {
-        xsum = xsum.wrapping_add(be16(px, i));
-        i += 2;
+    for c in pairs {
+        xsum = xsum.wrapping_add(u32::from(c[0]) << 8 | u32::from(c[1]));
+    }
+    if let [last] = rest {
+        xsum = xsum.wrapping_add(u32::from(*last) << 8);
     }
     // Три свёртки, как в C (:200-202).
     for _ in 0..3 {

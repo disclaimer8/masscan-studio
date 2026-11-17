@@ -84,6 +84,7 @@ fn snapshot_thread_ids(snap: &OwnedHandle, me: u32) -> impl Iterator<Item = u64>
         first = false;
         (ok != 0).then_some(e)
     })
+    .fuse()
     .filter(move |e| e.th32OwnerProcessID == me)
     .map(|e| u64::from(e.th32ThreadID))
 }

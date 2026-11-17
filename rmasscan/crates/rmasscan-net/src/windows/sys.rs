@@ -14,10 +14,8 @@
 //!   wpcap.dll, и сохраняем пути, версии и SHA-256 обеих DLL.
 
 use std::ffi::{CStr, c_void};
-use std::marker::PhantomData;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::os::windows::ffi::OsStrExt;
-use std::ptr::NonNull;
 use std::sync::Arc;
 
 use windows_sys::Win32::Foundation::{
@@ -25,9 +23,7 @@ use windows_sys::Win32::Foundation::{
     ERROR_NETWORK_UNREACHABLE, ERROR_NOT_FOUND, ERROR_PATH_NOT_FOUND, FreeLibrary, GetLastError,
     NO_ERROR,
 };
-use windows_sys::Win32::NetworkManagement::IpHelper::{
-    FreeMibTable, GetBestRoute2, GetIpForwardTable2, MIB_IPFORWARD_ROW2, MIB_IPFORWARD_TABLE2,
-};
+use windows_sys::Win32::NetworkManagement::IpHelper::{GetBestRoute2, MIB_IPFORWARD_ROW2};
 use windows_sys::Win32::Networking::WinSock::{ADDRESS_FAMILY, SOCKADDR_INET};
 use windows_sys::Win32::Storage::FileSystem::{
     GetFileVersionInfoSizeW, GetFileVersionInfoW, VS_FIXEDFILEINFO, VerQueryValueW,
@@ -44,8 +40,28 @@ use super::loader::{
 use crate::NetError;
 use crate::route_parse::{Fwd, Fwd6, WinAdapter};
 
+/// Переписывает на месте четыре байта BOOLEAN строки `MIB_IPFORWARD_ROW2` по сырому указателю `$row` в 0/1
+/// (`u8::from(байт != 0)`): `windows-sys` объявляет `Loopback`, `AutoconfigureAddress`, `Publish` и `Immortal` как
+/// `bool`, а IP Helper не обещает 0/1. Ни ссылки на строку, ни `bool` не создаётся. Только внутри `unsafe`: `$row`
+/// указывает на строку в записываемой памяти, на которую нет живых ссылок.
+macro_rules! canonical_booleans {
+    ($row:expr) => {{
+        let row: *mut windows_sys::Win32::NetworkManagement::IpHelper::MIB_IPFORWARD_ROW2 = $row;
+        for byte in [
+            (&raw mut (*row).Loopback).cast::<u8>(),
+            (&raw mut (*row).AutoconfigureAddress).cast::<u8>(),
+            (&raw mut (*row).Publish).cast::<u8>(),
+            (&raw mut (*row).Immortal).cast::<u8>(),
+        ] {
+            byte.write(u8::from(byte.read() != 0));
+        }
+    }};
+}
+
 mod observation;
 pub(crate) use observation::{adapters_until, interfaces_until};
+mod route_table;
+use route_table::{MibTable, TableMemory, walk_table};
 
 const SEARCH_FLAGS: u32 = LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32;
 
@@ -394,12 +410,10 @@ fn best_route_raw(
     to: &SOCKADDR_INET,
     label: &str,
 ) -> Result<Option<(MIB_IPFORWARD_ROW2, SOCKADDR_INET)>, NetError> {
-    // Строка из нулей, как прежний обнулённый буфер `MaybeUninit::zeroed`.
-    let mut row = MIB_IPFORWARD_ROW2::default();
+    let mut row = std::mem::MaybeUninit::<MIB_IPFORWARD_ROW2>::zeroed();
     let mut source = SOCKADDR_INET::default();
-    // SAFETY: `to`, `row` и `source` живые объекты ровно своих типов; NULL InterfaceLuid и SourceAddress (индекс 0)
-    // документированы как необязательные. При NO_ERROR API пишет в `row` строку маршрута: целые, объединения целых
-    // и BOOLEAN (TRUE/FALSE, `bool` в `windows-sys`).
+    // SAFETY: `to` и `source` живые объекты своих типов, `row` это обнулённый буфер ровно этого типа; NULL
+    // InterfaceLuid и SourceAddress (индекс 0) документированы как необязательные.
     let rc = unsafe {
         GetBestRoute2(
             std::ptr::null(),
@@ -407,15 +421,23 @@ fn best_route_raw(
             std::ptr::null(),
             to,
             0,
-            &mut row,
+            row.as_mut_ptr(),
             &mut source,
         )
     };
     match rc {
-        NO_ERROR => Ok(Some((row, source))),
-        ERROR_NOT_FOUND | ERROR_NETWORK_UNREACHABLE | ERROR_HOST_UNREACHABLE => Ok(None),
-        e => Err(iphlp_error(label, e)),
+        NO_ERROR => {}
+        ERROR_NOT_FOUND | ERROR_NETWORK_UNREACHABLE | ERROR_HOST_UNREACHABLE => return Ok(None),
+        e => return Err(iphlp_error(label, e)),
     }
+    // SAFETY: все байты `row` инициализированы (обнулены, затем записаны API), на `row` нет ссылок; четыре байта
+    // BOOLEAN переписаны в 0/1 через сырой указатель до любого типизированного чтения, остальные поля это целые и
+    // объединения целых, так что строка допустима как `MIB_IPFORWARD_ROW2`.
+    let row = unsafe {
+        canonical_booleans!(row.as_mut_ptr());
+        row.assume_init()
+    };
+    Ok(Some((row, source)))
 }
 
 /// Лучший маршрут к `dst` (`GetBestRoute2`); `None`, если маршрута нет
@@ -558,70 +580,17 @@ pub(crate) fn best_route6(dst: Ipv6Addr) -> Result<Option<(Fwd6, Option<Ipv6Addr
     Ok(Some((fwd6_from_row(&row), best_source)))
 }
 
-/// Таблица IP Helper, освобождаемая `FreeMibTable` ровно один раз.
-struct MibTable(NonNull<MIB_IPFORWARD_TABLE2>);
-
-impl MibTable {
-    /// Таблица на время заимствования владельца.
-    fn table(&self) -> TableRef<'_> {
-        TableRef {
-            head: self.0,
-            _owner: PhantomData,
-        }
-    }
-}
-
-impl Drop for MibTable {
-    fn drop(&mut self) {
-        // SAFETY: указатель получен из успешного GetIpForwardTable2 (не null),
-        // наружу не копируется и освобождается ровно один раз.
-        unsafe { FreeMibTable(self.0.as_ptr().cast()) };
-    }
-}
-
-/// Заимствованная таблица маршрутов: заголовок `MIB_IPFORWARD_TABLE2`, за которым в том же выделении подряд лежат
-/// `NumEntries` строк с `Table[0]` (`windows-sys` объявляет `Table` массивом из одной строки). Строится только над
-/// живой таблицей `GetIpForwardTable2` ([`MibTable::table`]) и в тестах над буфером `#[repr(C)]` той же раскладки, и
-/// не переживает её владельца.
-#[derive(Clone, Copy)]
-struct TableRef<'a> {
-    head: NonNull<MIB_IPFORWARD_TABLE2>,
-    _owner: PhantomData<&'a MIB_IPFORWARD_TABLE2>,
-}
-
-/// Строки таблицы по порядку через `decode`: `NumEntries` строк одним срезом с `Table[0]`. ОС не вызывается.
-fn walk_table<T>(table: TableRef<'_>, decode: fn(&MIB_IPFORWARD_ROW2) -> T) -> Vec<T> {
-    let head = table.head.as_ptr();
-    // SAFETY: `TableRef` указывает на живую таблицу (см. тип): `NumEntries` строк лежат подряд с `Table[0]` в том же
-    // выделении, срез не переживает заимствование `'_`. В строке только целые, объединения целых и BOOLEAN, которые
-    // IP Helper пишет как TRUE/FALSE (`bool` в `windows-sys`).
-    let rows = unsafe {
-        let n = usize::try_from((*head).NumEntries).unwrap_or(0);
-        std::slice::from_raw_parts((&raw const (*head).Table).cast::<MIB_IPFORWARD_ROW2>(), n)
-    };
-    rows.iter().map(decode).collect()
-}
-
 /// Все строки `GetIpForwardTable2(family)` через `decode` по порядку таблицы; `ERROR_NOT_FOUND` и пустой указатель
-/// это пустой список, иначе текст с меткой `label`. Только чтение.
+/// это пустой список, иначе текст с меткой `label`. Байты BOOLEAN строк приводятся к 0/1 до чистого обхода
+/// ([`TableMemory::table`]). Только чтение ОС.
 fn forward_rows<T>(
     family: ADDRESS_FAMILY,
     label: &str,
     decode: fn(&MIB_IPFORWARD_ROW2) -> T,
 ) -> Result<Vec<T>, NetError> {
-    let mut t: *mut MIB_IPFORWARD_TABLE2 = std::ptr::null_mut();
-    // SAFETY: выходной указатель на живой локальный объект; при успехе API выделяет таблицу, которую освобождает
-    // `MibTable`.
-    let rc = unsafe { GetIpForwardTable2(family, &mut t) };
-    match rc {
-        NO_ERROR => {}
-        ERROR_NOT_FOUND => return Ok(Vec::new()),
-        e => return Err(iphlp_error(label, e)),
-    }
-    let Some(t) = NonNull::new(t) else {
+    let Some(mut table) = MibTable::get(family).map_err(|e| iphlp_error(label, e))? else {
         return Ok(Vec::new());
     };
-    let table = MibTable(t);
     Ok(walk_table(table.table(), decode))
 }
 
@@ -724,6 +693,7 @@ impl NpcapApi {
 
 #[cfg(test)]
 mod tests {
+    use super::route_table::{RawTable, SyntheticTable, synthetic};
     use super::*;
 
     #[test]
@@ -783,31 +753,6 @@ mod tests {
             (BEST6_LABEL, "system error: GetBestRoute2(AF_INET6) error 5"),
         ] {
             assert_eq!(iphlp_error(label, 5).to_string(), text, "{label}");
-        }
-    }
-
-    /// `MIB_IPFORWARD_TABLE2` with `N` rows: the header, then the rows from `Table[0]` (`windows-sys` declares
-    /// `Table` as an array of one row).
-    #[repr(C)]
-    struct SyntheticTable<const N: usize> {
-        num_entries: u32,
-        rows: [windows_sys::Win32::NetworkManagement::IpHelper::MIB_IPFORWARD_ROW2; N],
-    }
-
-    const _: () = assert!(
-        std::mem::offset_of!(SyntheticTable<3>, rows)
-            == std::mem::offset_of!(
-                windows_sys::Win32::NetworkManagement::IpHelper::MIB_IPFORWARD_TABLE2,
-                Table
-            )
-    );
-
-    /// A borrowed table over a synthetic buffer; `num_entries` never exceeds the rows the buffer holds.
-    fn synthetic<const N: usize>(t: &SyntheticTable<N>) -> TableRef<'_> {
-        assert!(usize::try_from(t.num_entries).is_ok_and(|n| n <= t.rows.len()));
-        TableRef {
-            head: std::ptr::NonNull::from(t).cast(),
-            _owner: std::marker::PhantomData,
         }
     }
 
@@ -927,6 +872,73 @@ mod tests {
             rows: [row(5, 0, 1, false)],
         };
         assert!(walk_table(synthetic(&empty), fwd_from_row).is_empty());
+    }
+
+    /// BOOLEAN bytes other than 0/1 (2, 0xFF and others) are rewritten to 0/1 in place before any typed row exists, so
+    /// `Loopback` decodes as `byte != 0`, as the base read it; all four BOOLEAN fields of every row are normalised. The
+    /// rows are composed from raw bytes: no `bool` ever holds an invalid value.
+    #[test]
+    fn route_rows_with_non_canonical_boolean_bytes_decode_loopback_as_true() {
+        use std::mem::offset_of;
+        use windows_sys::Win32::NetworkManagement::IpHelper::{
+            MIB_IPFORWARD_ROW2 as Row, MIB_IPFORWARD_TABLE2,
+        };
+
+        let head = offset_of!(MIB_IPFORWARD_TABLE2, Table);
+        let size = size_of::<Row>();
+        let at = |row: usize, field: usize| head + row * size + field;
+        let booleans = [
+            offset_of!(Row, Loopback),
+            offset_of!(Row, AutoconfigureAddress),
+            offset_of!(Row, Publish),
+            offset_of!(Row, Immortal),
+        ];
+        // Per row: InterfaceIndex, Metric and the four BOOLEAN bytes (Loopback first).
+        let rows: [(u32, u32, [u8; 4]); 4] = [
+            (10, 5, [2, 0x80, 1, 0]),
+            (11, 6, [0xFF, 0, 0xFE, 7]),
+            (12, 7, [0, 3, 0, 0x40]),
+            (13, 8, [1, 1, 0xFF, 1]),
+        ];
+        let mut bytes = vec![0u8; head + rows.len() * size];
+        bytes[..4].copy_from_slice(&u32::try_from(rows.len()).unwrap().to_ne_bytes());
+        for (i, (ifindex, metric, flags)) in rows.iter().enumerate() {
+            bytes[at(i, offset_of!(Row, InterfaceIndex))..][..4]
+                .copy_from_slice(&ifindex.to_ne_bytes());
+            bytes[at(i, offset_of!(Row, Metric))..][..4].copy_from_slice(&metric.to_ne_bytes());
+            for (field, flag) in booleans.iter().zip(flags) {
+                bytes[at(i, *field)] = *flag;
+            }
+        }
+
+        let mut raw = RawTable::new(&bytes);
+        let decoded = walk_table(raw.table(), fwd_from_row);
+        let want: Vec<Fwd> = rows
+            .iter()
+            .map(|(ifindex, metric, flags)| Fwd {
+                ifindex: *ifindex,
+                prefix_len: 0,
+                next_hop: Ipv4Addr::UNSPECIFIED,
+                metric: *metric,
+                mib_loopback: flags[0] != 0,
+                loopback_if: false,
+            })
+            .collect();
+        assert_eq!(decoded, want);
+        assert_eq!(
+            decoded.iter().map(|f| f.mib_loopback).collect::<Vec<_>>(),
+            [true, true, false, true]
+        );
+
+        // In place: every BOOLEAN byte is now exactly `u8::from(byte != 0)`; nothing else changed.
+        let after = raw.bytes();
+        let mut expected = bytes.clone();
+        for (i, (_, _, flags)) in rows.iter().enumerate() {
+            for (field, flag) in booleans.iter().zip(flags) {
+                expected[at(i, *field)] = u8::from(*flag != 0);
+            }
+        }
+        assert_eq!(after[..expected.len()], expected[..]);
     }
 
     #[test]

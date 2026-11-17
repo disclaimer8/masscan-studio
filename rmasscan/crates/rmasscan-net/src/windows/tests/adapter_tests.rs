@@ -1340,6 +1340,16 @@ fn a_bad_length_anywhere_in_the_batch_sends_nothing_and_is_an_io_error() {
             errors += 1;
             assert!(e.message.contains("nothing was sent"), "{bad}@{at}: {e:?}");
         }
+        // A one-frame batch: refused by the batch's own length check (one tx_errors), the driver is never called.
+        let before = a.stats.snapshot().tx_errors;
+        let e =
+            a.io.tx
+                .send_batch(&[bad_frame.as_slice()], T50)
+                .unwrap_err();
+        errors += 1;
+        assert!(e.message.contains("nothing was sent"), "{bad}@one: {e:?}");
+        assert_eq!(a.stats.snapshot().tx_errors, before + 1, "{bad}@one");
+        assert_eq!(with_ret(|s| s.send_calls), 0, "{bad}@one");
     }
     with(|s| {
         assert_eq!((s.send_calls, s.transmit_calls), (0, 0));

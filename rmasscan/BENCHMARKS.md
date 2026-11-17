@@ -787,7 +787,8 @@ Windows (шов, запуск на Mac, `--test-threads=1`, 5 запусков �
 # isolation`. Every scanner run is pinned with taskset and bounded by timeout. Root only: sudo -n bash stand-s.sh ...
 # The host is shared: before every run the stand waits for a quiet host (the CPUs outside --cpus idle for QUIET_S s,
 # 1-minute load below LOAD_MAX; at most QUIET_MAX_S s, else the session is not valid), and a U-TX run during which the
-# CPUs outside --cpus were busier than RUN_BUSY_TX is noisy: recorded, never counted, and its slot repeats.
+# CPUs outside --cpus were busier than RUN_BUSY_TX is noisy: recorded, never counted, and its slot repeats if noise is
+# its only fault (a slot still noisy after QUIET_MAX_S s ends the session as not valid).
 #
 #   --out DIR      session directory (must not exist): runs.jsonl, runs/, summary.json, isolation.json, smoke-*.log
 #   --lab-bin BIN  rmasscan-lab (capture isolation)
@@ -858,6 +859,7 @@ LOAD_MAX=3.0       # the 1-minute load average before a run is below this (own U
 QUIET_S=5          # quiet window: the CPUs outside --cpus, measured over QUIET_S seconds ...
 QUIET_BUSY=0.05    # ... are at most this busy (fraction of their time) right before a run
 QUIET_MAX_S=1800   # waiting and noisy repeats of one run slot end after 30 min: the session is not valid
+QUIET_BEAT_S=60    # while it waits, the quiet window logs a heartbeat line this often
 RUN_BUSY_TX=0.05   # U-TX: a run during which the CPUs outside --cpus were busier than this is noisy and repeats
 OTHER_CPUS=$(python3 -c 'import sys
 want = set()
@@ -873,13 +875,19 @@ busy_of() { awk -v a="$1" -v b="$2" 'BEGIN { split(a, x, " "); split(b, y, " ");
 load1() { cut -d' ' -f1 /proc/loadavg; }
 pkg_throttle() { cat /sys/devices/system/cpu/cpu0/thermal_throttle/package_throttle_count 2>/dev/null || echo -1; }
 pkg_temp() { local z; for z in /sys/class/thermal/thermal_zone*; do
-  [ "$(cat "$z/type" 2>/dev/null)" = x86_pkg_temp ] && { cat "$z/temp"; return; }; done; echo -1; }
-quiet_wait() {  # quiet_wait SLOT_START : prints "busy load waited_s" of the quiet window; non-zero once SLOT_START + QUIET_MAX_S passed
-  local a b f l w0=$SECONDS
+  [ "$(cat "$z/type" 2>/dev/null)" = x86_pkg_temp ] && { cat "$z/temp" 2>/dev/null || echo -1; return 0; }; done; echo -1; }
+quiet_wait() {  # quiet_wait SLOT_START : prints "busy load waited_s" of the quiet window; non-zero once SLOT_START + QUIET_MAX_S passed;
+                # a heartbeat goes to stderr and session.log every QUIET_BEAT_S s of waiting (stdout is the caller's capture)
+  local a b f l w0=$SECONDS beat=$SECONDS
   while :; do
     a=$(other_ticks); sleep "$QUIET_S"; b=$(other_ticks); f=$(busy_of "$a" "$b"); l=$(load1)
     awk -v f="$f" -v l="$l" -v m="$QUIET_BUSY" -v lm="$LOAD_MAX" 'BEGIN { exit !(f ~ /^[0-9.]+$/ && l ~ /^[0-9.]+$/ && f <= m && l < lm) }' && { echo "$f $l $((SECONDS - w0))"; return 0; }
     [ $((SECONDS - $1)) -lt "$QUIET_MAX_S" ] || { echo "$f $l $((SECONDS - w0))"; return 1; }
+    if [ $((SECONDS - beat)) -ge "$QUIET_BEAT_S" ]; then
+      beat=$SECONDS
+      echo "[stand-s] quiet window: waiting $((SECONDS - w0))s (slot $((SECONDS - $1))s of ${QUIET_MAX_S}s): CPUs $OTHER_CPUS busy $f, load1 $l" \
+        | tee -a "$OUT/session.log" >&2
+    fi
   done
 }
 
@@ -921,7 +929,7 @@ for ns in "$NS_A" "$NS_B"; do
 done
 "$LAB_BIN" capture isolation --out "$OUT/isolation.json" --ns-a "$NS_A" --ns-b "$NS_B" --host-links-before "$OUT/host-links-before.txt"
 { echo "kernel $(uname -r); cpus $CPUS of $(nproc); qdisc $QDISC"
-  echo "quiet host: CPUs $OTHER_CPUS at most $QUIET_BUSY busy over ${QUIET_S}s, load1 < $LOAD_MAX, max ${QUIET_MAX_S}s; U-TX noisy above $RUN_BUSY_TX"
+  echo "quiet host: CPUs $OTHER_CPUS at most $QUIET_BUSY busy over ${QUIET_S}s, load1 < $LOAD_MAX, max ${QUIET_MAX_S}s; U-TX noisy above $RUN_BUSY_TX (repeated only if noise is the sole fault)"
   ip netns exec "$NS_A" tc qdisc show dev "$IF_A"
   for b in "$BASE" "$NEW"; do [ -z "$b" ] || echo "$(sha256sum "$b" | cut -c1-16) $b"; done; } >"$OUT/stand.txt"
 log "stand up: $(head -n1 "$OUT/stand.txt")"
@@ -953,11 +961,16 @@ judge() {  # judge FILE CELL VERSION SERIES PAIR RATE PROBES RC VB_DELTA SECONDS
 import json, sys
 (path, cell, version, series, pair, rate, probes, rc, delta, secs, attempt, quiet, run_busy, load1_after, throttle,
  temp0, temp1, run_busy_tx, sink) = sys.argv[1:]
+def num(x, kind=int):  # host readings (throttle count, temperature) are records, never a reason for the judge to fail
+    try:
+        return kind(x)
+    except ValueError:
+        return -1
 rec = {"cell": cell, "version": version, "series": series, "pair": int(pair), "rate": int(rate),
        "probes": int(probes), "rc": int(rc), "vb_rx_delta": int(delta), "seconds": float(secs),
        "file": path.rsplit("/", 1)[-1], "attempt": int(attempt), "quiet_busy": float(quiet.split()[0]),
        "load1_before": float(quiet.split()[1]), "quiet_wait_s": int(quiet.split()[2]), "load1_after": float(load1_after), "other_busy": float(run_busy),
-       "pkg_throttle": int(throttle), "pkg_temp_c": [int(temp0) / 1000, int(temp1) / 1000]}
+       "pkg_throttle": num(throttle), "pkg_temp_c": [num(temp0) / 1000, num(temp1) / 1000]}
 why = []
 if version != "oracle" and cell == "tx" and rec["other_busy"] > float(run_busy_tx):
     why.append(f"noisy: CPUs outside the scanner set {rec['other_busy']:.3f} busy > {run_busy_tx}")
@@ -991,13 +1004,14 @@ if j is not None and version != "oracle":
         if not why:
             rec["metrics"] = {"rx_cpu_ns_per_frame": rec["rx_cpu_ns"] / rec["rx_packets"]}
 rec["valid"] = version != "oracle" and not why
+rec["repeat"] = bool(rec.get("noisy")) and len(why) == 1   # the slot repeats only when noise is the sole fault
 rec["invalid_why"] = why
 open(sink, "a").write(json.dumps(rec) + "\n")
 m = " ".join(f"{k}={v:.1f}" for k, v in rec.get("metrics", {}).items()) + f" other_busy={rec['other_busy']:.3f} load1={rec['load1_before']} waited={rec['quiet_wait_s']}s"
 print(f"{rec['file']}: {'VALID' if rec['valid'] else ('REFERENCE' if version == 'oracle' else 'INVALID')} {m} {'; '.join(why)}")
 PY
 }
-run_u() {  # run_u CELL VERSION SERIES PAIR BIN RATE : one run slot of cell U (a noisy U-TX run repeats); prints judge lines
+run_u() {  # run_u CELL VERSION SERIES PAIR BIN RATE : one run slot of cell U (a U-TX run whose only fault is noise repeats)
   local cell=$1 version=$2 series=$3 pair=$4 bin=$5 rate=$6 targets ports probes expect f rc v0 v1 t0 t1 pre slot=$SECONDS attempt=0
   local q o0 o1 th0 th1 tp0 tp1
   if [ "$cell" = tx ]; then targets=$TX_TARGETS; ports=$TX_PORTS; probes=$TX_PROBES; expect=$TX_EXPECT
@@ -1023,14 +1037,15 @@ run_u() {  # run_u CELL VERSION SERIES PAIR BIN RATE : one run slot of cell U (a
   t1=$(date +%s.%N); v1=$(vb_rx); o1=$(other_ticks); th1=$(pkg_throttle); tp1=$(pkg_temp)
   judge "$f" "$cell" "$version" "$series" "$pair" "$rate" "$probes" "$rc" "$((v1 - v0))" "$(python3 -c "print(round($t1 - $t0, 3))")" \
     "$attempt" "$q" "$(busy_of "$o0" "$o1")" "$(load1)" "$((th1 - th0))" "$tp0" "$tp1" | tee -a "$OUT/session.log"
-  [ "$(noisy_of)" = 1 ] && [ "$series" != warmup ] || break
-  [ $((SECONDS - slot)) -lt "$QUIET_MAX_S" ] || break   # the slot stays noisy: its last record is INVALID
+  [ "$(repeat_of)" = 1 ] && [ "$series" != warmup ] || break
+  [ $((SECONDS - slot)) -lt "$QUIET_MAX_S" ] \
+    || fatal "$cell $series $version pair $pair: the run slot stayed noisy for ${QUIET_MAX_S}s: the session is not valid"
   log "noisy run: the slot repeats after the next quiet window"
   done
 }
 abba() { if [ $(( $1 % 2 )) = 1 ]; then echo "$2 $3"; else echo "$3 $2"; fi; }   # abba PAIR A B : odd A B, even B A
 valid_of() { python3 -c 'import json,sys; print("1" if json.loads(open(sys.argv[1]).read().splitlines()[-1])["valid"] else "0")' "$OUT/runs.jsonl"; }
-noisy_of() { python3 -c 'import json,sys; print("1" if json.loads(open(sys.argv[1]).read().splitlines()[-1]).get("noisy") else "0")' "$OUT/runs.jsonl"; }
+repeat_of() { python3 -c 'import json,sys; print("1" if json.loads(open(sys.argv[1]).read().splitlines()[-1]).get("repeat") else "0")' "$OUT/runs.jsonl"; }
 
 # ---- the session: calibration, A/B, reference ladder, oracle ------------------------------------------------
 RRX=""
@@ -1127,9 +1142,6 @@ for cell in ("tx", "rx"):
         base = {r["pair"]: r for r in ab if r["version"] == "base"}
         new = {r["pair"]: r for r in ab if r["version"] == "new"}
         e["ab_invalid"] = {"base": sum(not r["valid"] for r in base.values()), "new": sum(not r["valid"] for r in new.values())}
-        if any(r.get("noisy") for r in list(base.values()) + list(new.values())):
-            e["verdict"] = "INVALID: a run slot stayed noisy for 30 min: session not valid"
-            continue
         if e["ab_invalid"]["base"] or e["ab_invalid"]["new"]:
             e["verdict"] = "INVALID base: session not valid" if e["ab_invalid"]["base"] else "FAIL: INVALID run of the new version"
             continue
@@ -1142,8 +1154,13 @@ for cell in ("tx", "rx"):
         e.update(ab_base_median=bm, ab_base_min=min(bv), ab_base_max=max(bv), ab_new_median=nm,
                  ab_new_min=min(nv), ab_new_max=max(nv), ratio_better=ratio, pairs_not_worse_than_T=pairs_ok,
                  new_runs_better_than_base_median=beats_base_median,
-                 no_regression=ratio >= 1 - t and ratio >= 0.97 and pairs_ok >= len(nv) - 1,
+                 ab_pairs=len(nv), no_regression=ratio >= 1 - t and ratio >= 0.97 and pairs_ok >= len(nv) - 1,
                  speedup=ratio > 1 + t and beats_base_median >= len(nv) - 1)
+        # confirmatory rerun (protocol, BENCHMARKS.md): failing ONLY on the pair count, with the median ratio inside
+        # 1 - T (and 0.97), means one rerun of the whole A/B in a fresh session; a failing median ratio is final
+        median_ok = ratio >= 1 - t and ratio >= 0.97
+        e["no_regression_failed_on"] = None if e["no_regression"] else ("pairs" if median_ok else "median")
+        e["confirmatory_rerun"] = not e["no_regression"] and median_ok
 def perf_counts(path):
     c = {}
     try:
@@ -1185,14 +1202,16 @@ for cell, c in out["cells"].items():
     for m, e in c["metrics"].items():
         line = f"U-{cell.upper()} @{c['rate']} {m}: base median {e['cal_median']:.3f} ({e['cal_min']:.3f}-{e['cal_max']:.3f}) S_AA {100*e['S_AA']:.2f}% T {100*e['T']:.2f}%"
         if "ratio_better" in e:
-            line += f" | A/B base {e['ab_base_median']:.3f} new {e['ab_new_median']:.3f} ratio {e['ratio_better']:.4f} pairs {e['pairs_not_worse_than_T']}/{len(new)} no_regression={e['no_regression']} speedup={e['speedup']}"
+            line += f" | A/B base {e['ab_base_median']:.3f} new {e['ab_new_median']:.3f} ratio {e['ratio_better']:.4f} pairs {e['pairs_not_worse_than_T']}/{e['ab_pairs']} no_regression={e['no_regression']} speedup={e['speedup']}"
+            if e["confirmatory_rerun"]:
+                line += " | fails only on the pair count: ONE confirmatory rerun of the whole A/B in a fresh session (protocol)"
         elif "verdict" in e:
             line += " | " + e["verdict"]
         if "position" in e:
             line += f" | position: second worse {e['position']['second_worse']}/{e['position']['pairs']}, median second/first {e['position']['median_second_over_first']:.4f}"
         print(line)
 if lad: print("ladder (highest valid step):", out["ladder_highest_valid"])
-print("noisy runs (recorded, never counted, slot repeated):", out["noisy_runs"])
+print("noisy runs (recorded, never counted; the slot repeated when noise was the sole fault):", out["noisy_runs"])
 for cell, e in out.get("perf_stat", {}).items():
     for m in ("instructions_u_per_frame", "cycles_u_per_frame"):
         print(f"perf stat U-{cell.upper()} {m}: median {e[m]['median']} new/base {e[m]['new_over_base']}")

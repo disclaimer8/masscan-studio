@@ -649,4 +649,120 @@ mod tests {
         assert_eq!(all.as_slice(), &[r(0, 4), r(6, u32::MAX)]);
         assert_eq!(all.count(), 0xffff_ffff);
     }
+
+    /// Копия поиска `pick` из базы (двоичный поиск по префиксным суммам). Копия, а не вызов: проверяет замену цикла.
+    /// `None` — цикл не завершается за 1000 шагов или выходит за список (на несортированных суммах).
+    fn old_pick_mid(picker: &[u32], index: u64) -> Option<usize> {
+        let maxmax = picker.len();
+        let (mut min, mut max) = (0usize, maxmax);
+        for _ in 0..1000 {
+            let mid = min + (max - min) / 2;
+            if mid >= maxmax {
+                return None;
+            }
+            if index < u64::from(picker[mid]) {
+                max = mid;
+                continue;
+            }
+            if mid + 1 == maxmax || index < u64::from(picker[mid + 1]) {
+                return Some(mid);
+            }
+            min = mid + 1;
+        }
+        None
+    }
+
+    fn splitmix(state: &mut u64) -> u64 {
+        *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = *state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    }
+
+    fn rand_value(state: &mut u64) -> u32 {
+        match splitmix(state) % 4 {
+            0 => (splitmix(state) % 64) as u32,
+            1 => (splitmix(state) % (1 << 16)) as u32,
+            2 => [0, 1, 2, u32::MAX - 1, u32::MAX][(splitmix(state) % 5) as usize],
+            _ => splitmix(state) as u32,
+        }
+    }
+
+    #[test]
+    fn pick_partition_point_equals_old_search() {
+        // Случайные списки 1..64 диапазонов (в том числе `begin > end`, после `exclude` от 0.0.0.0, с оборачиванием
+        // префиксных сумм): `pick` равен копии старого поиска на всех индексах меньше суммы и на трёх за концом.
+        let mut state = 0x7069_636b_u64;
+        let (mut compared, mut skipped, mut non_monotone) = (0u32, 0u32, 0u32);
+        for case in 0..4000 {
+            let mut l = RangeList::new();
+            let reversed_heavy = case % 4 == 3;
+            for _ in 0..1 + splitmix(&mut state) % 64 {
+                let (b, e) = (rand_value(&mut state), rand_value(&mut state));
+                if reversed_heavy {
+                    l.add_range(b.max(e), b.min(e));
+                    continue;
+                }
+                // половина диапазонов нормальные, остальные как попало (в том числе `begin > end`)
+                match splitmix(&mut state) % 4 {
+                    0 | 1 => l.add_range(b.min(e), b.max(e)),
+                    2 => l.add_range(b, e),
+                    // обратный диапазон (`begin > end`): его размер оборачивается и делает суммы немонотонными
+                    _ => l.add_range(b.max(e), b.min(e)),
+                }
+            }
+            if splitmix(&mut state).is_multiple_of(2) {
+                l.sort_and_merge();
+            }
+            if splitmix(&mut state).is_multiple_of(3) {
+                let mut x = RangeList::new();
+                x.add_range(0, rand_value(&mut state));
+                for _ in 0..splitmix(&mut state) % 5 {
+                    let (b, e) = (rand_value(&mut state), rand_value(&mut state));
+                    x.add_range(b.min(e), b.max(e));
+                }
+                l.exclude(&mut x);
+            }
+            l.optimize();
+            let Some(picker) = l.picker.clone() else {
+                continue;
+            };
+            if picker.windows(2).any(|w| w[0] > w[1]) {
+                non_monotone += 1;
+            }
+            let count = l.count();
+            let mut indices: Vec<u64> = if count <= 4096 {
+                (0..count).collect()
+            } else {
+                let mut v: Vec<u64> = picker
+                    .iter()
+                    .flat_map(|&p| [u64::from(p), u64::from(p).wrapping_sub(1)])
+                    .filter(|&i| i < count)
+                    .collect();
+                v.extend((0..64).map(|_| splitmix(&mut state) % count));
+                v.extend([0, count - 1]);
+                v
+            };
+            indices.extend([count, count + 1, count + 2]);
+            for index in indices {
+                let Some(mid) = old_pick_mid(&picker, index) else {
+                    skipped += 1;
+                    continue;
+                };
+                let want = std::panic::catch_unwind(|| {
+                    l.list[mid]
+                        .begin
+                        .wrapping_add((index - u64::from(picker[mid])) as u32)
+                });
+                let got = std::panic::catch_unwind(|| l.pick(index));
+                assert_eq!(got.ok(), want.ok(), "case {case} index {index}");
+                compared += 1;
+            }
+        }
+        assert!(compared > 50_000, "compared {compared}");
+        eprintln!(
+            "pick differential: compared {compared}, old search stuck {skipped}, non-monotone lists {non_monotone}"
+        );
+    }
 }

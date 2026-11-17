@@ -514,6 +514,25 @@ mod prefix_tests {
         assert_eq!(prefix_from_sockaddr(&[8, 2, 0, 0, 255, 0, 255, 0]), None);
         assert_eq!(prefix_from_sockaddr(&[]), None);
     }
+    /// Pins the base decoder: Darwin may trim trailing zero octets of a netmask record, so a record of
+    /// `sa_len` bytes is zero-filled up to the IPv4 address field; an empty or 1-byte record is no mask.
+    #[test]
+    fn netmask_records_decode_as_on_base() {
+        assert_eq!(prefix_from_sockaddr(&[]), None);
+        assert_eq!(prefix_from_sockaddr(&[1]), None);
+        assert_eq!(prefix_from_sockaddr(&[5, 2, 0, 0, 255]), Some(8));
+        assert_eq!(prefix_from_sockaddr(&[6, 2, 0, 0, 255, 255]), Some(16));
+        assert_eq!(prefix_from_sockaddr(&[7, 2, 0, 0, 255, 255, 255]), Some(24));
+        assert_eq!(
+            prefix_from_sockaddr(&[8, 2, 0, 0, 255, 255, 255, 255]),
+            Some(32)
+        );
+        assert_eq!(
+            prefix_from_sockaddr(&[8, 2, 0, 0, 255, 0, 255, 0]),
+            None,
+            "a gap between the ones is not a mask"
+        );
+    }
     #[test]
     fn network_plan_prefix_masks_validate_contiguity_and_host_semantics() {
         for (mask, want) in [

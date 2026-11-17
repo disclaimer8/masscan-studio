@@ -757,11 +757,20 @@ pub struct PayloadEntry {
 impl PayloadEntry {
     /// Нагрузка зонда с вписанным cookie (`udp_payload_fixup`, templ-pkt.c:618).
     pub fn with_cookie(&self, seqno: u32) -> Vec<u8> {
-        let mut data = self.payload.to_vec();
-        if let Some(m) = self.set_cookie {
-            m.apply(&mut data, seqno);
-        }
+        let mut data = Vec::with_capacity(self.payload.len());
+        self.append_with_cookie(seqno, &mut data);
         data
+    }
+
+    /// [`PayloadEntry::with_cookie`] в конец `out`, без промежуточного `Vec`: так нагрузку дописывает в кадр
+    /// `UdpTemplate::build_udp`. Мутация видит только дописанные байты, как `length` нагрузки в C.
+    #[inline]
+    pub(crate) fn append_with_cookie(&self, seqno: u32, out: &mut Vec<u8>) {
+        let start = out.len();
+        out.extend_from_slice(&self.payload);
+        if let Some(m) = self.set_cookie {
+            m.apply(&mut out[start..], seqno);
+        }
     }
 }
 

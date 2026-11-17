@@ -619,12 +619,7 @@ impl UdpTemplate {
         out.clear();
         out.extend_from_slice(&self.packet);
         if let Some(e) = payload {
-            // `PayloadEntry::with_cookie` на месте, без промежуточного `Vec`.
-            let start = out.len();
-            out.extend_from_slice(&e.payload);
-            if let Some(m) = e.set_cookie {
-                m.apply(&mut out[start..], seqno);
-            }
+            e.append_with_cookie(seqno, out);
         }
         let (oi, ou) = (self.offset_ip, self.offset_udp);
         let ip_id = ip_them ^ u32::from(port_them) ^ seqno; // :942

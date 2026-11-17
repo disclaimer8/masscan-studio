@@ -313,6 +313,41 @@ proptest! {
     }
 }
 
+/// Полная длина IP у UDP зависит от нагрузки, поэтому в сумме заголовка она отдельное слагаемое (у TCP, ICMP и SCTP
+/// длина постоянна). Своя запись без мутатора каждой длины 0..=1472 (кадр Ethernet до 1514 байт) на трёх каналах:
+/// кадр равен эталону базы, адреса, порты и `seqno` меняются от длины к длине.
+#[test]
+fn udp_length_term_covers_every_payload_length() {
+    const MAC_ME: [u8; 6] = [0x00, 0x11, 0x22, 0x33, 0x44, 0x55];
+    const MAC_NH: [u8; 6] = [0x66, 0x55, 0x44, 0x33, 0x22, 0x11];
+    let mut out = Vec::new();
+    for (link, ttl) in [
+        (LinkType::Ethernet, 255u8),
+        (LinkType::Null, 64),
+        (LinkType::Raw, 1),
+    ] {
+        let t = UdpTemplate::new(MAC_ME, MAC_NH, link, ttl);
+        let r = RefUdp::new(MAC_ME, MAC_NH, link, ttl);
+        for len in 0..=1472usize {
+            let k = len as u32;
+            let entry = PayloadEntry {
+                payload: (0..len).map(|i| (i * 131 + len) as u8).collect(),
+                source_port: k,
+                set_cookie: None,
+            };
+            let them = (0xc633_6400 ^ k.wrapping_mul(0x9e37_79b9), (k * 7) as u16);
+            let me = (0x0aff_0001 + (k & 0xff), 40000 + (k % 16) as u16);
+            let seqno = k.wrapping_mul(0x85eb_ca6b);
+            t.build_udp(them, me, seqno, Some(&entry), &mut out);
+            assert_eq!(
+                out,
+                r.build_udp(them, me, seqno, Some(&entry)),
+                "{link:?}, payload {len}"
+            );
+        }
+    }
+}
+
 // ---------------------------------------------------------------------
 // SipHash и cookie
 // ---------------------------------------------------------------------

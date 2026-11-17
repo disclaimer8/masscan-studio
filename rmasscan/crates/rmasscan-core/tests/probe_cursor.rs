@@ -740,3 +740,37 @@ fn advance_pass_refused_while_lookahead_holds_pairs() {
     let pass1: Vec<u64> = drain_probes(&mut cur).iter().map(|p| p.index).collect();
     assert_eq!(pass1, (0..128).flat_map(|i| [i, i]).collect::<Vec<u64>>());
 }
+
+/// Studio plan with a different MAC per target: every IPv4 frame starts with its own target's MAC, all other bytes
+/// equal the frame of the same plan without a map.
+#[test]
+fn mapped_plan_uses_each_targets_own_mac() {
+    let c = config("10.0.0.0/26", "80", 7, 100.0);
+    let e = eff(&c);
+    let map: BTreeMap<u32, [u8; 6]> = (0..64u32)
+        .map(|k| {
+            let k = k as u8;
+            (
+                0x0a00_0000 + u32::from(k),
+                [2, 0x10 + k, 0x20 ^ k, 0x30 + k, 0x40 ^ k, k],
+            )
+        })
+        .collect();
+    let mapped =
+        ReadyPlan::with_destinations(e.clone(), binding(40000, 40003), map.clone()).unwrap();
+    let plain = ReadyPlan::new(e, binding(40000, 40003)).unwrap();
+    let mut a = ProbeCursor::new(&mapped, 0).unwrap();
+    let mut b = ProbeCursor::new(&plain, 0).unwrap();
+    let pa = a.preload(64).to_vec();
+    let pb = b.preload(64).to_vec();
+    assert_eq!(pa.len(), 64);
+    assert_eq!(pb.len(), 64);
+    let mut seen = std::collections::BTreeSet::new();
+    for (x, y) in pa.iter().zip(&pb) {
+        assert_eq!(x.ip_them, y.ip_them);
+        assert_eq!(x.frame[..6], map[&x.ip_them], "{:#x}", x.ip_them);
+        assert_eq!(x.frame[6..], y.frame[6..]);
+        seen.insert(x.frame[..6].to_vec());
+    }
+    assert_eq!(seen.len(), 64);
+}

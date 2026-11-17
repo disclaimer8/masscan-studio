@@ -18,12 +18,18 @@ use reference::{
 };
 use rmasscan_core::blackrock::BlackRock;
 use rmasscan_core::checksum::ip_header_checksum;
+use rmasscan_core::config::{Operation, ScanConfig, validate};
 use rmasscan_core::cookie::{icmp_echo_cookie, siphash24, syn_cookie_ipv4, syn_cookie_ipv6};
+use rmasscan_core::massip::MassIp;
 use rmasscan_core::packet::{
     IcmpEchoTemplate, LinkType, PacketModifiers, SctpTemplate, TcpHeaderOptions, TcpSynTemplate,
     UdpTemplate,
 };
 use rmasscan_core::payloads::{PayloadEntry, PayloadTable};
+use rmasscan_core::probe::{AdapterBinding, NicBinding, ProbeCursor, ReadyPlan};
+use rmasscan_core::targets::{
+    TEMPL_ICMP_ECHO, TEMPL_SCTP, TEMPL_SCTP_LAST, TEMPL_UDP, TEMPL_UDP_LAST, parse_ports,
+};
 use std::sync::Arc;
 
 fn cfg(cases: u32) -> ProptestConfig {
@@ -341,4 +347,85 @@ proptest! {
             ref_icmp_echo_cookie(ip_them, ip_me, entropy)
         );
     }
+}
+
+// ---------------------------------------------------------------------
+// ProbeCursor: повторное использование буферов кадров (Review Focus 4)
+// ---------------------------------------------------------------------
+
+/// Review Focus 4: смесь TCP, UDP с нагрузкой и без, SCTP и ICMP Echo (кадры 58, 42+DNS, 42+SNMP, 42, 66, 90 байт) при
+/// переиспользовании буферов: кадр каждого зонда равен кадру эталонного построителя в свежий `Vec` по полям этого же
+/// зонда, а короткий кадр не несёт хвоста предыдущего длинного.
+#[test]
+fn recycled_buffers_leave_no_stale_tail() {
+    const SEED: u64 = 42;
+    const MAC_ME: [u8; 6] = [0x00, 0x11, 0x22, 0x33, 0x44, 0x55];
+    const MAC_NH: [u8; 6] = [0x66, 0x55, 0x44, 0x33, 0x22, 0x11];
+    let mut m = MassIp::new();
+    m.add_target_string("198.18.0.0/28").unwrap();
+    parse_ports(m.ports_mut(), "80,U:53,U:161,U:9999,S:2905,I:0").unwrap();
+    let e = validate(
+        &ScanConfig {
+            targets: m,
+            seed: SEED,
+            ..ScanConfig::default()
+        },
+        Operation::Scan,
+    )
+    .unwrap();
+    let mods = e.packet_modifiers();
+    let nic = NicBinding::from(AdapterBinding {
+        interface_id: "test0".to_string(),
+        link_type: LinkType::Ethernet,
+        source_ipv4: 0x0aff_0001,
+        source_mac: MAC_ME,
+        next_hop_mac: MAC_NH,
+        source_ports: (40000, 40000),
+    });
+    let plan = ReadyPlan::new_cli(e, vec![nic]).unwrap();
+    let tcp = RefTcpSyn::new(MAC_ME, MAC_NH, LinkType::Ethernet, &mods);
+    let udp = RefUdp::new(MAC_ME, MAC_NH, LinkType::Ethernet, mods.ttl);
+    let sctp = RefSctp::new(MAC_ME, MAC_NH, LinkType::Ethernet, mods.ttl);
+    let icmp = RefIcmpEcho::new(MAC_ME, MAC_NH, LinkType::Ethernet, mods.ttl);
+
+    let mut lens = std::collections::BTreeSet::new();
+    let mut checked = 0usize;
+    for batch in [3usize, 64] {
+        let mut cur = ProbeCursor::new(&plan, 0).unwrap();
+        loop {
+            let probes = cur.preload(batch).to_vec();
+            if probes.is_empty() {
+                break;
+            }
+            for p in &probes {
+                let (ip_them, ip_me) = (p.ip_them, p.ip_me);
+                let (port_them, port_me) = (p.port_them, p.port_me);
+                let want = match p.port_index {
+                    TEMPL_UDP..=TEMPL_UDP_LAST => udp.build_udp(
+                        (ip_them, port_them),
+                        (ip_me, port_me),
+                        p.seqno,
+                        builtin().get(port_them),
+                    ),
+                    TEMPL_SCTP..=TEMPL_SCTP_LAST => {
+                        sctp.build_init((ip_them, port_them), (ip_me, port_me), p.seqno)
+                    }
+                    TEMPL_ICMP_ECHO => icmp.build_echo(ip_them, ip_me, p.seqno, SEED),
+                    _ => tcp.build_syn(ip_them, port_them, ip_me, port_me, p.seqno),
+                };
+                assert_eq!(
+                    p.frame, want,
+                    "batch {batch}, index {}, port_index {}",
+                    p.index, p.port_index
+                );
+                lens.insert(p.frame.len());
+                checked += 1;
+            }
+            let n = probes.len();
+            cur.advance_sent_n(n);
+        }
+    }
+    assert_eq!(checked, 2 * 16 * 6);
+    // Шесть видов кадров разной длины: без них тест не проверил бы хвосты.
+    assert!(lens.len() >= 5, "{lens:?}");
 }

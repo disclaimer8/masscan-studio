@@ -250,7 +250,8 @@ exit 0
 пользователем.
 
 **Матрица** (существующая, 40 ячеек) и полный набор Rust на коммите задачи; `$ORACLE` (путь на хосте) подставляется в
-команду на Mac. Сборка идёт в свой target-каталог sha на диске хоста (`~/rnn-target-<sha>`, удаляется после матрицы),
+команду на Mac. Сборка идёт в свой target-каталог sha на диске хоста (`~/rnn-target-<sha>`; команда удаляет его в конце
+при любом исходе, код возврата — код матрицы),
 как в сессиях стенда: в общем каталоге дерево из `git archive` одного коммита получало сборку другого (`BENCHMARKS.md`,
 «Стенд S»). Внешний таймаут 36 000 с (сумма внутренних 34 200 с):
 
@@ -265,7 +266,8 @@ SHA=$(gate_sha) && l_ship "$SHA" && "$TO" -k 60 36000 ssh -n "$LINUX_HOST" \
   && timeout -k 60 7200 scripts/wire-lab.sh --oracle '$ORACLE' --out \$OUT/rust --suite rust \
        --rust-bin \$CARGO_TARGET_DIR/release/examples/wire_scan --fixtures tests/golden/wire \
   && RMASSCAN_WIRE_RESULTS=\$OUT/rust RMASSCAN_WIRE_PERF_RESULTS=\$OUT/perf \
-       timeout -k 30 1800 ~/.cargo/bin/cargo test --locked -p rmasscan-net --test linux_wire -- --ignored" \
+       timeout -k 30 1800 ~/.cargo/bin/cargo test --locked -p rmasscan-net --test linux_wire -- --ignored; \
+  rc=\$?; rm -rf \$HOME/rnn-target-$SHA; exit \$rc" \
   >"$EVID/matrix-$SHA.log" 2>&1 && libtest_ok "$EVID/matrix-$SHA.log"
 ```
 

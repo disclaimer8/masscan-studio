@@ -12,7 +12,7 @@
 //! * `interrupt` (счётчик Ctrl-C живого скана: `_exit`, `SetConsoleCtrlHandler`; `sigaction` через `unix_sys`).
 //!
 //! Вне продукта: `lab_io::imp` только с feature `lab` (её включает один rmasscan-lab: sigaction-флаг остановки и
-//! listener с backlog 0) и тестовые модули (`macos::spike`, `windows::{tests, live}`). Остальной код безопасный:
+//! listener с backlog 0) и тестовые модули (`windows::{tests, live}`). Остальной код безопасный:
 //! `discover` и `route_parse` под `forbid(unsafe_code)`, разбор ответов ядра переносим и тестируется на любой ОС;
 //! адаптеры тестируются через синтетические швы (`linux::PacketIo`, `linux::IfaceInfo`; `macos::adapter::BpfIo`;
 //! подставная таблица функций wpcap). Обнаружение читает состояние ОС в процессе, без привилегий и без запуска
@@ -42,7 +42,7 @@ use rmasscan_engine::AdapterPair;
 #[cfg(target_os = "linux")]
 mod linux;
 
-// macOS: BPF (`/dev/bpf*`). `unsafe` только в `macos::{sys, ifinfo, process}` (и в тестовом `spike`). Переносимые
+// macOS: BPF (`/dev/bpf*`). `unsafe` только в `macos::{sys, ifinfo, process}`. Переносимые
 // части (`abi`, `adapter`) собираются и в тестах других платформ (seam-тесты).
 #[cfg(any(target_os = "macos", test))]
 mod macos;

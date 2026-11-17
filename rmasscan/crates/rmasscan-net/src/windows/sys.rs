@@ -14,14 +14,21 @@
 //!   wpcap.dll, и сохраняем пути, версии и SHA-256 обеих DLL.
 
 use std::ffi::{CStr, c_void};
+use std::marker::PhantomData;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::os::windows::ffi::OsStrExt;
+use std::ptr::NonNull;
 use std::sync::Arc;
 
 use windows_sys::Win32::Foundation::{
-    ERROR_BAD_EXE_FORMAT, ERROR_FILE_NOT_FOUND, ERROR_MOD_NOT_FOUND, ERROR_PATH_NOT_FOUND,
-    FreeLibrary, GetLastError,
+    ERROR_BAD_EXE_FORMAT, ERROR_FILE_NOT_FOUND, ERROR_HOST_UNREACHABLE, ERROR_MOD_NOT_FOUND,
+    ERROR_NETWORK_UNREACHABLE, ERROR_NOT_FOUND, ERROR_PATH_NOT_FOUND, FreeLibrary, GetLastError,
+    NO_ERROR,
 };
+use windows_sys::Win32::NetworkManagement::IpHelper::{
+    FreeMibTable, GetBestRoute2, GetIpForwardTable2, MIB_IPFORWARD_ROW2, MIB_IPFORWARD_TABLE2,
+};
+use windows_sys::Win32::Networking::WinSock::{ADDRESS_FAMILY, SOCKADDR_INET};
 use windows_sys::Win32::Storage::FileSystem::{
     GetFileVersionInfoSizeW, GetFileVersionInfoW, VS_FIXEDFILEINFO, VerQueryValueW,
 };
@@ -346,48 +353,75 @@ pub(crate) fn adapters() -> Result<Vec<WinAdapter>, NetError> {
         .collect())
 }
 
+/// Метки вызовов IP Helper в тексте [`iphlp_error`], по одной на место вызова.
+const FWD4_LABEL: &str = "GetIpForwardTable2";
+const FWD6_LABEL: &str = "GetIpForwardTable2(AF_INET6)";
+const BEST4_LABEL: &str = "GetBestRoute2";
+const BEST6_LABEL: &str = "GetBestRoute2(AF_INET6)";
+
+/// Ошибка вызова IP Helper `label` с кодом `e`: единственное место текста `{label} error {e}`.
+fn iphlp_error(label: &str, e: u32) -> NetError {
+    NetError::System(format!("{label} error {e}"))
+}
+
 /// Строка `MIB_IPFORWARD_ROW2` → [`Fwd`]; `mib_loopback` это флаг `Loopback` строки, `loopback_if` здесь всегда
 /// `false` (IfType 24 отмечает `route_parse::mark_loopback`).
-///
-/// # Safety
-/// `p` указывает на строку, заполненную IP Helper и живую на время вызова.
-unsafe fn fwd_from_row(
-    p: *const windows_sys::Win32::NetworkManagement::IpHelper::MIB_IPFORWARD_ROW2,
-) -> Fwd {
+fn fwd_from_row(row: &MIB_IPFORWARD_ROW2) -> Fwd {
     use windows_sys::Win32::Networking::WinSock::AF_INET;
 
-    // SAFETY: по контракту функции p валиден. Поля читаются по месту, без копии
-    // всей строки: целые как есть; объединение NextHop сначала по общему полю
-    // si_family, затем как IPv4 (целые); BOOLEAN Loopback читается как u8, так что
-    // значение, отличное от 0/1, никогда не читается как bool.
-    unsafe {
-        let next_hop = &raw const (*p).NextHop;
-        let gateway = if (*next_hop).si_family == AF_INET {
-            Ipv4Addr::from((*next_hop).Ipv4.sin_addr.S_un.S_addr.to_ne_bytes())
+    // SAFETY: SOCKADDR_INET это объединение с общим полем si_family; вариант Ipv4 читается только при AF_INET, его
+    // адрес это целое (объединение целых представлений одного u32).
+    let next_hop = unsafe {
+        if row.NextHop.si_family == AF_INET {
+            Ipv4Addr::from(row.NextHop.Ipv4.sin_addr.S_un.S_addr.to_ne_bytes())
         } else {
             Ipv4Addr::UNSPECIFIED
-        };
-        Fwd {
-            ifindex: (*p).InterfaceIndex,
-            prefix_len: (*p).DestinationPrefix.PrefixLength,
-            next_hop: gateway,
-            metric: (*p).Metric,
-            mib_loopback: (&raw const (*p).Loopback).cast::<u8>().read() != 0,
-            loopback_if: false,
         }
+    };
+    Fwd {
+        ifindex: row.InterfaceIndex,
+        prefix_len: row.DestinationPrefix.PrefixLength,
+        next_hop,
+        metric: row.Metric,
+        mib_loopback: row.Loopback,
+        loopback_if: false,
+    }
+}
+
+/// Один `GetBestRoute2` к `to`: строка маршрута и `BestSourceAddress`; `None`, если маршрута нет
+/// (`ERROR_NOT_FOUND`/`ERROR_NETWORK_UNREACHABLE`/`ERROR_HOST_UNREACHABLE`), иначе текст с меткой `label`. Только чтение.
+fn best_route_raw(
+    to: &SOCKADDR_INET,
+    label: &str,
+) -> Result<Option<(MIB_IPFORWARD_ROW2, SOCKADDR_INET)>, NetError> {
+    // Строка из нулей, как прежний обнулённый буфер `MaybeUninit::zeroed`.
+    let mut row = MIB_IPFORWARD_ROW2::default();
+    let mut source = SOCKADDR_INET::default();
+    // SAFETY: `to`, `row` и `source` живые объекты ровно своих типов; NULL InterfaceLuid и SourceAddress (индекс 0)
+    // документированы как необязательные. При NO_ERROR API пишет в `row` строку маршрута: целые, объединения целых
+    // и BOOLEAN (TRUE/FALSE, `bool` в `windows-sys`).
+    let rc = unsafe {
+        GetBestRoute2(
+            std::ptr::null(),
+            0,
+            std::ptr::null(),
+            to,
+            0,
+            &mut row,
+            &mut source,
+        )
+    };
+    match rc {
+        NO_ERROR => Ok(Some((row, source))),
+        ERROR_NOT_FOUND | ERROR_NETWORK_UNREACHABLE | ERROR_HOST_UNREACHABLE => Ok(None),
+        e => Err(iphlp_error(label, e)),
     }
 }
 
 /// Лучший маршрут к `dst` (`GetBestRoute2`); `None`, если маршрута нет
 /// (`ERROR_NOT_FOUND`/`ERROR_NETWORK_UNREACHABLE`/`ERROR_HOST_UNREACHABLE`). Только чтение.
 pub(crate) fn best_route(dst: Ipv4Addr) -> Result<Option<Fwd>, NetError> {
-    use windows_sys::Win32::Foundation::{
-        ERROR_HOST_UNREACHABLE, ERROR_NETWORK_UNREACHABLE, ERROR_NOT_FOUND, NO_ERROR,
-    };
-    use windows_sys::Win32::NetworkManagement::IpHelper::{GetBestRoute2, MIB_IPFORWARD_ROW2};
-    use windows_sys::Win32::Networking::WinSock::{
-        AF_INET, IN_ADDR, IN_ADDR_0, SOCKADDR_IN, SOCKADDR_INET,
-    };
+    use windows_sys::Win32::Networking::WinSock::{AF_INET, IN_ADDR, IN_ADDR_0, SOCKADDR_IN};
 
     let mut to = SOCKADDR_INET::default();
     to.Ipv4 = SOCKADDR_IN {
@@ -400,29 +434,7 @@ pub(crate) fn best_route(dst: Ipv4Addr) -> Result<Option<Fwd>, NetError> {
         },
         sin_zero: [0; 8],
     };
-    let mut row = std::mem::MaybeUninit::<MIB_IPFORWARD_ROW2>::zeroed();
-    let mut source = SOCKADDR_INET::default();
-    // SAFETY: `to` и `source` живые локальные объекты; `row` это обнулённый
-    // буфер ровно этого типа; NULL InterfaceLuid и SourceAddress (индекс 0)
-    // документированы как необязательные.
-    let rc = unsafe {
-        GetBestRoute2(
-            std::ptr::null(),
-            0,
-            std::ptr::null(),
-            &to,
-            0,
-            row.as_mut_ptr(),
-            &mut source,
-        )
-    };
-    match rc {
-        NO_ERROR => {}
-        ERROR_NOT_FOUND | ERROR_NETWORK_UNREACHABLE | ERROR_HOST_UNREACHABLE => return Ok(None),
-        e => return Err(NetError::System(format!("GetBestRoute2 error {e}"))),
-    }
-    // SAFETY: при NO_ERROR API заполнил `row`, который жив до конца функции.
-    Ok(Some(unsafe { fwd_from_row(row.as_ptr()) }))
+    Ok(best_route_raw(&to, BEST4_LABEL)?.map(|(row, _)| fwd_from_row(&row)))
 }
 
 /// Synchronous IP Helper route query. The absolute deadline and cancellation
@@ -494,44 +506,32 @@ pub(crate) fn adapters6() -> Result<Vec<Adapter6>, NetError> {
 }
 
 /// Строка `MIB_IPFORWARD_ROW2` IPv6 → [`Fwd6`] (как [`fwd_from_row`]).
-///
-/// # Safety
-/// `p` указывает на строку, заполненную IP Helper и живую на время вызова.
-unsafe fn fwd6_from_row(
-    p: *const windows_sys::Win32::NetworkManagement::IpHelper::MIB_IPFORWARD_ROW2,
-) -> Fwd6 {
+fn fwd6_from_row(row: &MIB_IPFORWARD_ROW2) -> Fwd6 {
     use windows_sys::Win32::Networking::WinSock::AF_INET6;
 
-    // SAFETY: по контракту функции p валиден. Поля читаются по месту: целые как есть; объединение NextHop сначала по
-    // общему полю si_family, затем как IPv6 (байты адреса); BOOLEAN Loopback как u8.
-    unsafe {
-        let next_hop = &raw const (*p).NextHop;
-        let gateway = if (*next_hop).si_family == AF_INET6 {
-            Ipv6Addr::from((*next_hop).Ipv6.sin6_addr.u.Byte)
+    // SAFETY: SOCKADDR_INET это объединение с общим полем si_family; вариант Ipv6 читается только при AF_INET6, его
+    // адрес это 16 байт целых.
+    let next_hop = unsafe {
+        if row.NextHop.si_family == AF_INET6 {
+            Ipv6Addr::from(row.NextHop.Ipv6.sin6_addr.u.Byte)
         } else {
             Ipv6Addr::UNSPECIFIED
-        };
-        Fwd6 {
-            ifindex: (*p).InterfaceIndex,
-            prefix_len: (*p).DestinationPrefix.PrefixLength,
-            next_hop: gateway,
-            metric: (*p).Metric,
-            mib_loopback: (&raw const (*p).Loopback).cast::<u8>().read() != 0,
-            loopback_if: false,
         }
+    };
+    Fwd6 {
+        ifindex: row.InterfaceIndex,
+        prefix_len: row.DestinationPrefix.PrefixLength,
+        next_hop,
+        metric: row.Metric,
+        mib_loopback: row.Loopback,
+        loopback_if: false,
     }
 }
 
 /// Лучший маршрут IPv6 к `dst` (`GetBestRoute2` `AF_INET6`) и `BestSourceAddress`; `None`, если маршрута нет. Только
 /// чтение.
 pub(crate) fn best_route6(dst: Ipv6Addr) -> Result<Option<(Fwd6, Option<Ipv6Addr>)>, NetError> {
-    use windows_sys::Win32::Foundation::{
-        ERROR_HOST_UNREACHABLE, ERROR_NETWORK_UNREACHABLE, ERROR_NOT_FOUND, NO_ERROR,
-    };
-    use windows_sys::Win32::NetworkManagement::IpHelper::{GetBestRoute2, MIB_IPFORWARD_ROW2};
-    use windows_sys::Win32::Networking::WinSock::{
-        AF_INET6, IN6_ADDR, IN6_ADDR_0, SOCKADDR_IN6, SOCKADDR_INET,
-    };
+    use windows_sys::Win32::Networking::WinSock::{AF_INET6, IN6_ADDR, IN6_ADDR_0, SOCKADDR_IN6};
 
     let sin6 = SOCKADDR_IN6 {
         sin6_family: AF_INET6,
@@ -543,30 +543,9 @@ pub(crate) fn best_route6(dst: Ipv6Addr) -> Result<Option<(Fwd6, Option<Ipv6Addr
     // Как у `best_route` (IPv4): объединение пишется полем, остальные байты нулевые.
     let mut to = SOCKADDR_INET::default();
     to.Ipv6 = sin6;
-    let mut row = std::mem::MaybeUninit::<MIB_IPFORWARD_ROW2>::zeroed();
-    let mut source = SOCKADDR_INET::default();
-    // SAFETY: `to` и `source` живые локальные объекты; `row` это обнулённый буфер ровно этого типа; NULL
-    // InterfaceLuid и SourceAddress (индекс 0) документированы как необязательные.
-    let rc = unsafe {
-        GetBestRoute2(
-            std::ptr::null(),
-            0,
-            std::ptr::null(),
-            &to,
-            0,
-            row.as_mut_ptr(),
-            &mut source,
-        )
+    let Some((row, source)) = best_route_raw(&to, BEST6_LABEL)? else {
+        return Ok(None);
     };
-    match rc {
-        NO_ERROR => {}
-        ERROR_NOT_FOUND | ERROR_NETWORK_UNREACHABLE | ERROR_HOST_UNREACHABLE => return Ok(None),
-        e => {
-            return Err(NetError::System(format!(
-                "GetBestRoute2(AF_INET6) error {e}"
-            )));
-        }
-    }
     // SAFETY: SOCKADDR_INET это объединение с общим полем si_family; вариант Ipv6 читается только при AF_INET6, его
     // адрес это 16 байт целых.
     let best_source = unsafe {
@@ -576,97 +555,88 @@ pub(crate) fn best_route6(dst: Ipv6Addr) -> Result<Option<(Fwd6, Option<Ipv6Addr
             None
         }
     };
-    // SAFETY: при NO_ERROR API заполнил `row`, который жив до конца функции.
-    Ok(Some((unsafe { fwd6_from_row(row.as_ptr()) }, best_source)))
+    Ok(Some((fwd6_from_row(&row), best_source)))
 }
 
 /// Таблица IP Helper, освобождаемая `FreeMibTable` ровно один раз.
-struct MibTable(*mut windows_sys::Win32::NetworkManagement::IpHelper::MIB_IPFORWARD_TABLE2);
+struct MibTable(NonNull<MIB_IPFORWARD_TABLE2>);
+
+impl MibTable {
+    /// Таблица на время заимствования владельца.
+    fn table(&self) -> TableRef<'_> {
+        TableRef {
+            head: self.0,
+            _owner: PhantomData,
+        }
+    }
+}
 
 impl Drop for MibTable {
     fn drop(&mut self) {
         // SAFETY: указатель получен из успешного GetIpForwardTable2 (не null),
         // наружу не копируется и освобождается ровно один раз.
-        unsafe { windows_sys::Win32::NetworkManagement::IpHelper::FreeMibTable(self.0.cast()) };
+        unsafe { FreeMibTable(self.0.as_ptr().cast()) };
     }
+}
+
+/// Заимствованная таблица маршрутов: заголовок `MIB_IPFORWARD_TABLE2`, за которым в том же выделении подряд лежат
+/// `NumEntries` строк с `Table[0]` (`windows-sys` объявляет `Table` массивом из одной строки). Строится только над
+/// живой таблицей `GetIpForwardTable2` ([`MibTable::table`]) и в тестах над буфером `#[repr(C)]` той же раскладки, и
+/// не переживает её владельца.
+#[derive(Clone, Copy)]
+struct TableRef<'a> {
+    head: NonNull<MIB_IPFORWARD_TABLE2>,
+    _owner: PhantomData<&'a MIB_IPFORWARD_TABLE2>,
+}
+
+/// Строки таблицы по порядку через `decode`: `NumEntries` строк одним срезом с `Table[0]`. ОС не вызывается.
+fn walk_table<T>(table: TableRef<'_>, decode: fn(&MIB_IPFORWARD_ROW2) -> T) -> Vec<T> {
+    let head = table.head.as_ptr();
+    // SAFETY: `TableRef` указывает на живую таблицу (см. тип): `NumEntries` строк лежат подряд с `Table[0]` в том же
+    // выделении, срез не переживает заимствование `'_`. В строке только целые, объединения целых и BOOLEAN, которые
+    // IP Helper пишет как TRUE/FALSE (`bool` в `windows-sys`).
+    let rows = unsafe {
+        let n = usize::try_from((*head).NumEntries).unwrap_or(0);
+        std::slice::from_raw_parts((&raw const (*head).Table).cast::<MIB_IPFORWARD_ROW2>(), n)
+    };
+    rows.iter().map(decode).collect()
+}
+
+/// Все строки `GetIpForwardTable2(family)` через `decode` по порядку таблицы; `ERROR_NOT_FOUND` и пустой указатель
+/// это пустой список, иначе текст с меткой `label`. Только чтение.
+fn forward_rows<T>(
+    family: ADDRESS_FAMILY,
+    label: &str,
+    decode: fn(&MIB_IPFORWARD_ROW2) -> T,
+) -> Result<Vec<T>, NetError> {
+    let mut t: *mut MIB_IPFORWARD_TABLE2 = std::ptr::null_mut();
+    // SAFETY: выходной указатель на живой локальный объект; при успехе API выделяет таблицу, которую освобождает
+    // `MibTable`.
+    let rc = unsafe { GetIpForwardTable2(family, &mut t) };
+    match rc {
+        NO_ERROR => {}
+        ERROR_NOT_FOUND => return Ok(Vec::new()),
+        e => return Err(iphlp_error(label, e)),
+    }
+    let Some(t) = NonNull::new(t) else {
+        return Ok(Vec::new());
+    };
+    let table = MibTable(t);
+    Ok(walk_table(table.table(), decode))
 }
 
 /// Все маршруты IPv4 (`GetIpForwardTable2(AF_INET)`). Только чтение.
 pub(crate) fn forward_table() -> Result<Vec<Fwd>, NetError> {
-    use windows_sys::Win32::Foundation::{ERROR_NOT_FOUND, NO_ERROR};
-    use windows_sys::Win32::NetworkManagement::IpHelper::{
-        GetIpForwardTable2, MIB_IPFORWARD_ROW2, MIB_IPFORWARD_TABLE2,
-    };
     use windows_sys::Win32::Networking::WinSock::AF_INET;
 
-    let mut t: *mut MIB_IPFORWARD_TABLE2 = std::ptr::null_mut();
-    // SAFETY: выходной указатель на живой локальный объект; при успехе API
-    // выделяет таблицу, которую освобождает `MibTable`.
-    let rc = unsafe { GetIpForwardTable2(AF_INET, &mut t) };
-    match rc {
-        NO_ERROR => {}
-        ERROR_NOT_FOUND => return Ok(Vec::new()),
-        e => return Err(NetError::System(format!("GetIpForwardTable2 error {e}"))),
-    }
-    if t.is_null() {
-        return Ok(Vec::new());
-    }
-    let table = MibTable(t);
-    // SAFETY: table.0 это таблица, выделенная API и живая до конца `table`;
-    // NumEntries строк лежат подряд с `Table[0]` в том же выделении.
-    let (n, base) = unsafe {
-        (
-            usize::try_from((*table.0).NumEntries).unwrap_or(0),
-            (&raw const (*table.0).Table).cast::<MIB_IPFORWARD_ROW2>(),
-        )
-    };
-    let mut out = Vec::with_capacity(n);
-    for i in 0..n {
-        // SAFETY: i < NumEntries, строка лежит внутри живого выделения таблицы.
-        out.push(unsafe { fwd_from_row(base.add(i)) });
-    }
-    Ok(out)
+    forward_rows(AF_INET, FWD4_LABEL, fwd_from_row)
 }
 
 /// Все маршруты IPv6 (`GetIpForwardTable2(AF_INET6)`). Только чтение.
 pub(crate) fn forward_table6() -> Result<Vec<Fwd6>, NetError> {
-    use windows_sys::Win32::Foundation::{ERROR_NOT_FOUND, NO_ERROR};
-    use windows_sys::Win32::NetworkManagement::IpHelper::{
-        GetIpForwardTable2, MIB_IPFORWARD_ROW2, MIB_IPFORWARD_TABLE2,
-    };
     use windows_sys::Win32::Networking::WinSock::AF_INET6;
 
-    let mut t: *mut MIB_IPFORWARD_TABLE2 = std::ptr::null_mut();
-    // SAFETY: выходной указатель на живой локальный объект; при успехе API выделяет таблицу, которую освобождает
-    // `MibTable`.
-    let rc = unsafe { GetIpForwardTable2(AF_INET6, &mut t) };
-    match rc {
-        NO_ERROR => {}
-        ERROR_NOT_FOUND => return Ok(Vec::new()),
-        e => {
-            return Err(NetError::System(format!(
-                "GetIpForwardTable2(AF_INET6) error {e}"
-            )));
-        }
-    }
-    if t.is_null() {
-        return Ok(Vec::new());
-    }
-    let table = MibTable(t);
-    // SAFETY: table.0 это таблица, выделенная API и живая до конца `table`; NumEntries строк лежат подряд с
-    // `Table[0]` в том же выделении.
-    let (n, base) = unsafe {
-        (
-            usize::try_from((*table.0).NumEntries).unwrap_or(0),
-            (&raw const (*table.0).Table).cast::<MIB_IPFORWARD_ROW2>(),
-        )
-    };
-    let mut out = Vec::with_capacity(n);
-    for i in 0..n {
-        // SAFETY: i < NumEntries, строка лежит внутри живого выделения таблицы.
-        out.push(unsafe { fwd6_from_row(base.add(i)) });
-    }
-    Ok(out)
+    forward_rows(AF_INET6, FWD6_LABEL, fwd6_from_row)
 }
 
 /// Версия ОС `major.minor.build[.revision]`. `RtlGetVersion` не подвержена
@@ -704,7 +674,10 @@ pub(crate) fn os_version() -> Option<String> {
             let p: Vec<&str> = f.split('.').collect();
             (p.len() == 4 && p[2] == v.dwBuildNumber.to_string()).then(|| p[3].to_string())
         });
-    Some(rev.map_or(base.clone(), |r| format!("{base}.{r}")))
+    Some(match rev {
+        Some(r) => format!("{base}.{r}"),
+        None => base,
+    })
 }
 
 /// Настоящий загрузчик.

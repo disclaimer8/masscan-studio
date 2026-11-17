@@ -45,6 +45,8 @@ const ORACLE_GIT_HEAD: &str = "8e6b3b0c07a81e8ea61d557c06134a21a6881614";
 const MAC_SRC: [u8; 6] = [0x02, 0x00, 0x00, 0x00, 0x00, 0x01];
 const MAC_R4: [u8; 6] = [0x02, 0x00, 0x00, 0x00, 0x00, 0xfe];
 const MAC_R6: [u8; 6] = [0x02, 0x00, 0x00, 0x00, 0x00, 0xfd];
+/// Буфер кадра C (`src/templ-pkt.c`): кадр длиннее не строится.
+const C_LIMIT: usize = 2040;
 const SEED: u64 = 0x0123_4567_89ab_cdef;
 /// Наш адрес в тестах разбора: 10.255.0.1 и fd00::2; порты источника 40000..=40015.
 const ME4: u32 = 0x0aff_0001;
@@ -761,6 +763,88 @@ fn inputs_match_generator() {
     assert_eq!(all.iter().map(|c| c.frames.len()).sum::<usize>(), 352);
 }
 
+/// Кадр rmasscan, переведённый в кадр C по двум названным отличиям (TSval у `--tcp-tsecho`, сумма IPv4 по E1.10).
+fn in_c_form(ours: &[u8], c: &CaseSpec, spec: &FrameSpec, i: usize, oi: usize) -> Vec<u8> {
+    let ot = oi + if spec.v6 { 40 } else { 20 };
+    let what = format!("{} frame {i}", c.name);
+    let mut want = ours.to_vec();
+    if let Some(ts) = c.template.tsecho {
+        let at = tsval_offset(&want, ot).expect("TSval option");
+        assert_eq!(&want[at..at + 4], &ts.to_be_bytes(), "{what}: our TSval");
+        want[at..at + 4].copy_from_slice(&c_tsval(ts));
+        fix_tcp_checksum(&mut want, oi, spec.v6);
+    }
+    if E1_10.contains(&(c.name.as_str(), i)) {
+        let h = c_ipv4_header_checksum(&want[oi..oi + 20], spec.payload_len);
+        want[oi + 10..oi + 12].copy_from_slice(&h.to_be_bytes());
+    }
+    want
+}
+
+/// `build_into` в буфер, где раньше лежали 2040 байт `0xAA`, даёт кадр C каждого случая (после тех же двух отличий);
+/// длиннее предела C и IPv6 без `source_ipv6` оставляют буфер пустым, `build` отдаёт в этих случаях пустой `Vec`.
+#[test]
+fn build_into_reuses_a_dirty_buffer() {
+    let mut out = vec![0xAA; C_LIMIT];
+    let mut total = 0usize;
+    for c in cases() {
+        let b = builder(c.link, &c.template);
+        let c_frames = read_c_frames(&c.name);
+        let oi = link_len(c.link);
+        for (i, (spec, c_frame)) in c.frames.iter().zip(&c_frames).enumerate() {
+            out.clear();
+            out.resize(C_LIMIT, 0xAA);
+            b.build_into(&spec.segment(), &mut out);
+            let want = in_c_form(&out, &c, spec, i, oi);
+            assert!(
+                want == *c_frame,
+                "{} frame {i}: build_into differs from C",
+                c.name
+            );
+            total += 1;
+        }
+    }
+    assert_eq!(total, 352);
+
+    // Нагрузка до предела включительно: кадр есть; на байт больше: пусто, а не остаток прошлого кадра.
+    let b = builder(LinkType::Ethernet, &DEFAULT_TEMPLATE);
+    // Голова без набивки до 60: кадр с нагрузкой в 100 байт на 100 байт длиннее головы.
+    let mut probe = seg4(ME4, PEER4, 40000, 80);
+    probe.payload = vec![7; 100];
+    let head = b.build(&probe).len() - 100;
+    let mut s = seg4(ME4, PEER4, 40000, 80);
+    s.payload = vec![7; C_LIMIT - head];
+    out.clear();
+    out.resize(C_LIMIT, 0xAA);
+    b.build_into(&s, &mut out);
+    assert_eq!(out.len(), C_LIMIT);
+    assert_eq!(out, b.build(&s));
+    s.payload.push(7);
+    b.build_into(&s, &mut out);
+    assert!(out.is_empty(), "segment over the C limit");
+    assert!(b.build(&s).is_empty());
+    let mut s6 = seg6(ME6, PEER6, 40000, 80);
+    s6.payload = vec![7; C_LIMIT];
+    out.resize(C_LIMIT, 0xAA);
+    b.build_into(&s6, &mut out);
+    assert!(out.is_empty(), "IPv6 segment over the C limit");
+
+    // План без `source_ipv6`: IPv6-сегмент оставляет грязный буфер пустым, IPv4 после него строится заново.
+    let b = TcpFrameBuilder::from_plan(&plan(
+        LinkType::Ethernet,
+        &DEFAULT_TEMPLATE.modifiers(),
+        None,
+    ));
+    out.resize(C_LIMIT, 0xAA);
+    b.build_into(&seg6(ME6, PEER6, 40000, 80), &mut out);
+    assert!(out.is_empty(), "IPv6 without source_ipv6");
+    assert!(b.build(&seg6(ME6, PEER6, 40000, 80)).is_empty());
+    out.resize(C_LIMIT, 0xAA);
+    b.build_into(&seg4(ME4, PEER4, 40000, 80), &mut out);
+    assert_eq!(out, b.build(&seg4(ME4, PEER4, 40000, 80)));
+    assert_eq!(out.len(), 60);
+}
+
 /// Кадр `TcpFrameBuilder::build` равен кадру C байт в байт, кроме двух названных отличий (E1.10 и TSval), а наши
 /// суммы IPv4 и TCP верны в каждом кадре.
 #[test]
@@ -777,7 +861,6 @@ fn tcp_frame_golden_matches_c() {
             let ours = b.build(&spec.segment());
             let what = format!("{} frame {i}", c.name);
             assert!(!ours.is_empty(), "{what}: no frame");
-            let ot = oi + if spec.v6 { 40 } else { 20 };
             if !spec.v6 {
                 assert!(ipv4_header_ok(&ours[oi..]), "{what}: our IPv4 header sum");
                 if !ipv4_header_ok(&c_frame[oi..]) {
@@ -788,17 +871,9 @@ fn tcp_frame_golden_matches_c() {
             assert!(tcp_ok(c_frame, oi, spec.v6), "{what}: C TCP sum");
 
             // Наш кадр, переведённый в C по двум названным отличиям.
-            let mut want = ours.clone();
-            if let Some(ts) = c.template.tsecho {
-                let at = tsval_offset(&want, ot).expect("TSval option");
-                assert_eq!(&want[at..at + 4], &ts.to_be_bytes(), "{what}: our TSval");
-                want[at..at + 4].copy_from_slice(&c_tsval(ts));
-                fix_tcp_checksum(&mut want, oi, spec.v6);
+            let want = in_c_form(&ours, &c, spec, i, oi);
+            if c.template.tsecho.is_some() {
                 tsecho_frames += 1;
-            }
-            if E1_10.contains(&(c.name.as_str(), i)) {
-                let h = c_ipv4_header_checksum(&want[oi..oi + 20], spec.payload_len);
-                want[oi + 10..oi + 12].copy_from_slice(&h.to_be_bytes());
             }
             assert!(
                 want == *c_frame,

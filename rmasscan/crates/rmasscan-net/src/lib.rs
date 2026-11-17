@@ -74,6 +74,11 @@ pub mod ndp_resolve;
 // Безопасный переносимый разбор ответов ядра о маршрутах (rtnetlink, route socket Darwin, IP Helper).
 mod route_parse;
 
+// Общие примитивы Unix: `socket`, `poll` одного fd, `setsockopt` целого, `sigaction`, адрес netlink ядра.
+#[cfg(unix)]
+#[allow(unsafe_code)]
+mod unix_sys;
+
 // Тестовый помощник: флаги одного fd (`F_GETFL`, `FD_CLOEXEC`) для тестов флагов сокетов.
 #[cfg(all(test, unix))]
 #[allow(unsafe_code)]

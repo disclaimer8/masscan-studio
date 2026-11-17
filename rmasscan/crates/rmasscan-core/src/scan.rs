@@ -148,7 +148,7 @@ fn list_bounds(
 }
 
 /// Итератор transmit (main.c:280-333, :421-424).
-struct TransmitIndices {
+pub(crate) struct TransmitIndices {
     i: u64,
     end: u64,
     range: u64,
@@ -157,6 +157,18 @@ struct TransmitIndices {
     /// `unsigned r` (main.c:213).
     r: u32,
     increment: u64,
+}
+
+impl TransmitIndices {
+    /// `i` следующего `next()` (main.c:280 `i < end`), `None` в конце цикла. Ничего не сдвигает.
+    pub(crate) fn peek_index(&self) -> Option<u64> {
+        (self.i < self.end).then_some(self.i)
+    }
+
+    /// Конец цикла `end` (main.c:270-273).
+    pub(crate) fn end(&self) -> u64 {
+        self.end
+    }
 }
 
 impl Iterator for TransmitIndices {
@@ -247,7 +259,7 @@ pub fn transmit_index_stream(
 
 /// Тело [`transmit_index_stream`] с конкретным типом итератора.
 #[allow(clippy::too_many_arguments)]
-fn transmit_indices(
+pub(crate) fn transmit_indices(
     range: u64,
     shard: Shard,
     nic_count: u32,
@@ -281,24 +293,49 @@ fn transmit_indices(
 /// Пары `(tag, m)` внутреннего итератора как `(tag, blackrock.shuffle(m))`, в том же порядке. Пустой буфер
 /// набирается до `SHUFFLE_LANES` пар: полная пачка идёт через `BlackRock::shuffle_batch`, неполная (конец потока)
 /// через скалярный `shuffle`. Буфер набирается лениво, только когда пуст; кто остановился раньше (`Break`),
-/// теряет уже перемешанные дорожки пачки, а внутренний итератор дальше пачки не читается.
-struct Shuffled<I> {
+/// теряет уже перемешанные дорожки пачки, а внутренний итератор дальше пачки не читается. После первого `None`
+/// внутренний итератор больше не опрашивается (`exhausted`): поток кончается один раз, даже если внутренний
+/// итератор потом снова отдал бы пары. Буфер это упреждение: у `Shuffled<TransmitIndices>` следующий индекс
+/// показывает [`Shuffled::peek_index`], а не внутренний итератор.
+pub(crate) struct Shuffled<I> {
     inner: I,
     blackrock: BlackRock,
     buf: [(u64, u64); SHUFFLE_LANES],
     head: usize,
     len: usize,
+    /// Внутренний итератор вернул `None`.
+    exhausted: bool,
 }
 
 impl<I> Shuffled<I> {
-    fn new(inner: I, blackrock: BlackRock) -> Self {
+    pub(crate) fn new(inner: I, blackrock: BlackRock) -> Self {
         Shuffled {
             inner,
             blackrock,
             buf: [(0, 0); SHUFFLE_LANES],
             head: 0,
             len: 0,
+            exhausted: false,
         }
+    }
+}
+
+impl Shuffled<TransmitIndices> {
+    /// `i` пары, которую отдаст следующий `next()`: голова буфера, иначе следующий индекс внутреннего потока;
+    /// `None` в конце. Ничего не сдвигает.
+    pub(crate) fn peek_index(&self) -> Option<u64> {
+        if self.head < self.len {
+            Some(self.buf[self.head].0)
+        } else if self.exhausted {
+            None
+        } else {
+            self.inner.peek_index()
+        }
+    }
+
+    /// Конец цикла внутреннего потока ([`TransmitIndices::end`]).
+    pub(crate) fn end(&self) -> u64 {
+        self.inner.end()
     }
 }
 
@@ -307,8 +344,14 @@ impl<I: Iterator<Item = (u64, u64)>> Shuffled<I> {
     fn fill(&mut self) {
         self.head = 0;
         self.len = 0;
+        if self.exhausted {
+            return;
+        }
         while self.len < SHUFFLE_LANES {
-            let Some(pair) = self.inner.next() else { break };
+            let Some(pair) = self.inner.next() else {
+                self.exhausted = true;
+                break;
+            };
             self.buf[self.len] = pair;
             self.len += 1;
         }
@@ -1089,6 +1132,91 @@ mod tests {
             assert_eq!(it.next(), None, "len {len}");
             assert_eq!(pulled.get(), len);
         }
+    }
+
+    /// After the inner iterator's first `None` the stream is over: `Shuffled` never polls it again, even when the
+    /// inner iterator would resume (here it yields `(99, 0)` after the `None`).
+    #[test]
+    fn shuffled_never_polls_an_exhausted_inner_again() {
+        let br = BlackRock::new(1_000_003, 0xdead_beef, 14);
+        for len in [0usize, 3, SHUFFLE_LANES, SHUFFLE_LANES + 3] {
+            let polls = std::cell::Cell::new(0usize);
+            let inner = std::iter::from_fn(|| {
+                let k = polls.get();
+                polls.set(k + 1);
+                match k.cmp(&len) {
+                    std::cmp::Ordering::Less => Some((k as u64, 7 * k as u64)),
+                    std::cmp::Ordering::Equal => None,
+                    std::cmp::Ordering::Greater => Some((99, 0)),
+                }
+            });
+            let mut it = Shuffled::new(inner, br);
+            for k in 0..len {
+                assert_eq!(
+                    it.next(),
+                    Some((k as u64, br.shuffle(7 * k as u64))),
+                    "len {len} k {k}"
+                );
+            }
+            for _ in 0..3 {
+                assert_eq!(it.next(), None, "len {len}");
+            }
+            assert_eq!(polls.get(), len + 1, "len {len}: polled once past the end");
+        }
+    }
+
+    /// `Shuffled<TransmitIndices>::peek_index` is the `i` of the next `next()` at every step (buffer head while the
+    /// lookahead holds pairs, then the inner stream), `None` at the end; `end()` is `transmit_bounds`' end.
+    #[test]
+    fn shuffled_transmit_peek_index_is_the_next_index() {
+        let br = BlackRock::new(40, 42, 14);
+        let mut longest = 0;
+        for (shard, nic_count, nic_index) in [(ONE, 1u32, 0u32), (Shard { one: 2, of: 3 }, 2, 1)] {
+            for retries in [0u32, 2] {
+                for (resume_index, resume_count) in [(0u64, None), (5, Some(17))] {
+                    let mut it = Shuffled::new(
+                        transmit_indices(
+                            40,
+                            shard,
+                            nic_count,
+                            nic_index,
+                            resume_index,
+                            resume_count,
+                            retries,
+                            7.0,
+                        ),
+                        br,
+                    );
+                    let (_, end, _) = transmit_bounds(
+                        40,
+                        shard,
+                        nic_count,
+                        nic_index,
+                        resume_index,
+                        resume_count,
+                        retries,
+                    );
+                    assert_eq!(it.end(), end);
+                    let mut n = 0;
+                    loop {
+                        let peek = it.peek_index();
+                        let next = it.next();
+                        assert_eq!(peek, next.map(|(i, _)| i), "step {n}");
+                        if next.is_none() {
+                            break;
+                        }
+                        n += 1;
+                    }
+                    longest = longest.max(n);
+                    assert_eq!(it.peek_index(), None);
+                    assert_eq!(it.end(), end);
+                }
+            }
+        }
+        assert!(
+            longest > 2 * SHUFFLE_LANES,
+            "{longest}: the lookahead must be exercised"
+        );
     }
 
     /// `Break` at every position `p` of a full flow: the flow returns `Ok(Break(p))` at once, `emit` ran exactly

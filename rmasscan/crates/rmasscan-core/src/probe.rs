@@ -16,7 +16,6 @@
 //!   [`ControlFlow`].
 
 use std::collections::{BTreeMap, VecDeque};
-use std::iter::Peekable;
 use std::ops::ControlFlow;
 use std::sync::Arc;
 
@@ -31,7 +30,8 @@ use crate::packet::{
 use crate::payloads::PayloadTable;
 use crate::ranges::RangeList;
 use crate::scan::{
-    ScanError, Shard, transmit_bounds, transmit_index_stream, transmit_scan_flow_v46,
+    ScanError, Shard, Shuffled, TransmitIndices, transmit_bounds, transmit_indices,
+    transmit_scan_flow_v46,
 };
 use crate::targets::{
     TEMPL_ARP, TEMPL_ICMP_ECHO, TEMPL_OPROTO_FIRST, TEMPL_OPROTO_LAST, TEMPL_SCTP, TEMPL_SCTP_LAST,
@@ -939,29 +939,28 @@ impl ReadyPlan {
                 limit,
             });
         }
-        let (start, end) = self.bounds(nic_index, base);
-        let stream = transmit_index_stream(
-            range,
-            e.shard(),
-            count as u32,
-            nic_index,
-            base,
-            e.resume_count(),
-            e.retries(),
-            e.max_rate(),
+        let stream = Shuffled::new(
+            transmit_indices(
+                range,
+                e.shard(),
+                count as u32,
+                nic_index,
+                base,
+                e.resume_count(),
+                e.retries(),
+                e.max_rate(),
+            ),
+            self.inner.blackrock,
         );
-        let stream: Box<dyn Iterator<Item = (u64, u64)> + Send> = Box::new(stream);
         let mut cursor = ProbeCursor {
             plan: self.clone(),
             nic_index: nic_index as usize,
-            stream: stream.peekable(),
+            stream,
             loaded: VecDeque::new(),
             ended: false,
             failed: None,
-            blackrock: self.inner.blackrock,
             repeats: 0,
-            position: start,
-            end,
+            position: 0,
         };
         cursor.refresh_position();
         Ok(cursor)
@@ -974,7 +973,11 @@ impl ReadyPlan {
 pub struct ProbeCursor {
     plan: ReadyPlan,
     nic_index: usize,
-    stream: Peekable<Box<dyn Iterator<Item = (u64, u64)> + Send>>,
+    /// Пары `(i, xXx после shuffle)` текущего прохода (`main.c:280-334`). Перестановка у прохода `n` это
+    /// `BlackRock(seed + n)` (`main.c:225-228, 445-449`), у прохода 0 перестановка плана. До `SHUFFLE_LANES` пар
+    /// лежат в упреждении потока: следующий индекс и конец прохода спрашиваются у потока
+    /// ([`Shuffled::peek_index`], [`Shuffled::end`]), не у внутреннего итератора.
+    stream: Shuffled<TransmitIndices>,
     /// Загруженные, ещё не подтверждённые probe, по порядку индексов.
     loaded: VecDeque<Probe>,
     /// Поток кончился или probe не построился: новых probe нет. Липкий, чтобы
@@ -983,16 +986,11 @@ pub struct ProbeCursor {
     /// Probe не построился: конец не естественный, `--infinite` не перезапускает проход, а движок обязан
     /// объявить отказ ([`ProbeCursor::build_error`]).
     failed: Option<PlanError>,
-    /// Перестановка текущего прохода: у прохода `n` это `BlackRock(seed + n)` (`main.c:225-228, 445-449`), у
-    /// прохода 0 перестановка плана.
-    blackrock: BlackRock,
     /// Счётчик `--infinite` (`repeats` в C): номер прохода, входит в `(unsigned)(i + repeats)` (`main.c:379`).
     repeats: u64,
     /// Внешний индекс `i` следующего неподтверждённого probe (main.c:431
     /// `parms->my_index = i`), не число отправленных кадров.
     position: u64,
-    /// `effective_end` потока: позиция после последнего кадра.
-    end: u64,
 }
 
 impl std::fmt::Debug for ProbeCursor {
@@ -1020,14 +1018,14 @@ impl ProbeCursor {
     }
 
     /// Ставит `position` по внешнему индексу: голова загруженных, иначе
-    /// следующий `i` потока, иначе `end`.
+    /// следующий `i` потока (с упреждением), иначе `end` потока (`effective_end`: позиция после последнего кадра).
     fn refresh_position(&mut self) {
         self.position = match self.loaded.front() {
             Some(p) => p.index,
-            None => match self.stream.peek() {
-                Some(&(i, _)) => i,
-                None => self.end,
-            },
+            None => self
+                .stream
+                .peek_index()
+                .unwrap_or_else(|| self.stream.end()),
         };
     }
 
@@ -1037,13 +1035,13 @@ impl ProbeCursor {
         if self.ended {
             return false;
         }
-        let Some((i, x)) = self.stream.next() else {
+        // xxx = blackrock_shuffle(x), main.c:334: перемешано в потоке.
+        let Some((i, xxx)) = self.stream.next() else {
             self.ended = true;
             return false;
         };
         let inner = &*self.plan.inner;
         let builder = &inner.builders[self.nic_index];
-        let xxx = self.blackrock.shuffle(x);
         // main.c:336-373: индексы `< range_ipv6` это цели IPv6 (`Builder::fill_v6`), остальные IPv4.
         let (target, port, xxx) = inner.effective.massip().pick_transmit(xxx);
         let mut p = Probe::default();
@@ -1087,12 +1085,12 @@ impl ProbeCursor {
     }
 
     /// Следующий проход `--infinite` (`main.c:445-449` `seed++; repeats++; goto infinite`, метка на `:251`).
-    /// Только когда `effective.infinite()` включён и текущий проход дошёл до `effective_end` (поток исчерпан и всё
-    /// отправлено): тогда пересоздаёт `BlackRock::new(range, seed + repeats + 1, rounds)` (`:262`), увеличивает
-    /// `repeats` и сбрасывает поток на начало (`:269-273`) с базой 0 и без `resume-count`: оба параметра действуют
-    /// только на первом проходе (спец Р5). Это сознательное отличие от C: метка `:251` стоит до
+    /// Только когда `effective.infinite()` включён и текущий проход дошёл до `effective_end` (поток исчерпан вместе с
+    /// упреждением и всё отправлено): тогда пересоздаёт `BlackRock::new(range, seed + repeats + 1, rounds)`
+    /// (`:262`), увеличивает `repeats` и сбрасывает поток на начало (`:269-273`) с базой 0 и без `resume-count`: оба
+    /// параметра действуют только на первом проходе (спец Р5). Это сознательное отличие от C: метка `:251` стоит до
     /// `start = resume.index + ...`, и C повторяет окно на каждом проходе. Здесь следующие проходы покрывают весь
-    /// диапазон `[0, range)` и повторы. `end` пересчитывается для нового прохода.
+    /// диапазон `[0, range)` и повторы. `end` нового прохода берётся из его потока.
     /// `entropy` построителя остаётся исходным `seed` (`:227` `entropy = masscan->seed` задан до метки), поэтому
     /// `seqno` и порт источника проверяются приёмом для обоих проходов. `true`, если проход начат заново.
     pub fn advance_pass(&mut self) -> bool {
@@ -1100,7 +1098,7 @@ impl ProbeCursor {
         if !e.infinite()
             || self.failed.is_some()
             || !self.loaded.is_empty()
-            || self.stream.peek().is_some()
+            || self.stream.peek_index().is_some()
         {
             return false;
         }
@@ -1113,34 +1111,24 @@ impl ProbeCursor {
         ) else {
             return false;
         };
-        let stream = transmit_index_stream(
-            inner.range,
-            e.shard(),
-            inner.nics.len() as u32,
-            self.nic_index as u32,
-            0,
-            None,
-            e.retries(),
-            e.max_rate(),
+        let stream = Shuffled::new(
+            transmit_indices(
+                inner.range,
+                e.shard(),
+                inner.nics.len() as u32,
+                self.nic_index as u32,
+                0,
+                None,
+                e.retries(),
+                e.max_rate(),
+            ),
+            blackrock,
         );
-        let (_, end, _) = transmit_bounds(
-            inner.range,
-            e.shard(),
-            inner.nics.len() as u32,
-            self.nic_index as u32,
-            0,
-            None,
-            e.retries(),
-        );
-        let stream: Box<dyn Iterator<Item = (u64, u64)> + Send> = Box::new(stream);
-        let mut stream = stream.peekable();
         // Пустой проход не перезапускается: движок крутился бы вхолостую.
-        if stream.peek().is_none() {
+        if stream.peek_index().is_none() {
             return false;
         }
         self.stream = stream;
-        self.end = end;
-        self.blackrock = blackrock;
         self.repeats = next;
         self.ended = false;
         self.refresh_position();

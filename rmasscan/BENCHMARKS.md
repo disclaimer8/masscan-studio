@@ -555,13 +555,17 @@ Windows (шов, запуск на Mac, `--test-threads=1`, 5 запусков �
 # and rnn-b (peer), one veth pair rnn-va/rnn-vb created inside rnn-a with the peer end moved straight into rnn-b;
 # no uplink, bridge, NAT or default route; IPv6 off; ip_forward 0; the seal is checked by `rmasscan-lab capture
 # isolation`. Every scanner run is pinned with taskset and bounded by timeout. Root only: sudo -n bash stand-s.sh ...
+# The host is shared: before every run the stand waits for a quiet host (the CPUs outside --cpus idle for QUIET_S s,
+# 1-minute load below LOAD_MAX; at most QUIET_MAX_S s, else the session is not valid), and a U-TX run during which the
+# CPUs outside --cpus were busier than RUN_BUSY_TX is noisy: recorded, never counted, and its slot repeats.
 #
 #   --out DIR      session directory (must not exist): runs.jsonl, runs/, summary.json, isolation.json, smoke-*.log
 #   --lab-bin BIN  rmasscan-lab (capture isolation)
-#   --cpus SET     taskset CPU set of every scanner run (default 2,3; one set per session)
+#   --cpus SET     taskset CPU set of every scanner run (default 2,3; one set per session; must leave a CPU out)
 #   --qdisc SPEC   root qdisc of rnn-va: noqueue (default, as the matrix) or a tc spec ("tbf rate 1gbit burst 64kb latency 50ms")
 #   --smoke BIN    adapter smoke run first: the linux_io test binary, lab_* as root, then the unprivileged test as nobody
-#   --base BIN     wire_scan of the base commit: calibration "base vs base" of each cell (U-RX: picks R_RX)
+#   --base BIN     wire_scan of the base commit: one warm-up run (never counted), then calibration "base vs base" of
+#                  each cell (U-RX: picks R_RX)
 #   --new BIN      wire_scan of the task commit: paired A/B after the calibration, then the U-RX reference ladder
 #   --cells LIST   tx,rx (default), tx or rx
 #   --pairs N      pairs per series (default 5); pair i runs in ABBA order: odd i base-first, even i new-first
@@ -619,6 +623,36 @@ TX_RATE=100000000; TX_TARGETS=10.200.0.0/16; TX_PORTS=1-64; TX_PROBES=4194304; T
 RX_TARGETS=10.200.0.2-10.200.0.129; RX_LADDER="400000 300000 200000 150000 100000 75000 50000"
 rx_ports() { echo $(( (11 * $1 + 127) / 128 )); }   # P = ceil(11 * R_RX / 128): >= 10 s steady plus the ramp
 
+# ---- quiet host (BENCHMARKS.md, «Позиционный эффект стенда»): other services share the host -------------------
+LOAD_MAX=3.0       # the 1-minute load average before a run is below this (own U-RX runs reach ~2.6)
+QUIET_S=5          # quiet window: the CPUs outside --cpus, measured over QUIET_S seconds ...
+QUIET_BUSY=0.05    # ... are at most this busy (fraction of their time) right before a run
+QUIET_MAX_S=1800   # waiting and noisy repeats of one run slot end after 30 min: the session is not valid
+RUN_BUSY_TX=0.05   # U-TX: a run during which the CPUs outside --cpus were busier than this is noisy and repeats
+OTHER_CPUS=$(python3 -c 'import sys
+want = set()
+for part in sys.argv[1].split(","):
+    a, _, b = part.partition("-"); want.update(range(int(a), int(b or a) + 1))
+print(",".join(str(c) for c in range(int(sys.argv[2])) if c not in want))' "$CPUS" "$(nproc --all)")
+[ -n "$OTHER_CPUS" ] || fatal "--cpus $CPUS leaves no CPU out: the quiet window watches the CPUs the scanner does not use"
+other_ticks() {  # "busy total" jiffies of the CPUs outside --cpus (busy = all but idle and iowait)
+  awk -v set=",$OTHER_CPUS," '/^cpu[0-9]/ { c = substr($1, 4); if (index(set, "," c ",")) {
+    t += $2 + $3 + $4 + $5 + $6 + $7 + $8 + $9; i += $5 + $6 } } END { print t - i, t }' /proc/stat
+}
+busy_of() { awk -v a="$1" -v b="$2" 'BEGIN { split(a, x, " "); split(b, y, " "); t = y[2] - x[2]; printf "%.4f\n", (t > 0 ? (y[1] - x[1]) / t : 0) }'; }
+load1() { cut -d' ' -f1 /proc/loadavg; }
+pkg_throttle() { cat /sys/devices/system/cpu/cpu0/thermal_throttle/package_throttle_count 2>/dev/null || echo -1; }
+pkg_temp() { local z; for z in /sys/class/thermal/thermal_zone*; do
+  [ "$(cat "$z/type" 2>/dev/null)" = x86_pkg_temp ] && { cat "$z/temp"; return; }; done; echo -1; }
+quiet_wait() {  # quiet_wait SLOT_START : prints "busy load waited_s" of the quiet window; non-zero once SLOT_START + QUIET_MAX_S passed
+  local a b f l w0=$SECONDS
+  while :; do
+    a=$(other_ticks); sleep "$QUIET_S"; b=$(other_ticks); f=$(busy_of "$a" "$b"); l=$(load1)
+    awk -v f="$f" -v l="$l" -v m="$QUIET_BUSY" -v lm="$LOAD_MAX" 'BEGIN { exit !(f ~ /^[0-9.]+$/ && l ~ /^[0-9.]+$/ && f <= m && l < lm) }' && { echo "$f $l $((SECONDS - w0))"; return 0; }
+    [ $((SECONDS - $1)) -lt "$QUIET_MAX_S" ] || { echo "$f $l $((SECONDS - w0))"; return 1; }
+  done
+}
+
 # ---- topology ----------------------------------------------------------------------------------------------
 cleanup() {
   local rc=$?
@@ -656,7 +690,9 @@ for ns in "$NS_A" "$NS_B"; do
   ! ip netns exec "$ns" ip route get 8.8.8.8 >/dev/null 2>&1 || fatal "$ns can route to 8.8.8.8"
 done
 "$LAB_BIN" capture isolation --out "$OUT/isolation.json" --ns-a "$NS_A" --ns-b "$NS_B" --host-links-before "$OUT/host-links-before.txt"
-{ echo "kernel $(uname -r); cpus $CPUS of $(nproc); qdisc $QDISC"; ip netns exec "$NS_A" tc qdisc show dev "$IF_A"
+{ echo "kernel $(uname -r); cpus $CPUS of $(nproc); qdisc $QDISC"
+  echo "quiet host: CPUs $OTHER_CPUS at most $QUIET_BUSY busy over ${QUIET_S}s, load1 < $LOAD_MAX, max ${QUIET_MAX_S}s; U-TX noisy above $RUN_BUSY_TX"
+  ip netns exec "$NS_A" tc qdisc show dev "$IF_A"
   for b in "$BASE" "$NEW"; do [ -z "$b" ] || echo "$(sha256sum "$b" | cut -c1-16) $b"; done; } >"$OUT/stand.txt"
 log "stand up: $(head -n1 "$OUT/stand.txt")"
 
@@ -681,14 +717,21 @@ fi
 # ---- one run -------------------------------------------------------------------------------------------------
 IDX=0
 vb_rx() { ip -n "$NS_B" -s -j link show "$IF_B" | python3 -c 'import json,sys; print(json.load(sys.stdin)[0]["stats64"]["rx"]["packets"])'; }
-judge() {  # judge FILE CELL VERSION SERIES PAIR RATE PROBES RC VB_DELTA SECONDS : one JSON line to runs.jsonl, a short line to stdout
-  python3 - "$@" "$OUT/runs.jsonl" <<'PY'
+judge() {  # judge FILE CELL VERSION SERIES PAIR RATE PROBES RC VB_DELTA SECONDS ATTEMPT QUIET RUN_BUSY LOAD1_AFTER THROTTLE TEMP0 TEMP1
+           # : one JSON line to runs.jsonl, a short line to stdout
+  python3 - "$@" "$RUN_BUSY_TX" "$OUT/runs.jsonl" <<'PY'
 import json, sys
-path, cell, version, series, pair, rate, probes, rc, delta, secs, sink = sys.argv[1:]
+(path, cell, version, series, pair, rate, probes, rc, delta, secs, attempt, quiet, run_busy, load1_after, throttle,
+ temp0, temp1, run_busy_tx, sink) = sys.argv[1:]
 rec = {"cell": cell, "version": version, "series": series, "pair": int(pair), "rate": int(rate),
        "probes": int(probes), "rc": int(rc), "vb_rx_delta": int(delta), "seconds": float(secs),
-       "file": path.rsplit("/", 1)[-1]}
+       "file": path.rsplit("/", 1)[-1], "attempt": int(attempt), "quiet_busy": float(quiet.split()[0]),
+       "load1_before": float(quiet.split()[1]), "quiet_wait_s": int(quiet.split()[2]), "load1_after": float(load1_after), "other_busy": float(run_busy),
+       "pkg_throttle": int(throttle), "pkg_temp_c": [int(temp0) / 1000, int(temp1) / 1000]}
 why = []
+if version != "oracle" and cell == "tx" and rec["other_busy"] > float(run_busy_tx):
+    why.append(f"noisy: CPUs outside the scanner set {rec['other_busy']:.3f} busy > {run_busy_tx}")
+    rec["noisy"] = True
 if rec["rc"] in (124, 137):
     why.append("timeout")
 try:
@@ -720,17 +763,22 @@ if j is not None and version != "oracle":
 rec["valid"] = version != "oracle" and not why
 rec["invalid_why"] = why
 open(sink, "a").write(json.dumps(rec) + "\n")
-m = " ".join(f"{k}={v:.1f}" for k, v in rec.get("metrics", {}).items())
+m = " ".join(f"{k}={v:.1f}" for k, v in rec.get("metrics", {}).items()) + f" other_busy={rec['other_busy']:.3f} load1={rec['load1_before']} waited={rec['quiet_wait_s']}s"
 print(f"{rec['file']}: {'VALID' if rec['valid'] else ('REFERENCE' if version == 'oracle' else 'INVALID')} {m} {'; '.join(why)}")
 PY
 }
-run_u() {  # run_u CELL VERSION SERIES PAIR BIN RATE : one scanner run of cell U; prints the judge line
-  local cell=$1 version=$2 series=$3 pair=$4 bin=$5 rate=$6 targets ports probes expect f rc=0 v0 v1 t0 t1 pre=()
+run_u() {  # run_u CELL VERSION SERIES PAIR BIN RATE : one run slot of cell U (a noisy U-TX run repeats); prints judge lines
+  local cell=$1 version=$2 series=$3 pair=$4 bin=$5 rate=$6 targets ports probes expect f rc v0 v1 t0 t1 pre slot=$SECONDS attempt=0
+  local q o0 o1 th0 th1 tp0 tp1
   if [ "$cell" = tx ]; then targets=$TX_TARGETS; ports=$TX_PORTS; probes=$TX_PROBES; expect=$TX_EXPECT
   else ports=1-$(rx_ports "$rate"); targets=$RX_TARGETS; probes=$((128 * $(rx_ports "$rate"))); expect=$(( probes / rate + 4 )); fi
+  while :; do
+  attempt=$((attempt + 1)); rc=0; pre=()
   IDX=$((IDX + 1)); f="$OUT/runs/$(printf %03d "$IDX")-$cell-$series-$version-$rate.json"
   [ "$series" = perf ] && pre=(perf stat -x, -e instructions:u,cycles:u -o "$f.perf" --)
-  sleep 1   # the previous run's tail (replies, backlog) is over before the next starts
+  # the quiet window (>= QUIET_S s) also lets the previous run's tail (replies, backlog) end before the next starts
+  q=$(quiet_wait "$slot") || fatal "host not quiet for ${QUIET_MAX_S}s before a run (CPUs $OTHER_CPUS busy, load1, waited: $q): the session is not valid"
+  th0=$(pkg_throttle); tp0=$(pkg_temp); o0=$(other_ticks)
   v0=$(vb_rx); t0=$(date +%s.%N)
   if [ "$version" = oracle ]; then
     timeout -k 10 $((3 * expect)) ip netns exec "$NS_A" taskset -c "$CPUS" "$bin" "$targets" -p"$ports" \
@@ -742,18 +790,25 @@ run_u() {  # run_u CELL VERSION SERIES PAIR BIN RATE : one scanner run of cell U
       --rate "$rate" --targets "$targets" --ports "$ports" 2>"$f.err" \
       | sed -E 's/"replies":\[[^]]*\]/"replies":"(dropped by stand-s)"/' >"$f" || rc=${PIPESTATUS[0]}
   fi
-  t1=$(date +%s.%N); v1=$(vb_rx)
+  t1=$(date +%s.%N); v1=$(vb_rx); o1=$(other_ticks); th1=$(pkg_throttle); tp1=$(pkg_temp)
   judge "$f" "$cell" "$version" "$series" "$pair" "$rate" "$probes" "$rc" "$((v1 - v0))" "$(python3 -c "print(round($t1 - $t0, 3))")" \
-    | tee -a "$OUT/session.log"
+    "$attempt" "$q" "$(busy_of "$o0" "$o1")" "$(load1)" "$((th1 - th0))" "$tp0" "$tp1" | tee -a "$OUT/session.log"
+  [ "$(noisy_of)" = 1 ] && [ "$series" != warmup ] || break
+  [ $((SECONDS - slot)) -lt "$QUIET_MAX_S" ] || break   # the slot stays noisy: its last record is INVALID
+  log "noisy run: the slot repeats after the next quiet window"
+  done
 }
 abba() { if [ $(( $1 % 2 )) = 1 ]; then echo "$2 $3"; else echo "$3 $2"; fi; }   # abba PAIR A B : odd A B, even B A
 valid_of() { python3 -c 'import json,sys; print("1" if json.loads(open(sys.argv[1]).read().splitlines()[-1])["valid"] else "0")' "$OUT/runs.jsonl"; }
+noisy_of() { python3 -c 'import json,sys; print("1" if json.loads(open(sys.argv[1]).read().splitlines()[-1]).get("noisy") else "0")' "$OUT/runs.jsonl"; }
 
 # ---- the session: calibration, A/B, reference ladder, oracle ------------------------------------------------
 RRX=""
 if [ -n "$BASE" ]; then
   for cell in tx rx; do
     case ",$CELLS," in *",$cell,"*) ;; *) continue ;; esac
+    # warm-up: the first run after an idle host has the whole package power budget (faster); never counted
+    if [ "$cell" = tx ]; then run_u tx base warmup 0 "$BASE" "$TX_RATE"; else run_u rx base warmup 0 "$BASE" "${RX_LADDER%% *}"; fi
     if [ "$cell" = tx ]; then
       for p in $(seq 1 "$PAIRS"); do for v in $(abba "$p" base1 base2); do
         run_u tx "$v" cal "$p" "$BASE" "$TX_RATE"
@@ -826,11 +881,25 @@ for cell in ("tx", "rx"):
         e = c["metrics"][m] = {"cal_median": med, "cal_min": min(allv), "cal_max": max(allv),
                                "median_1": statistics.median(a), "median_2": statistics.median(b),
                                "S_AA": s_aa, "T": t}
+        # position check: per calibration pair, the second run (run order) over the first
+        q, worse = [], 0
+        for p in sorted({r["pair"] for r in cal}):
+            two = sorted((r for r in cal if r["pair"] == p), key=lambda r: r["file"])
+            if len(two) != 2: continue
+            x, y = two[0]["metrics"][m], two[1]["metrics"][m]
+            q.append(1.0 if x == y else (y / x if x else float("inf")))
+            worse += better_ratio(m, y, x) < 1
+        if q:
+            e["position"] = {"pairs": len(q), "second_worse": worse, "median_second_over_first": statistics.median(q),
+                             "second_over_first": q}
         ab = [r for r in runs if r["cell"] == cell and r["series"] == "ab"]
         if not ab: continue
         base = {r["pair"]: r for r in ab if r["version"] == "base"}
         new = {r["pair"]: r for r in ab if r["version"] == "new"}
         e["ab_invalid"] = {"base": sum(not r["valid"] for r in base.values()), "new": sum(not r["valid"] for r in new.values())}
+        if any(r.get("noisy") for r in list(base.values()) + list(new.values())):
+            e["verdict"] = "INVALID: a run slot stayed noisy for 30 min: session not valid"
+            continue
         if e["ab_invalid"]["base"] or e["ab_invalid"]["new"]:
             e["verdict"] = "INVALID base: session not valid" if e["ab_invalid"]["base"] else "FAIL: INVALID run of the new version"
             continue
@@ -878,17 +947,22 @@ lad = [r for r in runs if r["series"] == "ladder"]
 if lad:
     out["ladder_highest_valid"] = {v: max([r["rate"] for r in lad if r["version"] == v and r["valid"]], default=None)
                                    for v in ("base", "new")}
+out["noisy_runs"] = {cell: sum(1 for r in runs if r["cell"] == cell and r.get("noisy") and r["series"] != "warmup")
+                     for cell in ("tx", "rx")}
 out["oracle"] = [{k: r[k] for k in ("cell", "rate", "rc", "seconds", "vb_rx_delta")} for r in runs if r["version"] == "oracle"]
 json.dump(out, open(sys.argv[2], "w"), indent=1)
 for cell, c in out["cells"].items():
     for m, e in c["metrics"].items():
         line = f"U-{cell.upper()} @{c['rate']} {m}: base median {e['cal_median']:.3f} ({e['cal_min']:.3f}-{e['cal_max']:.3f}) S_AA {100*e['S_AA']:.2f}% T {100*e['T']:.2f}%"
         if "ratio_better" in e:
-            line += f" | A/B base {e['ab_base_median']:.3f} new {e['ab_new_median']:.3f} ratio {e['ratio_better']:.4f} pairs {e['pairs_not_worse_than_T']}/5 no_regression={e['no_regression']} speedup={e['speedup']}"
+            line += f" | A/B base {e['ab_base_median']:.3f} new {e['ab_new_median']:.3f} ratio {e['ratio_better']:.4f} pairs {e['pairs_not_worse_than_T']}/{len(new)} no_regression={e['no_regression']} speedup={e['speedup']}"
         elif "verdict" in e:
             line += " | " + e["verdict"]
+        if "position" in e:
+            line += f" | position: second worse {e['position']['second_worse']}/{e['position']['pairs']}, median second/first {e['position']['median_second_over_first']:.4f}"
         print(line)
 if lad: print("ladder (highest valid step):", out["ladder_highest_valid"])
+print("noisy runs (recorded, never counted, slot repeated):", out["noisy_runs"])
 for cell, e in out.get("perf_stat", {}).items():
     for m in ("instructions_u_per_frame", "cycles_u_per_frame"):
         print(f"perf stat U-{cell.upper()} {m}: median {e[m]['median']} new/base {e[m]['new_over_base']}")

@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use crate::bytes::be16_at;
-use crate::targets::{is_c_space, strtoul0};
+use crate::targets::{PortListEnd, is_c_space, strtoul0, tokenize_ports};
 
 /// `length == 0xFFFFFFFF` в таблице C значит "длина строки" (templ-payloads.c:571).
 const LEN_STRLEN: u32 = 0xFFFF_FFFF;
@@ -891,8 +891,8 @@ impl PayloadTable {
             if !lines.next_line() {
                 break;
             }
-            let (ranges, rest_at) =
-                parse_ports_prefix(lines.cur).map_err(|_| lines.syntax("expected ports"))?;
+            let (ranges, rest_at) = tokenize_ports(lines.cur, PortListEnd::StopAtNonPort)
+                .map_err(|_| lines.syntax("expected ports"))?;
             lines.cur = trim(&lines.cur[rest_at..]);
             // [C string]
             loop {
@@ -909,9 +909,8 @@ impl PayloadTable {
                 if !lines.cur.first().is_some_and(u8::is_ascii_digit) {
                     return Err(lines.syntax("expected source port"));
                 }
-                // Позиция для `strtoul0` с прежней сигнатурой; остаток строки после числа отбрасывается.
-                let mut pos = 0;
-                source_port = strtoul0(lines.cur, &mut pos) as u32;
+                // Остаток строки после числа отбрасывается (:259-260).
+                source_port = strtoul0(lines.cur).0 as u32;
                 lines.cur = &[];
             }
             if !buf.is_empty() {
@@ -1020,64 +1019,6 @@ impl NmapLines<'_> {
             msg,
         }
     }
-}
-
-/// `rangelist_parse_ports` (massip-rangesv4.c:993) с остановкой на первом не-порте: возвращает диапазоны (с
-/// префиксным сдвигом, как в C) и смещение остатка строки. Ошибка: неизвестный префикс или порт вне диапазона.
-fn parse_ports_prefix(s: &[u8]) -> Result<(Vec<(u32, u32)>, usize), ()> {
-    use crate::targets::{TEMPL_ICMP_ECHO, TEMPL_OPROTO_FIRST, TEMPL_SCTP, TEMPL_TCP, TEMPL_UDP};
-    let mut p = 0;
-    let mut offset = TEMPL_TCP;
-    let mut out = Vec::new();
-    while p < s.len() {
-        while p < s.len() && is_c_space(s[p]) {
-            p += 1;
-        }
-        if p >= s.len() || s[p] == b'#' {
-            break;
-        }
-        if s[p].is_ascii_alphabetic() && s.get(p + 1) == Some(&b':') {
-            offset = match s[p] {
-                b'T' | b't' => TEMPL_TCP,
-                b'U' | b'u' => TEMPL_UDP,
-                b'S' | b's' => TEMPL_SCTP,
-                b'O' | b'o' => TEMPL_OPROTO_FIRST,
-                b'I' | b'i' => TEMPL_ICMP_ECHO,
-                _ => return Err(()),
-            };
-            p += 2;
-        }
-        let port = match s.get(p) {
-            Some(b'-') => 1,
-            Some(c) if c.is_ascii_digit() => strtoul0(s, &mut p),
-            _ => break,
-        };
-        let is_oproto = offset == TEMPL_OPROTO_FIRST;
-        let end = if s.get(p) == Some(&b'-') {
-            p += 1;
-            if s.get(p).is_some_and(u8::is_ascii_digit) {
-                strtoul0(s, &mut p)
-            } else if is_oproto {
-                0xFF
-            } else {
-                0xFFFF
-            }
-        } else {
-            port
-        };
-        if (port > 0xFF && is_oproto) || port > 0xFFFF || end > 0xFFFF || end < port {
-            return Err(());
-        }
-        out.push((port as u32 + offset, end as u32 + offset));
-        while p < s.len() && is_c_space(s[p]) {
-            p += 1;
-        }
-        if s.get(p) != Some(&b',') {
-            break;
-        }
-        p += 1;
-    }
-    Ok((out, p))
 }
 
 /// `parse_c_string` (templ-nmap-payloads.c:100): разбирает строку в кавычках, дописывает байты в `buf` (не больше 1500)

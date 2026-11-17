@@ -68,7 +68,7 @@ pub fn tcp_segment<'a>(frame: &'a [u8], link: LinkType, plan: &ReadyPlan) -> Opt
                 return None;
             }
             if ip_header_checksum(p.ip, 0, p.header_len) != 0xffff
-                || checksum_ipv4(p.ip_them, p.ip_me, 6, seg) != h.checksum
+                || checksum_ipv4(p.ip_them, p.ip_me, PROTO_TCP, seg) != h.checksum
             {
                 return None;
             }
@@ -100,7 +100,7 @@ pub fn tcp_segment<'a>(frame: &'a [u8], link: LinkType, plan: &ReadyPlan) -> Opt
             if !is_my_ip6(plan, p.ip_me) || !is_my_port(plan, h.port_me) {
                 return None;
             }
-            if checksum_ipv6(p.ip_them, p.ip_me, 6, seg) != h.checksum {
+            if checksum_ipv6(p.ip_them, p.ip_me, PROTO_TCP, seg) != h.checksum {
                 return None;
             }
             Some(SegmentIn {
@@ -137,13 +137,23 @@ impl FrameTemplate {
     /// Голова всегда содержит полные заголовки IP и TCP: шаблоны SYN строят `packet` как заголовки канала, IP и TCP с
     /// опциями без данных, `doff` равен длине TCP шаблона, поэтому `offset_app == packet.len()`. Построители кадров
     /// пишут поля прямо в голову по индексам.
+    ///
+    /// Инвариант проверяется `assert!` (не `debug_assert!`): конструктор зовётся раз на построитель, не на кадр, и
+    /// сюда приходят только внутренние шаблоны, которые ему удовлетворяют.
     fn new((packet, offset_ip, offset_tcp): (&[u8], usize, usize)) -> FrameTemplate {
         let doff = packet
             .get(offset_tcp + 12)
             .map_or(5, |b| usize::from(b >> 4));
         let offset_app = (offset_tcp + doff * 4).min(packet.len());
+        let head = packet.get(..offset_app).unwrap_or(packet).to_vec();
+        assert!(
+            head.len() >= offset_tcp + 20 && offset_tcp >= offset_ip + 20,
+            "frame template: head {} bytes must cover the IP header ({offset_ip}..{offset_tcp}, at least 20 bytes) \
+             and the 20-byte TCP header",
+            head.len(),
+        );
         FrameTemplate {
-            head: packet.get(..offset_app).unwrap_or(packet).to_vec(),
+            head,
             offset_ip,
             offset_tcp,
         }
@@ -259,7 +269,7 @@ fn build_v4(t: &FrameTemplate, local: u32, remote: u32, s: &SegmentOut, out: &mu
 
     put_tcp_fields(px, ot, s);
     // :503-508: полная сумма сегмента с псевдозаголовком (нечётный хвост дополняется нулём).
-    let tcp_sum = checksum_ipv4(local, remote, 6, &px[ot..]);
+    let tcp_sum = checksum_ipv4(local, remote, PROTO_TCP, &px[ot..]);
     px[ot + 16..ot + 18].copy_from_slice(&tcp_sum.to_be_bytes());
 
     // :510-513: набивка нулями до 60 на любом канале.
@@ -289,7 +299,7 @@ fn build_v6(t: &FrameTemplate, local: u128, remote: u128, s: &SegmentOut, out: &
 
     put_tcp_fields(px, ot, s);
     // :604-606.
-    let tcp_sum = checksum_ipv6(local, remote, 6, &px[ot..]);
+    let tcp_sum = checksum_ipv6(local, remote, PROTO_TCP, &px[ot..]);
     px[ot + 16..ot + 18].copy_from_slice(&tcp_sum.to_be_bytes());
 }
 

@@ -173,8 +173,8 @@ impl RangeList {
         self.is_sorted = true;
     }
 
-    /// massip-rangesv4.c:60 `rangelist_is_contains` (линейный поиск).
-    /// Отсортированный список (`sort_and_merge`, `optimize`, `exclude`) ищется двоичным поиском, иначе линейно.
+    /// massip-rangesv4.c:60 `rangelist_is_contains` (в C всегда линейный поиск).
+    /// Здесь отсортированный список (`sort_and_merge`, `optimize`, `exclude`) ищется двоичным поиском, иначе линейно.
     pub fn is_contains(&self, value: u32) -> bool {
         if self.is_sorted {
             return contains_sorted(&self.list, value, |r| (r.begin, r.end));
@@ -262,9 +262,7 @@ impl RangeList {
 
         let mut newlist = RangeList::new();
         let mut x = 0usize;
-        for &range in &self.list {
-            let mut range = range;
-
+        for mut range in self.list.iter().copied() {
             // Двигаем exclude вперёд до возможного пересечения
             while x < excludes.list.len() && excludes.list[x].end < range.begin {
                 x += 1;
@@ -650,7 +648,9 @@ mod tests {
         assert_eq!(all.count(), 0xffff_ffff);
     }
 
-    /// Копия поиска `pick` из базы (двоичный поиск по префиксным суммам). Копия, а не вызов: проверяет замену цикла.
+    /// Копия цикла `pick` из базы (двоичный поиск по префиксным суммам). `pick` сохраняет этот цикл, и копия, а не
+    /// вызов, закрепляет его. Замена на `partition_point` отклонена: дифференциальный тест разошёлся с ней на списках с
+    /// диапазоном `begin > end` (его размер оборачивается, и префиксные суммы немонотонны).
     /// `None` — цикл не завершается за 1000 шагов или выходит за список (на несортированных суммах).
     fn old_pick_mid(picker: &[u32], index: u64) -> Option<usize> {
         let maxmax = picker.len();
@@ -690,7 +690,7 @@ mod tests {
     }
 
     #[test]
-    fn pick_partition_point_equals_old_search() {
+    fn pick_matches_the_kept_search() {
         // Случайные списки 1..64 диапазонов (в том числе `begin > end`, после `exclude` от 0.0.0.0, с оборачиванием
         // префиксных сумм): `pick` равен копии старого поиска на всех индексах меньше суммы и на трёх за концом.
         let mut state = 0x7069_636b_u64;

@@ -52,15 +52,15 @@ use crate::targets::{TEMPL_ICMP_ECHO, TEMPL_SCTP, TEMPL_TCP, TEMPL_UDP};
 /// main.c:773 `if (length > 1514) continue;`.
 pub const MAX_FRAME_LEN: usize = 1514;
 
-/// Номера IP-протоколов, которые разбирает приёмник (общие для `tcp_frame.rs`).
-pub(crate) const PROTO_ICMP: u8 = 1;
+/// Номера IP-протоколов, которые разбирает приёмник (`PROTO_TCP` общий с `tcp_frame.rs`).
+const PROTO_ICMP: u8 = 1;
 pub(crate) const PROTO_TCP: u8 = 6;
-pub(crate) const PROTO_UDP: u8 = 17;
-pub(crate) const PROTO_SCTP: u8 = 132;
+const PROTO_UDP: u8 = 17;
+const PROTO_SCTP: u8 = 132;
 
-/// Флаги TCP: RST и SYN+ACK (маска `0x12`).
+/// Флаги TCP: RST и SYN+ACK (маска `0x12`); `FLAG_RST` общий с `tcp_frame.rs`.
 pub(crate) const FLAG_RST: u8 = 0x04;
-pub(crate) const FLAG_SYNACK_MASK: u8 = 0x12;
+const FLAG_SYNACK_MASK: u8 = 0x12;
 
 /// Как относиться к контрольным суммам входящих кадров. Это явный выбор
 /// вызывающего, а не глобальный флаг.
@@ -520,7 +520,7 @@ fn parse_ipv4_tcp(
         if ip_header_checksum(ip, 0, header_len) != 0xffff {
             return Err(ParseError::BadIpChecksum);
         }
-        if checksum_ipv4(ip_them, ip_me, 6, seg) != stored {
+        if checksum_ipv4(ip_them, ip_me, PROTO_TCP, seg) != stored {
             return Err(ParseError::BadTcpChecksum);
         }
     }
@@ -683,7 +683,7 @@ fn parse_ipv6_segment(
         return Ok(None);
     }
 
-    if policy == ChecksumPolicy::Verify && checksum_ipv6(ip_them, ip_me, 6, seg) != stored {
+    if policy == ChecksumPolicy::Verify && checksum_ipv6(ip_them, ip_me, PROTO_TCP, seg) != stored {
         return Err(ParseError::BadTcpChecksum);
     }
 

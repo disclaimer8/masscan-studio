@@ -1588,6 +1588,40 @@ fn an_extra_banner_of_rmasscan_fails_against_c() {
     }
 }
 
+/// A changed byte of the static default ClientHello FAILs against C in the normal TLS case: the
+/// 'tls-hello-random' mask is not on t10, and even where it is (t12) it covers only the dynamic templates'
+/// random field, never another byte.
+#[test]
+fn a_corrupt_static_clienthello_fails_against_c() {
+    for at in [11usize, 60] {
+        let mut sim = Sim::new("t10_tls4");
+        let st = sim.step_mut("binary");
+        let k = st
+            .frames
+            .iter()
+            .position(|(_, f)| {
+                f.get(6..12) == Some(&SCANNER_MAC[..])
+                    && tcp_head(f).is_some_and(|h| h.payload.len() == 198 && h.payload[0] == 0x16)
+            })
+            .expect("no ClientHello frame in t10_tls4");
+        let f = &mut st.frames[k].1;
+        let (_, l4) = ip_bounds(f);
+        let doff = usize::from(f[l4 + 12] >> 4) * 4;
+        f[l4 + doff + at] ^= 0x01;
+        set_sums(f);
+        let (v, b) = judge_one(&sim);
+        assert_eq!(v, FAIL, "byte {at}: {b:#?}");
+        assert!(
+            has(
+                &b,
+                FAIL,
+                "every connection's scanner segments equal the C oracle's"
+            ),
+            "byte {at}: {b:#?}"
+        );
+    }
+}
+
 #[test]
 fn a_lost_banner_of_rmasscan_fails_against_c() {
     let mut sim = Sim::new("b01_banners");
@@ -2126,6 +2160,55 @@ fn every_tcp_case_passes_on_the_products_own_stack() {
         let (v, b) = judge_tcp(c.tag, |_| {});
         assert_eq!(v, PASS, "{}: {b:#?}", c.tag);
     }
+}
+
+#[test]
+fn a_scanner_that_never_opens_the_second_tls_connection_fails() {
+    // The --cert second connection is an obligation of the case and the scenario, not a permission the
+    // verifier checks only when one shows up: cut rmasscan's second connection to .2:443 out of its steps
+    // entirely (both directions' frames, its open record, its banners) and the case fails on the missing
+    // connection itself, not only against C's records.
+    let (v, b) = judge_tcp("t10_tls4", |sim| {
+        for st in sim.steps.iter_mut().filter(|s| s.spec.who == Who::Rmasscan) {
+            // The source ports of the scanner's SYNs to .2:443, in order: the plan's, then the stack's.
+            let mut sports: Vec<u16> = Vec::new();
+            for (_, f) in &st.frames {
+                if f.get(6..12) == Some(&SCANNER_MAC[..])
+                    && let Some(h) = tcp_head(f)
+                    && h.dst == ip4(2)
+                    && h.dp == 443
+                    && h.flags & 0x3f == 0x02
+                    && !sports.contains(&h.sp)
+                {
+                    sports.push(h.sp);
+                }
+            }
+            assert_eq!(sports.len(), 2, "SYN source ports to .2:443: {sports:?}");
+            let second = sports[1];
+            st.frames.retain(|(_, f)| {
+                tcp_head(f).is_none_or(|h| {
+                    !((h.dst == ip4(2) && h.dp == 443 && h.sp == second)
+                        || (h.src == ip4(2) && h.sp == 443 && h.dp == second))
+                })
+            });
+            let (mut opened, mut apps) = (false, Vec::new());
+            st.recs.retain(|r| match r {
+                SimRec::TcpStatus { port: 443, .. } => {
+                    let keep = !opened;
+                    opened = true;
+                    keep
+                }
+                SimRec::TcpBanner { port: 443, app, .. } => {
+                    let keep = !apps.contains(app);
+                    apps.push(*app);
+                    keep
+                }
+                _ => true,
+            });
+        }
+    });
+    assert_eq!(v, FAIL, "{b:#?}");
+    assert!(has(&b, FAIL, "opens C's second connection"), "{b:#?}");
 }
 
 #[test]

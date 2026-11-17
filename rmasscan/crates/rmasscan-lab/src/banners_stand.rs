@@ -48,7 +48,7 @@
 //! `stderr.txt`, `exit.txt`, `alf.txt`, `uplink.pcap`, `uplink.err`, ...).
 use crate::{
     autodetect_verify::{self as av, ArgvRecord, Plan},
-    banners_verify::{self as bv, Body, Conn, Document, Rec, Seg, TcpScenario, tcp_head},
+    banners_verify::{self as bv, Body, Conn, Document, Rec, Seg, TcpHead, TcpScenario, tcp_head},
     ipv6_verify as iv,
     macos_verify::{Tree, hashes_match_tree, tree},
     pcap::Frames,
@@ -78,6 +78,10 @@ pub const REFERENCE_SOURCE: &str = "source.json";
 pub const REFERENCE_VERDICT: &str = "verdict.json";
 /// The Linux window's case and C step the reference is taken from, and its files.
 pub const REFERENCE_CASE: &str = "t01_tcp4";
+/// The Linux window's TLS case whose copy proves the TLS scenarios of the native stands (their reference case
+/// `t01_tcp4` does not scan TLS), and the directory its copy lives in.
+pub const REFERENCE_TLS_CASE: &str = "t10_tls4";
+pub const REFERENCE_TLS_DIR: &str = "reference-tls";
 pub const REFERENCE_STEP: &str = "oracle-list";
 pub const REFERENCE_FILES: [&str; 3] = ["argv.json", "output.txt", "peer.pcap"];
 /// `t01_tcp4`'s lifetime and wait: the scenarios end long before either, so rmasscan and C behave alike.
@@ -187,13 +191,21 @@ impl StandCase {
             CONNECTION_TIMEOUT.to_string(),
         ];
         a.extend(self.flags.iter().map(|f| (*f).to_owned()));
-        crate::pair_verify::scan_tail(
-            &mut a,
-            Out::List,
-            false,
-            bv::RATE,
-            &WAIT.to_string(),
-            bv::SOURCE_PORT,
+        // The source port range of the TLS cases: the stack's second connection needs the next port.
+        a.extend(
+            [
+                "-oL",
+                OUTPUT,
+                "--seed",
+                "1",
+                "--rate",
+                bv::RATE,
+                "--wait",
+                &WAIT.to_string(),
+                "--source-port",
+                &format!("{}-{}", bv::SOURCE_PORT, bv::SOURCE_PORT + 15),
+            ]
+            .map(str::to_owned),
         );
         a.extend(["--retries".to_owned(), "0".to_owned()]);
         a
@@ -233,7 +245,7 @@ impl StandCase {
             source_ipv4: u32::from(st.scanner_ip),
             source_mac: st.scanner_mac,
             next_hop_mac: st.peer_mac,
-            source_ports: (bv::SOURCE_PORT, bv::SOURCE_PORT),
+            source_ports: bv::source_range(),
         });
         let mut ips = MassIp::new();
         ips.add_target_string(&PEER.to_string())
@@ -247,7 +259,7 @@ impl StandCase {
             adapter_ip: Some(u32::from(st.scanner_ip)),
             adapter_mac: Some(st.scanner_mac),
             router_mac: Some(st.peer_mac),
-            source_port: Some((bv::SOURCE_PORT, bv::SOURCE_PORT)),
+            source_port: Some((bv::SOURCE_PORT, bv::SOURCE_PORT + 15)),
             adapter_name: Some(st.iface.into()),
             ..ScanConfig::default()
         };
@@ -340,6 +352,17 @@ fn run_verdict(v: &Value, tag: &str) -> Option<String> {
 /// every copied file must have the sha256 the Linux case recorded before its own copy. A copy that is
 /// already there is kept only when it is the same.
 pub fn copy_reference(linux: &Path, out: &Path) -> Result<ReferenceSource, String> {
+    let src = copy_reference_case(linux, out, REFERENCE_CASE, REFERENCE_DIR)?;
+    copy_reference_case(linux, out, REFERENCE_TLS_CASE, REFERENCE_TLS_DIR)?;
+    Ok(src)
+}
+
+fn copy_reference_case(
+    linux: &Path,
+    out: &Path,
+    ref_case: &str,
+    dir_name: &str,
+) -> Result<ReferenceSource, String> {
     let man = read_json(linux.join("manifest.json"))
         .ok_or_else(|| format!("{}: no manifest.json", linux.display()))?;
     if man["banners"] != "linux" {
@@ -356,16 +379,16 @@ pub fn copy_reference(linux: &Path, out: &Path) -> Result<ReferenceSource, Strin
         )
     })?;
     let verdict: Value = serde_json::from_slice(&vbytes).map_err(|e| e.to_string())?;
-    let rv = run_verdict(&verdict, REFERENCE_CASE).unwrap_or_default();
+    let rv = run_verdict(&verdict, ref_case).unwrap_or_default();
     if rv != PASS {
         return Err(format!(
-            "{REFERENCE_CASE} of {} is {rv:?}, not PASS: it is no reference",
+            "{ref_case} of {} is {rv:?}, not PASS: it is no reference",
             linux.display()
         ));
     }
-    let case = linux.join("runs").join(REFERENCE_CASE);
+    let case = linux.join("runs").join(ref_case);
     let hashes = fs::read_to_string(case.join("hashes-before-copy.txt"))
-        .map_err(|e| format!("{REFERENCE_CASE}/hashes-before-copy.txt: {e}"))?;
+        .map_err(|e| format!("{ref_case}/hashes-before-copy.txt: {e}"))?;
     let recorded: BTreeMap<&str, &str> = hashes
         .lines()
         .filter_map(|l| l.split_once("  "))
@@ -377,21 +400,19 @@ pub fn copy_reference(linux: &Path, out: &Path) -> Result<ReferenceSource, Strin
         let rel = format!("{REFERENCE_STEP}/{f}");
         let want = recorded
             .get(rel.as_str())
-            .ok_or_else(|| format!("{REFERENCE_CASE} recorded no hash of {rel}"))?;
+            .ok_or_else(|| format!("{ref_case} recorded no hash of {rel}"))?;
         let b = fs::read(case.join(&rel)).map_err(|e| format!("{rel}: {e}"))?;
         if sha(&b) != *want {
-            return Err(format!(
-                "{rel} differs from the hash {REFERENCE_CASE} recorded"
-            ));
+            return Err(format!("{rel} differs from the hash {ref_case} recorded"));
         }
         files.insert(f.to_owned(), (*want).to_owned());
         bytes.push((rel, b));
     }
     // A verdict.json is a file that outlives the files it judged: judge the window again now.
-    let fresh = run_verdict(&bv::verify_dir(linux), REFERENCE_CASE).unwrap_or_default();
+    let fresh = run_verdict(&bv::verify_dir(linux), ref_case).unwrap_or_default();
     if fresh != PASS {
         return Err(format!(
-            "{REFERENCE_CASE} of {} is {fresh:?} when banners-verify judges it now, though verdict.json says PASS: it is no reference",
+            "{ref_case} of {} is {fresh:?} when banners-verify judges it now, though verdict.json says PASS: it is no reference",
             linux.display()
         ));
     }
@@ -400,14 +421,14 @@ pub fn copy_reference(linux: &Path, out: &Path) -> Result<ReferenceSource, Strin
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default(),
-        case: REFERENCE_CASE.into(),
+        case: ref_case.into(),
         step: REFERENCE_STEP.into(),
         run_verdict: rv,
         overall: s(&verdict["overall"]).to_owned(),
         verdict_sha256: sha(&vbytes),
         files,
     };
-    let dir = out.join(REFERENCE_DIR);
+    let dir = out.join(dir_name);
     if dir.exists() {
         let had: Option<ReferenceSource> = fs::read(dir.join(REFERENCE_SOURCE))
             .ok()
@@ -480,9 +501,32 @@ fn payload_segments(
         .map(|h| h.payload)
         .collect()
 }
-/// The reference run: the copy's record, its files and what they hold. `None` when it does not prove C's records.
+/// The reference runs: the t01 copy and the TLS copy merged (the native stands' TLS port is judged by
+/// `t10_tls4` of the same Linux window; without its copy the reference proves nothing of the TLS scenarios).
 pub(crate) fn judge_reference(r: &mut Run, root: &Path, c: &StandCase) -> Option<CReference> {
-    let d = root.join(REFERENCE_DIR);
+    let first = judge_reference_case(r, root, c, REFERENCE_DIR, REFERENCE_CASE)?;
+    let tls = judge_reference_case(r, root, c, REFERENCE_TLS_DIR, REFERENCE_TLS_CASE)?;
+    let mut records = first.records;
+    records.extend(tls.records);
+    let mut payloads = first.payloads;
+    payloads.extend(tls.payloads);
+    r.notes.insert(
+        "c_records".into(),
+        json!(records.iter().map(Rec::show).collect::<Vec<_>>()),
+    );
+    Some(CReference { records, payloads })
+}
+
+/// One reference case's copy: its record, its files and what they hold. `None` when it does not prove C's
+/// records of that case's scenarios.
+fn judge_reference_case(
+    r: &mut Run,
+    root: &Path,
+    c: &StandCase,
+    dir_name: &str,
+    ref_case: &str,
+) -> Option<CReference> {
+    let d = root.join(dir_name);
     let src: ReferenceSource = av::typed(r, &d, REFERENCE_SOURCE)?;
     r.inv(
         "reference/source.json names the Linux window by a plain directory name",
@@ -490,10 +534,8 @@ pub(crate) fn judge_reference(r: &mut Run, root: &Path, c: &StandCase) -> Option
         &src.source_dir,
     );
     r.inv(
-        &format!(
-            "the reference is C's {REFERENCE_STEP} step of {REFERENCE_CASE}, PASS in its window"
-        ),
-        src.case == REFERENCE_CASE && src.step == REFERENCE_STEP && src.run_verdict == PASS,
+        &format!("the reference is C's {REFERENCE_STEP} step of {ref_case}, PASS in its window"),
+        src.case == ref_case && src.step == REFERENCE_STEP && src.run_verdict == PASS,
         format!("{}/{} {}", src.case, src.step, src.run_verdict),
     );
     let verdict = fs::read(d.join(REFERENCE_VERDICT)).ok();
@@ -503,7 +545,7 @@ pub(crate) fn judge_reference(r: &mut Run, root: &Path, c: &StandCase) -> Option
             sha(b) == src.verdict_sha256
                 && serde_json::from_slice::<Value>(b)
                     .ok()
-                    .and_then(|v| run_verdict(&v, REFERENCE_CASE))
+                    .and_then(|v| run_verdict(&v, ref_case))
                     .as_deref()
                     == Some(src.run_verdict.as_str())
         }),
@@ -514,7 +556,7 @@ pub(crate) fn judge_reference(r: &mut Run, root: &Path, c: &StandCase) -> Option
         let b = fs::read(d.join(REFERENCE_STEP).join(f)).ok();
         r.inv(
             &format!(
-                "reference/{REFERENCE_STEP}/{f} has the sha256 {REFERENCE_CASE} recorded in its window"
+                "reference/{REFERENCE_STEP}/{f} has the sha256 {ref_case} recorded in its window"
             ),
             b.as_ref()
                 .is_some_and(|b| src.files.get(f) == Some(&sha(b))),
@@ -522,10 +564,10 @@ pub(crate) fn judge_reference(r: &mut Run, root: &Path, c: &StandCase) -> Option
         );
         copies.insert(f, b.unwrap_or_default());
     }
-    let t01 = bv::tcp_case(REFERENCE_CASE)?;
+    let t01 = bv::tcp_case(ref_case)?;
     let argv: Option<ArgvRecord> = serde_json::from_slice(&copies["argv.json"]).ok();
     r.inv(
-        "the reference ran t01_tcp4's -oL argv (banners_verify::tcp_argv)",
+        &format!("the reference ran {ref_case}'s -oL argv (banners_verify::tcp_argv)"),
         argv.is_some_and(|a| a.argv == bv::tcp_argv(&t01, Out::List)),
         "",
     );
@@ -537,7 +579,7 @@ pub(crate) fn judge_reference(r: &mut Run, root: &Path, c: &StandCase) -> Option
             return None;
         }
     };
-    let t01 = bv::tcp_case(REFERENCE_CASE)?;
+    let t01 = bv::tcp_case(ref_case)?;
     let ref_ports: Vec<u16> = t01.port_list();
     let ports: Vec<u16> = c
         .ports
@@ -566,7 +608,14 @@ pub(crate) fn judge_reference(r: &mut Run, root: &Path, c: &StandCase) -> Option
             .filter(|x| x.port == p)
             .filter_map(Rec::app_name)
             .collect();
-        if opens != 1 || apps != sc.apps {
+        let want_apps: Vec<&str> = sc
+            .apps
+            .iter()
+            .copied()
+            .cycle()
+            .take(sc.apps.len() * opens.max(1))
+            .collect();
+        if opens == 0 || apps.iter().map(String::as_str).collect::<Vec<_>>() != want_apps {
             bad.push(format!(
                 "{p}: {opens} open records, banners {apps:?}, the scenario {:?}",
                 sc.apps
@@ -590,22 +639,36 @@ pub(crate) fn judge_reference(r: &mut Run, root: &Path, c: &StandCase) -> Option
         }
     };
     let lst = bv::stand();
+    let src_ip = bv::tcp_case(ref_case)
+        .map(|t| t.source())
+        .unwrap_or(lst.scanner_ip.into());
     let payloads: BTreeMap<u16, Vec<Vec<u8>>> = ports
         .iter()
         .map(|&p| {
-            (
-                p,
-                payload_segments(
-                    &frames,
-                    lst.scanner_mac,
-                    bv::tcp_case(REFERENCE_CASE)
-                        .map(|t| t.source())
-                        .unwrap_or(lst.scanner_ip.into()),
-                    IpAddr::V4(PEER),
-                    p,
-                    bv::SOURCE_PORT,
-                ),
-            )
+            // Every connection's payload in SYN order (a TLS target has the stack's second connection from
+            // the next source port besides the plan's).
+            let mut sports: Vec<u16> = Vec::new();
+            for f in frames.iter().map(|x| &x.1) {
+                if let Some(h) = tcp_head(f)
+                    && f.get(6..12) == Some(&lst.scanner_mac[..])
+                    && h.dst == IpAddr::V4(PEER)
+                    && h.dp == p
+                    && h.flags & 0x3f == 0x02
+                    && !sports.contains(&h.sp)
+                {
+                    sports.push(h.sp);
+                }
+            }
+            if sports.is_empty() {
+                sports.push(bv::SOURCE_PORT);
+            }
+            let segs = sports
+                .iter()
+                .flat_map(|&sp| {
+                    payload_segments(&frames, lst.scanner_mac, src_ip, IpAddr::V4(PEER), p, sp)
+                })
+                .collect();
+            (p, segs)
         })
         .collect();
     r.inv(
@@ -617,11 +680,6 @@ pub(crate) fn judge_reference(r: &mut Run, root: &Path, c: &StandCase) -> Option
             .collect::<Vec<_>>()
             .join(", "),
     );
-    r.notes.insert(
-        "c_records".into(),
-        json!(records.iter().map(Rec::show).collect::<Vec<_>>()),
-    );
-    r.notes.insert("source".into(), json!(src));
     r.proven().then_some(CReference { records, payloads })
 }
 
@@ -699,6 +757,30 @@ fn stack_form(builder: &rmasscan_core::tcp_frame::TcpFrameBuilder, f: &[u8]) -> 
     };
     builder.build(&seg) == f
 }
+/// Is `f` the SYN of the stack's own second connection (TLS `--cert`, D1), not a SYN of the scan plan? Two
+/// proofs of rmasscan's authorship a host stack cannot forge: the frame is the product builder's template
+/// output ([`stack_form`]) and its sequence number is the cookie of its 4-tuple at the stands' seed 1, from a
+/// source port of the case's range ([`bv::source_range`]). How many such connections a run owes is judged in
+/// `judge_run`; this only keeps them out of the host stack's frames.
+fn is_reconnect_syn(builder: &rmasscan_core::tcp_frame::TcpFrameBuilder, f: &[u8]) -> bool {
+    let Some(h) = tcp_head(f) else {
+        return false;
+    };
+    let (IpAddr::V4(local), IpAddr::V4(remote)) = (h.src, h.dst) else {
+        return false;
+    };
+    let (lo, hi) = bv::source_range();
+    (lo..=hi).contains(&h.sp)
+        && h.seq
+            == rmasscan_core::cookie::syn_cookie_ipv4(
+                u32::from(remote),
+                u32::from(h.dp),
+                u32::from(local),
+                u32::from(h.sp),
+                1,
+            ) as u32
+        && stack_form(builder, f)
+}
 /// What is wrong with the 42-byte ARP replies of the scanner MAC on a stand (L-M4), as autodetect bounds them
 /// (`av::os_arp_reply_problems`): on Windows each answers a who-has of the peer for the source before it, in the
 /// kernel's form, at most one per request (the guest answers for its own address); on macOS there is none at all
@@ -731,6 +813,9 @@ pub fn stand_wire(c: &StandCase, fr: &Frames, plan: &rmasscan_core::probe::Ready
     // An ARP request of the scanner MAC (the host kernel's or a resolver's) so far: the peer's replies to it are the
     // host's traffic, not the stand's doing.
     let mut asked = false;
+    // The stack's second-connection SYNs ([`is_reconnect_syn`]): not SYNs of the plan, but the seeds of the
+    // `reconnect` connections the peer's SYN-ACKs open below.
+    let mut reconnect_syns: Vec<Vec<u8>> = Vec::new();
     for (t, f) in fr {
         let t = *t;
         if f.get(12..14) == Some(&crate::link::MARKER_ETHERTYPE[..]) {
@@ -794,6 +879,8 @@ pub fn stand_wire(c: &StandCase, fr: &Frames, plan: &rmasscan_core::probe::Ready
             } else if h.flags & 0x3f == 0x02 {
                 if syns.contains(f) {
                     v.probes.push((t, f.clone()));
+                } else if is_reconnect_syn(&builder, f) {
+                    reconnect_syns.push(f.clone());
                 } else {
                     v.os_frames
                         .push(format!("{}, no SYN of the plan", describe(f)));
@@ -831,20 +918,33 @@ pub fn stand_wire(c: &StandCase, fr: &Frames, plan: &rmasscan_core::probe::Ready
             }
             continue;
         }
-        let probe = v.probes.iter().position(|(_, p)| {
-            tcp_head(p).is_some_and(|q| {
-                q.dst == h.src && q.dp == h.sp && q.sp == h.dp && h.ack == q.seq.wrapping_add(1)
-            })
-        });
-        match probe {
-            Some(i) if h.flags & 0x12 == 0x12 || h.flags & 0x04 != 0 => {
-                let q = tcp_head(&v.probes[i].1).unwrap_or_else(|| h.clone());
+        // The SYN this answers: one of the plan's, or the stack's second-connection SYN (its connection
+        // hangs on the plan probe of its port, marked `reconnect`).
+        let answers = |q: &TcpHead| {
+            q.dst == h.src && q.dp == h.sp && q.sp == h.dp && h.ack == q.seq.wrapping_add(1)
+        };
+        let found = v
+            .probes
+            .iter()
+            .enumerate()
+            .find_map(|(i, (_, p))| tcp_head(p).filter(|q| answers(q)).map(|q| (q, i, false)))
+            .or_else(|| {
+                reconnect_syns.iter().find_map(|p| {
+                    let q = tcp_head(p).filter(|q| answers(q))?;
+                    let i = v.probes.iter().position(|(_, s)| {
+                        tcp_head(s).is_some_and(|w| w.dst == q.dst && w.dp == q.dp)
+                    })?;
+                    Some((q, i, true))
+                })
+            });
+        match found {
+            Some((q, i, reconnect)) if h.flags & 0x12 == 0x12 || h.flags & 0x04 != 0 => {
                 v.conns.push(Conn {
                     probe: i,
                     ip: q.dst,
                     port: q.dp,
                     sport: q.sp,
-                    reconnect: false,
+                    reconnect,
                     open: h.flags & 0x12 == 0x12,
                     reply_t: t,
                     reply_flags: h.flags,
@@ -1185,8 +1285,12 @@ pub(crate) fn judge_run(root: &Path, c: &StandCase, reference: Option<&CReferenc
     for (i, (_, p)) in w.probes.iter().enumerate() {
         let h = tcp_head(p);
         let answered: Vec<&Conn> = w.conns.iter().filter(|x| x.probe == i).collect();
-        match (answered.first(), h) {
-            (Some(x), Some(h)) if answered.len() == 1 && x.open => {
+        // The probe's own connection is exactly one (the stack's second connections hang on the same probe,
+        // marked `reconnect`); the stream checks below run on every connection of the probe: the peer owes
+        // the scenario on the second connection as on the first.
+        let firsts: Vec<&&Conn> = answered.iter().filter(|x| !x.reconnect).collect();
+        match (firsts.first(), h) {
+            (Some(_), Some(h)) if firsts.len() == 1 && firsts[0].open => {
                 let Some(sc) = c.scenario(h.dp) else {
                     stand_bad.push(format!("{}: no scenario", h.dp));
                     continue;
@@ -1195,25 +1299,27 @@ pub(crate) fn judge_run(root: &Path, c: &StandCase, reference: Option<&CReferenc
                 // scanner's frames on this connection owe it. A scanner that never sent the hello the HTTP script
                 // waits for owes it nothing after the handshake (the payload check's FAIL below); the SSH server
                 // speaks first and owes its ident once the handshake is complete, whatever the scanner sends after.
-                let (got, owed) = (x.peer_stream(), x.owed(sc));
-                if !sc.stream().starts_with(&got) || got.len() < owed {
-                    stand_bad.push(format!(
-                        "{}: the peer sent {} bytes, the scanner's frames owe {} of its scenario's {}",
-                        h.dp,
-                        got.len(),
-                        owed,
-                        sc.stream().len()
-                    ));
-                }
-                if x.peer.iter().any(|g| g.flags & 0x04 != 0) {
-                    stand_bad.push(format!("{}: a RST of the peer", h.dp));
+                for x in &answered {
+                    let (got, owed) = (x.peer_stream(), x.owed(sc));
+                    if !sc.stream().starts_with(&got) || got.len() < owed {
+                        stand_bad.push(format!(
+                            "{}: the peer sent {} bytes, the scanner's frames owe {} of its scenario's {}",
+                            h.dp,
+                            got.len(),
+                            owed,
+                            sc.stream().len()
+                        ));
+                    }
+                    if x.peer.iter().any(|g| g.flags & 0x04 != 0) {
+                        stand_bad.push(format!("{}: a RST of the peer", h.dp));
+                    }
                 }
             }
             (_, h) => stand_bad.push(format!(
                 "{}: {} answers, open {:?}",
                 h.map_or(0, |h| h.dp),
-                answered.len(),
-                answered.first().map(|x| x.open)
+                firsts.len(),
+                firsts.first().map(|x| x.open)
             )),
         }
     }
@@ -1304,53 +1410,20 @@ pub(crate) fn judge_run(root: &Path, c: &StandCase, reference: Option<&CReferenc
     let mut hello = Vec::new();
     let mut rsts = Vec::new();
     let mut after = Vec::new();
-    let mut sent = BTreeMap::new();
+    let mut sent: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    // C's payloads of a scenario are its connections' in SYN order (`judge_reference_case`, the stack's
+    // second connection beside the plan's); rmasscan's are gathered the same way, per Linux port, over every
+    // open connection. The per-connection checks (hello timing, RST, frames after the end) run on each.
+    let mut by_port: BTreeMap<u16, Vec<Vec<u8>>> = BTreeMap::new();
     for x in w.conns.iter().filter(|x| x.open) {
         let Some(lp) = c.linux_port(x.port) else {
             continue;
         };
         let mine = scanner_payloads(x);
-        sent.insert(
-            x.port.to_string(),
-            json!(
-                mine.iter()
-                    .map(|p| bv::c_normalize_string(p))
-                    .collect::<Vec<_>>()
-            ),
-        );
-        if let Some(rf) = reference {
-            match rf.payloads.get(&lp) {
-                Some(want) if want != &mine => {
-                    wrong.push(format!(
-                        "{}: rmasscan sent {:?}, C {:?}",
-                        x.port,
-                        mine.iter()
-                            .map(|p| bv::c_normalize_string(p))
-                            .collect::<Vec<_>>(),
-                        Some(
-                            want.iter()
-                                .map(|p| bv::c_normalize_string(p))
-                                .collect::<Vec<_>>(),
-                        )
-                    ));
-                }
-                None if lp == 443 => {
-                    // No C reference on this stand for TLS (the Linux window's reference case does not scan
-                    // 443): the first payload must be the ClientHello (a handshake record of 198 bytes).
-                    let ok = mine.first().is_some_and(|p| {
-                        p.len() == 198 && p.starts_with(b"\x16\x03\x01\x00\xc1\x01")
-                    });
-                    if !ok {
-                        wrong.push(format!(
-                            "{}: first payload is not the default ClientHello: {:?}",
-                            x.port,
-                            mine.first().map(|p| bv::c_normalize_string(p))
-                        ));
-                    }
-                }
-                _ => {}
-            }
-        }
+        sent.entry(x.port.to_string())
+            .or_default()
+            .extend(mine.iter().map(|p| bv::c_normalize_string(p)));
+        by_port.entry(lp).or_default().extend(mine);
         if c.scenario(x.port).is_some_and(|sc| !sc.server_first()) {
             match x.scanner.iter().find(|g| !g.payload.is_empty()) {
                 Some(g)
@@ -1371,11 +1444,67 @@ pub(crate) fn judge_run(root: &Path, c: &StandCase, reference: Option<&CReferenc
                 .map(|g| format!("{} flags {:#04x}", x.port, g.flags)),
         );
     }
+    if let Some(rf) = reference {
+        for (lp, mine) in &by_port {
+            match rf.payloads.get(lp) {
+                Some(want) if want != mine => {
+                    wrong.push(format!(
+                        "{}: rmasscan sent {:?}, C {:?}",
+                        lp,
+                        mine.iter()
+                            .map(|p| bv::c_normalize_string(p))
+                            .collect::<Vec<_>>(),
+                        Some(
+                            want.iter()
+                                .map(|p| bv::c_normalize_string(p))
+                                .collect::<Vec<_>>(),
+                        )
+                    ));
+                }
+                None if *lp == 443 => {
+                    // No C reference for TLS (the window's TLS copy carries none for this port): the first
+                    // payload must be the ClientHello (a handshake record of 198 bytes).
+                    let ok = mine.first().is_some_and(|p| {
+                        p.len() == 198 && p.starts_with(b"\x16\x03\x01\x00\xc1\x01")
+                    });
+                    if !ok {
+                        wrong.push(format!(
+                            "{}: first payload is not the default ClientHello: {:?}",
+                            lp,
+                            mine.first().map(|p| bv::c_normalize_string(p))
+                        ));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
     r.notes.insert("scanner_payloads".into(), json!(sent));
     r.cap(
         "rmasscan's payload segments on each connection are C's on the same scenario (its hello, its SSH ident), in order",
         wrong.is_empty() && reference.is_some(),
         some4(&wrong),
+    );
+    // The second connection is an obligation of the TLS scenario, not a permission: a scanner that never
+    // opens it must not pass by having nothing to check (the banners window's rule, D1). Keyed on the
+    // scenario (direct TLS, `TcpScenario::direct_tls`), exactly one open second connection per open first
+    // connection, and none on any other scenario.
+    let mut reconnect_bad = Vec::new();
+    for x in w.conns.iter().filter(|x| x.open && !x.reconnect) {
+        let tls = c.scenario(x.port).is_some_and(TcpScenario::direct_tls);
+        let n = w
+            .conns
+            .iter()
+            .filter(|y| y.reconnect && y.open && y.ip == x.ip && y.port == x.port)
+            .count();
+        if n != usize::from(tls) {
+            reconnect_bad.push(format!("{}: {n} second connections", x.port));
+        }
+    }
+    r.cap(
+        "rmasscan opens C's second connection (--cert) once for each open TLS connection, and no other second connection",
+        reconnect_bad.is_empty(),
+        some4(&reconnect_bad),
     );
     r.cap(
         &format!(
@@ -1409,7 +1538,8 @@ pub(crate) fn judge_run(root: &Path, c: &StandCase, reference: Option<&CReferenc
         foreign.is_empty(),
         some4(&foreign),
     );
-    // M1: one run of banners per connection, after its open record.
+    // M1: one run of banners per connection, after its open record. A port with the stack's second
+    // connection (TLS `--cert`) has as many runs as connections, each opened by its own open record.
     let mut m1 = Vec::new();
     for &p in &scanned {
         let at: Vec<usize> = doc
@@ -1419,14 +1549,23 @@ pub(crate) fn judge_run(root: &Path, c: &StandCase, reference: Option<&CReferenc
             .filter(|(_, x)| x.port == p && x.is_banner())
             .map(|(i, _)| i)
             .collect();
-        let open = doc
+        let opens: Vec<usize> = doc
             .records
             .iter()
-            .position(|x| x.port == p && matches!(x.body, Body::Status { st: St::Open, .. }));
-        if let (Some(a), Some(b)) = (at.first(), at.last())
-            && (b - a + 1 != at.len() || open.is_none_or(|o| o > *a))
+            .enumerate()
+            .filter(|(_, x)| x.port == p && matches!(x.body, Body::Status { st: St::Open, .. }))
+            .map(|(i, _)| i)
+            .collect();
+        let starts: Vec<usize> = at
+            .iter()
+            .enumerate()
+            .filter(|(k, i)| k == &0 || at[k - 1] + 1 != **i)
+            .map(|(_, i)| *i)
+            .collect();
+        if !at.is_empty()
+            && (starts.len() > opens.len() || starts.iter().any(|s| !opens.iter().any(|o| o < s)))
         {
-            m1.push(format!("{p}: banners at {at:?}, open at {open:?}"));
+            m1.push(format!("{p}: banners at {at:?}, opens at {opens:?}"));
         }
     }
     r.beh(
@@ -1434,19 +1573,40 @@ pub(crate) fn judge_run(root: &Path, c: &StandCase, reference: Option<&CReferenc
         m1.is_empty(),
         some4(&m1),
     );
+    // The document groups a port's records, not a connection's: with the stack's second connection the
+    // scenario's applications repeat once per open connection (as `judge_reference_case` demands of C).
     let mut apps_bad = Vec::new();
+    let mut judged: BTreeSet<u16> = BTreeSet::new();
     for x in w.conns.iter().filter(|x| x.open) {
+        if !judged.insert(x.port) {
+            continue;
+        }
         let Some(sc) = c.scenario(x.port) else {
             continue;
         };
+        let opens = w
+            .conns
+            .iter()
+            .filter(|y| y.open && y.port == x.port)
+            .count();
         let got: Vec<String> = doc
             .records
             .iter()
             .filter(|y| y.port == x.port)
             .filter_map(Rec::app_name)
             .collect();
-        if got != sc.apps {
-            apps_bad.push(format!("{} {got:?}, the scenario {:?}", x.port, sc.apps));
+        let want: Vec<&str> = sc
+            .apps
+            .iter()
+            .copied()
+            .cycle()
+            .take(sc.apps.len() * opens)
+            .collect();
+        if got.iter().map(String::as_str).collect::<Vec<_>>() != want {
+            apps_bad.push(format!(
+                "{} {got:?}, the scenario {:?} x {opens}",
+                x.port, sc.apps
+            ));
         }
     }
     r.cap(
@@ -1454,9 +1614,10 @@ pub(crate) fn judge_run(root: &Path, c: &StandCase, reference: Option<&CReferenc
         apps_bad.is_empty() && !w.conns.is_empty(),
         some4(&apps_bad),
     );
-    let ref_ports: Vec<u16> = bv::tcp_case(REFERENCE_CASE)
-        .map(|t| t.port_list())
-        .unwrap_or_default();
+    let ref_ports: Vec<u16> = [REFERENCE_CASE, REFERENCE_TLS_CASE]
+        .iter()
+        .flat_map(|t| bv::tcp_case(t).map(|c| c.port_list()).unwrap_or_default())
+        .collect();
     let mine: Vec<Rec> = doc
         .records
         .iter()
@@ -1517,7 +1678,12 @@ pub(crate) fn stand_dir(root: &Path) -> bool {
 /// `t` without the reference copy: its capture is the Linux stand's (judged by its own window) and would read as
 /// foreign frames on this stand.
 fn without_reference(t: &Tree) -> Tree {
-    let keep = |p: &String| p != REFERENCE_DIR && !p.starts_with(&format!("{REFERENCE_DIR}/"));
+    let keep = |p: &String| {
+        p != REFERENCE_DIR
+            && p != REFERENCE_TLS_DIR
+            && !p.starts_with(&format!("{REFERENCE_DIR}/"))
+            && !p.starts_with(&format!("{REFERENCE_TLS_DIR}/"))
+    };
     Tree {
         files: t.files.iter().filter(|p| keep(p)).cloned().collect(),
         dirs: t.dirs.iter().filter(|p| keep(p)).cloned().collect(),
@@ -1562,6 +1728,7 @@ pub fn verify_dir(root: &Path) -> Value {
     }
     let inside = |f: &String| {
         f.starts_with(&format!("{REFERENCE_DIR}/"))
+            || f.starts_with(&format!("{REFERENCE_TLS_DIR}/"))
             || tags
                 .iter()
                 .any(|tag| f.starts_with(&format!("runs/{tag}/")))

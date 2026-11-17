@@ -105,6 +105,12 @@ pub const TARGETS: &str = pv::TARGETS;
 pub const RATE: &str = pv::RATE;
 pub const WAIT: &str = pv::WAIT;
 pub const SOURCE_PORT: u16 = pv::SOURCE_PORT;
+/// The source-port range of a case that expects the stack's second connections (TLS `--cert`, D1) and of the
+/// native stands: `--source-port 40000-40015`. Sixteen ports: the plan's hash picks the first connection's
+/// port in the range, C's `_next_IP_port` the second one's.
+pub const fn source_range() -> (u16, u16) {
+    (SOURCE_PORT, SOURCE_PORT + 15)
+}
 /// The UDP ports of the window: C's eight parser ports (`src/proto-udp.c:76-113`; ZeroAccess by its first port) and
 /// 1900, a port with a built-in probe and no parser (the `default` branch).
 pub const PORTS: [u16; 9] = [53, 123, 137, 161, 500, 1900, 5683, 11211, 16464];
@@ -539,7 +545,7 @@ pub const TCP_CASES: [TcpCase; 12] = [
         banners: true,
         noreset: false,
         extra_args: &[],
-        source_ports: (SOURCE_PORT, SOURCE_PORT + 15),
+        source_ports: source_range(),
         connection_timeout: Some(8),
         wait: 14,
         outs: &[Out::Binary, Out::List],
@@ -549,7 +555,6 @@ pub const TCP_CASES: [TcpCase; 12] = [
             "no-frame-from-destroyed-tcb",
             "memcached-tcp-past-segment",
             "minecraft-unsplit",
-            "tls-hello-random",
         ],
         quiet: false,
     },
@@ -562,7 +567,7 @@ pub const TCP_CASES: [TcpCase; 12] = [
         banners: true,
         noreset: false,
         extra_args: &[],
-        source_ports: (SOURCE_PORT, SOURCE_PORT + 15),
+        source_ports: source_range(),
         connection_timeout: Some(8),
         wait: 14,
         outs: &[Out::Binary, Out::List],
@@ -572,7 +577,6 @@ pub const TCP_CASES: [TcpCase; 12] = [
             "no-frame-from-destroyed-tcb",
             "memcached-tcp-past-segment",
             "minecraft-unsplit",
-            "tls-hello-random",
         ],
         quiet: false,
     },
@@ -585,7 +589,7 @@ pub const TCP_CASES: [TcpCase; 12] = [
         banners: true,
         noreset: false,
         extra_args: &["--heartbleed"],
-        source_ports: (SOURCE_PORT, SOURCE_PORT + 15),
+        source_ports: source_range(),
         connection_timeout: Some(8),
         wait: 14,
         outs: &[Out::Binary, Out::List],
@@ -805,6 +809,13 @@ impl TcpScenario {
     /// The server speaks before the scanner (its first step is a write): no hello is ever sent (B5).
     pub fn server_first(&self) -> bool {
         matches!(self.steps.first(), Some(TcpStep::Write(_)))
+    }
+    /// TLS from the connection's first byte: the scanner opens with a ClientHello and its first banner is
+    /// the `ssl` one. Only these connections owe C's second connection (`--cert`, D1); a STARTTLS upgrade
+    /// after a plaintext dialogue (server-first, `smtp` first) never has one, and a TLS stream that yields
+    /// no certificate banners (`ssl`, `vuln`) still does.
+    pub fn direct_tls(&self) -> bool {
+        !self.server_first() && self.apps.first() == Some(&"ssl")
     }
 }
 const fn ts(
@@ -2998,7 +3009,7 @@ pub const DEVIATIONS: [(&str, &str); 9] = [
     ),
     (
         "tls-hello-random",
-        "A2 of the TLS reference: a vuln-mode ClientHello's random field (bytes 11..43) carries the scan's start time and a SipHash fingerprint of it, so the two scanners' hellos differ there; hellos that differ only in those bytes are the same hello, and every first payload on a TLS port of both scanners must be a ClientHello of a template length",
+        "A2 of the TLS reference: a vuln-mode ClientHello's random field (bytes 11..43) carries the scan's start time and a SipHash fingerprint of it, so the two scanners' hellos differ there; hellos of the dynamic templates (lengths 74, 225, 361) that differ only in those bytes are the same hello; the static default and TLS 1.3 hellos are never masked, and every first payload on a TLS port of both scanners must be a dynamic ClientHello whose bytes outside the random field equal its template's",
     ),
     (
         "minecraft-unsplit",
@@ -3845,10 +3856,45 @@ fn tcp_scanner(r: &mut Run, c: &TcpCase, s: &Side<BView>, v: &TcpView) {
         );
     }
     if c.banners {
-        // The second connections (TLS reconnect, reference D1): one per first connection, from the next source
-        // port by C's arithmetic over the case's range, its SYN sequence number the cookie of its 4-tuple (seed 1
-        // of the window's argv), and on the first connection a FIN right after the hello (SF__close).
+        // The second connections (TLS `--cert` reconnect, reference D1) are an obligation keyed on the case
+        // and the scenario, never on their own presence: a scanner that opens none must fail, not pass with
+        // nothing to check. Exactly one for each open first connection whose scenario is direct TLS
+        // ([`TcpScenario::direct_tls`]) in a case that scans a source-port range, and no other second
+        // connection.
         let reconnects: Vec<&Conn> = v.conns.iter().filter(|x| x.reconnect).collect();
+        let ranged = c.source_ports.0 < c.source_ports.1;
+        let mut expected = 0usize;
+        let mut counts = Vec::new();
+        for x in v.conns.iter().filter(|x| x.open && !x.reconnect) {
+            let tls = ranged && tcp_scenario(x.port, x.ip).is_some_and(TcpScenario::direct_tls);
+            expected += usize::from(tls);
+            let n = reconnects
+                .iter()
+                .filter(|y| y.ip == x.ip && y.port == x.port)
+                .count();
+            if n != usize::from(tls) {
+                counts.push(format!(
+                    "{}:{} {n} second connections",
+                    ip_text(x.ip),
+                    x.port
+                ));
+            }
+        }
+        if expected > 0 || !reconnects.is_empty() {
+            cap(
+                r,
+                s,
+                "the scanner opens C's second connection (--cert) once for each open TLS connection, and no other second connection",
+                counts.is_empty(),
+                if counts.is_empty() {
+                    format!("{} second connections", reconnects.len())
+                } else {
+                    some4(&counts, 4).join("; ")
+                },
+            );
+        }
+        // Each second connection there is: from the next source port of its first by C's arithmetic over the
+        // case's range, its SYN sequence number the cookie of its 4-tuple (seed 1 of the window's argv).
         if !reconnects.is_empty() {
             let (first_port, last_port) = c.source_ports;
             let next_port = |sport: u16| -> u16 {
@@ -4255,17 +4301,73 @@ fn tcp_banner_checks(r: &mut Run, s: &Side<BView>, d: &Document) {
     );
 }
 
-/// A sequence with a ClientHello's random field zeroed ('tls-hello-random'): bytes 11..43 of a payload
-/// that starts a handshake record (a vuln-mode hello carries the scan's start time there, reference A2).
+/// Every ClientHello template of the product, as a full record, tagged dynamicized or static: the dynamicized
+/// vuln-mode ones (heartbeat, ticketbleed, sslv3+SCSV) carry a random field (bytes 11..43 of the record) the
+/// two scanners cannot share; the static default and TLS 1.3 ones are the same bytes on every run. The bytes
+/// outside the random field are the template's at any moment (`TlsSettings::new(0)`).
+fn hello_templates() -> Vec<(bool, Vec<u8>)> {
+    use rmasscan_proto::TlsHelloKind::*;
+    let kinds = rmasscan_proto::TlsSettings::new(0);
+    [
+        (false, Default),
+        (false, Tls13),
+        (true, Heartbeat),
+        (true, Ticketbleed),
+        (true, Sslv3Poodle),
+    ]
+    .into_iter()
+    .map(|(dynamic, kind)| (dynamic, kinds.hello(kind).to_vec()))
+    .collect()
+}
+/// The template a ClientHello starts with at `s[0]`, by content: every available byte outside the random
+/// field (11..43) is the template's, the 11-byte head (the record header with its length, the handshake
+/// head) in full — the head alone already separates the five templates. Never the TCP payload's length: a
+/// hello may fill one segment, share it after other bytes (STARTTLS), or be split over several, and only
+/// the connection's byte stream shows where a record starts.
+fn hello_template_at<'a>(
+    s: &[u8],
+    templates: &'a [(bool, Vec<u8>)],
+) -> Option<&'a (bool, Vec<u8>)> {
+    if s.len() < 11 || s[0] != 0x16 || s[5] != 0x01 {
+        return None;
+    }
+    templates.iter().find(|(_, t)| {
+        s[..11] == t[..11] && {
+            let n = s.len().min(t.len());
+            n <= 43 || s[43..n] == t[43..n]
+        }
+    })
+}
+
+/// A sequence with every dynamicized ClientHello's random field zeroed ('tls-hello-random'): the static
+/// default and TLS 1.3 hellos always compare byte for byte (reference A2). The hellos are found by content
+/// in the connection's byte stream (the segments' payloads in order, spans kept), so one split over
+/// segments or sharing a segment with what precedes it is masked exactly where its record lies.
 fn masked_sequence(x: &Conn, mask: bool) -> Vec<RelSeg> {
     let mut seq = x.sequence();
-    if mask {
-        for seg in &mut seq {
-            let p = &mut seg.1;
-            if p.len() >= 44 && p[0] == 0x16 && p[5] == 0x01 {
-                p[11..43].fill(0);
+    if !mask {
+        return seq;
+    }
+    let templates = hello_templates();
+    let mut stream: Vec<u8> = Vec::new();
+    let mut spans: Vec<(usize, usize)> = Vec::with_capacity(seq.len());
+    for seg in &seq {
+        spans.push((stream.len(), seg.1.len()));
+        stream.extend_from_slice(&seg.1);
+    }
+    let mut i = 0;
+    while i + 11 <= stream.len() {
+        match hello_template_at(&stream[i..], &templates) {
+            Some((true, _)) => {
+                let end = (i + 43).min(stream.len());
+                stream[i + 11..end].fill(0);
+                i = end;
             }
+            _ => i += 1,
         }
+    }
+    for (seg, &(start, len)) in seq.iter_mut().zip(&spans) {
+        seg.1.copy_from_slice(&stream[start..start + len]);
     }
     seq
 }
@@ -4511,19 +4613,43 @@ fn tcp_deviations(
             )
         }
         "tls-hello-random" => {
-            // The masked field must be a ClientHello's: every first payload on a TLS connection of both
-            // scanners starts with a handshake record of at least the random field's end.
-            let bad = views
-                .iter()
-                .flat_map(|(_, v)| v.conns.iter().filter(|x| x.open && x.port == 443))
-                .filter_map(|x| x.scanner.iter().find(|g| !g.payload.is_empty()))
-                .filter(|g| {
-                    !(g.payload.len() >= 44 && g.payload[0] == 0x16 && g.payload[5] == 0x01)
-                })
-                .count();
+            // Every masked hello must be a dynamic ClientHello, and every ClientHello of the case a known
+            // template: the scanner byte stream of each TLS connection, walked record by record (443 is TLS
+            // from its first byte) and each handshake record matched by content against the five templates,
+            // static ones included (they compare byte for byte elsewhere; here they only prove the masking
+            // hid no other hello). Segment lengths are never consulted: a record may be split over segments
+            // or share one.
+            let templates = hello_templates();
+            let mut bad = 0;
+            for (_, v) in &views {
+                for x in v.conns.iter().filter(|x| x.open && x.port == 443) {
+                    let stream: Vec<u8> = x
+                        .scanner
+                        .iter()
+                        .flat_map(|g| g.payload.iter().copied())
+                        .collect();
+                    let mut i = 0;
+                    while i < stream.len() {
+                        if stream[i] == 0x16
+                            && hello_template_at(&stream[i..], &templates).is_none()
+                        {
+                            bad += 1;
+                        }
+                        let rec = stream
+                            .get(i + 3..i + 5)
+                            .map_or(0, |b| 5 + usize::from(be16(b, 0)));
+                        if rec == 0 {
+                            break;
+                        }
+                        i += rec;
+                    }
+                }
+            }
             (
                 bad == 0,
-                format!("{bad} first payloads on TLS connections that are not ClientHellos"),
+                format!(
+                    "{bad} handshake records on TLS connections that are not ClientHellos of a known template"
+                ),
             )
         }
         "minecraft-unsplit" => {

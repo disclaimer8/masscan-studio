@@ -214,6 +214,10 @@ impl MassIp {
             index < self.ipv4_index_threshold,
             "massip pick: index out of range"
         );
+        // Один порт: порог равен `count_ipv4s * 1`, индекс меньше `count_ipv4s`, так что `%` и `/` дают `index` и 0.
+        if self.count_ports == 1 {
+            return (self.ipv4.pick(index), self.ports.pick(0));
+        }
         let ip = self.ipv4.pick(index % self.count_ipv4s);
         let port = self.ports.pick(index / self.count_ipv4s);
         (ip, port)

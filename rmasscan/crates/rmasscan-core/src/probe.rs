@@ -1149,7 +1149,9 @@ mod tests {
     use super::*;
     use crate::config::{ScanConfig, validate};
     use crate::massip::MassIp;
-    use crate::targets::{TEMPL_SCTP, TEMPL_UDP, add_target_string, parse_ports};
+    use crate::targets::{
+        TEMPL_ICMP_ECHO, TEMPL_OPROTO_FIRST, TEMPL_SCTP, TEMPL_UDP, add_target_string, parse_ports,
+    };
     use std::collections::BTreeSet;
 
     const IP_ME: u32 = 0x0aff_0001;
@@ -1639,6 +1641,51 @@ mod tests {
 
     fn cli_err(ports: &str) -> PlanError {
         ReadyPlan::new_cli(eff("198.18.2.0/30", ports, |_| {}), nics(1)).unwrap_err()
+    }
+
+    #[test]
+    fn fill_refusal_leaves_only_the_target_written() {
+        // Отказ `fill` (порт источника вне 16 бит; `I:n` и `O:n` без построителя) пишет только `target`: ни одно
+        // другое поле и ни один байт кадра не меняются.
+        let payloads = Arc::new(PayloadTable::builtin());
+        let mods = PacketModifiers::default();
+        let nic = NicBinding::from(binding());
+        let mut wide = Builder::from_nic(&nic, 0x1234_5678, &mods, &payloads).unwrap();
+        wide.first = 0xFFFF;
+        wide.port_mask = 0xFFFF;
+        let narrow = Builder::from_nic(&nic, 0x1234_5678, &mods, &payloads).unwrap();
+        let dirty = || Probe {
+            index: 0x1111_1111_1111_1111,
+            ip_me: 0x2222_2222,
+            port_me: 0x3333,
+            ip_them: 0x4444_4444,
+            target: TargetIp::V6(0x5555),
+            port_them: 0x6666,
+            port_index: 0x7777_7777,
+            seqno: 0x8888_8888,
+            frame: vec![0xAB; 2040],
+        };
+        let (i, repeats, xxx, ip_them) = (7, 0, 9, 0xC612_0201);
+        let (_, port_me) = wide.source(i, repeats, xxx);
+        assert!(port_me > 0xFFFF, "the case must make port_me too wide");
+        let icmp_other = TEMPL_ICMP_ECHO + 1;
+        let oproto = TEMPL_OPROTO_FIRST + 47;
+        let cases = [
+            (&wide, 80, port_me),
+            (&wide, TEMPL_ICMP_ECHO, port_me),
+            (&narrow, icmp_other, narrow.source(i, repeats, xxx).1),
+            (&narrow, oproto, narrow.source(i, repeats, xxx).1),
+        ];
+        for (b, port_them, port_me) in cases {
+            let mut p = dirty();
+            let err = b
+                .fill(&mut p, i, repeats, xxx, ip_them, port_them)
+                .unwrap_err();
+            assert_eq!(err, PlanError::PortDoesNotFit { port_them, port_me });
+            let mut want = dirty();
+            want.target = TargetIp::V4(ip_them);
+            assert_eq!(p, want, "port index {port_them}");
+        }
     }
 
     #[test]

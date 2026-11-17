@@ -7,6 +7,9 @@
 //!
 //! Только Linux: `socket`, `route` и `open`. Остальное не зависит от `libc` (номера Linux в `abi`) и собирается в
 //! тестах на любой ОС, поэтому тесты адаптера идут и на Mac, и на Windows.
+//!
+//! Приём идёт пачками: один `recvmmsg` забирает до [`RX_BATCH`] кадров во внутреннее кольцо `RxHalf`, а `recv`
+//! выдаёт их по одному, с теми же фильтрами, счётчиками и проверкой дедлайна, что у покадрового пути.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -26,7 +29,7 @@ use crate::{Counters, NetError, NetStatsHandle};
 
 // Номера Linux без `libc`: errno, `ARPHRD_ETHER`, `PACKET_OUTGOING`.
 mod abi;
-use abi::errno::{EAGAIN, EBADF, EINTR, ENODEV, EWOULDBLOCK};
+use abi::errno::{EAGAIN, EBADF, EINTR, EINVAL, ENODEV, EWOULDBLOCK};
 use abi::{ARPHRD_ETHER, PACKET_OUTGOING};
 
 #[cfg(target_os = "linux")]
@@ -53,10 +56,39 @@ pub(crate) struct KernelStats {
     pub drops: u32,
 }
 
+/// Сообщений в одной пачке приёма (`recvmmsg`) и слотов во внутреннем кольце `RxHalf`.
+pub(crate) const RX_BATCH: usize = 32;
+/// Байт в слоте кольца. Кадр длиннее слота ядро усекает до `RX_SLOT`, а его [`RecvMeta::len`] остаётся истинной
+/// длиной (MSG_TRUNC).
+pub(crate) const RX_SLOT: usize = 2048;
+
+/// Метаданные одного сообщения пачки. `Err(EPROTO)`: ядро отдало адрес короче `SLL_MIN_LEN` (без `sll_pkttype` свой
+/// исходящий кадр не отличить), как прямой `recv`.
+pub(crate) type SlotMeta = Result<RecvMeta, Errno>;
+
+/// Сколько сообщений просить у ядра в одной пачке: `min(slots, metas, RX_BATCH)`, то есть не больше, чем есть слотов и
+/// мест для метаданных. Ноль — `Err(EINVAL)` до любого системного вызова.
+pub(crate) fn batch_len(slots: usize, metas: usize) -> Result<usize, Errno> {
+    match slots.min(metas).min(RX_BATCH) {
+        0 => Err(EINVAL),
+        n => Ok(n),
+    }
+}
+
 /// Шов syscalls одного сокета. Все методы НЕБЛОКИРУЮЩИЕ.
 pub(crate) trait PacketIo: Send {
     fn send(&mut self, frame: &[u8]) -> Result<usize, Errno>;
+    /// Один кадр в буфер вызывающего (прямой путь `RxHalf`: буфер длиннее [`RX_SLOT`]). Адрес короче
+    /// `SLL_MIN_LEN` — `Err(EPROTO)`.
     fn recv(&mut self, buf: &mut [u8]) -> Result<RecvMeta, Errno>;
+    /// Пачка: до [`batch_len`] сообщений, сообщение `i` в `slots[i]` (не больше [`RX_SLOT`] байт), его метаданные в
+    /// `metas[i]`. `Ok(n)` с n ≥ 1, пусто — `Err(EAGAIN)`. Ошибка не-EAGAIN после принятого префикса: ядро отдаёт
+    /// префикс, а ошибку — следующим вызовом; исход тот же, что у покадрового пути, на вызов позже.
+    fn recv_batch(
+        &mut self,
+        slots: &mut [[u8; RX_SLOT]],
+        metas: &mut [SlotMeta],
+    ) -> Result<usize, Errno>;
     fn poll(&mut self, write: bool, timeout_ms: i32) -> Result<Readiness, Errno>;
     /// PACKET_STATISTICS: ядро сбрасывает счётчики при чтении.
     fn packet_stats(&mut self) -> Result<KernelStats, Errno>;
@@ -190,18 +222,64 @@ impl<I: PacketIo> Tx for TxHalf<I> {
     }
 }
 
-/// RX-половина.
+/// RX-половина. Внутреннее кольцо из [`RX_BATCH`] слотов по [`RX_SLOT`] байт: пачку `recv_batch` `recv` выдаёт по
+/// одной записи, и пока в кольце есть записи, никакого нового приёма нет; прямой путь (буфер вызывающего длиннее
+/// слота) идёт только при пустом кольце. Кадры в кольце при закрытии теряются (раньше они так же лежали в очереди
+/// сокета и уходили вместе с fd).
 pub(crate) struct RxHalf<I: PacketIo> {
     io: Option<I>,
     ifindex: i32,
     counters: Arc<Counters>,
     since_stats: u64,
+    ring: RxRing,
 }
 
 enum RxStep {
     Frame(usize),
     Idle,
     Fatal(String),
+}
+
+/// Принятая пачка, ещё не выданная вызывающему: записи `head..len` в порядке ядра.
+struct RxRing {
+    slots: Box<[[u8; RX_SLOT]]>,
+    metas: [SlotMeta; RX_BATCH],
+    head: usize,
+    len: usize,
+}
+
+impl RxRing {
+    fn new() -> Self {
+        Self {
+            slots: vec![[0; RX_SLOT]; RX_BATCH].into_boxed_slice(),
+            metas: [Err(EAGAIN); RX_BATCH],
+            head: 0,
+            len: 0,
+        }
+    }
+
+    /// Следующая невыданная запись: слот и метаданные.
+    fn pop(&mut self) -> Option<(&[u8; RX_SLOT], SlotMeta)> {
+        if self.head >= self.len {
+            return None;
+        }
+        let i = self.head;
+        self.head += 1;
+        Some((self.slots.get(i)?, *self.metas.get(i)?))
+    }
+
+    /// Новая пачка в пустое кольцо.
+    fn fill<I: PacketIo>(&mut self, io: &mut I) -> Result<(), Errno> {
+        let n = io.recv_batch(&mut self.slots, &mut self.metas)?;
+        self.head = 0;
+        self.len = n.min(RX_BATCH);
+        Ok(())
+    }
+
+    fn clear(&mut self) {
+        self.head = 0;
+        self.len = 0;
+    }
 }
 
 impl<I: PacketIo> RxHalf<I> {
@@ -211,6 +289,7 @@ impl<I: PacketIo> RxHalf<I> {
             ifindex: ifindex.cast_signed(),
             counters,
             since_stats: 0,
+            ring: RxRing::new(),
         }
     }
 
@@ -240,23 +319,66 @@ impl<I: PacketIo> RxHalf<I> {
         let _ = self.collect_kernel_stats();
     }
 
+    /// Фильтры одной записи в прежнем порядке: свой исходящий кадр, чужой ifindex, кадр длиннее буфера вызывающего
+    /// (`cap`), каждый в свой счётчик. `true` — кадр проходит, `rx_packets` считает вызывающий.
+    fn admit(meta: &RecvMeta, ifindex: i32, cap: usize, counters: &Counters) -> bool {
+        let dropped = if meta.pkttype == PACKET_OUTGOING {
+            &counters.rx_outgoing
+        } else if meta.ifindex != ifindex {
+            &counters.rx_wrong_interface
+        } else if meta.len > cap {
+            &counters.rx_truncated
+        } else {
+            return true;
+        };
+        Counters::bump(dropped);
+        false
+    }
+
     fn step(
         io: &mut I,
+        ring: &mut RxRing,
         ifindex: i32,
         counters: &Counters,
         buffer: &mut [u8],
         deadline: &Deadline,
     ) -> RxStep {
         loop {
-            match io.recv(buffer) {
-                Ok(meta) => {
-                    if meta.pkttype == PACKET_OUTGOING {
-                        Counters::bump(&counters.rx_outgoing);
-                    } else if meta.ifindex != ifindex {
-                        Counters::bump(&counters.rx_wrong_interface);
-                    } else if meta.len > buffer.len() {
-                        Counters::bump(&counters.rx_truncated);
-                    } else {
+            // Записи кольца раньше любого нового приёма, по одной, в порядке ядра.
+            if let Some((slot, meta)) = ring.pop() {
+                let meta = match meta {
+                    Ok(meta) => meta,
+                    // Тот же текст, что у покадрового `recvfrom`, на той же записи.
+                    Err(e) => return RxStep::Fatal(errno_msg("recvfrom", e)),
+                };
+                if Self::admit(&meta, ifindex, buffer.len(), counters) {
+                    // `len <= buffer.len()` проверил фильтр; слот держит не больше RX_SLOT байт кадра.
+                    match (slot.get(..meta.len), buffer.get_mut(..meta.len)) {
+                        (Some(frame), Some(dst)) => {
+                            dst.copy_from_slice(frame);
+                            Counters::bump(&counters.rx_packets);
+                            return RxStep::Frame(meta.len);
+                        }
+                        // Кадр длиннее слота при буфере длиннее слота (буфер вырос, пока кадр ждал в кольце): ядро
+                        // усекло его до RX_SLOT, целиком его не выдать.
+                        _ => Counters::bump(&counters.rx_truncated),
+                    }
+                }
+                // Отброшенный кадр не продлевает вызов.
+                if deadline.expired() {
+                    return RxStep::Idle;
+                }
+                continue;
+            }
+            // Кольцо пусто: буфер длиннее слота читает кадр прямо (длинные кадры как прежде), иначе пачка в кольцо.
+            let got = if buffer.len() > RX_SLOT {
+                io.recv(buffer).map(Some)
+            } else {
+                ring.fill(io).map(|()| None)
+            };
+            match got {
+                Ok(Some(meta)) => {
+                    if Self::admit(&meta, ifindex, buffer.len(), counters) {
                         Counters::bump(&counters.rx_packets);
                         return RxStep::Frame(meta.len);
                     }
@@ -265,12 +387,14 @@ impl<I: PacketIo> RxHalf<I> {
                         return RxStep::Idle;
                     }
                 }
+                // Пачка в кольце: её записи разбирает начало цикла.
+                Ok(None) => {}
                 Err(e) if is_again(e) => {
                     if deadline.expired() {
                         return RxStep::Idle;
                     }
                     match io.poll(false, deadline.poll_ms()) {
-                        // Готовность без пакета: возвращаемся к recv.
+                        // Готовность без пакета: возвращаемся к приёму.
                         Ok(Readiness::Ready) => {}
                         Err(EINTR) => io.backoff(deadline.eintr_wait()),
                         Ok(Readiness::Timeout) => return RxStep::Idle,
@@ -286,6 +410,7 @@ impl<I: PacketIo> RxHalf<I> {
                     }
                     io.backoff(deadline.eintr_wait());
                 }
+                // Текст `recvfrom` прежний (тексты не меняются), хотя вызов теперь `recvmmsg`.
                 Err(e) => return RxStep::Fatal(errno_msg("recvfrom", e)),
             }
         }
@@ -298,7 +423,14 @@ impl<I: PacketIo> Rx for RxHalf<I> {
         let Some(io) = self.io.as_mut() else {
             return Err(closed_error());
         };
-        match Self::step(io, self.ifindex, &self.counters, buffer, &deadline) {
+        match Self::step(
+            io,
+            &mut self.ring,
+            self.ifindex,
+            &self.counters,
+            buffer,
+            &deadline,
+        ) {
             RxStep::Frame(n) => {
                 self.since_stats += 1;
                 if self.since_stats >= STATS_EVERY {
@@ -314,6 +446,7 @@ impl<I: PacketIo> Rx for RxHalf<I> {
                 Counters::bump(&self.counters.rx_errors);
                 self.flush_kernel_stats();
                 self.io = None;
+                self.ring.clear();
                 Err(IoError::new(msg))
             }
         }

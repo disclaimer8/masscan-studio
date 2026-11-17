@@ -1,20 +1,26 @@
 //! Private FFI-слой Linux AF_PACKET. Каждый syscall завернут в безопасную
 //! функцию/метод; наружу не выходят сырые указатели и неочищаемые ресурсы.
 //! `socket`, `poll` одного fd и `setsockopt` целого идут через общие
-//! примитивы `crate::unix_sys`; здесь остаются `bind`, `send`, `recvfrom`,
-//! `getsockopt` и ioctl интерфейса:
+//! примитивы `crate::unix_sys`; здесь остаются `bind`, `send`, `recvmmsg`
+//! (единственный приём: и пачка, и прямой `recv`), `getsockopt` и ioctl
+//! интерфейса:
 //!
 //! * fd всегда живёт в `OwnedFd` (закрывается в Drop ровно один раз);
 //! * все буферы это срезы Rust, длина берётся из самого среза;
-//! * `sockaddr_ll` собирается литералом структуры (все поля публичны);
-//!   нулями (`mem::zeroed`) инициализируется только `ifreq` (union);
+//! * `sockaddr_ll`, `iovec`, `msghdr` и `mmsghdr` собираются литералами
+//!   структур (все поля публичны); нулями (`mem::zeroed`) инициализируется
+//!   только `ifreq` (union);
 //! * других ресурсов libc, требующих освобождения, нет.
 
 use std::ffi::CString;
 use std::mem;
 use std::os::fd::{AsFd, AsRawFd, OwnedFd};
+use std::ptr;
 
-use super::{Errno, IfaceInfo, KernelStats, PacketIo, Readiness, RecvMeta};
+use super::{
+    Errno, IfaceInfo, KernelStats, PacketIo, RX_BATCH, RX_SLOT, Readiness, RecvMeta, SlotMeta,
+    batch_len,
+};
 use crate::unix_sys::{last_errno, poll_one, setsockopt_int, socket, socklen_of};
 
 /// Буфер приёма, который просит RX-сокет (P5): 4 MiB. С буфером по умолчанию (`net.core.rmem_default`, около
@@ -81,6 +87,34 @@ pub(super) struct PacketFd {
     fd: OwnedFd,
 }
 
+/// Куда [`PacketFd::recv_msgs`] кладёт сообщения.
+enum RecvInto<'a> {
+    /// Слоты кольца RX: сообщение `i` в `slots[i]`, `iov_len` ровно `RX_SLOT`.
+    Slots(&'a mut [[u8; RX_SLOT]]),
+    /// Один буфер вызывающего (прямой путь): `iov_len` — его длина.
+    One(&'a mut [u8]),
+}
+
+/// `iovec` без буфера: запись массива за пределами `vlen` вызова; ядро её не читает.
+const NO_IOV: libc::iovec = libc::iovec {
+    iov_base: ptr::null_mut(),
+    iov_len: 0,
+};
+
+/// `mmsghdr` без адреса и буфера: запись массива за пределами `vlen` вызова; ядро её не читает.
+const NO_MSG: libc::mmsghdr = libc::mmsghdr {
+    msg_hdr: libc::msghdr {
+        msg_name: ptr::null_mut(),
+        msg_namelen: 0,
+        msg_iov: ptr::null_mut(),
+        msg_iovlen: 0,
+        msg_control: ptr::null_mut(),
+        msg_controllen: 0,
+        msg_flags: 0,
+    },
+    msg_len: 0,
+};
+
 impl PacketFd {
     /// Создаёт сокет БЕЗ протокола (ничего не принимает до bind) и привязывает
     /// его к `ifindex`. `protocol_be == 0` для TX, `ETH_P_ALL_BE` для RX.
@@ -129,6 +163,93 @@ impl PacketFd {
         }
         Ok(PacketFd { fd })
     }
+
+    /// Единственный приём сокета: `recvmmsg` (MSG_TRUNC, таймаут NULL) до `batch_len` сообщений в слоты кольца или
+    /// одного сообщения в буфер вызывающего. `Ok(n)`, n ≥ 1: `metas[..n]` заполнены; пусто — `Err(EAGAIN)`.
+    /// Метаданные: длина — `msg_len` (истинная при MSG_TRUNC, может быть больше буфера), `pkttype` и `ifindex` — из
+    /// адреса; `msg_namelen` выставляется перед вызовом и проверяется после: адрес короче `SLL_MIN_LEN` даёт
+    /// `Err(EPROTO)` в слоте (без `pkttype` свой исходящий кадр не отличить). Ошибка не-EAGAIN после принятого
+    /// префикса: ядро отдаёт префикс, а ошибку — следующим вызовом; исход тот же, что у покадрового пути, на вызов
+    /// позже.
+    fn recv_msgs(&mut self, into: RecvInto<'_>, metas: &mut [SlotMeta]) -> Result<usize, Errno> {
+        let mut iov = [NO_IOV; RX_BATCH];
+        let n = match into {
+            RecvInto::Slots(slots) => {
+                let n = batch_len(slots.len(), metas.len())?;
+                for (v, slot) in iov.iter_mut().zip(slots.iter_mut()).take(n) {
+                    *v = libc::iovec {
+                        iov_base: slot.as_mut_ptr().cast::<libc::c_void>(),
+                        iov_len: slot.len(),
+                    };
+                }
+                n
+            }
+            RecvInto::One(buf) => {
+                let n = batch_len(1, metas.len())?;
+                iov[0] = libc::iovec {
+                    iov_base: buf.as_mut_ptr().cast::<libc::c_void>(),
+                    iov_len: buf.len(),
+                };
+                n
+            }
+        };
+        let mut addrs = [sockaddr_ll(0, 0, 0); RX_BATCH];
+        let mut msgs = [NO_MSG; RX_BATCH];
+        for ((m, addr), v) in msgs
+            .iter_mut()
+            .zip(addrs.iter_mut())
+            .zip(iov.iter_mut())
+            .take(n)
+        {
+            *m = libc::mmsghdr {
+                msg_hdr: libc::msghdr {
+                    msg_name: (&raw mut *addr).cast::<libc::c_void>(),
+                    msg_namelen: socklen_of::<libc::sockaddr_ll>(),
+                    msg_iov: &raw mut *v,
+                    msg_iovlen: 1,
+                    msg_control: ptr::null_mut(),
+                    msg_controllen: 0,
+                    msg_flags: 0,
+                },
+                msg_len: 0,
+            };
+        }
+        let vlen = libc::c_uint::try_from(n).map_err(|_| libc::EINVAL)?;
+        // SAFETY: ядру передаются первые `vlen` = n записей `msgs`, n = `batch_len(..)` ≤ RX_BATCH = длине `msgs`,
+        // `addrs` и `iov` (проверено выше). У каждой из этих записей `msg_iov` указывает на свой живой `iovec`
+        // (`msg_iovlen` 1), а тот — на свой слот `slots[i]` (i < n ≤ `slots.len()`) длиной ровно RX_SLOT или на буфер
+        // вызывающего с его длиной: ядро пишет в буфер не больше `iov_len` байт. `msg_name` указывает на свой живой
+        // `sockaddr_ll`, `msg_namelen` — его размер, ядро пишет не больше. Управляющих данных нет (NULL, 0), таймаут
+        // NULL. Массивы и буферы живут до конца вызова и не перемещаются; fd валиден (владеет OwnedFd).
+        let rc = unsafe {
+            libc::recvmmsg(
+                self.fd.as_raw_fd(),
+                msgs.as_mut_ptr(),
+                vlen,
+                libc::MSG_TRUNC,
+                ptr::null_mut(),
+            )
+        };
+        // Ядро возвращает не больше `vlen` сообщений и при `vlen` ≥ 1 не возвращает 0; оба случая всё же сводятся к
+        // контракту шва (не больше n, пусто — EAGAIN).
+        let got = usize::try_from(rc).map_err(|_| last_errno())?.min(n);
+        if got == 0 {
+            return Err(libc::EAGAIN);
+        }
+        for ((meta, m), addr) in metas.iter_mut().zip(&msgs).zip(&addrs).take(got) {
+            *meta = if usize::try_from(m.msg_hdr.msg_namelen).unwrap_or(usize::MAX) < SLL_MIN_LEN {
+                // Без pkttype нельзя отличить исходящий кадр: не выдаём его.
+                Err(libc::EPROTO)
+            } else {
+                Ok(RecvMeta {
+                    len: usize::try_from(m.msg_len).unwrap_or(usize::MAX),
+                    pkttype: addr.sll_pkttype,
+                    ifindex: addr.sll_ifindex,
+                })
+            };
+        }
+        Ok(got)
+    }
 }
 
 impl PacketIo for PacketFd {
@@ -147,32 +268,18 @@ impl PacketIo for PacketFd {
     }
 
     fn recv(&mut self, buf: &mut [u8]) -> Result<RecvMeta, Errno> {
-        let mut sll = sockaddr_ll(0, 0, 0);
-        let mut slen = socklen_of::<libc::sockaddr_ll>();
-        // SAFETY: буфер описан срезом (ptr+len одного объекта, ядро пишет не
-        // более len байт); `sll` и `slen` это живые локальные объекты, `slen`
-        // содержит их реальный размер. MSG_TRUNC заставляет вернуть
-        // ИСТИННУЮ длину кадра даже если он длиннее буфера.
-        let n = unsafe {
-            libc::recvfrom(
-                self.fd.as_raw_fd(),
-                buf.as_mut_ptr().cast::<libc::c_void>(),
-                buf.len(),
-                libc::MSG_TRUNC,
-                (&raw mut sll).cast::<libc::sockaddr>(),
-                &raw mut slen,
-            )
-        };
-        let len = usize::try_from(n).map_err(|_| last_errno())?;
-        if usize::try_from(slen).unwrap_or(usize::MAX) < SLL_MIN_LEN {
-            // Без pkttype нельзя отличить исходящий кадр: не выдаём его.
-            return Err(libc::EPROTO);
-        }
-        Ok(RecvMeta {
-            len,
-            pkttype: sll.sll_pkttype,
-            ifindex: sll.sll_ifindex,
-        })
+        let mut meta: [SlotMeta; 1] = [Err(libc::EAGAIN)];
+        self.recv_msgs(RecvInto::One(buf), &mut meta)?;
+        let [meta] = meta;
+        meta
+    }
+
+    fn recv_batch(
+        &mut self,
+        slots: &mut [[u8; RX_SLOT]],
+        metas: &mut [SlotMeta],
+    ) -> Result<usize, Errno> {
+        self.recv_msgs(RecvInto::Slots(slots), metas)
     }
 
     fn poll(&mut self, write: bool, timeout_ms: i32) -> Result<Readiness, Errno> {

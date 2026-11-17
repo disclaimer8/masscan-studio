@@ -7,12 +7,15 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use super::abi::errno::{EACCES, EBADF, EIO, ENETDOWN, ENODEV, ENOPROTOOPT, ENXIO, EPERM};
+use super::abi::errno::{EACCES, EBADF, EIO, ENETDOWN, ENODEV, ENOPROTOOPT, ENXIO, EPERM, EPROTO};
 use super::*;
 use crate::NetStats;
 
 const IFINDEX: u32 = 7;
 
+/// Запись очереди сокета: кадр `(данные, pkttype, ifindex)` или errno. `Err(EPROTO)` — запись с адресом короче
+/// `SLL_MIN_LEN`: настоящий сокет отдаёт её прямым `recv` как `Err(EPROTO)`, а внутри пачки `recv_batch` — как слот
+/// `Err(EPROTO)`, пачку она не прерывает. Любой другой errno — ошибка вызова.
 type ScriptedFrame = Result<(Vec<u8>, u8, i32), Errno>;
 
 #[derive(Default)]
@@ -27,7 +30,10 @@ struct Script {
     stats: VecDeque<Result<KernelStats, Errno>>,
     poll_ms: Vec<i32>,
     send_calls: usize,
+    /// Все вызовы приёма: прямые `recv` и пачки `recv_batch`.
     recv_calls: usize,
+    /// Из них пачки `recv_batch`.
+    batch_calls: usize,
     poll_calls: usize,
     /// Каждая запрошенная пауза после EINTR.
     backoffs: Vec<Duration>,
@@ -82,6 +88,46 @@ impl PacketIo for Fake {
                 })
             }
             Some(Err(e)) => Err(e),
+            None => Err(s.recv_forever.unwrap_or(EAGAIN)),
+        }
+    }
+    /// Пачка: подряд записи очереди (кадры и записи с коротким адресом) до первой ошибки или `batch_len`; ошибка в
+    /// голове очереди — `Err`, как у `recvmmsg`, который отдаёт принятый префикс, а ошибку — следующим вызовом.
+    fn recv_batch(
+        &mut self,
+        slots: &mut [[u8; RX_SLOT]],
+        metas: &mut [SlotMeta],
+    ) -> Result<usize, Errno> {
+        let n = batch_len(slots.len(), metas.len())?;
+        let mut s = self.s.lock().unwrap();
+        s.recv_calls += 1;
+        s.batch_calls += 1;
+        let mut got = 0;
+        while got < n {
+            let meta = match s.recvs.front() {
+                Some(Ok((data, pkttype, ifindex))) => {
+                    // Слот держит не больше RX_SLOT байт; MSG_TRUNC: истинная длина.
+                    let k = data.len().min(RX_SLOT);
+                    slots[got][..k].copy_from_slice(&data[..k]);
+                    Ok(RecvMeta {
+                        len: data.len(),
+                        pkttype: *pkttype,
+                        ifindex: *ifindex,
+                    })
+                }
+                Some(Err(EPROTO)) => Err(EPROTO),
+                _ => break,
+            };
+            s.recvs.pop_front();
+            metas[got] = meta;
+            got += 1;
+        }
+        if got > 0 {
+            return Ok(got);
+        }
+        match s.recvs.pop_front() {
+            Some(Err(e)) => Err(e),
+            Some(Ok(_)) => unreachable!("frames are taken into the batch above"),
             None => Err(s.recv_forever.unwrap_or(EAGAIN)),
         }
     }
@@ -724,6 +770,306 @@ fn health_after_fatal_error_reports_the_closed_adapter() {
     assert!(r.health(MS50).is_err(), "closed fd cannot prove integrity");
 }
 
+// ---------------------------------------------------------------- RX batch (recvmmsg)
+
+#[test]
+fn batch_len_never_asks_for_more_slots_than_fit() {
+    assert_eq!((RX_BATCH, RX_SLOT), (32, 2048));
+    assert_eq!(batch_len(0, RX_BATCH), Err(EINVAL));
+    assert_eq!(batch_len(RX_BATCH, 0), Err(EINVAL));
+    assert_eq!(batch_len(0, 0), Err(EINVAL));
+    assert_eq!(batch_len(1, 1), Ok(1));
+    assert_eq!(batch_len(3, 10), Ok(3));
+    assert_eq!(batch_len(10, 3), Ok(3));
+    assert_eq!(batch_len(RX_BATCH, RX_BATCH), Ok(RX_BATCH));
+    assert_eq!(batch_len(RX_BATCH + 1, 100), Ok(RX_BATCH));
+    assert_eq!(batch_len(usize::MAX, usize::MAX), Ok(RX_BATCH));
+    // The seam refuses an empty batch before it receives anything.
+    let (mut f, s, _) = fake(Script {
+        recvs: [frame(&[1])].into(),
+        ..Default::default()
+    });
+    let mut slots = [[0u8; RX_SLOT]; 2];
+    let mut metas = [Err(EAGAIN); RX_BATCH];
+    assert_eq!(f.recv_batch(&mut [], &mut metas), Err(EINVAL));
+    assert_eq!(f.recv_batch(&mut slots, &mut []), Err(EINVAL));
+    let s = s.lock().unwrap();
+    assert_eq!((s.recv_calls, s.recvs.len()), (0, 1), "nothing received");
+}
+
+#[test]
+fn rx_batch_delivers_buffered_frames_without_a_syscall() {
+    let (mut r, s, _, c) = rx(Script {
+        recvs: [frame(&[1]), frame(&[2, 2]), frame(&[3, 3, 3])].into(),
+        ..Default::default()
+    });
+    let mut buf = [0u8; RX_SLOT];
+    assert_eq!(r.recv(&mut buf, MS50), Ok(Some(1)));
+    assert_eq!(buf[0], 1);
+    {
+        let s = s.lock().unwrap();
+        assert_eq!((s.recv_calls, s.batch_calls, s.poll_calls), (1, 1, 0));
+        assert!(s.recvs.is_empty(), "one batch took the whole burst");
+    }
+    assert_eq!(r.recv(&mut buf, MS50), Ok(Some(2)));
+    assert_eq!(&buf[..2], &[2, 2]);
+    assert_eq!(r.recv(&mut buf, MS50), Ok(Some(3)));
+    assert_eq!(&buf[..3], &[3, 3, 3]);
+    {
+        let s = s.lock().unwrap();
+        assert_eq!(
+            (s.recv_calls, s.batch_calls, s.poll_calls),
+            (1, 1, 0),
+            "buffered frames need no syscall"
+        );
+    }
+    assert_eq!(snap(&c).rx_packets, 3);
+}
+
+/// `rx_packets`, `rx_outgoing`, `rx_wrong_interface`, `rx_truncated`, `rx_errors`.
+fn rx_counts(c: &Arc<Counters>) -> [u64; 5] {
+    let s = snap(c);
+    [
+        s.rx_packets,
+        s.rx_outgoing,
+        s.rx_wrong_interface,
+        s.rx_truncated,
+        s.rx_errors,
+    ]
+}
+
+/// Review Focus 1. Each scenario puts records of every kind into one batch: our own outgoing frame (a kernel without
+/// `PACKET_IGNORE_OUTGOING`), a frame of another ifindex, a frame longer than the caller's buffer, ordinary frames, a
+/// record with a short address (`EPROTO`), and a non-EAGAIN error after the received prefix.
+///
+/// The expectations below (frames in order, the five counters after each call, the `recvfrom: …` error on its call)
+/// were taken from the SAME scenarios on the base `5b0e9712`, where `RxHalf` called the per-frame `recv` of this fake
+/// once per record: a temporary probe test printed each call's result and counters and was then removed (its diff
+/// and log are with the task-13 evidence). Only the number of receive calls differs, by design, and is asserted
+/// separately: the base made one call per record.
+#[test]
+fn rx_batch_mixed_records_match_the_per_frame_path() {
+    let outgoing = |b: u8| Ok((vec![b; 10], PACKET_OUTGOING, IFINDEX as i32));
+    let foreign = |b: u8| Ok((vec![b; 10], 0, IFINDEX as i32 + 1));
+    let long = |b: u8| Ok((vec![b; 100], 0, IFINDEX as i32));
+    let closed = || Err(CLOSED.to_string());
+    let proto = || Err(format!("recvfrom: {}", os(EPROTO)));
+    // (script, per call: frame or error text and the counters after it, batch calls, records left unread)
+    type Calls = Vec<(Result<Vec<u8>, String>, [u64; 5])>;
+    let cases: Vec<(&str, Vec<ScriptedFrame>, Calls, usize, usize)> = vec![
+        (
+            // The short-address record is fatal on its own call; the frame behind it and the error are never
+            // delivered (they were in the batch or behind it, as they were in the socket queue on the base).
+            "short address",
+            vec![
+                outgoing(1),
+                foreign(2),
+                long(3),
+                frame(&[4, 4, 4]),
+                Err(EPROTO),
+                frame(&[5, 5]),
+                Err(ENETDOWN),
+            ],
+            vec![
+                (Ok(vec![4, 4, 4]), [1, 1, 1, 1, 0]),
+                (proto(), [1, 1, 1, 1, 1]),
+                (closed(), [1, 1, 1, 1, 1]),
+                (closed(), [1, 1, 1, 1, 1]),
+            ],
+            1,
+            1,
+        ),
+        (
+            // recvmmsg returns the prefix; the error comes with the next call, after the prefix is delivered.
+            "error after the prefix",
+            vec![
+                frame(&[1]),
+                outgoing(2),
+                foreign(3),
+                long(4),
+                frame(&[5, 5]),
+                Err(ENETDOWN),
+                frame(&[6]),
+            ],
+            vec![
+                (Ok(vec![1]), [1, 0, 0, 0, 0]),
+                (Ok(vec![5, 5]), [2, 1, 1, 1, 0]),
+                (Err(format!("recvfrom: {}", os(ENETDOWN))), [2, 1, 1, 1, 1]),
+                (closed(), [2, 1, 1, 1, 1]),
+            ],
+            2,
+            1,
+        ),
+        (
+            "short address at the head",
+            vec![Err(EPROTO), frame(&[1])],
+            vec![
+                (proto(), [0, 0, 0, 0, 1]),
+                (closed(), [0, 0, 0, 0, 1]),
+                (closed(), [0, 0, 0, 0, 1]),
+                (closed(), [0, 0, 0, 0, 1]),
+            ],
+            1,
+            0,
+        ),
+    ];
+    for (name, recvs, calls, batches, left) in cases {
+        let (mut r, s, _, c) = rx(Script {
+            recvs: recvs.into(),
+            ..Default::default()
+        });
+        for (i, (want, counts)) in calls.into_iter().enumerate() {
+            let mut buf = [0u8; 16];
+            let got = match r.recv(&mut buf, MS50) {
+                Ok(Some(n)) => Ok(buf[..n].to_vec()),
+                Ok(None) => Ok(Vec::new()),
+                Err(e) => Err(e.message),
+            };
+            assert_eq!(got, want, "{name}: call {}", i + 1);
+            assert_eq!(
+                rx_counts(&c),
+                counts,
+                "{name}: counters after call {}",
+                i + 1
+            );
+        }
+        let s = s.lock().unwrap();
+        assert_eq!(
+            (s.recv_calls, s.batch_calls, s.recvs.len()),
+            (batches, batches, left),
+            "{name}: receive calls"
+        );
+    }
+}
+
+#[test]
+fn rx_ring_is_drained_before_the_direct_path() {
+    let (mut r, s, _, c) = rx(Script {
+        recvs: [
+            frame(&[1]),
+            frame(&[7; RX_SLOT + 100]),
+            frame(&[2, 2]),
+            Err(EAGAIN),
+            frame(&[9; RX_SLOT + 100]),
+        ]
+        .into(),
+        polls: [Ok(Readiness::Ready)].into(),
+        ..Default::default()
+    });
+    let mut small = [0u8; 64];
+    let mut big = vec![0u8; 2 * RX_SLOT];
+    // A buffer no longer than a slot: one batch takes the three records before EAGAIN.
+    assert_eq!(r.recv(&mut small, MS50), Ok(Some(1)));
+    // A buffer longer than a slot while the ring holds records: the ring goes first, without a syscall. The record
+    // longer than a slot was cut to RX_SLOT bytes by the kernel, so it cannot be delivered whole: truncated.
+    assert_eq!(r.recv(&mut big, MS50), Ok(Some(2)));
+    assert_eq!(&big[..2], &[2, 2]);
+    {
+        let s = s.lock().unwrap();
+        assert_eq!((s.recv_calls, s.batch_calls), (1, 1));
+    }
+    assert_eq!(rx_counts(&c), [2, 0, 0, 1, 0]);
+    // The ring is empty: the direct path, which delivers a frame longer than a slot whole.
+    assert_eq!(r.recv(&mut big, MS50), Ok(Some(RX_SLOT + 100)));
+    assert!(big[..RX_SLOT + 100].iter().all(|&b| b == 9));
+    let s = s.lock().unwrap();
+    assert_eq!(
+        (s.recv_calls, s.batch_calls),
+        (3, 1),
+        "EAGAIN, then the frame"
+    );
+    assert_eq!(rx_counts(&c), [3, 0, 0, 1, 0]);
+}
+
+#[test]
+fn rx_caller_buffer_larger_than_a_slot_uses_the_direct_path() {
+    let (mut r, s, _, c) = rx(Script {
+        recvs: [
+            frame(&[7; RX_SLOT + 1]),
+            frame(&[8; 3 * RX_SLOT]),
+            frame(&[4; 10]),
+            frame(&[3; RX_SLOT]),
+        ]
+        .into(),
+        ..Default::default()
+    });
+    let mut big = vec![0u8; RX_SLOT + 1];
+    // Long-frame semantics as before, one receive per record: whole when it fits the caller's buffer, truncated
+    // when it does not.
+    assert_eq!(r.recv(&mut big, MS50), Ok(Some(RX_SLOT + 1)));
+    assert!(big.iter().all(|&b| b == 7));
+    assert_eq!(r.recv(&mut big, MS50), Ok(Some(10)));
+    assert_eq!(&big[..10], &[4; 10]);
+    {
+        let s = s.lock().unwrap();
+        assert_eq!((s.recv_calls, s.batch_calls), (3, 0));
+    }
+    assert_eq!(rx_counts(&c), [2, 0, 0, 1, 0]);
+    // A buffer of exactly one slot takes the batch path.
+    let mut slot = vec![0u8; RX_SLOT];
+    assert_eq!(r.recv(&mut slot, MS50), Ok(Some(RX_SLOT)));
+    assert!(slot.iter().all(|&b| b == 3));
+    let s = s.lock().unwrap();
+    assert_eq!((s.recv_calls, s.batch_calls), (4, 1));
+    assert_eq!(rx_counts(&c), [3, 0, 0, 1, 0]);
+}
+
+#[test]
+fn rx_batch_partial_fill_then_eagain_waits_until_the_deadline() {
+    let (mut r, s, _, c) = rx(Script {
+        recvs: [frame(&[1]), frame(&[2])].into(),
+        ..Default::default()
+    });
+    let mut buf = [0u8; 16];
+    assert_eq!(r.recv(&mut buf, MS50), Ok(Some(1)));
+    assert_eq!(r.recv(&mut buf, MS50), Ok(Some(1)));
+    assert_eq!(buf[0], 2);
+    assert_eq!(s.lock().unwrap().recv_calls, 1, "a partial batch of two");
+    let t0 = Instant::now();
+    assert_eq!(r.recv(&mut buf, Duration::from_millis(20)), Ok(None));
+    let e = t0.elapsed();
+    #[cfg(target_os = "linux")]
+    assert!(e >= Duration::from_millis(19), "{e:?}");
+    assert!(e < Duration::from_millis(20) + SLACK, "{e:?}");
+    let s = s.lock().unwrap();
+    assert_eq!(
+        s.recv_calls, s.batch_calls,
+        "a slot-sized buffer never takes the direct path"
+    );
+    assert!(s.poll_calls >= 1, "EAGAIN waits in poll");
+    assert!(s.recv_calls < 50, "must sleep in poll, not spin");
+    assert_eq!(snap(&c).rx_packets, 2);
+}
+
+/// Review Focus 5: `health` between batches makes a fresh `PACKET_STATISTICS` read, and the frames waiting in the
+/// ring come out after it, none lost and none counted twice.
+#[test]
+fn health_between_batches_reads_fresh_drops_and_keeps_buffered_frames() {
+    let (mut r, s, _, c) = rx(Script {
+        recvs: [frame(&[1]), frame(&[2]), frame(&[3])].into(),
+        stats: [ks(5), ks(2)].into(),
+        ..Default::default()
+    });
+    let mut buf = [0u8; 16];
+    assert_eq!(r.recv(&mut buf, MS50), Ok(Some(1)));
+    assert_eq!(r.health(MS50).unwrap().kernel_drops, Some(5));
+    assert_eq!(s.lock().unwrap().stats.len(), 1, "one fresh read");
+    assert_eq!(r.recv(&mut buf, MS50), Ok(Some(1)));
+    assert_eq!(buf[0], 2);
+    assert_eq!(r.recv(&mut buf, MS50), Ok(Some(1)));
+    assert_eq!(buf[0], 3);
+    assert_eq!(r.health(MS50).unwrap().kernel_drops, Some(7));
+    let st = snap(&c);
+    assert_eq!((st.rx_packets, st.kernel_drops), (3, Some(7)));
+    let s = s.lock().unwrap();
+    assert_eq!(
+        (s.recv_calls, s.batch_calls),
+        (1, 1),
+        "the buffered frames came without a new receive"
+    );
+    assert!(s.stats.is_empty(), "each health read the kernel once");
+}
+
 // ---------------------------------------------------------------- binding
 
 struct FakeIface {
@@ -1123,6 +1469,22 @@ impl PacketIo for BenchIo {
             pkttype: 0,
             ifindex: IFINDEX as i32,
         })
+    }
+    fn recv_batch(
+        &mut self,
+        slots: &mut [[u8; RX_SLOT]],
+        metas: &mut [SlotMeta],
+    ) -> Result<usize, Errno> {
+        let n = batch_len(slots.len(), metas.len())?;
+        for (slot, meta) in slots.iter_mut().zip(metas.iter_mut()).take(n) {
+            slot[..self.frame.len()].copy_from_slice(&self.frame);
+            *meta = Ok(RecvMeta {
+                len: self.frame.len(),
+                pkttype: 0,
+                ifindex: IFINDEX as i32,
+            });
+        }
+        Ok(n)
     }
     fn poll(&mut self, _write: bool, _timeout_ms: i32) -> Result<Readiness, Errno> {
         Ok(Readiness::Ready)

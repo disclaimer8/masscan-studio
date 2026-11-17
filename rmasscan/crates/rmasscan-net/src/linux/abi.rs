@@ -15,8 +15,8 @@ pub(crate) const PACKET_OUTGOING: u8 = 4;
 /// вид ошибки, общие с macOS и берутся из `adapter_common::errno`.
 ///
 /// Каждый номер собирается только там, где его читают, иначе clippy `-D warnings` отвергает тупиковый код на одной из
-/// ОС: номера только для тестов стоят под `cfg(test)`, а `EPROTO` и `ENOBUFS` сейчас читает одна сверка с `libc` на
-/// Linux.
+/// ОС: номера только для тестов стоят под `cfg(test)` (`EPROTO` — запись с коротким адресом в сценариях шва; сокет
+/// Linux берёт его из `libc`, как и прежде), а `ENOBUFS` сейчас читает одна сверка с `libc` на Linux.
 pub(crate) mod errno {
     pub(crate) use crate::adapter_common::errno::ENODEV;
     #[cfg(test)]
@@ -27,9 +27,11 @@ pub(crate) mod errno {
     pub(crate) const EIO: i32 = 5;
     pub(crate) const EBADF: i32 = 9;
     pub(crate) const EAGAIN: i32 = 11;
+    /// Пачка приёма без слотов или метаданных (`batch_len`).
+    pub(crate) const EINVAL: i32 = 22;
     /// На Linux равен `EAGAIN`.
     pub(crate) const EWOULDBLOCK: i32 = 11;
-    #[cfg(all(test, target_os = "linux"))]
+    #[cfg(test)]
     pub(crate) const EPROTO: i32 = 71;
     #[cfg(test)]
     pub(crate) const ENOPROTOOPT: i32 = 92;

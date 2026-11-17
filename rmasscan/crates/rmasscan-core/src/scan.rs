@@ -723,7 +723,7 @@ mod tests {
         );
     }
 
-    /// The base `TransmitIndices::next` verbatim (one `x %= range`): the reference for the reduction in `next`.
+    /// A copy of the base `TransmitIndices::next` (one `x %= range`): the reference the stream is pinned against.
     fn base_next(t: &mut TransmitIndices) -> Option<(u64, u64)> {
         if t.i >= t.end {
             return None;
@@ -740,7 +740,7 @@ mod tests {
     }
 
     /// main.c:328: `r * rate` wraps past 2^64 (rate 1.8e19, r up to 3), so every unreduced `xXx` is far above
-    /// `2 * range` and the reduction takes its general branch. The stream equals the base `next` pair by pair.
+    /// `2 * range`. The test pins the stream in that case: it equals the copy of the base `next` pair by pair.
     #[test]
     fn transmit_stream_with_wrapping_rate_term() {
         let (range, retries, rate) = (40u64, 2u32, 1.8e19);

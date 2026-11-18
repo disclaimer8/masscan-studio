@@ -28,6 +28,11 @@ use crate::unix_sys::{last_errno, poll_one, setsockopt_int, socket, socklen_of};
 /// переполняет очередь сокета, а движок считает любую потерю ядра фатальной (`RxLoss`).
 const RX_SOCKET_BUFFER: libc::c_int = 4 << 20;
 
+/// Буфер передачи, который просит TX-сокет (P3, решение пользователя): 4 MiB обычным `SO_SNDBUF`, ядро режет запрос
+/// до `net.core.wmem_max` и хранит удвоенное значение. На стенде veth эффект не измерим: поток TX там ни разу не ждал
+/// места в буфере (0 `poll` на 1000 кадров, `BENCHMARKS.md`, «Задача 17»).
+const TX_SOCKET_BUFFER: libc::c_int = 4 << 20;
+
 /// Запрос буфера приёма RX-сокета через `set(name, value)` = `setsockopt(SOL_SOCKET, name, value)`: сначала
 /// `SO_RCVBUFFORCE` (нужен CAP_NET_ADMIN, снимает предел `net.core.rmem_max`), при `EPERM` — `SO_RCVBUF` (ядро
 /// ограничивает его `rmem_max`). Ядро хранит и отдаёт `getsockopt` удвоенное значение. Возвращает итог последнего
@@ -159,6 +164,15 @@ impl PacketFd {
                 libc::SOL_PACKET,
                 libc::PACKET_IGNORE_OUTGOING,
                 1,
+            );
+        } else {
+            // Только TX-сокет (protocol 0), P3 по решению пользователя: буфер передачи 4 MiB. Отказ безвреден, как
+            // выше: сокет остаётся с буфером по умолчанию (`net.core.wmem_default`).
+            let _ = setsockopt_int(
+                fd.as_fd(),
+                libc::SOL_SOCKET,
+                libc::SO_SNDBUF,
+                TX_SOCKET_BUFFER,
             );
         }
         Ok(PacketFd { fd })

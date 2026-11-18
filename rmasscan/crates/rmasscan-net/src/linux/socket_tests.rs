@@ -7,7 +7,7 @@ use std::ffi::c_int;
 use std::mem;
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd};
 
-use super::{Errno, RX_SOCKET_BUFFER, ioctl_socket, request_rx_buffer};
+use super::{Errno, RX_SOCKET_BUFFER, TX_SOCKET_BUFFER, ioctl_socket, request_rx_buffer};
 // The helper of task 2b moved to the shared Unix primitives; these tests keep its old name.
 use crate::unix_sys::setsockopt_int as set_int_opt;
 
@@ -39,6 +39,13 @@ fn get_int_opt(fd: BorrowedFd<'_>, level: c_int, name: c_int) -> c_int {
 #[test]
 fn rx_socket_buffer_is_4_mib() {
     assert_eq!(RX_SOCKET_BUFFER, 4 * 1024 * 1024);
+}
+
+/// P3: the TX socket asks for the same 4 MiB as its send buffer (`SO_SNDBUF`); the read-back on a real TX socket is
+/// `lab_tx_socket_send_buffer_is_raised` in `tests/linux_io.rs`.
+#[test]
+fn tx_socket_buffer_is_4_mib() {
+    assert_eq!(TX_SOCKET_BUFFER, 4 * 1024 * 1024);
 }
 
 /// Without CAP_NET_ADMIN the kernel caps `SO_RCVBUF` at `net.core.rmem_max` and stores double the capped value, so

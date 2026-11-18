@@ -7,7 +7,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use super::abi::errno::{EACCES, EBADF, EIO, ENETDOWN, ENODEV, ENOPROTOOPT, ENXIO, EPERM, EPROTO};
+use super::abi::errno::{
+    EACCES, EBADF, EIO, ENETDOWN, ENOBUFS, ENODEV, ENOPROTOOPT, ENXIO, EPERM, EPROTO,
+};
 use super::*;
 use crate::NetStats;
 
@@ -476,6 +478,45 @@ fn tx_poll_failure_is_fatal() {
     assert!(dropped.load(Ordering::SeqCst));
 }
 
+/// P3: `ENOBUFS` — qdisc или драйвер отбросили кадр, ядро его не приняло. Как EINTR: пауза не больше
+/// [`EINTR_BACKOFF_MAX`] и не больше остатка, повтор до дедлайна вызова, затем `WouldBlockUnsent` (не фатальная
+/// ошибка), fd открыт. `poll(POLLOUT)` здесь не ждут: он сообщает о месте в буфере сокета, а не в очереди qdisc, и
+/// вернулся бы сразу. Так же на пути пачки.
+#[test]
+fn tx_enobufs_storm_backs_off_and_ends_unsent_at_the_deadline() {
+    let timeout = Duration::from_millis(20);
+    let (mut t, s, dropped, c) = tx(Script {
+        send_forever: Some(ENOBUFS),
+        ..Default::default()
+    });
+    assert_eq!(t.send(&FRAME, timeout), Ok(SendStatus::WouldBlockUnsent));
+    assert!(!dropped.load(Ordering::SeqCst), "ENOBUFS keeps the fd open");
+    assert_eq!(tx_counts(&c), [0, 1, 0, 0, 0, 0]);
+    {
+        let s = s.lock().unwrap();
+        assert!(s.send_calls > 1, "ENOBUFS is retried: {}", s.send_calls);
+        assert_eq!(s.poll_calls, 0, "ENOBUFS backs off instead of polling");
+        assert!(s.wire.is_empty());
+        assert_bounded_backoff(&s, s.send_calls, timeout);
+    }
+    let f = frames58(8);
+    let (mut t, s, dropped, c) = tx(Script {
+        send_forever: Some(ENOBUFS),
+        ..Default::default()
+    });
+    assert_eq!(
+        t.send_batch(&refs(&f), timeout),
+        Ok(batch(0, SendStatus::WouldBlockUnsent))
+    );
+    assert!(!dropped.load(Ordering::SeqCst), "ENOBUFS keeps the fd open");
+    assert!(t.deferred.is_none());
+    assert_eq!(tx_counts(&c), [0, 1, 0, 0, 1, 8]);
+    let s = s.lock().unwrap();
+    assert!(s.many_calls > 1, "ENOBUFS is retried: {}", s.many_calls);
+    assert_eq!((s.poll_calls, s.send_calls), (0, 0));
+    assert_bounded_backoff(&s, s.many_calls, timeout);
+}
+
 // ---------------------------------------------------------------- TX batches (sendmmsg)
 
 /// `n` frames of 58 bytes, each different: bytes 0 and 1 are the frame number.
@@ -662,6 +703,86 @@ fn tx_batch_lost_error_is_resolved_by_reissue_within_one_deadline() {
     assert!(polled <= 50, "one deadline for the call: {:?}", s.poll_ms);
     assert_eq!(s.poll_calls, 1);
     assert_eq!(tx_counts(&c), [3, 1, 0, 0, 1, 8]);
+}
+
+/// P3, пачка: `sendmmsg` принял 3 из 8 и потерял `ENOBUFS` кадра 3; повтор с кадра 3 получает его и, как EAGAIN, не
+/// становится отложенной фатальной ошибкой: короткая пауза и повтор в том же дедлайне. Однократный `ENOBUFS` — все
+/// кадры доходят до сокета по разу, по порядку; бесконечный — префикс засчитан, остаток `WouldBlockUnsent`, fd открыт,
+/// исход и счётчики те же, что у EAGAIN, а следующий вызов снова идёт в ядро.
+#[test]
+fn tx_batch_enobufs_after_a_prefix_is_retried_like_eagain() {
+    let f = frames58(8);
+    let (mut t, s, dropped, c) = tx(Script {
+        sends: ok58(3)
+            .chain([Err(ENOBUFS), Err(ENOBUFS)])
+            .chain(ok58(5))
+            .collect(),
+        ..Default::default()
+    });
+    assert_eq!(
+        t.send_batch(&refs(&f), MS50),
+        Ok(batch(8, SendStatus::Sent))
+    );
+    assert!(!dropped.load(Ordering::SeqCst));
+    assert!(t.deferred.is_none());
+    {
+        let s = s.lock().unwrap();
+        assert_eq!(s.wire, f, "every frame once, in order");
+        assert_eq!(
+            s.many_offered,
+            vec![f.clone(), f[3..].to_vec(), f[3..].to_vec(), f[3..].to_vec()]
+        );
+        assert_eq!((s.poll_calls, s.send_calls), (0, 0));
+        assert_eq!(s.backoffs.len(), 2, "one pause per ENOBUFS");
+        assert!(s.backoffs.iter().all(|w| *w <= EINTR_BACKOFF_MAX));
+    }
+    assert_eq!(tx_counts(&c), [8, 0, 0, 0, 1, 8]);
+
+    // ENOBUFS forever after the prefix ends like EAGAIN forever after the prefix.
+    let timeout = Duration::from_millis(20);
+    let mut ends = Vec::new();
+    for e in [EAGAIN, ENOBUFS] {
+        let (mut t, s, dropped, c) = tx(Script {
+            sends: ok58(3).collect(),
+            send_forever: Some(e),
+            ..Default::default()
+        });
+        let got = t.send_batch(&refs(&f), timeout);
+        assert!(
+            !dropped.load(Ordering::SeqCst),
+            "errno {e}: the fd stays open"
+        );
+        assert!(t.deferred.is_none(), "errno {e}: nothing deferred");
+        {
+            let s = s.lock().unwrap();
+            assert_eq!(s.wire, f[..3].to_vec(), "errno {e}: the prefix once");
+            if e == ENOBUFS {
+                assert_eq!(s.poll_calls, 0);
+                assert_bounded_backoff(&s, s.many_calls - 1, timeout);
+            }
+        }
+        ends.push((got, tx_counts(&c)));
+        // The next call goes to the kernel again.
+        {
+            let mut s = s.lock().unwrap();
+            s.send_forever = None;
+            s.sends = ok58(5).collect();
+        }
+        assert_eq!(
+            t.send_batch(&refs(&f[3..]), MS50),
+            Ok(batch(5, SendStatus::Sent)),
+            "errno {e}"
+        );
+        assert_eq!(s.lock().unwrap().wire, f, "errno {e}");
+    }
+    assert_eq!(ends[0], ends[1], "EAGAIN vs ENOBUFS");
+    assert_eq!(
+        ends[1],
+        (
+            Ok(batch(3, SendStatus::WouldBlockUnsent)),
+            [3, 1, 0, 0, 1, 8]
+        )
+    );
 }
 
 #[test]
@@ -1042,6 +1163,20 @@ fn tx_cases(n: usize, caps: bool) -> Vec<TxCase> {
             format!("EINTR forever from {p}"),
             pre(),
             Some(EINTR),
+            vec![],
+            vec![],
+        );
+        add(
+            format!("ENOBUFS once at {p}"),
+            with(&[Err(ENOBUFS), Ok(58)], tail()),
+            None,
+            vec![],
+            vec![],
+        );
+        add(
+            format!("ENOBUFS forever from {p}"),
+            pre(),
+            Some(ENOBUFS),
             vec![],
             vec![],
         );

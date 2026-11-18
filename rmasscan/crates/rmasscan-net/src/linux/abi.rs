@@ -16,7 +16,7 @@ pub(crate) const PACKET_OUTGOING: u8 = 4;
 ///
 /// Каждый номер собирается только там, где его читают, иначе clippy `-D warnings` отвергает тупиковый код на одной из
 /// ОС: номера только для тестов стоят под `cfg(test)` (`EPROTO` — запись с коротким адресом в сценариях шва; сокет
-/// Linux берёт его из `libc`, как и прежде), а `ENOBUFS` сейчас читает одна сверка с `libc` на Linux.
+/// Linux берёт его из `libc`, как и прежде).
 pub(crate) mod errno {
     pub(crate) use crate::adapter_common::errno::ENODEV;
     #[cfg(test)]
@@ -37,6 +37,6 @@ pub(crate) mod errno {
     pub(crate) const ENOPROTOOPT: i32 = 92;
     #[cfg(test)]
     pub(crate) const ENETDOWN: i32 = 100;
-    #[cfg(all(test, target_os = "linux"))]
+    /// Передача: qdisc или драйвер отбросили кадр (`TxHalf`, P3).
     pub(crate) const ENOBUFS: i32 = 105;
 }

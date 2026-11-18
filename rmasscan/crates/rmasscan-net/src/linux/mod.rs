@@ -32,7 +32,7 @@ use crate::{Counters, NetError, NetStatsHandle};
 
 // Номера Linux без `libc`: errno, `ARPHRD_ETHER`, `PACKET_OUTGOING`.
 mod abi;
-use abi::errno::{EAGAIN, EBADF, EINTR, EINVAL, EIO, ENODEV, EWOULDBLOCK};
+use abi::errno::{EAGAIN, EBADF, EINTR, EINVAL, EIO, ENOBUFS, ENODEV, EWOULDBLOCK};
 use abi::{ARPHRD_ETHER, PACKET_OUTGOING};
 
 #[cfg(target_os = "linux")]
@@ -111,7 +111,7 @@ pub(crate) trait PacketIo: Send {
     fn poll(&mut self, write: bool, timeout_ms: i32) -> Result<Readiness, Errno>;
     /// PACKET_STATISTICS: ядро сбрасывает счётчики при чтении.
     fn packet_stats(&mut self) -> Result<KernelStats, Errno>;
-    /// Пауза между повторами после EINTR. `wait` уже ограничена остатком
+    /// Пауза между повторами после EINTR или `ENOBUFS` передачи. `wait` уже ограничена остатком
     /// дедлайна и [`EINTR_BACKOFF_MAX`]. Реализация обязана реально ждать
     /// (иначе цикл крутится); тесты считают вызовы и сумму `wait`.
     fn backoff(&mut self, wait: Duration);
@@ -125,7 +125,7 @@ pub(crate) trait IfaceInfo {
     fn link_family(&self, name: &str) -> Result<u16, Errno>;
 }
 
-/// Максимальная пауза между повторами после EINTR (против busy-spin).
+/// Максимальная пауза между повторами после EINTR и `ENOBUFS` передачи (против busy-spin).
 pub(crate) const EINTR_BACKOFF_MAX: Duration = Duration::from_millis(1);
 /// Раз в столько принятых кадров забираем статистику ядра.
 const STATS_EVERY: u64 = 4096;
@@ -201,8 +201,9 @@ impl<I: PacketIo> TxHalf<I> {
         }
     }
 
-    /// Ошибка `send`/`sendmmsg` на кадре, одна для одиночного пути и пачки. EAGAIN/EINTR: ядро не приняло ни байта
-    /// кадра; EAGAIN ждёт `poll(POLLOUT)` до дедлайна вызова, EINTR — паузу не больше [`EINTR_BACKOFF_MAX`].
+    /// Ошибка `send`/`sendmmsg` на кадре, одна для одиночного пути и пачки. EAGAIN/EINTR/`ENOBUFS`: ядро не приняло
+    /// кадр; EAGAIN ждёт `poll(POLLOUT)` до дедлайна вызова, EINTR и `ENOBUFS` — паузу не больше [`EINTR_BACKOFF_MAX`].
+    /// По истечении дедлайна — `WouldBlockUnsent`.
     fn on_send_error(io: &mut I, e: Errno, deadline: &Deadline) -> Retry {
         if is_again(e) {
             if deadline.expired() {
@@ -219,9 +220,11 @@ impl<I: PacketIo> TxHalf<I> {
                 Err(e) => Retry::Fatal(errno_msg("poll(POLLOUT)", e)),
             };
         }
-        if e == EINTR {
-            // POSIX: send(), прерванный до передачи первого байта, ничего не
-            // отправил, поэтому WouldBlockUnsent (не Uncertain) безопасен.
+        // EINTR — POSIX: send(), прерванный до передачи первого байта, ничего не отправил. ENOBUFS (P3) — qdisc
+        // интерфейса или драйвер отбросили кадр (или ядру не хватило памяти на него): кадр не ушёл. В обоих случаях
+        // WouldBlockUnsent (не Uncertain) безопасен. ENOBUFS ждёт паузу, а не `poll(POLLOUT)`: тот сообщает о месте в
+        // буфере сокета, а не в очереди qdisc, и вернулся бы сразу.
+        if e == EINTR || e == ENOBUFS {
             if deadline.expired() {
                 return Retry::Unsent;
             }

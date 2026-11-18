@@ -138,7 +138,7 @@ that stops early makes the whole batch `Uncertain` (the run fails with `TxUncert
 retry), because the byte count alone does not prove which frames reached the wire. Driver calls that exceed
 the 50 ms contract (`MAX_IO_TIMEOUT`) are counted in `net.tx_over_budget`, and any non-zero count fails
 acceptance; a call between `IO_BUDGET` (42 ms) and 50 ms is not counted. The Windows adapter times both the
-`pcap_sendpacket` and the sendqueue path; the `single` adapters (Linux, macOS) do not measure it. `identity.tx_mode` (`sendqueue` or `single`) and
+`pcap_sendpacket` and the sendqueue path; the macOS adapter (`single`) and the Linux adapter (`sendqueue` through `sendmmsg`, batches of up to 64 frames) do not measure it. `identity.tx_mode` (`sendqueue` or `single`) and
 `identity.tx_batch_cap`, and `net.tx_batches`, `net.tx_batch_max`, `net.tx_over_budget`, tell the verifier
 which path ran. On a run with uncertain frames the wire check is `tx_sent <= SYN on wire <= tx_sent +
 tx_uncertain`; everywhere else `tx_sent` equals the SYN count on the wire.

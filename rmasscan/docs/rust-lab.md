@@ -264,6 +264,14 @@ compare row by row. `--tx-mode sendqueue|single` (default `sendqueue`) is the TX
 must find in `identity.tx_mode`; it only records `tx_mode_expected` in `manifest.json` and does not
 change what runs on the guest. A directory keeps the mode it was started with.
 
+Linux reports `tx_mode` `sendqueue` too (since 2026-11): its adapter sends batches of up to 64 frames with one
+`sendmmsg` (`identity.tx_batch_cap` 64; `net.tx_batches` and `net.tx_batch_max` count the calls of two or more frames,
+which the engine forms only when its throttle window holds more than one frame), retrying from the first frame the
+kernel did not take. Linux does not measure `tx_over_budget` (always 0, which is
+not evidence), so the call budget rule below does not apply to Linux; the checks below apply only to Windows directories
+whose manifest has `tx_mode_expected`. The Linux suite (`wire_suite.rs`) checks `tx_sent`, `tx_uncertain`, `tx_errors`
+and the pause boundaries, not the TX mode.
+
 ```sh
 rmasscan/target/release/rmasscan-lab windows-suite \
   --out docs/experiments/2026-10-25-rmasscan-windows-sendqueue-acceptance-raw/perf-r2 \

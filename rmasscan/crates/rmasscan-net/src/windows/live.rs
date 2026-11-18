@@ -2242,7 +2242,7 @@ fn live_rx_event_wait_budget_latency_and_idle_cpu() {
         .chain(slacks.iter().map(|s| P2Mode::Event(*s)))
         .collect();
     let mut conds = vec!["quiet", "junk"];
-    if rep % 2 == 0 {
+    if rep.is_multiple_of(2) {
         modes.reverse();
         conds.reverse();
     }

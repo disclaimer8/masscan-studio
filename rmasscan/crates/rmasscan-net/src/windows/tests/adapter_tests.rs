@@ -14,7 +14,8 @@ use rmasscan_core::receive::{PortStatus, parse_reply};
 use rmasscan_core::targets::{add_target_string, parse_ports};
 use rmasscan_engine::fake::reply_to_syn;
 use rmasscan_engine::{
-    AdapterPair, Engine, EngineOptions, Event, FailReason, IoError, Reason, SendStatus, Tx, TxBatch,
+    AdapterPair, Engine, EngineOptions, Event, FailReason, IoError, Reason, Rx, SendStatus, Tx,
+    TxBatch,
 };
 
 use super::fake::*;
@@ -23,10 +24,11 @@ use crate::NetError;
 use crate::TxMode;
 use crate::adapter_common::mac_text;
 use crate::windows::adapter::{
-    IO_BUDGET, MAX_TX_FRAME, MIN_TX_FRAME, TX_BATCH_FRAMES, TX_QUEUE_BYTES, batch_outcome,
-    check_binding, open_with,
+    EVENT_SLACK, EVENT_WAIT_SLICE, IO_BUDGET, MAX_TX_FRAME, MIN_TX_FRAME, RxHalf, TX_BATCH_FRAMES,
+    TX_QUEUE_BYTES, batch_outcome, check_binding, open_with,
 };
-use crate::windows::ffi::SENDQUEUE_RECORD_HEADER;
+use crate::windows::ffi::{REQUIRED_SYMBOLS, SENDQUEUE_RECORD_HEADER, SYM_PCAP_GETEVENT};
+use crate::windows::handle::PcapHandle;
 use crate::windows::loader::{ApiSlot, NpcapApi};
 
 const OUR_MAC: [u8; 6] = [0x52, 0x54, 0x00, 0x04, 0x80, 0xa9];
@@ -638,6 +640,275 @@ fn next_ex_error_and_eof_are_fatal_and_carry_the_driver_text() {
     let mut a = open_pair(&api);
     let e = a.io.rx.recv(&mut b, Duration::from_millis(50)).unwrap_err();
     assert!(e.message.contains("EOF"), "{e:?}");
+}
+
+// ---------- RX: событие чтения Npcap (P2), виртуальные часы ----------
+
+/// RX-половина на виртуальных часах сценария (`FakeClock`) над handle подставной библиотеки.
+fn clocked_rx(api: &Arc<NpcapApi>) -> RxHalf<FakeClock> {
+    let h = PcapHandle::open(api, &super::dev(DEV1), super::PARAMS).unwrap();
+    RxHalf::with_clock(
+        h,
+        OUR_MAC,
+        Arc::new(crate::Counters::default()),
+        0,
+        FakeClock,
+    )
+}
+
+/// Цена одного или нескольких вызовов RX в подставной библиотеке и на виртуальных часах.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RxCost {
+    next_ex: usize,
+    sleeps: usize,
+    yields: usize,
+    /// Вызовы функции ожидания события.
+    waits: usize,
+    /// Виртуальное время.
+    elapsed: Duration,
+}
+
+fn rx_cost(f: impl FnOnce()) -> RxCost {
+    let snap = || with_ret(|s| (s.next_calls, s.sleeps, s.yields, s.waits.len(), s.vtime));
+    let a = snap();
+    f();
+    let b = snap();
+    RxCost {
+        next_ex: b.0 - a.0,
+        sleeps: b.1 - a.1,
+        yields: b.2 - a.2,
+        waits: b.3 - a.3,
+        elapsed: b.4 - a.4,
+    }
+}
+
+/// Один пустой `recv(50 мс)` прежним опросом: дедлайн 42 мс; 39 снов по 1 мс, пока остаток больше 3 мс, затем 30
+/// уступок по 0,1 мс; `pcap_next_ex` перед каждой паузой и последний на дедлайне.
+const POLL_IDLE_50MS: RxCost = RxCost {
+    next_ex: 70,
+    sleeps: 39,
+    yields: 30,
+    waits: 0,
+    elapsed: Duration::from_millis(42),
+};
+
+#[test]
+fn pcap_getevent_is_optional_not_required() {
+    assert!(
+        !REQUIRED_SYMBOLS.contains(&SYM_PCAP_GETEVENT),
+        "an old wpcap without pcap_getevent must not become MissingCapability"
+    );
+    // Подставная библиотека по умолчанию это старый wpcap без символа.
+    reset(|_| {});
+    assert!(symbol_addr(SYM_PCAP_GETEVENT).is_none());
+    assert!(good_api().rx_event().is_none());
+    // Символ есть: таблица ожидания разрешена, но событие берётся у `pcap_t` только при первом ожидании.
+    reset(|s| s.event = EventMode::Data);
+    let api = good_api();
+    assert!(api.rx_event().is_some());
+    let _rx = clocked_rx(&api);
+    assert_eq!(with_ret(|s| s.getevent_calls), 0, "not at load or open");
+    drop(_rx);
+    drop(api);
+    // Отсутствие и нулевой адрес необязательного символа это «нет события», а не отказ загрузки.
+    for l in [
+        super::FakeLoader {
+            result: Ok(vec![SYM_PCAP_GETEVENT]),
+            ..super::FakeLoader::ok()
+        },
+        super::FakeLoader {
+            null_syms: vec![SYM_PCAP_GETEVENT],
+            ..super::FakeLoader::ok()
+        },
+    ] {
+        let api = NpcapApi::load_with(&l, GOOD_PATH).expect("pcap_getevent is optional");
+        assert!(api.rx_event().is_none());
+    }
+}
+
+#[test]
+fn missing_or_null_event_falls_back_to_one_ms_polling() {
+    // Старый wpcap без `pcap_getevent`: ни одного ожидания, опрос прежний.
+    reset(|_| {});
+    let api = good_api();
+    let mut rx = clocked_rx(&api);
+    let mut b = buf();
+    let mut got = None;
+    let cost = rx_cost(|| got = Some(rx.recv(&mut b, T50).unwrap()));
+    assert_eq!(got, Some(None));
+    assert_eq!(cost, POLL_IDLE_50MS, "no pcap_getevent");
+    assert_eq!(with_ret(|s| s.getevent_calls), 0);
+    // NULL и INVALID_HANDLE_VALUE: событие спрашивается один раз на handle, ожиданий нет, опрос тот же.
+    for addr in [0, usize::MAX] {
+        reset(|s| s.event = EventMode::Handle(addr));
+        let api = good_api();
+        let mut rx = clocked_rx(&api);
+        for round in 0..2 {
+            let mut got = None;
+            let cost = rx_cost(|| got = Some(rx.recv(&mut b, T50).unwrap()));
+            assert_eq!(got, Some(None));
+            assert_eq!(cost, POLL_IDLE_50MS, "event {addr:#x}, recv {round}");
+        }
+        assert_eq!(with_ret(|s| s.getevent_calls), 1, "event {addr:#x}");
+        assert_eq!(with_ret(|s| s.waits.clone()), vec![], "event {addr:#x}");
+    }
+}
+
+#[test]
+fn event_wait_never_asks_past_the_slack_or_the_slice() {
+    reset(|s| s.event = EventMode::Data);
+    let api = good_api();
+    let mut rx = clocked_rx(&api);
+    let mut b = buf();
+    for timeout_ms in [50, 42, 20, 5] {
+        let timeout = Duration::from_millis(timeout_ms);
+        let budget = timeout.min(IO_BUDGET);
+        let start = with_ret(|s| {
+            s.waits.clear();
+            s.vtime
+        });
+        let deadline = start + budget;
+        assert_eq!(rx.recv(&mut b, timeout).unwrap(), None);
+        let waits = with_ret(|s| s.waits.clone());
+        for &(at, ms) in &waits {
+            let left = deadline - at;
+            assert!(
+                left > EVENT_SLACK,
+                "timeout {timeout_ms}: waited with {left:?} left: {waits:?}"
+            );
+            let cap = (left - EVENT_SLACK).min(EVENT_WAIT_SLICE);
+            assert!(
+                ms >= 1 && Duration::from_millis(u64::from(ms)) <= cap,
+                "timeout {timeout_ms}: asked {ms} ms with {left:?} left: {waits:?}"
+            );
+        }
+        // Ожидания доходят ровно до запаса (здесь всё в целых мс), последние EVENT_SLACK идут опросом.
+        let waited: u64 = waits.iter().map(|w| u64::from(w.1)).sum();
+        assert_eq!(
+            Duration::from_millis(waited),
+            budget.saturating_sub(EVENT_SLACK),
+            "timeout {timeout_ms}: {waits:?}"
+        );
+        assert_eq!(
+            with_ret(|s| s.vtime) - start,
+            budget,
+            "timeout {timeout_ms}"
+        );
+    }
+}
+
+#[test]
+fn signalled_but_empty_event_does_not_spin() {
+    reset(|_| {});
+    // Настоящее время после замка сериализации, который берёт `reset`.
+    let real = Instant::now();
+    // (а) опрос без события и (б) событие, сигнальное и при пустом буфере, на одном сценарии.
+    let polling_api = good_api();
+    with(|s| s.event = EventMode::AlwaysSignaled);
+    let event_api = good_api();
+    assert!(polling_api.rx_event().is_none() && event_api.rx_event().is_some());
+    let (mut polling, mut event) = (clocked_rx(&polling_api), clocked_rx(&event_api));
+    let mut b = buf();
+    let mut got = (None, None);
+    let a = rx_cost(|| got.0 = Some(polling.recv(&mut b, T50).unwrap()));
+    let e = rx_cost(|| got.1 = Some(event.recv(&mut b, T50).unwrap()));
+    assert_eq!(got, (Some(None), Some(None)));
+    assert_eq!(a, POLL_IDLE_50MS);
+    assert!(a.next_ex + 3 >= e.next_ex, "pcap_next_ex: {e:?} vs {a:?}");
+    assert!(a.waits + 3 >= e.waits, "waits: {e:?} vs {a:?}");
+    assert!(
+        a.elapsed <= IO_BUDGET && e.elapsed <= IO_BUDGET,
+        "{a:?} {e:?}"
+    );
+    // Три пустых сигнала подряд выключили событие этой половины до конца: дальше прежний опрос.
+    let again = rx_cost(|| assert_eq!(event.recv(&mut b, T50).unwrap(), None));
+    assert_eq!(again, POLL_IDLE_50MS);
+    assert!(
+        real.elapsed() < Duration::from_secs(1),
+        "{:?}",
+        real.elapsed()
+    );
+}
+
+#[test]
+fn signalled_event_delivers_the_frame_without_sleeping() {
+    let at = Duration::from_millis(5);
+    reset(|s| {
+        s.event = EventMode::Data;
+        s.arrivals.push_back((at, NextStep::Frame(peer_frame(64))));
+    });
+    let api = good_api();
+    let mut rx = clocked_rx(&api);
+    let mut b = buf();
+    let mut got = None;
+    let cost = rx_cost(|| got = rx.recv(&mut b, T50).unwrap());
+    assert_eq!(got, Some(64));
+    assert_eq!(b[..64], peer_frame(64)[..]);
+    assert_eq!(
+        cost,
+        RxCost {
+            next_ex: 2,
+            sleeps: 0,
+            yields: 0,
+            waits: 1,
+            elapsed: at,
+        }
+    );
+}
+
+#[test]
+fn wait_failure_disables_the_event_for_this_half() {
+    // WAIT_FAILED, WAIT_ABANDONED, WAIT_OBJECT_0 + 1: всё, кроме сигнала и таймаута, это отказ.
+    for rc in [u32::MAX, 0x80, 1] {
+        reset(|s| s.event = EventMode::WaitRc(rc));
+        let api = good_api();
+        let mut failed = clocked_rx(&api);
+        let mut b = buf();
+        let first = rx_cost(|| assert_eq!(failed.recv(&mut b, T50).unwrap(), None));
+        assert_eq!(
+            first,
+            RxCost {
+                waits: 1,
+                ..POLL_IDLE_50MS
+            },
+            "rc {rc:#x}"
+        );
+        // Выключено до конца этой половины, даже когда событие снова работает; новая половина его ждёт.
+        with(|s| s.event = EventMode::Data);
+        let later = rx_cost(|| assert_eq!(failed.recv(&mut b, T50).unwrap(), None));
+        assert_eq!(later, POLL_IDLE_50MS, "rc {rc:#x}");
+        let mut other = clocked_rx(&api);
+        let fresh = rx_cost(|| assert_eq!(other.recv(&mut b, T50).unwrap(), None));
+        assert!(fresh.waits > 0, "rc {rc:#x}: {fresh:?}");
+    }
+}
+
+#[test]
+fn idle_recv_with_event_returns_within_the_budget() {
+    reset(|s| s.event = EventMode::Data);
+    // Настоящее время после замка сериализации, который берёт `reset`.
+    let real = Instant::now();
+    let api = good_api();
+    let mut rx = clocked_rx(&api);
+    let mut b = buf();
+    for timeout in [
+        T50,
+        Duration::from_secs(5),
+        Duration::from_millis(20),
+        Duration::from_millis(5),
+        Duration::ZERO,
+    ] {
+        let cost = rx_cost(|| assert_eq!(rx.recv(&mut b, timeout).unwrap(), None));
+        assert!(
+            cost.elapsed <= timeout.min(IO_BUDGET),
+            "{timeout:?}: {cost:?}"
+        );
+    }
+    assert!(
+        real.elapsed() < Duration::from_secs(1),
+        "{:?}",
+        real.elapsed()
+    );
 }
 
 // ---------- TX ----------

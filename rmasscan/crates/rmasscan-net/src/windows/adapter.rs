@@ -9,7 +9,10 @@
 //!   спайку (запас не менее 7.2 мс над худшим измеренным срывом планировщика);
 //!   контракт 50 мс не повышается. Мусор (свои кадры, усечённые кадры)
 //!   дедлайн не продлевает. Кадр копируется в буфер вызывающего внутри
-//!   `PcapHandle::poll_into` до любого следующего вызова pcap.
+//!   `PcapHandle::poll_into` до любого следующего вызова pcap. Между пустыми
+//!   чтениями RX ждёт событие чтения Npcap (`pcap_getevent`), если оно есть, а
+//!   последние `EVENT_SLACK` бюджета и без события опрашивает, как прежде
+//!   (см. [`RxHalf`]).
 //! * TX синхронный и НЕ отменяемый: `pcap_sendpacket` rc 0 → `Sent`, любой
 //!   другой rc → `Uncertain` (исход неизвестен, повтора нет, checkpoint
 //!   запрещён). Пачка из 2…`TX_BATCH_FRAMES` кадров идёт одним
@@ -52,7 +55,7 @@ use rmasscan_engine::{
 };
 
 use super::ffi::SENDQUEUE_RECORD_HEADER;
-use super::handle::{OpenParams, PcapHandle, Polled, SendQueue, resolve_device};
+use super::handle::{EventWait, OpenParams, PcapHandle, Polled, SendQueue, resolve_device};
 use super::loader::NpcapApi;
 use crate::adapter_common::{check_binding as common_check_binding, closed_error, mac_text};
 use crate::drop_counter::DropCounter;
@@ -91,6 +94,37 @@ const TX_BUFFER_BYTES: i32 = 65_536;
 /// До этого остатка спим по 1 мс, затем отдаём квант (`yield_now`): так
 /// измерен спайк (Hybrid), без активного кручения на всём дедлайне.
 const SPIN_BELOW: Duration = Duration::from_millis(3);
+/// Последние `EVENT_SLACK` бюджета RX всегда идут опросом: ожидание события Windows может кончиться на такт таймера
+/// позже запрошенного (такт по умолчанию 15,625 мс), поэтому бюджет `IO_BUDGET` держится при любом такте.
+pub(crate) const EVENT_SLACK: Duration = Duration::from_millis(16);
+/// Самое долгое одно ожидание события: потерянное пробуждение стоит не больше одного среза.
+pub(crate) const EVENT_WAIT_SLICE: Duration = Duration::from_millis(10);
+/// Столько сигналов подряд, за которыми сразу пусто, выключают событие этой RX-половины до конца.
+const EVENT_EMPTY_SIGNALS: u8 = 3;
+
+/// Шов часов RX: настоящие часы ОС ([`SysClock`]) или виртуальные часы тестов.
+pub(crate) trait RxClock: Send {
+    fn now(&mut self) -> Instant;
+    fn sleep(&mut self, d: Duration);
+    fn yield_now(&mut self);
+}
+
+/// Часы ОС: `Instant::now`, `thread::sleep`, `thread::yield_now` (путь опроса с ними тот же, что без шва).
+pub(crate) struct SysClock;
+
+impl RxClock for SysClock {
+    fn now(&mut self) -> Instant {
+        Instant::now()
+    }
+
+    fn sleep(&mut self, d: Duration) {
+        std::thread::sleep(d);
+    }
+
+    fn yield_now(&mut self) {
+        std::thread::yield_now();
+    }
+}
 
 fn publish_drops(counters: &Counters, total: u64) {
     counters.kernel_drops.store(total, Relaxed);
@@ -238,12 +272,56 @@ impl Tx for TxHalf {
     }
 }
 
-/// RX-половина.
-pub(crate) struct RxHalf {
+/// RX-половина на часах `C` ([`SysClock`] в продукте).
+///
+/// Пауза между пустыми `pcap_next_ex` (P2): если у `pcap_t` есть событие чтения (`pcap_getevent`) и до дедлайна
+/// больше `EVENT_SLACK`, половина ждёт событие не дольше `min(остаток - EVENT_SLACK, EVENT_WAIT_SLICE)` в целых мс
+/// вниз; сигнал и таймаут ведут к новому `pcap_next_ex`. Сигнал, за которым сразу пусто, даёт одну паузу опроса, а
+/// `EVENT_EMPTY_SIGNALS` таких подряд выключают событие этой половины до конца; отказ ожидания и отсутствие события
+/// тоже. Иначе и в последние `EVENT_SLACK` прежний опрос: сон 1 мс, ниже `SPIN_BELOW` уступка кванта.
+pub(crate) struct RxHalf<C: RxClock = SysClock> {
     handle: Option<PcapHandle>,
     own_mac: [u8; 6],
     counters: Arc<Counters>,
     drops: DropCounter,
+    clock: C,
+    /// Ждать событие чтения (пока его не выключили).
+    event: bool,
+    /// Последнее ожидание кончилось сигналом, а `pcap_next_ex` с тех пор ничего не прочитал.
+    signalled: bool,
+    /// Сигналов подряд, за которыми сразу было пусто.
+    empty_signals: u8,
+    slack: Duration,
+    slice: Duration,
+    #[cfg(all(test, windows))]
+    tally: EventTally,
+}
+
+/// Счёт ожиданий события для живого спайка P2 (только тесты на Windows).
+#[cfg(all(test, windows))]
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct EventTally {
+    pub waits: u64,
+    pub signaled: u64,
+    pub timed_out: u64,
+    pub unavailable: u64,
+    pub failed: u64,
+    pub empty_signals: u64,
+    /// Событие ещё включено.
+    pub on: bool,
+}
+
+#[cfg(all(test, windows))]
+impl EventTally {
+    fn note(&mut self, r: EventWait) {
+        self.waits += 1;
+        match r {
+            EventWait::Signaled => self.signaled += 1,
+            EventWait::TimedOut => self.timed_out += 1,
+            EventWait::Unavailable => self.unavailable += 1,
+            EventWait::Failed(_) => self.failed += 1,
+        }
+    }
 }
 
 impl RxHalf {
@@ -253,21 +331,74 @@ impl RxHalf {
         counters: Arc<Counters>,
         baseline_drop: u32,
     ) -> Self {
+        Self::with_clock(handle, own_mac, counters, baseline_drop, SysClock)
+    }
+}
+
+impl<C: RxClock> RxHalf<C> {
+    pub(crate) fn with_clock(
+        handle: PcapHandle,
+        own_mac: [u8; 6],
+        counters: Arc<Counters>,
+        baseline_drop: u32,
+        clock: C,
+    ) -> Self {
         Self {
             handle: Some(handle),
             own_mac,
             counters,
             drops: DropCounter::new(baseline_drop),
+            clock,
+            event: true,
+            signalled: false,
+            empty_signals: 0,
+            slack: EVENT_SLACK,
+            slice: EVENT_WAIT_SLICE,
+            #[cfg(all(test, windows))]
+            tally: EventTally::default(),
         }
     }
 
-    /// Пауза до следующего опроса: сон 1 мс, пока остаток больше порога.
-    fn wait(deadline: Instant) {
-        let left = deadline.saturating_duration_since(Instant::now());
+    /// Пауза до следующего `pcap_next_ex`: ожидание события или шаг прежнего опроса (сон 1 мс, пока остаток больше
+    /// порога, иначе уступка кванта).
+    fn wait(&mut self, deadline: Instant) {
+        let left = deadline.saturating_duration_since(self.clock.now());
+        if std::mem::take(&mut self.signalled) {
+            // Сигнал, за которым сразу пусто: один шаг опроса, как без события.
+            self.empty_signals = self.empty_signals.saturating_add(1);
+            if self.empty_signals >= EVENT_EMPTY_SIGNALS {
+                self.event = false;
+            }
+            #[cfg(all(test, windows))]
+            {
+                self.tally.empty_signals += 1;
+            }
+        } else if self.event && left > self.slack {
+            // Целые мс вниз: ожидание не заходит в последние `slack` бюджета.
+            let ms = u32::try_from((left - self.slack).min(self.slice).as_millis()).unwrap_or(0);
+            if ms > 0
+                && let Some(h) = self.handle.as_mut()
+            {
+                let r = h.wait_readable(ms);
+                #[cfg(all(test, windows))]
+                self.tally.note(r);
+                match r {
+                    EventWait::Signaled => {
+                        self.signalled = true;
+                        return;
+                    }
+                    EventWait::TimedOut => {
+                        self.empty_signals = 0;
+                        return;
+                    }
+                    EventWait::Unavailable | EventWait::Failed(_) => self.event = false,
+                }
+            }
+        }
         if left > SPIN_BELOW {
-            std::thread::sleep(Duration::from_millis(1));
+            self.clock.sleep(Duration::from_millis(1));
         } else {
-            std::thread::yield_now();
+            self.clock.yield_now();
         }
     }
 
@@ -290,14 +421,38 @@ impl RxHalf {
     }
 }
 
-impl Rx for RxHalf {
+/// Живой спайк P2: режим, запас и срез ожидания, счёт ожиданий (только тесты на Windows).
+#[cfg(all(test, windows))]
+impl<C: RxClock> RxHalf<C> {
+    /// `on = false` это прежний опрос без события.
+    pub(crate) fn set_event_policy(&mut self, on: bool, slack: Duration, slice: Duration) {
+        self.event = on;
+        self.slack = slack;
+        self.slice = slice;
+    }
+
+    pub(crate) fn event_tally(&self) -> EventTally {
+        EventTally {
+            on: self.event,
+            ..self.tally
+        }
+    }
+}
+
+impl<C: RxClock> Rx for RxHalf<C> {
     fn recv(&mut self, buffer: &mut [u8], timeout: Duration) -> Result<Option<usize>, IoError> {
-        let deadline = Instant::now() + timeout.min(MAX_IO_TIMEOUT).min(IO_BUDGET);
+        let deadline = self.clock.now() + timeout.min(MAX_IO_TIMEOUT).min(IO_BUDGET);
         loop {
             let Some(h) = self.handle.as_mut() else {
                 return Err(closed_error());
             };
-            match h.poll_into(buffer) {
+            let polled = h.poll_into(buffer);
+            if self.signalled && polled != Polled::Empty {
+                // Сигнал не был пустым: событие работает.
+                self.signalled = false;
+                self.empty_signals = 0;
+            }
+            match polled {
                 Polled::Frame(n) => {
                     // Свой кадр отсекается ДО дорогого разбора движком.
                     if n >= 12 && buffer[6..12] == self.own_mac {
@@ -309,10 +464,10 @@ impl Rx for RxHalf {
                 }
                 Polled::Truncated => Counters::bump(&self.counters.rx_truncated),
                 Polled::Empty => {
-                    if Instant::now() >= deadline {
+                    if self.clock.now() >= deadline {
                         return Ok(None);
                     }
-                    Self::wait(deadline);
+                    self.wait(deadline);
                     continue;
                 }
                 Polled::Error(rc) => {
@@ -325,7 +480,7 @@ impl Rx for RxHalf {
                 Polled::Malformed(why) => return Err(self.fatal(why.into())),
             }
             // Мусор не продлевает вызов.
-            if Instant::now() >= deadline {
+            if self.clock.now() >= deadline {
                 return Ok(None);
             }
         }
@@ -352,7 +507,7 @@ impl Rx for RxHalf {
     }
 }
 
-impl Drop for RxHalf {
+impl<C: RxClock> Drop for RxHalf<C> {
     fn drop(&mut self) {
         // Итог остаётся в общих счётчиках после закрытия handle.
         self.flush_drops();

@@ -19,6 +19,9 @@
 //! Sendqueue tests also read RMASSCAN_NPCAP_SQ_SIZES / _SQ_ROUNDS / _SQ_BATCH /
 //! _SQ_SECS / _SQ_PPS / _SQ_REUSE_CALLS / _SQ_ALLOC_CALLS and
 //! RMASSCAN_NPCAP_STOP_ROUNDS (defaults documented at the sendqueue section).
+//! `live_rx_event_wait_budget_latency_and_idle_cpu` (rmasscan-net task 16, P2)
+//! reads RMASSCAN_NPCAP_P2_REP / _P2_SLACKS / _P2_SAMPLES / _P2_IDLE_SECS /
+//! _P2_JUNK_PPS (documented at the P2 section).
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -1710,5 +1713,581 @@ fn live_sendqueue_linkdown() {
     kv(&lab, "sq_linkdown_short_count", &short.len().to_string());
     for s in short.iter().take(20) {
         kv(&lab, "sq_linkdown_short", s);
+    }
+}
+
+// =====================================================================
+// P2 (rmasscan-net, задача 16): ожидание события чтения Npcap против опроса
+// =====================================================================
+//
+// `live_rx_event_wait_budget_latency_and_idle_cpu` меряет продуктовый `RxHalf` (часы ОС) в режимах «poll» (событие
+// выключено: прежний сон 1 мс, уступка кванта ниже 3 мс) и «eventN» (ожидание события с запасом N мс из
+// RMASSCAN_NPCAP_P2_SLACKS, по умолчанию 16,8,4,2; срез EVENT_WAIT_SLICE) в условиях «quiet» (до RX не доходит
+// ничего) и «junk» (TX-поток шлёт свои кадры с RMASSCAN_NPCAP_P2_JUNK_PPS, по умолчанию 5000; фильтр RX отсекает их
+// в драйвере, как продуктовый `not ether src`). На каждую ячейку (условие × режим) свой RX handle продуктовой
+// конфигурации (snaplen 2048, таймаут 1 мс, immediate, буфер 4 МиБ, nonblocking):
+//   1. задержка выдачи: TX-поток шлёт RMASSCAN_NPCAP_P2_SAMPLES маркеров (свой SYN на порт 9, номер в seq) через
+//      случайные 4-16 мс. Npcap отдаёт отправленный кадр RX handle того же адаптера во время `pcap_sendpacket`,
+//      поэтому задержка от прихода это время от входа в `pcap_sendpacket` маркера до возврата `recv` с ним;
+//   2. затем (событие уже видело кадры) RMASSCAN_NPCAP_P2_SAMPLES пустых `recv(50 мс)` подряд: длительность каждого и
+//      CPU RX-потока (`QueryThreadCycleTime`, `GetThreadTimes`) за первые RMASSCAN_NPCAP_P2_IDLE_SECS с (10) и за
+//      всю фазу.
+// Фильтр RX пропускает только маркеры (`ether src <lab NIC> and tcp dst port 9`), а `own_mac` половины фиктивный:
+// маркеры это свои кадры, и программный отсев своих кадров их выбросил бы. Порядок режимов и условий чередуется по
+// RMASSCAN_NPCAP_P2_REP (номер повтора). Все кадры идут пиру через `assert_lab_frame`, с испорченной суммой TCP
+// (`badsum`: пир их молча отбрасывает). Перед ячейками калибровка: длительности `wait_readable(1/5/10 мс)` без
+// сигнала и `thread::sleep(1 мс)`.
+
+use std::ffi::c_void;
+
+use rmasscan_core::packet::PacketModifiers;
+use rmasscan_engine::Rx;
+
+use super::adapter::{EVENT_SLACK, EVENT_WAIT_SLICE, EventTally, RxHalf};
+use super::handle::EventWait;
+use crate::Counters;
+use crate::adapter_common::mac_text;
+
+const P2_MARKER_PORT: u16 = 9;
+const P2_JUNK_PORT: u16 = 19;
+/// Фиктивный `own_mac` RX-половины: локально администрируемый, на стенде не встречается.
+const P2_NOT_OWN_MAC: [u8; 6] = [0x02, 0x00, 0x5e, 0x16, 0x16, 0x16];
+/// Буфер RX продукта (`RX_BUFFER_BYTES`).
+const P2_RX_BUFFER: i32 = 4 << 20;
+/// Смещение TCP в кадре шаблона без опций (Ethernet 14 + IPv4 20).
+const P2_TCP: usize = 34;
+/// Ворота брифа: пустой `recv` p99 <= 43 мс и max < 50 мс; задержка p99/max не хуже опроса больше чем на 2 мс.
+const P2_EMPTY_P99_US: u64 = 43_000;
+const P2_EMPTY_MAX_US: u64 = 50_000;
+const P2_LAT_SLACK_US: u64 = 2_000;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum P2Mode {
+    Poll,
+    Event(Duration),
+}
+
+impl P2Mode {
+    fn name(self) -> String {
+        match self {
+            P2Mode::Poll => "poll".into(),
+            P2Mode::Event(s) => format!("event{}", s.as_millis()),
+        }
+    }
+}
+
+/// `QueryThreadCycleTime(HANDLE, PULONG64) -> BOOL` (kernel32; фича windows-sys с ним не включена, поэтому адрес).
+type QueryCyclesFn = unsafe extern "system" fn(*mut c_void, *mut u64) -> i32;
+
+fn query_cycles_fn() -> QueryCyclesFn {
+    use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
+    let name: Vec<u16> = "kernel32.dll".encode_utf16().chain(Some(0)).collect();
+    // SAFETY: name NUL-терминирована; GetModuleHandleW не загружает библиотеку (kernel32 есть в каждом процессе).
+    let h = unsafe { GetModuleHandleW(name.as_ptr()) };
+    assert!(!h.is_null(), "kernel32 is not loaded");
+    // SAFETY: h это живой HMODULE kernel32, имя NUL-терминировано.
+    let p = unsafe { GetProcAddress(h, c"QueryThreadCycleTime".as_ptr().cast()) }
+        .expect("kernel32 exports QueryThreadCycleTime");
+    // SAFETY: экспорт QueryThreadCycleTime kernel32 имеет документированную сигнатуру QueryCyclesFn; fn-указатели
+    // одного размера.
+    unsafe { std::mem::transmute::<unsafe extern "system" fn() -> isize, QueryCyclesFn>(p) }
+}
+
+/// CPU текущего потока: циклы (`QueryThreadCycleTime`) и время ядра/пользователя в 100 нс (`GetThreadTimes`).
+#[derive(Clone, Copy, Debug, Default)]
+struct ThreadCpu {
+    cycles: u64,
+    kernel_100ns: u64,
+    user_100ns: u64,
+}
+
+impl ThreadCpu {
+    fn now(q: QueryCyclesFn) -> ThreadCpu {
+        use windows_sys::Win32::Foundation::FILETIME;
+        use windows_sys::Win32::System::Threading::{GetCurrentThread, GetThreadTimes};
+        // SAFETY: без предусловий; псевдо-HANDLE текущего потока.
+        let me = unsafe { GetCurrentThread() };
+        let mut cycles = 0u64;
+        // SAFETY: me это псевдо-HANDLE текущего потока, cycles действительный выходной указатель.
+        let ok_cycles = unsafe { q(me, &mut cycles) };
+        let zero = FILETIME {
+            dwLowDateTime: 0,
+            dwHighDateTime: 0,
+        };
+        let (mut c, mut e, mut k, mut u) = (zero, zero, zero, zero);
+        // SAFETY: me как выше; четыре действительных выходных указателя.
+        let ok_times = unsafe { GetThreadTimes(me, &mut c, &mut e, &mut k, &mut u) };
+        assert!(ok_cycles != 0 && ok_times != 0, "thread CPU query failed");
+        let ft = |f: FILETIME| (u64::from(f.dwHighDateTime) << 32) | u64::from(f.dwLowDateTime);
+        ThreadCpu {
+            cycles,
+            kernel_100ns: ft(k),
+            user_100ns: ft(u),
+        }
+    }
+
+    fn since(self, start: ThreadCpu) -> ThreadCpu {
+        ThreadCpu {
+            cycles: self.cycles - start.cycles,
+            kernel_100ns: self.kernel_100ns - start.kernel_100ns,
+            user_100ns: self.user_100ns - start.user_100ns,
+        }
+    }
+
+    fn line(self, secs: f64) -> String {
+        format!(
+            "cycles={} cycles_per_s={:.0} kernel_ms={:.1} user_ms={:.1} secs={secs:.3}",
+            self.cycles,
+            self.cycles as f64 / secs,
+            self.kernel_100ns as f64 / 1e4,
+            self.user_100ns as f64 / 1e4
+        )
+    }
+}
+
+/// xorshift64: интервалы маркеров.
+fn p2_next(state: &mut u64) -> u64 {
+    *state ^= *state << 13;
+    *state ^= *state >> 7;
+    *state ^= *state << 17;
+    *state
+}
+
+/// Свой SYN с испорченной суммой TCP на `dport` с номером `seq` (только к пиру, через `assert_lab_frame`).
+fn p2_frame(lab: &Lab, tpl: &TcpSynTemplate, dport: u16, seq: u32, out: &mut Vec<u8>) {
+    tpl.build_syn(
+        DST_IP,
+        dport,
+        SRC_IP,
+        40_000 + (seq % 1000) as u16,
+        seq,
+        out,
+    );
+    assert_lab_frame(lab, out);
+}
+
+/// Номер маркера из кадра (порт назначения 9, номер в seq).
+fn p2_marker_id(f: &[u8]) -> Option<u32> {
+    if f.len() < P2_TCP + 20 || f[12..14] != [0x08, 0x00] || f[23] != 6 {
+        return None;
+    }
+    if u16::from_be_bytes([f[P2_TCP + 2], f[P2_TCP + 3]]) != P2_MARKER_PORT {
+        return None;
+    }
+    Some(u32::from_be_bytes(
+        f[P2_TCP + 4..P2_TCP + 8].try_into().unwrap(),
+    ))
+}
+
+/// RX-половина продукта над handle продуктовой конфигурации с фильтром маркеров.
+fn p2_open_rx(api: &Arc<NpcapApi>, lab: &Lab, mode: P2Mode) -> RxHalf {
+    let mut h = open_rx(api, lab, P2_RX_BUFFER);
+    let expr = format!(
+        "ether src {} and tcp dst port {P2_MARKER_PORT}",
+        mac_text(&lab.src_mac)
+    );
+    let mut f = h.compile(&expr).expect("compile the marker filter");
+    h.set_filter(&mut f).expect("set the marker filter");
+    drop(f);
+    let base = h.stats_raw().expect("baseline stats");
+    let mut rx = RxHalf::new(
+        h,
+        P2_NOT_OWN_MAC,
+        Arc::new(Counters::default()),
+        base.ps_drop,
+    );
+    match mode {
+        P2Mode::Poll => rx.set_event_policy(false, EVENT_SLACK, EVENT_WAIT_SLICE),
+        P2Mode::Event(slack) => rx.set_event_policy(true, slack, EVENT_WAIT_SLICE),
+    }
+    rx
+}
+
+/// TX-поток ячейки: мусор с `junk_pps` (0: нет) до `stop`; маркеры `0..sent_at.len()` через случайные 4-16 мс (время
+/// входа в `pcap_sendpacket` каждого в `sent_at`, нс от `base`). Возвращает (мусора отправлено, ненулевых rc).
+#[allow(clippy::too_many_arguments)]
+fn p2_tx(
+    lab: &Lab,
+    tpl: &TcpSynTemplate,
+    tx: &mut PcapHandle,
+    junk_pps: u64,
+    sent_at: &[AtomicU64],
+    base: Instant,
+    stop: &AtomicBool,
+    seed: u64,
+) -> (u64, u64) {
+    let mut rng = seed | 1;
+    let gap = |rng: &mut u64| Duration::from_micros(4_000 + p2_next(rng) % 12_001);
+    let (mut f, mut junk, mut bad) = (Vec::new(), 0u64, 0u64);
+    let start = Instant::now();
+    let mut next = 0usize;
+    let mut due = start + gap(&mut rng);
+    while !stop.load(Ordering::Acquire) {
+        let now = Instant::now();
+        if next < sent_at.len() && now >= due {
+            p2_frame(lab, tpl, P2_MARKER_PORT, next as u32, &mut f);
+            sent_at[next].store((Instant::now() - base).as_nanos() as u64, Ordering::Release);
+            bad += u64::from(send_checked(lab, tx, &f) != 0);
+            next += 1;
+            due = Instant::now() + gap(&mut rng);
+            continue;
+        }
+        let junk_due =
+            (junk_pps > 0).then(|| start + Duration::from_secs_f64(junk as f64 / junk_pps as f64));
+        if let Some(j) = junk_due
+            && now >= j
+        {
+            p2_frame(
+                lab,
+                tpl,
+                P2_JUNK_PORT,
+                1_000_000 + (junk % 1_000_000) as u32,
+                &mut f,
+            );
+            bad += u64::from(send_checked(lab, tx, &f) != 0);
+            junk += 1;
+            continue;
+        }
+        let marker_due = (next < sent_at.len()).then_some(due);
+        let wake = match (marker_due, junk_due) {
+            (Some(m), Some(j)) => m.min(j),
+            (Some(m), None) => m,
+            (None, Some(j)) => j,
+            (None, None) => now + Duration::from_millis(5),
+        };
+        std::thread::sleep(wake.saturating_duration_since(Instant::now()));
+    }
+    (junk, bad)
+}
+
+#[derive(Default)]
+struct P2Result {
+    empty_us: Vec<u64>,
+    lat_us: Vec<u64>,
+    cpu10: ThreadCpu,
+    cpu10_secs: f64,
+    cpu_all: ThreadCpu,
+    cpu_all_secs: f64,
+}
+
+/// Перцентили nearest-rank и максимум отсортированной выборки, мкс.
+fn p2_stats(v: &[u64]) -> (u64, u64, u64, u64) {
+    let mut s = v.to_vec();
+    s.sort_unstable();
+    (
+        pct_nr(&s, 0.50),
+        pct_nr(&s, 0.99),
+        pct_nr(&s, 0.999),
+        s.last().copied().unwrap_or(0),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn p2_cell(
+    lab: &Lab,
+    api: &Arc<NpcapApi>,
+    tpl: &TcpSynTemplate,
+    tx: &mut PcapHandle,
+    q: QueryCyclesFn,
+    cond: &str,
+    mode: P2Mode,
+    seed: u64,
+) -> P2Result {
+    let samples = env_u64("RMASSCAN_NPCAP_P2_SAMPLES", 2000) as usize;
+    let idle = Duration::from_secs(env_u64("RMASSCAN_NPCAP_P2_IDLE_SECS", 10));
+    let junk_pps = if cond == "junk" {
+        env_u64("RMASSCAN_NPCAP_P2_JUNK_PPS", 5000)
+    } else {
+        0
+    };
+    let label = format!("p2_{cond}_{}", mode.name());
+    let mut rx = p2_open_rx(api, lab, mode);
+    let base = Instant::now();
+    let sent_at: Vec<AtomicU64> = (0..samples).map(|_| AtomicU64::new(u64::MAX)).collect();
+    let mut recv_at: Vec<Option<u64>> = vec![None; samples];
+    let (mut other, mut dup) = (0u64, 0u64);
+    let mut res = P2Result::default();
+
+    // 1. Задержка выдачи маркеров.
+    let stop = AtomicBool::new(false);
+    let (junk1, bad1) = std::thread::scope(|sc| {
+        let txj = sc.spawn(|| p2_tx(lab, tpl, tx, junk_pps, &sent_at, base, &stop, seed));
+        let mut buf = vec![0u8; 2048];
+        let limit =
+            Instant::now() + Duration::from_millis(16 * samples as u64) + Duration::from_secs(5);
+        let mut got = 0usize;
+        while got < samples && Instant::now() < limit {
+            match rx.recv(&mut buf, MS50) {
+                Ok(Some(n)) => {
+                    let t = (Instant::now() - base).as_nanos() as u64;
+                    match p2_marker_id(&buf[..n]) {
+                        Some(id) if (id as usize) < samples => {
+                            let slot = &mut recv_at[id as usize];
+                            if slot.is_none() {
+                                *slot = Some(t);
+                                got += 1;
+                            } else {
+                                dup += 1;
+                            }
+                        }
+                        _ => other += 1,
+                    }
+                }
+                Ok(None) => {}
+                Err(e) => panic!("{label}: recv failed: {e:?}"),
+            }
+        }
+        stop.store(true, Ordering::Release);
+        txj.join().unwrap()
+    });
+    let mut lat_csv = String::from("id,sent_ns,recv_ns,lat_us\n");
+    let mut missing = 0u64;
+    for (id, r) in recv_at.iter().enumerate() {
+        let s = sent_at[id].load(Ordering::Acquire);
+        match r {
+            Some(r) if s != u64::MAX => {
+                let lat = r.saturating_sub(s) / 1000;
+                res.lat_us.push(lat);
+                let _ = writeln!(lat_csv, "{id},{s},{r},{lat}");
+            }
+            _ => missing += 1,
+        }
+    }
+    let tally_lat = rx.event_tally();
+
+    // 2. Пустые recv(50 мс) и CPU RX-потока.
+    let stop = AtomicBool::new(false);
+    let mut empty_csv = String::from("i,dur_us,frame\n");
+    let mut frames_idle = 0u64;
+    let (junk2, bad2) = std::thread::scope(|sc| {
+        let txj = sc.spawn(|| p2_tx(lab, tpl, tx, junk_pps, &[], base, &stop, seed));
+        let rxj = sc.spawn(|| {
+            let mut buf = vec![0u8; 2048];
+            let c0 = ThreadCpu::now(q);
+            let t0 = Instant::now();
+            let mut cpu10 = None;
+            let mut out = Vec::with_capacity(samples);
+            for i in 0..samples {
+                let s = Instant::now();
+                let r = rx.recv(&mut buf, MS50).expect("idle recv");
+                let d = s.elapsed().as_micros() as u64;
+                out.push((i, d, r.is_some()));
+                if cpu10.is_none() && t0.elapsed() >= idle {
+                    cpu10 = Some((ThreadCpu::now(q).since(c0), t0.elapsed().as_secs_f64()));
+                }
+            }
+            let all = (ThreadCpu::now(q).since(c0), t0.elapsed().as_secs_f64());
+            (out, cpu10.unwrap_or(all), all)
+        });
+        let (out, cpu10, all) = rxj.join().unwrap();
+        stop.store(true, Ordering::Release);
+        let j = txj.join().unwrap();
+        for (i, d, frame) in out {
+            let _ = writeln!(empty_csv, "{i},{d},{}", u8::from(frame));
+            if frame {
+                frames_idle += 1;
+            } else {
+                res.empty_us.push(d);
+            }
+        }
+        (res.cpu10, res.cpu10_secs) = cpu10;
+        (res.cpu_all, res.cpu_all_secs) = all;
+        j
+    });
+    let tally = rx.event_tally();
+    let drops = rx.health(MS50).map(|h| h.kernel_drops);
+    drop(rx);
+
+    for (what, body) in [("latency", &lat_csv), ("empty", &empty_csv)] {
+        let path = format!("{}\\{}__{label}_{what}.csv", lab.out_dir, lab.cond);
+        std::fs::write(&path, body).unwrap_or_else(|e| panic!("cannot write {path}: {e}"));
+    }
+    let (e50, e99, e999, emax) = p2_stats(&res.empty_us);
+    let over = |l: u64| res.empty_us.iter().filter(|d| **d > l).count();
+    kv(
+        lab,
+        &format!("{label}_empty"),
+        &format!(
+            "n={} p50_us={e50} p99_us={e99} p999_us={e999} max_us={emax} over43ms={} over50ms={} frames={frames_idle}",
+            res.empty_us.len(),
+            over(43_000),
+            over(50_000)
+        ),
+    );
+    let (l50, l99, l999, lmax) = p2_stats(&res.lat_us);
+    kv(
+        lab,
+        &format!("{label}_latency"),
+        &format!(
+            "n={} p50_us={l50} p99_us={l99} p999_us={l999} max_us={lmax} missing={missing} other={other} dup={dup}",
+            res.lat_us.len()
+        ),
+    );
+    kv(
+        lab,
+        &format!("{label}_cpu10"),
+        &res.cpu10.line(res.cpu10_secs),
+    );
+    kv(
+        lab,
+        &format!("{label}_cpu_all"),
+        &res.cpu_all.line(res.cpu_all_secs),
+    );
+    kv(
+        lab,
+        &format!("{label}_tally_after_latency"),
+        &p2_tally(&tally_lat),
+    );
+    kv(lab, &format!("{label}_tally"), &p2_tally(&tally));
+    kv(
+        lab,
+        &format!("{label}_tx"),
+        &format!(
+            "junk_sent={} send_nonzero_rc={} kernel_drops={drops:?}",
+            junk1 + junk2,
+            bad1 + bad2
+        ),
+    );
+    res
+}
+
+/// Счёт ожиданий события половины одной строкой.
+fn p2_tally(t: &EventTally) -> String {
+    format!(
+        "waits={} signaled={} timed_out={} unavailable={} failed={} empty_signals={} event_on={}",
+        t.waits, t.signaled, t.timed_out, t.unavailable, t.failed, t.empty_signals, t.on
+    )
+}
+
+/// Длительности одного вызова `f` (мкс), `n` раз.
+fn p2_time(n: usize, mut f: impl FnMut()) -> Vec<u64> {
+    (0..n)
+        .map(|_| {
+            let t = Instant::now();
+            f();
+            t.elapsed().as_micros() as u64
+        })
+        .collect()
+}
+
+#[test]
+#[ignore = "live: needs the lab NIC (see module docs and the P2 section)"]
+fn live_rx_event_wait_budget_latency_and_idle_cpu() {
+    let lab = lab();
+    let api = load();
+    println!("VERSION {}", api.lib_version());
+    assert!(
+        api.rx_event().is_some(),
+        "NOT RUN: this wpcap.dll lacks pcap_getevent"
+    );
+    let rep = env_u64("RMASSCAN_NPCAP_P2_REP", 1);
+    let slacks: Vec<Duration> = std::env::var("RMASSCAN_NPCAP_P2_SLACKS")
+        .unwrap_or_else(|_| "16,8,4,2".into())
+        .split(',')
+        .map(|s| Duration::from_millis(s.trim().parse().expect("bad RMASSCAN_NPCAP_P2_SLACKS")))
+        .collect();
+    let q = query_cycles_fn();
+    let tpl = TcpSynTemplate::new_with_options(
+        lab.src_mac,
+        lab.peer_mac,
+        LinkType::Ethernet,
+        &PacketModifiers {
+            badsum: true,
+            ..PacketModifiers::default()
+        },
+    );
+    let mut tx = open_tx_product(&api, &lab);
+
+    // Калибровка: ожидание события без сигнала и сон 1 мс.
+    {
+        let mut h = open_rx(&api, &lab, P2_RX_BUFFER);
+        let expr = format!(
+            "ether src {} and tcp dst port {P2_MARKER_PORT}",
+            mac_text(&lab.src_mac)
+        );
+        let mut f = h.compile(&expr).expect("compile");
+        h.set_filter(&mut f).expect("setfilter");
+        drop(f);
+        for ms in [1u32, 5, 10] {
+            let mut outcomes: BTreeMap<String, usize> = BTreeMap::new();
+            let d = p2_time(100, || {
+                *outcomes
+                    .entry(format!("{:?}", h.wait_readable(ms)))
+                    .or_default() += 1;
+            });
+            let (p50, p99, _, max) = p2_stats(&d);
+            let min = d.iter().copied().min().unwrap_or(0);
+            kv(
+                &lab,
+                &format!("p2_calib_wait{ms}ms"),
+                &format!(
+                    "n=100 min_us={min} p50_us={p50} p99_us={p99} max_us={max} outcomes={outcomes:?}"
+                ),
+            );
+        }
+        let d = p2_time(200, || std::thread::sleep(Duration::from_millis(1)));
+        let (p50, p99, _, max) = p2_stats(&d);
+        kv(
+            &lab,
+            "p2_calib_sleep1ms",
+            &format!("n=200 p50_us={p50} p99_us={p99} max_us={max}"),
+        );
+        assert!(
+            !matches!(h.wait_readable(1), EventWait::Unavailable),
+            "NOT RUN: the RX handle has no read event"
+        );
+    }
+
+    let mut modes: Vec<P2Mode> = std::iter::once(P2Mode::Poll)
+        .chain(slacks.iter().map(|s| P2Mode::Event(*s)))
+        .collect();
+    let mut conds = vec!["quiet", "junk"];
+    if rep % 2 == 0 {
+        modes.reverse();
+        conds.reverse();
+    }
+    let mut results: Vec<(&str, P2Mode, P2Result)> = Vec::new();
+    for &cond in &conds {
+        for (i, mode) in modes.iter().enumerate() {
+            let seed = 0x9e37_79b9_7f4a_7c15 ^ (rep << 32) ^ ((i as u64) << 8) ^ now_ms();
+            let r = p2_cell(&lab, &api, &tpl, &mut tx, q, cond, *mode, seed);
+            results.push((cond, *mode, r));
+        }
+    }
+
+    // Ворота брифа по ячейкам этого повтора (итог по всем повторам и условиям сводится вне теста).
+    for cond in &conds {
+        let poll = results
+            .iter()
+            .find(|(c, m, _)| c == cond && *m == P2Mode::Poll)
+            .map(|(_, _, r)| r)
+            .expect("poll cell");
+        let (_, p_l99, _, p_lmax) = p2_stats(&poll.lat_us);
+        let p_cpu = poll.cpu10.cycles as f64 / poll.cpu10_secs;
+        for (c, m, r) in &results {
+            if c != cond || *m == P2Mode::Poll {
+                continue;
+            }
+            let (_, e99, _, emax) = p2_stats(&r.empty_us);
+            let (_, l99, _, lmax) = p2_stats(&r.lat_us);
+            let cpu = r.cpu10.cycles as f64 / r.cpu10_secs;
+            let empty_ok = e99 <= P2_EMPTY_P99_US && emax < P2_EMPTY_MAX_US;
+            let lat_ok = l99 <= p_l99 + P2_LAT_SLACK_US && lmax <= p_lmax + P2_LAT_SLACK_US;
+            let cpu_ok = cpu < p_cpu;
+            kv(
+                &lab,
+                &format!("p2_gate_{cond}_{}", m.name()),
+                &format!(
+                    "empty_p99_us={e99} empty_max_us={emax} empty_ok={empty_ok} lat_p99_us={l99} lat_max_us={lmax} \
+                     poll_lat_p99_us={p_l99} poll_lat_max_us={p_lmax} lat_ok={lat_ok} cpu_per_s={cpu:.0} \
+                     poll_cpu_per_s={p_cpu:.0} cpu_ok={cpu_ok} verdict={}",
+                    if empty_ok && lat_ok && cpu_ok {
+                        "PASS"
+                    } else {
+                        "FAIL"
+                    }
+                ),
+            );
+        }
     }
 }

@@ -224,9 +224,26 @@ pub(crate) type SetFilterFn = unsafe extern "C" fn(*mut PcapT, *mut BpfProgram) 
 pub(crate) type FreeCodeFn = unsafe extern "C" fn(*mut BpfProgram);
 /// `pcap_init(opts, errbuf)`: 0 или PCAP_ERROR. Необязательный символ.
 pub(crate) type InitFn = unsafe extern "C" fn(c_uint, *mut c_char) -> c_int;
+/// `pcap_getevent(p)` (`pcap/pcap.h`, ветка `_WIN32`): HANDLE события чтения, которым владеет сам `pcap_t` (живёт до
+/// `pcap_close`). Необязательный символ.
+pub(crate) type GetEventFn = unsafe extern "C" fn(*mut PcapT) -> *mut c_void;
+/// `WaitForSingleObject(handle, ms)` (`synchapi.h`, `WINAPI`): `WAIT_OBJECT_0`, `WAIT_TIMEOUT` или иной код.
+pub(crate) type WaitFn = unsafe extern "system" fn(*mut c_void, u32) -> u32;
+/// Исходы `WaitForSingleObject` (`winbase.h`/`winerror.h`).
+pub(crate) const WAIT_OBJECT_0: u32 = 0;
+pub(crate) const WAIT_TIMEOUT: u32 = 258;
 
-/// Имя необязательного символа (его отсутствие не ошибка).
+/// Имена необязательных символов (их отсутствие не ошибка). Они вне `pcap_api!` и `REQUIRED_SYMBOLS`: старый wpcap
+/// без них загружается, а не становится `MissingCapability`.
 pub(crate) const SYM_PCAP_INIT: &str = "pcap_init";
+pub(crate) const SYM_PCAP_GETEVENT: &str = "pcap_getevent";
+
+// Сверка исходов ожидания с windows-sys (только на Windows).
+#[cfg(windows)]
+const _: () = {
+    use windows_sys::Win32::Foundation as f;
+    assert!(f::WAIT_OBJECT_0 == WAIT_OBJECT_0 && f::WAIT_TIMEOUT == WAIT_TIMEOUT);
+};
 
 /// Одно место, где перечислены все символы wpcap: имя, тип, поле таблицы.
 macro_rules! pcap_api {

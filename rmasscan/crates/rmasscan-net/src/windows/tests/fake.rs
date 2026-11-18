@@ -7,7 +7,9 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::ffi::{CString, c_char, c_int, c_uint, c_void};
 use std::sync::{Arc, LazyLock, Mutex, MutexGuard};
+use std::time::{Duration, Instant};
 
+use crate::windows::adapter::RxClock;
 use crate::windows::ffi::*;
 
 pub(super) const GOOD_PATH: &str = "C:\\Windows\\System32\\Npcap\\wpcap.dll";
@@ -47,6 +49,22 @@ pub(super) enum TransmitStep {
     Straddle(usize),
     /// Больше очереди: `len + 1`; доставлена вся очередь.
     Over,
+}
+
+/// Событие чтения подставной библиотеки: экспорт `pcap_getevent` и ответы ожидания [`f_wait`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum EventMode {
+    /// `pcap_getevent` не экспортируется (по умолчанию: старый wpcap, RX опрашивает, как прежде).
+    NoSymbol,
+    /// `pcap_getevent` отдаёт этот адрес: 0 это NULL, `usize::MAX` это `INVALID_HANDLE_VALUE`.
+    Handle(usize),
+    /// Сигнал, только когда кадр уже ждёт чтения или приходит из `arrivals` до конца ожидания; иначе ожидание
+    /// длится всё запрошенное время и кончается таймаутом.
+    Data,
+    /// Сигнальное всегда, даже при пустом буфере.
+    AlwaysSignaled,
+    /// Ожидание сразу возвращает этот код.
+    WaitRc(u32),
 }
 
 pub(super) type Responder = Arc<dyn Fn(&[u8]) -> Vec<Vec<u8>> + Send + Sync>;
@@ -127,6 +145,20 @@ pub(super) struct Scenario {
     pub init_opts: Vec<c_uint>,
     /// `(pcap_set_* name, rc)`: that setter returns rc on every handle.
     pub set_fail: Option<(&'static str, c_int)>,
+    // ---- событие чтения и виртуальные часы RX ----
+    pub event: EventMode,
+    pub getevent_calls: usize,
+    /// Каждое ожидание [`f_wait`]: виртуальное время вызова и запрошенные миллисекунды.
+    pub waits: Vec<(Duration, u32)>,
+    /// Виртуальное время [`FakeClock`] и [`f_wait`] от начала сценария.
+    pub vtime: Duration,
+    /// Кадры, приходящие в заданный момент виртуального времени (по возрастанию): переходят в `next_script`, когда до
+    /// них доходят часы.
+    pub arrivals: VecDeque<(Duration, NextStep)>,
+    pub sleeps: usize,
+    pub yields: usize,
+    clock_calls: usize,
+    clock_base: Instant,
 }
 
 impl Default for Scenario {
@@ -187,6 +219,15 @@ impl Default for Scenario {
             init_rc: 0,
             init_opts: Vec::new(),
             set_fail: None,
+            event: EventMode::NoSymbol,
+            getevent_calls: 0,
+            waits: Vec::new(),
+            vtime: Duration::ZERO,
+            arrivals: VecDeque::new(),
+            sleeps: 0,
+            yields: 0,
+            clock_calls: 0,
+            clock_base: Instant::now(),
         }
     }
 }
@@ -699,8 +740,113 @@ unsafe extern "C" fn f_close(p: *mut PcapT) {
     log(&format!("close:{}", hid(p)));
 }
 
+// ---------- событие чтения и виртуальные часы ----------
+
+/// HANDLE события, которое отдаёт подставной `pcap_getevent` (кроме `EventMode::Handle`).
+const FAKE_EVENT: usize = 0x00E7_E000;
+/// `WAIT_FAILED`: ожидание на чужом HANDLE.
+const FAKE_WAIT_FAILED: u32 = u32::MAX;
+/// Шаг виртуального времени одной уступки кванта.
+const YIELD_STEP: Duration = Duration::from_micros(100);
+/// Столько обращений к [`FakeClock`] за сценарий считаются кручением.
+const CLOCK_CALLS_MAX: usize = 100_000;
+
+unsafe extern "C" fn f_getevent(_p: *mut PcapT) -> *mut c_void {
+    let mut s = st();
+    s.getevent_calls += 1;
+    s.log.push("getevent".into());
+    match s.event {
+        EventMode::Handle(addr) => std::ptr::without_provenance_mut(addr),
+        _ => std::ptr::without_provenance_mut(FAKE_EVENT),
+    }
+}
+
+/// Сдвигает виртуальное время на `t`; кадры `arrivals`, до которых дошло время, становятся читаемыми.
+fn advance_to(s: &mut Scenario, t: Duration) {
+    s.vtime = t;
+    while s.arrivals.front().is_some_and(|(at, _)| *at <= t) {
+        if let Some((_, step)) = s.arrivals.pop_front() {
+            s.next_script.push_back(step);
+        }
+    }
+}
+
+/// `WaitForSingleObject` подставной библиотеки на виртуальном времени сценария. Не паникует (граница `extern`).
+pub(super) unsafe extern "system" fn f_wait(h: *mut c_void, ms: u32) -> u32 {
+    let mut s = st();
+    let at = s.vtime;
+    s.waits.push((at, ms));
+    if h.addr() != FAKE_EVENT {
+        s.log.push("fake_error:wait on an unknown handle".into());
+        return FAKE_WAIT_FAILED;
+    }
+    match s.event {
+        EventMode::WaitRc(rc) => rc,
+        EventMode::AlwaysSignaled => WAIT_OBJECT_0,
+        EventMode::NoSymbol | EventMode::Handle(_) | EventMode::Data => {
+            if !s.next_script.is_empty() || s.junk_forever.is_some() {
+                return WAIT_OBJECT_0;
+            }
+            let until = at + Duration::from_millis(u64::from(ms));
+            match s.arrivals.front().map(|(t, _)| *t) {
+                Some(t) if t <= until => {
+                    advance_to(&mut s, t.max(at));
+                    WAIT_OBJECT_0
+                }
+                _ => {
+                    advance_to(&mut s, until);
+                    WAIT_TIMEOUT
+                }
+            }
+        }
+    }
+}
+
+/// Виртуальные часы RX над временем сценария: `sleep` сдвигает время на `d`, `yield_now` на 0,1 мс, [`f_wait`] без
+/// сигнала на запрошенное время; кадры из `arrivals` приходят, когда до них доходят часы. После 100 000 обращений
+/// паникует («spin»): зацикленная реализация падает, а не виснет.
+pub(super) struct FakeClock;
+
+/// Одно обращение к часам: `f` под замком сценария, затем проверка счёта (паника уже без замка).
+fn clock_access<T>(f: impl FnOnce(&mut Scenario) -> T) -> T {
+    let (out, calls) = {
+        let mut s = st();
+        s.clock_calls += 1;
+        (f(&mut s), s.clock_calls)
+    };
+    assert!(
+        calls <= CLOCK_CALLS_MAX,
+        "spin: FakeClock was called more than {CLOCK_CALLS_MAX} times"
+    );
+    out
+}
+
+impl RxClock for FakeClock {
+    fn now(&mut self) -> Instant {
+        clock_access(|s| s.clock_base + s.vtime)
+    }
+
+    fn sleep(&mut self, d: Duration) {
+        clock_access(|s| {
+            s.sleeps += 1;
+            let t = s.vtime + d;
+            advance_to(s, t);
+        });
+    }
+
+    fn yield_now(&mut self) {
+        clock_access(|s| {
+            s.yields += 1;
+            let t = s.vtime + YIELD_STEP;
+            advance_to(s, t);
+        });
+    }
+}
+
 pub(super) fn symbol_addr(name: &str) -> Option<*const c_void> {
     Some(match name {
+        // Необязательный экспорт: только если сценарий его включил (по умолчанию старый wpcap без него).
+        "pcap_getevent" if st().event != EventMode::NoSymbol => f_getevent as *const c_void,
         "pcap_init" => f_init as *const c_void,
         "pcap_lib_version" => f_lib_version as *const c_void,
         "pcap_findalldevs" => f_findalldevs as *const c_void,

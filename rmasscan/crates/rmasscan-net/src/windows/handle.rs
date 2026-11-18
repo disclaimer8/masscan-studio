@@ -8,14 +8,14 @@
 //! принадлежит ровно одному worker. Библиотека живёт, пока жив любой handle
 //! (`Arc<NpcapApi>` в поле), и выгружается после `pcap_close` последнего.
 
-use std::ffi::{CStr, CString, c_char, c_int, c_uint};
+use std::ffi::{CStr, CString, c_char, c_int, c_uint, c_void};
 use std::ptr::{self, NonNull};
 use std::sync::Arc;
 
 use super::ffi::{
     BPF_RET_K, BpfInsn, BpfProgram, DLT_EN10MB, DLT_IEEE802_11_RADIO, DLT_NULL, NEXT_EX_EOF,
     NEXT_EX_OK, NEXT_EX_TIMEOUT, PCAP_ERRBUF_SIZE, PCAP_IF_LOOPBACK, PCAP_NETMASK_UNKNOWN, PcapIf,
-    PcapPkthdr, PcapSendQueue, PcapStat, PcapT,
+    PcapPkthdr, PcapSendQueue, PcapStat, PcapT, WAIT_OBJECT_0, WAIT_TIMEOUT,
 };
 use super::loader::NpcapApi;
 use crate::NetError;
@@ -65,12 +65,39 @@ pub(crate) struct PcapHandle {
     raw: NonNull<PcapT>,
     /// Заданный `snaplen`: `caplen` больше него это нарушение контракта.
     snaplen: usize,
+    /// Событие чтения `pcap_t` ([`PcapHandle::wait_readable`]).
+    event: ReadEvent,
     // Последним: выгрузка библиотеки после `pcap_close` в Drop.
     api: Arc<NpcapApi>,
 }
 
+/// Событие чтения `pcap_t`: ещё не запрошено, нет его (NULL или `INVALID_HANDLE_VALUE`) или HANDLE. Им владеет
+/// `pcap_t` (Packet.dll закрывает его в `pcap_close`), поэтому handle его не закрывает.
+#[derive(Debug, Clone, Copy)]
+enum ReadEvent {
+    Unfetched,
+    Missing,
+    Ready(NonNull<c_void>),
+}
+
+/// Исход одного ожидания события чтения.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EventWait {
+    /// `WAIT_OBJECT_0`: событие сигнальное.
+    Signaled,
+    /// `WAIT_TIMEOUT`: ожидание длилось всё заданное время.
+    TimedOut,
+    /// Ждать нечего: wpcap без `pcap_getevent` или событие NULL/`INVALID_HANDLE_VALUE`; ожидание не вызывалось.
+    Unavailable,
+    /// Любой другой код ожидания (`WAIT_FAILED`, `WAIT_ABANDONED`, …) как есть.
+    Failed(u32),
+}
+
 // SAFETY: pcap_t не имеет потоковой привязки; PcapHandle единственный владелец
-// указателя и не клонируется. `Sync` намеренно не реализован.
+// указателя и не клонируется. Событие чтения (`event`) это HANDLE объекта ядра,
+// принадлежащий тому же pcap_t: он не привязан к потоку, handle его не закрывает
+// и ждёт его только через `&mut self`, поэтому он переходит вместе с владельцем.
+// `Sync` намеренно не реализован.
 unsafe impl Send for PcapHandle {}
 
 impl Drop for PcapHandle {
@@ -102,6 +129,7 @@ impl PcapHandle {
         let h = PcapHandle {
             raw,
             snaplen: usize::try_from(p.snaplen).unwrap_or(0),
+            event: ReadEvent::Unfetched,
             api: Arc::clone(api),
         };
         h.set("pcap_set_snaplen", h.api.fns.set_snaplen, p.snaplen)?;
@@ -318,6 +346,37 @@ impl PcapHandle {
         // размера libpcap для Windows (ABI проверен в ffi).
         let rc = unsafe { (self.api.fns.stats)(self.raw.as_ptr(), &mut st) };
         if rc == 0 { Ok(st) } else { Err(rc) }
+    }
+
+    /// Ждёт событие чтения `pcap_t` не дольше `ms` мс (`WaitForSingleObject`). Событие берётся у `pcap_t`
+    /// (`pcap_getevent`) при первом ожидании и не закрывается: им владеет `pcap_t`. `Unavailable` без вызова ожидания:
+    /// у wpcap нет `pcap_getevent` или событие NULL/`INVALID_HANDLE_VALUE`.
+    pub(crate) fn wait_readable(&mut self, ms: u32) -> EventWait {
+        let Some((getevent, wait)) = self.api.rx_event() else {
+            return EventWait::Unavailable;
+        };
+        if let ReadEvent::Unfetched = self.event {
+            // SAFETY: raw валиден и активирован (принадлежит self); getevent разрешён из той же библиотеки, которую
+            // держит self.api, и только возвращает HANDLE, сохранённый в pcap_t.
+            let ev = unsafe { getevent(self.raw.as_ptr()) };
+            // INVALID_HANDLE_VALUE (-1) это псевдо-HANDLE текущего процесса, а не событие: ждать его нельзя.
+            self.event = match NonNull::new(ev) {
+                Some(ev) if ev.as_ptr().addr() != usize::MAX => ReadEvent::Ready(ev),
+                _ => ReadEvent::Missing,
+            };
+        }
+        let ReadEvent::Ready(ev) = self.event else {
+            return EventWait::Unavailable;
+        };
+        // SAFETY: ev это событие, которое pcap_getevent вернул для этого pcap_t (не NULL и не INVALID_HANDLE_VALUE,
+        // проверено выше); pcap_t закрывается только в Drop, поэтому HANDLE жив всё время вызова; wait это функция
+        // модуля, которая по контракту `unsafe trait Module` ведёт себя как WaitForSingleObject и не держит HANDLE
+        // после возврата.
+        match unsafe { wait(ev.as_ptr(), ms) } {
+            WAIT_OBJECT_0 => EventWait::Signaled,
+            WAIT_TIMEOUT => EventWait::TimedOut,
+            rc => EventWait::Failed(rc),
+        }
     }
 }
 

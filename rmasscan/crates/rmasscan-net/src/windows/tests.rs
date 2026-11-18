@@ -38,8 +38,7 @@ fn good_diag() -> Vec<DllInfo> {
         mk("Packet.dll", "C:\\Windows\\System32\\Npcap\\Packet.dll"),
     ]
 }
-// SAFETY: символы возвращают реальные тестовые функции с верными сигнатурами; `wait_object` это `f_wait` с
-// контрактом `WaitForSingleObject` на виртуальном времени сценария (HANDLE после возврата не хранит).
+// SAFETY: символы возвращают реальные тестовые функции с верными сигнатурами.
 unsafe impl Module for FakeModule {
     fn symbol(&self, name: &CStr) -> Option<*const c_void> {
         let n = name.to_str().ok()?;
@@ -56,9 +55,6 @@ unsafe impl Module for FakeModule {
     }
     fn describe(&self) -> Result<Vec<DllInfo>, NetError> {
         Ok(self.diag.clone())
-    }
-    fn wait_object(&self) -> WaitFn {
-        f_wait
     }
 }
 impl Drop for FakeModule {

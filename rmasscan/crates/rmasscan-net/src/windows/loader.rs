@@ -28,8 +28,7 @@ use std::sync::{Arc, Mutex, Weak};
 use sha2::{Digest, Sha256};
 
 use super::ffi::{
-    GetEventFn, InitFn, PCAP_CHAR_ENC_UTF_8, PCAP_ERRBUF_SIZE, PcapFns, REQUIRED_SYMBOLS,
-    SYM_PCAP_GETEVENT, SYM_PCAP_INIT, WaitFn,
+    InitFn, PCAP_CHAR_ENC_UTF_8, PCAP_ERRBUF_SIZE, PcapFns, REQUIRED_SYMBOLS, SYM_PCAP_INIT,
 };
 use crate::NetError;
 
@@ -51,17 +50,11 @@ pub(crate) enum LoadFailure {
 /// экспорта загруженной библиотеки под этим именем, с сигнатурой, объявленной в
 /// `ffi` для такого имени, и `p` остаётся действительным, пока жив модуль.
 /// Нулевой адрес допустим (трактуется как отсутствие), мусорный нет.
-///
-/// `wait_object` возвращает функцию, которая ведёт себя как `WaitForSingleObject`: ждёт переданный HANDLE не дольше
-/// заданного числа миллисекунд, возвращает `WAIT_OBJECT_0`, `WAIT_TIMEOUT` или иной код и не держит HANDLE после
-/// возврата. Крейт вызывает её только с событием живого `pcap_t` (результат `pcap_getevent` этого handle).
 pub(crate) unsafe trait Module: Send + Sync {
     /// Адрес экспорта или `None`.
     fn symbol(&self, name: &CStr) -> Option<*const c_void>;
     /// Пути, версии и хэши реально загруженных wpcap/Packet DLL.
     fn describe(&self) -> Result<Vec<DllInfo>, NetError>;
-    /// Функция ожидания события чтения (`WaitForSingleObject`).
-    fn wait_object(&self) -> WaitFn;
 }
 
 /// Шов загрузчика: настоящий (`sys::OsLoader`) или подставной.
@@ -90,9 +83,6 @@ pub(crate) struct NpcapApi {
     /// приходят в UTF-8. Иначе (старый wpcap без символа или отказ) это
     /// ANSI-кодировка, и нелатинский текст может искажаться; на работу не влияет.
     utf8_text: bool,
-    /// `pcap_getevent` и функция ожидания модуля: RX ждёт событие чтения вместо опроса. `None` на старом wpcap без
-    /// символа (тогда RX опрашивает, как прежде).
-    rx_event: Option<(GetEventFn, WaitFn)>,
     // Последним: выгрузка библиотеки после всего остального.
     _module: Box<dyn Module>,
 }
@@ -103,7 +93,6 @@ impl std::fmt::Debug for NpcapApi {
             .field("version", &self.version)
             .field("diagnostics", &self.diagnostics)
             .field("utf8_text", &self.utf8_text)
-            .field("rx_event", &self.rx_event.is_some())
             .finish()
     }
 }
@@ -229,15 +218,6 @@ impl NpcapApi {
                 unsafe { init(PCAP_CHAR_ENC_UTF_8, err.as_mut_ptr()) == 0 }
             }
         };
-        // `pcap_getevent` необязателен, как `pcap_init`: без него (старый wpcap) RX опрашивает. Здесь только адрес,
-        // событие у `pcap_t` берёт handle при первом ожидании.
-        let rx_event = lookup(SYM_PCAP_GETEVENT).map(|p| {
-            // SAFETY: p не нулевой (`lookup` отфильтровал NULL); по контракту `unsafe trait Module` это реальный экспорт
-            // `pcap_getevent` с сигнатурой `GetEventFn`, живой, пока жив module (он живёт в `NpcapApi`); указатель
-            // данных и fn-указатель одного размера.
-            let getevent = unsafe { std::mem::transmute::<*const c_void, GetEventFn>(p) };
-            (getevent, module.wait_object())
-        });
         // SAFETY: lib_version разрешён из wpcap.dll, не принимает аргументов и
         // возвращает указатель на статическую строку библиотеки или NULL.
         let p = unsafe { (fns.lib_version)() };
@@ -254,7 +234,6 @@ impl NpcapApi {
             version,
             diagnostics,
             utf8_text,
-            rx_event,
             _module: module,
         }))
     }
@@ -271,11 +250,6 @@ impl NpcapApi {
     /// Текст библиотеки в UTF-8 (см. поле `utf8_text`).
     pub(crate) fn utf8_text(&self) -> bool {
         self.utf8_text
-    }
-
-    /// `pcap_getevent` и функция ожидания: `Some`, только если символ разрешился (см. поле `rx_event`).
-    pub(crate) fn rx_event(&self) -> Option<(GetEventFn, WaitFn)> {
-        self.rx_event
     }
 }
 

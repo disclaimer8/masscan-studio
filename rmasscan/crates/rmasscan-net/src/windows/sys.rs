@@ -33,9 +33,7 @@ use windows_sys::Win32::System::LibraryLoader::{
     LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW,
 };
 use windows_sys::Win32::System::SystemInformation::GetSystemDirectoryW;
-use windows_sys::Win32::System::Threading::WaitForSingleObject;
 
-use super::ffi::WaitFn;
 use super::loader::{
     ApiSlot, DllInfo, LoadFailure, Loader, Module, NpcapApi, npcap_dll_path, sha256_hex,
 };
@@ -111,7 +109,6 @@ impl OsModule {
 
 // SAFETY: symbol() отдаёт только результат GetProcAddress живого HMODULE
 // (реальный экспорт; выгрузка лишь в Drop), нулевой результат это None.
-// wait_object() отдаёт сам `WaitForSingleObject` из kernel32: контракт трейта и есть его контракт.
 unsafe impl Module for OsModule {
     fn symbol(&self, name: &CStr) -> Option<*const c_void> {
         // SAFETY: handle это живой HMODULE (выгрузка только в Drop), name
@@ -134,10 +131,6 @@ unsafe impl Module for OsModule {
             out.push(dll_info("Packet.dll", &module_path(h)?)?);
         }
         Ok(out)
-    }
-
-    fn wait_object(&self) -> WaitFn {
-        WaitForSingleObject
     }
 }
 

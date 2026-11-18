@@ -2106,7 +2106,7 @@ fn plan_banners_runs_mb01_and_macos_verify_passes_it_by_records() {
         .filter(|a| a.iter().any(|x| x == "listen"))
         .collect();
     assert_eq!(listen.len(), 1);
-    assert_eq!(after(listen[0], "--banners"), "2222=22,8080=80");
+    assert_eq!(after(listen[0], "--banners"), "2222=22,8080=80,8443=443");
     assert!(!listen[0].iter().any(|x| x == "--open"));
     let scan: Vec<&Vec<String>> = spawned.iter().filter(|a| a[0] == rig.rmasscan).collect();
     assert_eq!(scan.len(), 1);

@@ -1,6 +1,6 @@
 //! Буферы баннеров соединения, `struct BannerOutput` (`src/proto-banout.c`, `src/proto-banout.h:15-21`, справка B3):
-//! одна запись на тип приложения, порядок списка C, предел записи 65 536 байт (Р5) и бюджет байтов таблицы
-//! ([`ByteBudget`]).
+//! одна открытая запись на тип приложения плюс завершённые `banout_end` (справка 4c §B4), порядок списка C,
+//! предел записи 65 536 байт (Р5) и бюджет байтов таблицы ([`ByteBudget`]).
 //!
 //! Порядок записей у C зависит от устройства списка: голова встроена в TCB (200 байт, не перевыделяется), новая
 //! запись занимает пустую голову или встаёт сразу за ней, а голова, которой мало места, переезжает в новый узел за
@@ -13,24 +13,58 @@
 //! записи C, а не куски потока с дырой посередине; неполную запись HEUR сессия в парсер не повторяет
 //! ([`super::session`]).
 
-use rmasscan_core::banner::MAX_BANNER_BYTES;
+use crate::app_id;
+use rmasscan_core::banner::{MAX_BANNER_BYTES, REPEATED_BANNER_RECORD_COST};
 
 use crate::tcp::app::ByteBudget;
 
-/// Запись списка: `protocol`, `length` C, сохранённые байты (не больше [`MAX_BANNER_BYTES`]) и отметка, что предел
-/// или бюджет уже отказали ей в байте (дальше в неё не пишется).
+/// Запись списка: `protocol`, `length` C, сохранённые байты (не больше [`MAX_BANNER_BYTES`]), отметка, что предел
+/// или бюджет уже отказали ей в байте (дальше в неё не пишется), и отметка завершения `banout_end`
+/// (`protocol |= 0x80000000`, `src/proto-banout.c:163-171`): поиск по полному слову протокола (`:54-59`) такую
+/// запись больше не находит, и следующее дописывание того же приложения открывает новую.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct Rec {
     app: u16,
     c_len: usize,
     bytes: Vec<u8>,
     lossy: bool,
+    ended: bool,
+    // Monotonic C list placement: the newest tail node follows the head.
+    order: usize,
+    charged: bool,
 }
+
+/// Состояние потокового кодера base64, `struct BannerBase64` (`src/proto-banner1.h:47-51`): сколько байт текущей
+/// тройки собрано (`state` 0..2) и сама тройка (`temp`). Одно на соединение (`StreamState.base64`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Base64Stream {
+    state: u8,
+    temp: u32,
+}
+
+impl Base64Stream {
+    /// `banout_init_base64` (`src/proto-banout.c:376-380`).
+    // Потребитель — парсер TLS (задача 4 подэтапа 4c); до неё кодер упражняют только тесты banout.
+    #[allow(dead_code)]
+    pub(crate) fn reset(&mut self) {
+        self.state = 0;
+        self.temp = 0;
+    }
+}
+
+/// Алфавит `b64` (`src/proto-banout.c:367-371`).
+const B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 /// Буферы баннеров одного соединения (`tcb->banout`). Пустой вектор это свежий `banout_init`: пустая голова.
 #[derive(Debug, Default)]
 pub(crate) struct Banout {
+    // Only open records and the embedded head. All operations on this vector
+    // are bounded by the fixed number of application IDs.
     recs: Vec<Rec>,
+    ended: Vec<Rec>,
+    next_order: usize,
+    seen_certs: u8,
+    refused_certs: u8,
 }
 
 /// Ёмкость головы списка: `unsigned char banner[200]` (`src/proto-banout.h:20`). Голова встроена в TCB и не
@@ -51,7 +85,12 @@ impl Banout {
         self.commit_deferred_app(staged, budget, crate::app_id::MC);
     }
 
-    fn commit_deferred_app(&mut self, staged: &mut Banout, budget: &mut ByteBudget, app: u16) {
+    pub(super) fn commit_deferred_app(
+        &mut self,
+        staged: &mut Banout,
+        budget: &mut ByteBudget,
+        app: u16,
+    ) {
         // Переносится только запись `app`; байты любой другой отложенной записи возвращаются в бюджет.
         let mut rec = None;
         for r in std::mem::take(&mut staged.recs) {
@@ -73,8 +112,7 @@ impl Banout {
             && let Some(head) = self.recs.first_mut()
             && head.c_len.saturating_add(rec.c_len) >= HEAD_CAPACITY
         {
-            let moved = std::mem::take(head);
-            self.recs.insert(1, moved);
+            self.move_head();
             at = 1;
         }
         if let Some(target) = self.recs.get_mut(at) {
@@ -84,7 +122,12 @@ impl Banout {
             } else {
                 rec.bytes.len().min(room)
             };
-            budget.give(rec.bytes.len() - got);
+            let unused = rec.bytes.len() - got;
+            budget.give(unused);
+            if target.lossy {
+                budget.refuse(rec.bytes.len().min(room));
+            }
+
             rec.bytes.truncate(got);
             push_bounded(&mut target.bytes, &rec.bytes);
             target.lossy |= rec.lossy || got < rec.c_len;
@@ -106,13 +149,10 @@ impl Banout {
             return;
         };
         let at = self.new_proto(rec.app);
-        if at == 0 && rec.c_len >= HEAD_CAPACITY {
-            self.recs.insert(1, rec);
-            if let Some(head) = self.recs.first_mut() {
-                *head = Rec::default();
-            }
-        } else if let Some(target) = self.recs.get_mut(at) {
-            *target = rec;
+        let order = self.recs[at].order;
+        self.recs[at] = Rec { order, ..rec };
+        if at == 0 && self.recs[at].c_len >= HEAD_CAPACITY {
+            self.move_head();
         }
     }
 
@@ -126,17 +166,30 @@ impl Banout {
         if self.recs.is_empty() {
             self.recs.push(Rec::default());
         }
-        let mut at = match self.recs.iter().position(|r| r.app == app) {
+        let mut at = match self.recs.iter().position(|r| r.app == app && !r.ended) {
             Some(i) => i,
-            None => self.new_proto(app),
+            None => {
+                let bit = Self::cert_bit(app);
+                let repeat = self.seen_certs & bit != 0;
+                if self.refused_certs & bit != 0
+                    || (repeat && !budget.reserve_record(REPEATED_BANNER_RECORD_COST))
+                {
+                    self.refused_certs |= bit;
+                    budget.refuse(px.len());
+                    return;
+                }
+                self.seen_certs |= bit;
+                let i = self.new_proto(app);
+                self.recs[i].charged = repeat;
+                i
+            }
         };
         if at == 0
             && let Some(head) = self.recs.first_mut()
             && head.c_len.saturating_add(px.len()) >= HEAD_CAPACITY
         {
             // `:269-273`: копия головы встаёт сразу за ней, голова `protocol = 0, length = 0`.
-            let moved = std::mem::take(head);
-            self.recs.insert(1, moved);
+            self.move_head();
             at = 1;
         }
         let Some(rec) = self.recs.get_mut(at) else {
@@ -156,6 +209,111 @@ impl Banout {
         rec.lossy = got < px.len();
     }
 
+    /// `banout_append_base64(banout, app, px, length, base64)` (`src/proto-banout.c:386-415`): каждая полная
+    /// тройка — 4 знака, хвост тройки живёт в `b64` между фрагментами. Знаки дописываются по одному, как
+    /// `banout_append_char` у C: переезд головы на 200 байтах зависит от размера каждого дописывания, и
+    /// кусковая подача давала бы другой порядок записей на разрезанном потоке.
+    pub(crate) fn append_base64(
+        &mut self,
+        budget: &mut ByteBudget,
+        b64: &mut Base64Stream,
+        app: u16,
+        px: &[u8],
+    ) {
+        for &byte in px {
+            match b64.state {
+                0 => {
+                    b64.temp = u32::from(byte) << 16;
+                    b64.state = 1;
+                }
+                1 => {
+                    b64.temp |= u32::from(byte) << 8;
+                    b64.state = 2;
+                }
+                _ => {
+                    b64.temp |= u32::from(byte);
+                    b64.state = 0;
+                    let x = b64.temp;
+                    for shift in [18, 12, 6, 0] {
+                        self.append(budget, app, &[B64[((x >> shift) & 0x3F) as usize]]);
+                    }
+                }
+            }
+        }
+    }
+
+    /// `banout_finalize_base64` (`src/proto-banout.c:419-442`): неполная тройка дописывается с `=` на недостающие
+    /// знаки; полная (state 0) ничего не добавляет. Состояние кодера не сбрасывается, как у C.
+    pub(crate) fn finalize_base64(
+        &mut self,
+        budget: &mut ByteBudget,
+        b64: &mut Base64Stream,
+        app: u16,
+    ) {
+        let x = b64.temp;
+        let tail: &[u8] = match b64.state {
+            1 => &[
+                B64[((x >> 18) & 0x3F) as usize],
+                B64[((x >> 12) & 0x3F) as usize],
+                b'=',
+                b'=',
+            ],
+            2 => &[
+                B64[((x >> 18) & 0x3F) as usize],
+                B64[((x >> 12) & 0x3F) as usize],
+                B64[((x >> 6) & 0x3F) as usize],
+                b'=',
+            ],
+            _ => &[],
+        };
+        if !tail.is_empty() {
+            self.append(budget, app, tail);
+        }
+    }
+
+    /// `banout_end(banout, app)` (`src/proto-banout.c:163-171`): открытая непустая запись `app` завершается;
+    /// следующее дописывание того же приложения откроет новую запись ([`Banout::append`]).
+    pub(crate) fn end(&mut self, app: u16) {
+        self.refused_certs &= !Self::cert_bit(app);
+        if let Some(i) = self
+            .recs
+            .iter()
+            .position(|r| r.app == app && !r.ended && r.c_len != 0)
+        {
+            if i == 0 {
+                self.recs[i].ended = true;
+            } else {
+                let mut rec = self.recs.remove(i);
+                rec.ended = true;
+                self.ended.push(rec);
+            }
+        }
+    }
+
+    fn cert_bit(app: u16) -> u8 {
+        match app {
+            app_id::X509_CERT => 1,
+            app_id::X509_CACERT => 2,
+            _ => 0,
+        }
+    }
+
+    fn move_head(&mut self) {
+        let mut moved = std::mem::take(&mut self.recs[0]);
+        self.next_order += 1;
+        moved.order = self.next_order;
+        self.recs.insert(1, moved);
+    }
+
+    /// Есть ли `needle` в сохранённых байтах записи `app` (`banout_is_contains`, `src/proto-banout.c:100-128`;
+    /// у C поиск по всей записи, здесь — по сохранённому префиксу, как у всех записей под пределом Р5).
+    pub(crate) fn contains(&self, app: u16, needle: &[u8]) -> bool {
+        self.recs
+            .iter()
+            .filter(|r| r.app == app)
+            .any(|r| r.bytes.windows(needle.len().max(1)).any(|w| w == needle))
+    }
+
     /// Запись `app` неполная: предел Р5 или бюджет отказали ей в байте.
     pub(crate) fn lossy(&self, app: u16) -> bool {
         self.recs.iter().any(|r| r.app == app && r.lossy)
@@ -170,10 +328,12 @@ impl Banout {
                 0
             }
             Some(_) => {
+                self.next_order += 1;
                 self.recs.insert(
                     1,
                     Rec {
                         app,
+                        order: self.next_order,
                         ..Rec::default()
                     },
                 );
@@ -211,8 +371,17 @@ impl Banout {
     /// выдаётся.
     pub(crate) fn flush(&mut self, budget: &mut ByteBudget) -> Vec<(u16, Vec<u8>)> {
         let mut out = Vec::new();
-        for r in std::mem::take(&mut self.recs) {
+        let state = std::mem::take(self);
+        let mut open = state.recs.into_iter();
+        let head = open.next();
+        let mut tail = state.ended;
+        tail.extend(open);
+        tail.sort_unstable_by_key(|r| std::cmp::Reverse(r.order));
+        for r in head.into_iter().chain(tail) {
             budget.give(r.bytes.len());
+            if r.charged {
+                budget.give(REPEATED_BANNER_RECORD_COST);
+            }
             if r.app != 0 && r.c_len != 0 && !r.bytes.is_empty() {
                 out.push((r.app, r.bytes));
             }
@@ -223,13 +392,24 @@ impl Banout {
     /// Узлы списка `(protocol, length C)`, голова первой.
     #[cfg(test)]
     pub(crate) fn nodes(&self) -> Vec<(u16, usize)> {
-        self.recs.iter().map(|r| (r.app, r.c_len)).collect()
+        let mut open = self.recs.iter();
+        let head = open.next();
+        let mut tail: Vec<_> = open.chain(&self.ended).collect();
+        tail.sort_unstable_by_key(|r| std::cmp::Reverse(r.order));
+        head.into_iter()
+            .chain(tail)
+            .map(|r| (r.app, r.c_len))
+            .collect()
     }
 
     /// Сохранённых байтов во всех записях.
     #[cfg(test)]
     pub(crate) fn held(&self) -> usize {
-        self.recs.iter().map(|r| r.bytes.len()).sum()
+        self.recs
+            .iter()
+            .chain(&self.ended)
+            .map(|r| r.bytes.len())
+            .sum()
     }
 }
 
@@ -499,5 +679,170 @@ mod tests {
 
     fn app_id_heur() -> u16 {
         crate::app::app_id::HEUR
+    }
+
+    /// Векторы `banout_selftest` C (`src/proto-banout.c:498-537`): границы финализации на длинах 1..5.
+    #[test]
+    fn base64_stream_matches_c_selftest_vectors() {
+        let mut b = Banout::default();
+        let mut budget = ByteBudget::new(usize::MAX);
+        let mut b64 = Base64Stream::default();
+        for (app, data) in [
+            (1u16, &b"x"[..]),
+            (2, &b"bc"[..]),
+            (3, &b"mno"[..]),
+            (4, &b"stuv"[..]),
+            (5, &b"fghij"[..]),
+        ] {
+            b64.reset();
+            b.append_base64(&mut budget, &mut b64, app, data);
+            b.finalize_base64(&mut budget, &mut b64, app);
+        }
+        let recs: std::collections::HashMap<u16, Vec<u8>> =
+            b.flush(&mut budget).into_iter().collect();
+        assert_eq!(recs[&1], b"eA==");
+        assert_eq!(recs[&2], b"YmM=");
+        assert_eq!(recs[&3], b"bW5v");
+        assert_eq!(recs[&4], b"c3R1dg==");
+        assert_eq!(recs[&5], b"ZmdoaWo=");
+    }
+
+    /// Тот же DER кусками 1/2/3/7 и целиком — одна строка: перенос кодера между фрагментами
+    /// (`banout_append_base64`, `src/proto-banout.c:386-415`).
+    #[test]
+    fn base64_same_in_any_fragmentation() {
+        let data: Vec<u8> = (0..1000usize).map(|i| (i * 37 % 251) as u8).collect();
+        let whole = encode(&data, &[data.len()]);
+        for chunk in [1usize, 2, 3, 7, 64] {
+            let splits: Vec<usize> = std::iter::repeat_n(chunk, data.len() / chunk + 1).collect();
+            assert_eq!(encode(&data, &splits), whole, "chunk {chunk}");
+        }
+    }
+
+    fn encode(data: &[u8], splits: &[usize]) -> Vec<u8> {
+        let mut b = Banout::default();
+        let mut budget = ByteBudget::new(usize::MAX);
+        let mut b64 = Base64Stream::default();
+        let mut at = 0;
+        for &n in splits {
+            let end = (at + n).min(data.len());
+            b.append_base64(&mut budget, &mut b64, 15, &data[at..end]);
+            at = end;
+            if at == data.len() {
+                break;
+            }
+        }
+        assert_eq!(at, data.len());
+        b.finalize_base64(&mut budget, &mut b64, 15);
+        b.flush(&mut budget).pop().expect("record").1
+    }
+
+    /// До финализации неполная тройка не видна; финализация дописывает её с набивкой
+    /// (`banout_finalize_base64`, `src/proto-banout.c:419-442`).
+    #[test]
+    fn base64_finalize_only_at_end() {
+        let mut b = Banout::default();
+        let mut budget = ByteBudget::new(usize::MAX);
+        let mut b64 = Base64Stream::default();
+        b.append_base64(&mut budget, &mut b64, 21, b"ab");
+        // Ни одного знака ещё не дописано, узла нет — как у C до первого `banout_append_char`.
+        assert!(b.nodes().is_empty());
+        b.finalize_base64(&mut budget, &mut b64, 21);
+        assert_eq!(b.flush(&mut budget), [(21, b"YWI=".to_vec())]);
+    }
+
+    /// `banout_end` (`src/proto-banout.c:163-171` + поиск по полному слову протокола `:54-59`): следующее
+    /// дописывание того же приложения открывает новую запись. Цепочка из трёх «сертификатов» даёт X509 и две
+    /// X509CA; end пустой записи ничего не делает; порядок сброса — порядок списка.
+    #[test]
+    fn ended_record_semantics_match_c() {
+        let mut b = Banout::default();
+        let mut budget = ByteBudget::new(usize::MAX);
+        let mut b64 = Base64Stream::default();
+        b.end(15);
+        for (app, data) in [(15u16, &b"one"[..]), (16, &b"two"[..]), (16, &b"three"[..])] {
+            b64.reset();
+            b.append_base64(&mut budget, &mut b64, app, data);
+            b.finalize_base64(&mut budget, &mut b64, app);
+            b.end(app);
+        }
+        b.append(&mut budget, 9, b"TLS/1.2 ");
+        // Порядок списка C: каждая новая запись встаёт сразу за головой (15), поэтому вторая X509CA идёт
+        // раньше первой, а 9 — между головой и ними.
+        assert_eq!(
+            b.flush(&mut budget),
+            [
+                (15, b"b25l".to_vec()),
+                (9, b"TLS/1.2 ".to_vec()),
+                (16, b"dGhyZWU=".to_vec()),
+                (16, b"dHdv".to_vec()),
+            ]
+        );
+    }
+
+    #[test]
+    fn refused_repeated_records_retain_no_nodes_and_refund_every_reservation() {
+        for limit in [0, 3, 4, 127, 132, 136, 1024] {
+            let mut b = Banout::default();
+            let mut budget = ByteBudget::new(limit);
+            for _ in 0..10_000 {
+                b.append(&mut budget, app_id::X509_CACERT, b"YWJj");
+                b.end(app_id::X509_CACERT);
+            }
+            let nodes = b.nodes().len();
+            assert!(nodes <= 1 + limit / REPEATED_BANNER_RECORD_COST);
+            let bytes = b.held();
+            assert_eq!(budget.dropped(), 40_000 - bytes as u64);
+            let out = b.flush(&mut budget);
+            assert_eq!(out.iter().map(|r| r.1.len()).sum::<usize>(), bytes);
+            assert_eq!(budget.left(), limit);
+            assert!(b.nodes().is_empty());
+        }
+    }
+
+    /// Предел Р5 и бюджет таблицы действуют на base64 так же, как на обычный текст: запись режется с конца,
+    /// недостача считается, после отказа запись не растёт (и финализация ничего не добавляет).
+    #[test]
+    fn base64_respects_record_cap_and_budget() {
+        let der = vec![0x30u8; 60_000];
+        let mut b = Banout::default();
+        let mut budget = ByteBudget::new(1 << 20);
+        let mut b64 = Base64Stream::default();
+        b.append_base64(&mut budget, &mut b64, 15, &der);
+        b.finalize_base64(&mut budget, &mut b64, 15);
+        assert_eq!(b.held(), MAX_BANNER_BYTES);
+        assert_eq!(b.flush(&mut budget)[0].1.len(), MAX_BANNER_BYTES);
+
+        let mut small = ByteBudget::new(8);
+        let mut b = Banout::default();
+        let mut b64 = Base64Stream::default();
+        b.append_base64(&mut small, &mut b64, 15, b"abcdefghij");
+        b.finalize_base64(&mut small, &mut b64, 15);
+        assert_eq!(b.held(), 8);
+        assert_eq!(b.flush(&mut small), [(15, b"YWJjZGVm".to_vec())]);
+        assert_eq!(small.left(), 8);
+    }
+
+    /// Порядок B3 рядом с текстовой записью: голова переезжает на той же логической длине, что у C при
+    /// посимвольных дописываниях кодера.
+    #[test]
+    fn base64_flush_order_with_text_record() {
+        for text_len in [50usize, 250] {
+            let mut b = Banout::default();
+            let mut budget = ByteBudget::new(usize::MAX);
+            let mut b64 = Base64Stream::default();
+            b.append(&mut budget, 9, &vec![b's'; text_len]);
+            b.append_base64(&mut budget, &mut b64, 15, &[1u8; 30]);
+            b.finalize_base64(&mut budget, &mut b64, 15);
+            b.end(15);
+            b.append(&mut budget, 20, b"vuln");
+            let got: Vec<u16> = b.flush(&mut budget).iter().map(|r| r.0).collect();
+            let want: Vec<u16> = if text_len < 200 {
+                vec![9, 20, 15]
+            } else {
+                vec![15, 20, 9]
+            };
+            assert_eq!(got, want, "text {text_len}");
+        }
     }
 }

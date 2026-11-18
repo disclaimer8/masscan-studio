@@ -1,0 +1,9 @@
+tls-oracle v1 segments=1 bytes=31
+run whole calls=1
+record 15 4 "YWJj"
+record 15 4 "YWJj"
+end
+run bytewise calls=31
+record 15 4 "YWJj"
+record 15 4 "YWJj"
+end

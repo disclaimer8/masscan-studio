@@ -4186,7 +4186,7 @@ impl World {
         fs::create_dir_all(&g).unwrap();
         fs::write(d.join("peer.pcap"), crate::pcap::encode(&sim.frames)).unwrap();
         fs::write(d.join("eno1.pcap"), crate::pcap::encode(&Vec::new())).unwrap();
-        // What `peer listen --banners 22,80` writes when it is ready.
+        // What `peer listen --banners 22,80,443` writes when it is ready.
         let banners: Vec<Value> = crate::peer::banner_ports(&bs::WINDOWS.banners_arg())
             .unwrap()
             .iter()
@@ -4255,7 +4255,7 @@ fn plan_banners_runs_wb01_and_windows_verify_passes_it_by_records() {
         .collect();
     assert_eq!(listen.len(), 1, "{listen:?}");
     assert!(
-        listen[0].contains("listen --banners 22,80 --ready"),
+        listen[0].contains("listen --banners 22,80,443 --ready"),
         "{}",
         listen[0]
     );

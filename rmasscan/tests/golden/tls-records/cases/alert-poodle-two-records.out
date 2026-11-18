@@ -1,0 +1,7 @@
+tls-oracle v1 segments=1 bytes=14
+run whole calls=1
+record 24 26 "poodle[TLS_FALLBACK_SCSV] "
+end
+run bytewise calls=14
+record 24 26 "poodle[TLS_FALLBACK_SCSV] "
+end

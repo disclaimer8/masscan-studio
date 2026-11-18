@@ -1,0 +1,7 @@
+x509-oracle v1 count=1 bytes=175
+run whole calls=1
+record 9 11 ", leaf.test"
+end
+run bytewise calls=175
+record 9 11 ", leaf.test"
+end

@@ -30,9 +30,10 @@ pub(crate) fn linux_window() -> &'static Path {
     DIR.get_or_init(|| {
         let root = scratch("linux");
         BSim::tcp(&bv::tcp_case(REFERENCE_CASE).unwrap()).write(&root);
+        BSim::tcp(&bv::tcp_case(REFERENCE_TLS_CASE).unwrap()).write(&root);
         fs::write(
             root.join(REFERENCE_VERDICT),
-            json!({"runs":[{"tag":"manifest","verdict":PASS},{"tag":REFERENCE_CASE,"verdict":PASS}],"overall":PASS})
+            json!({"runs":[{"tag":"manifest","verdict":PASS},{"tag":REFERENCE_CASE,"verdict":PASS},{"tag":REFERENCE_TLS_CASE,"verdict":PASS}],"overall":PASS})
                 .to_string(),
         )
         .unwrap();
@@ -341,13 +342,22 @@ fn simulate(c: &StandCase) -> (Frames, Vec<Line>) {
     let builder = rmasscan_core::tcp_frame::TcpFrameBuilder::from_plan(&plan);
     let probes = crate::pair_verify::plan_probes(&plan).unwrap().0;
     let mut stack = rmasscan_proto::tcp_stack_factory(
-        rmasscan_proto::TcpBannerSettings::default(),
+        crate::banners_verify::tcp_case_settings(
+            &crate::banners_verify::tcp_case("t01_tcp4").unwrap(),
+        ),
         CONNECTION_TIMEOUT,
     )
     .new_table(TableParams {
         seed: 1,
         capacity: 4096,
         banner_byte_budget: 1 << 29,
+        // The stand's own source (the case scans --source-port 40000-40015): ranges of another case's
+        // source would send the reconnect arithmetic to a wrong address.
+        source: rmasscan_core::stack::SourceRanges {
+            ports: bv::source_range(),
+            ipv4: Some((u32::from(st.scanner_ip), u32::from(st.scanner_ip))),
+            ipv6: None,
+        },
     });
     let src = st.scanner_ip;
     let key_of = |port: u16, sport: u16| ConnKey {
@@ -499,10 +509,45 @@ fn simulate(c: &StandCase) -> (Frames, Vec<Line>) {
         }
         for (at, g) in sent {
             fr.push((at, builder.build(&g)));
-            let i = conns
+            let i = match conns
                 .iter()
                 .position(|pc| key_of(pc.port, pc.sport) == g.key)
-                .unwrap();
+            {
+                Some(i) => i,
+                // The --cert second connection: the stack's own SYN opens a peer conn on the first conn's
+                // port and scenario, answered like the first.
+                None if g.flags == 0x02 => {
+                    conns.push(PeerConn {
+                        port: g.key.remote_port,
+                        sport: g.key.local_port,
+                        syn_seq: g.seq,
+                        sc: c.scenario(g.key.remote_port).unwrap(),
+                        snd_nxt: 0,
+                        rcv_nxt: g.seq.wrapping_add(1),
+                        established: false,
+                        pc: 0,
+                        ready_at: 0.0,
+                        unread: 0,
+                        eof: false,
+                        done: false,
+                        dead: false,
+                        end_at: None,
+                    });
+                    let i = conns.len() - 1;
+                    let pc = &mut conns[i];
+                    let isn = 0x3000_0000u32.wrapping_add((i as u32) << 20);
+                    pc.snd_nxt = isn.wrapping_add(1);
+                    let f = peer(pc, isn, pc.syn_seq.wrapping_add(1), 0x12, &[]);
+                    pending.push((at + 0.001, i, f));
+                    i
+                }
+                None => panic!(
+                    "no conn for segment key {:?} flags {:#x}; conns {:?}",
+                    g.key,
+                    g.flags,
+                    conns.iter().map(|c| (c.port, c.sport)).collect::<Vec<_>>()
+                ),
+            };
             let pc = &mut conns[i];
             if g.flags & 0x04 != 0 {
                 pc.dead = true;
@@ -640,14 +685,14 @@ fn with_scanner_payload(sim: &mut StandSim, port: u16, payload: &[u8]) {
 fn the_case_table_scans_the_http_and_ssh_scenarios_with_the_stands_binding() {
     assert_eq!(
         WINDOWS.argv().join(" "),
-        "198.18.0.2 -p22,80 --banners --connection-timeout 8 --adapter-ip 198.18.0.1 --router-mac 02-57-4c-3d-2e-9b -oL output.txt --seed 1 --rate 100 --wait 14 --source-port 40000 --retries 0"
+        "198.18.0.2 -p22,80,443 --banners --connection-timeout 8 --adapter-ip 198.18.0.1 --router-mac 02-57-4c-3d-2e-9b -oL output.txt --seed 1 --rate 100 --wait 14 --source-port 40000-40015 --retries 0"
     );
     assert_eq!(
         MACOS.argv().join(" "),
-        "198.18.0.2 -p2222,8080 --banners --connection-timeout 8 --adapter feth4201 --adapter-ip 198.18.0.1 --adapter-mac 02-ac-00-00-00-01 --router-ip 198.18.0.2 --router-mac 02-ac-00-00-00-02 -oL output.txt --seed 1 --rate 100 --wait 14 --source-port 40000 --retries 0"
+        "198.18.0.2 -p2222,8080,8443 --banners --connection-timeout 8 --adapter feth4201 --adapter-ip 198.18.0.1 --adapter-mac 02-ac-00-00-00-01 --router-ip 198.18.0.2 --router-mac 02-ac-00-00-00-02 -oL output.txt --seed 1 --rate 100 --wait 14 --source-port 40000-40015 --retries 0"
     );
-    assert_eq!(WINDOWS.banners_arg(), "22,80");
-    assert_eq!(MACOS.banners_arg(), "2222=22,8080=80");
+    assert_eq!(WINDOWS.banners_arg(), "22,80,443");
+    assert_eq!(MACOS.banners_arg(), "2222=22,8080=80,8443=443");
     // The listener takes what the table says.
     for c in [WINDOWS, MACOS] {
         let b = crate::peer::banner_ports(&c.banners_arg()).unwrap();
@@ -666,7 +711,14 @@ fn the_case_table_scans_the_http_and_ssh_scenarios_with_the_stands_binding() {
             .iter()
             .map(|(p, _)| c.scenario(*p).unwrap().apps)
             .collect();
-        assert_eq!(apps, [&["ssh"][..], &["http.server", "title", "http"][..]]);
+        assert_eq!(
+            apps,
+            [
+                &["ssh"][..],
+                &["http.server", "title", "http"][..],
+                &["ssl", "X509CA", "X509"][..]
+            ]
+        );
         // The flags are the binding the autodetect window proved on the stand (w04, m03), plus the given source.
         let st = av::stand(c.plan);
         assert!(c.argv().contains(&av::dash(st.peer_mac)));
@@ -674,13 +726,16 @@ fn the_case_table_scans_the_http_and_ssh_scenarios_with_the_stands_binding() {
     }
     // The mapping is only sound because C sends the same on both ports: an HTTP scenario on a port without C's HTTP
     // hello, or SSH on a hello port, would be refused.
-    for ports in [[(2222, 22), (8081, 80)], [(23, 22), (8080, 80)]] {
+    for ports in [
+        [(2222, 22), (8081, 80), (8443, 443)],
+        [(23, 22), (8080, 80), (8443, 443)],
+    ] {
         let c = StandCase { ports, ..MACOS };
         assert!(!hello_table_problems(&c).is_empty(), "{ports:?}");
     }
     // A hello table that lost its line for a port whose scenario waits for the hello is a problem, not "no hello".
     let c = StandCase {
-        ports: [(2222, 22), (9999, 80)],
+        ports: [(2222, 22), (9999, 80), (8443, 443)],
         ..MACOS
     };
     let probs = hello_table_problems(&c);
@@ -703,10 +758,12 @@ fn both_stands_pass_with_cs_records_of_the_same_scenarios() {
         // The verdict is by records: C's, with the macOS ports mapped.
         assert_eq!(
             r["notes"]["banners_by_app"],
-            json!({"http": 1, "http.server": 1, "ssh": 1, "title": 1})
+            json!({"X509": 2, "X509CA": 2, "http": 1, "http.server": 1, "ssh": 1, "ssl": 2, "title": 1})
         );
         let refs = array(&run_of(&v, REFERENCE_DIR)["notes"]["c_records"]);
-        assert_eq!(refs.len(), 6, "{refs:?}");
+        // t01's six (two opens, four banners) and t10's eight: an open per connection of 443 (the plan's
+        // and the stack's second), three banners on each.
+        assert_eq!(refs.len(), 14, "{refs:?}");
         if c.plan == Plan::Windows {
             assert!(s(&r["notes"]["windows_no_rst"]).starts_with("holds"));
             assert_eq!(
@@ -717,7 +774,10 @@ fn both_stands_pass_with_cs_records_of_the_same_scenarios() {
             assert_eq!(r["notes"]["wire"]["host_arp_replies"], 1);
             assert_eq!(r["notes"]["wire"]["rmasscan_arp_answers"], 1);
         } else {
-            assert_eq!(r["notes"]["port_map"], json!(["2222 -> 22", "8080 -> 80"]));
+            assert_eq!(
+                r["notes"]["port_map"],
+                json!(["2222 -> 22", "8080 -> 80", "8443 -> 443"])
+            );
         }
     }
 }
@@ -1120,14 +1180,17 @@ fn the_reference_must_be_a_pass_of_t01_with_its_recorded_hashes() {
     // The suites refuse a window whose t01_tcp4 is not PASS, or whose files changed since that window's own copy.
     let linux = scratch("linux-bad");
     BSim::tcp(&bv::tcp_case(REFERENCE_CASE).unwrap()).write(&linux);
+    BSim::tcp(&bv::tcp_case(REFERENCE_TLS_CASE).unwrap()).write(&linux);
     let out = scratch("out-bad");
     assert!(
         copy_reference(&linux, &out)
             .unwrap_err()
             .contains("verdict.json")
     );
-    let verdict =
-        |v: &str| json!({"runs":[{"tag":REFERENCE_CASE,"verdict":v}],"overall":v}).to_string();
+    let verdict = |v: &str| {
+        json!({"runs":[{"tag":REFERENCE_CASE,"verdict":v},{"tag":REFERENCE_TLS_CASE,"verdict":v}],"overall":v})
+            .to_string()
+    };
     fs::write(linux.join(REFERENCE_VERDICT), verdict(INVALID)).unwrap();
     assert!(
         copy_reference(&linux, &out)
@@ -1204,12 +1267,19 @@ fn the_reference_must_be_a_pass_of_t01_with_its_recorded_hashes() {
 
 #[test]
 fn the_reference_is_read_from_a_window_the_banners_verifier_judged() {
-    // The copy reads the verdict banners-verify writes: its t01_tcp4 run, judged on the generator's case.
+    // The copy reads the verdict banners-verify writes: its t01_tcp4 and t10_tls4 runs, judged on the
+    // generator's cases.
     let linux = scratch("linux-real");
     BSim::tcp(&bv::tcp_case(REFERENCE_CASE).unwrap()).write(&linux);
+    BSim::tcp(&bv::tcp_case(REFERENCE_TLS_CASE).unwrap()).write(&linux);
     let verdict = bv::verify_dir(&linux);
     assert_eq!(
         run_verdict(&verdict, REFERENCE_CASE).as_deref(),
+        Some(PASS),
+        "{verdict:#}"
+    );
+    assert_eq!(
+        run_verdict(&verdict, REFERENCE_TLS_CASE).as_deref(),
         Some(PASS),
         "{verdict:#}"
     );
@@ -1230,6 +1300,13 @@ fn the_reference_is_read_from_a_window_the_banners_verifier_judged() {
         rf.payloads
     );
     assert_eq!(rf.payloads[&22], [b"SSH-2.0-OPENSSH_7.9\r\n".to_vec()]);
+    // And on 443: C's ClientHello on the plan's connection and the hello of its second (`--cert`) one, in
+    // SYN order.
+    assert_eq!(rf.payloads[&443].len(), 2, "{:?}", rf.payloads[&443]);
+    assert!(
+        rf.payloads[&443][0].len() == 198
+            && rf.payloads[&443][0].starts_with(b"\x16\x03\x01\x00\xc1\x01")
+    );
     for d in [linux, out] {
         let _ = fs::remove_dir_all(d);
     }
@@ -1283,7 +1360,7 @@ fn an_unexplained_frame_of_the_scanner_or_a_syn_off_the_plan_fails() {
                 remote: u32::from(PEER),
             },
             local_port: 40000,
-            remote_port: 443,
+            remote_port: 8443,
         },
         seq: 1,
         ack: 1,

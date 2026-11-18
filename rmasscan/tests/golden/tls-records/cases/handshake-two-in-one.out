@@ -1,0 +1,7 @@
+tls-oracle v1 segments=1 bytes=51
+run whole calls=1
+record 9 21 "TLS/1.2 cipher:0xc02f"
+end
+run bytewise calls=51
+record 9 21 "TLS/1.2 cipher:0xc02f"
+end

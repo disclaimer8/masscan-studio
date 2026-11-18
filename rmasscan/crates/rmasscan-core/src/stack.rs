@@ -67,6 +67,19 @@ pub struct StackStats {
     pub tcbs_live: u64,
     pub table_full: u64,
     pub banner_bytes_dropped: u64,
+    /// Реконнекты, которым не нашлось другого порта/адреса источника (`ERRMSG` у C печатается один раз,
+    /// `src/stack-tcp-core.c:1669`, справка 4c §D1).
+    pub reconnect_no_port: u64,
+}
+
+/// Диапазоны источника таблицы для реконнекта (`stack->src`, `src/stack-src.h:9-28`): порты и адреса,
+/// границы включительно, как `is_my_port`/`is_my_ip`. `(0, 0)`/`None` — диапазон не задан: только адрес и
+/// порт самого соединения.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SourceRanges {
+    pub ports: (u16, u16),
+    pub ipv4: Option<(u32, u32)>,
+    pub ipv6: Option<(u128, u128)>,
 }
 
 /// Параметры новой таблицы: `seed` скана, предел живых соединений и бюджет байтов баннеров. В C предела нет
@@ -76,6 +89,8 @@ pub struct TableParams {
     pub seed: u64,
     pub capacity: usize,
     pub banner_byte_budget: usize,
+    /// Диапазоны источника для второго соединения на TLS-порт (Р10); по умолчанию не заданы.
+    pub source: SourceRanges,
 }
 
 /// Таблица соединений одного приёмного потока.
@@ -154,6 +169,7 @@ mod tests {
             seed: 1,
             capacity: 4,
             banner_byte_budget: 0,
+            source: SourceRanges::default(),
         });
         let key = ConnKey {
             addrs: ConnAddrs::V4 {

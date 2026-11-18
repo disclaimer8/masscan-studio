@@ -174,6 +174,11 @@ impl PacketFd {
                 libc::SO_SNDBUF,
                 TX_SOCKET_BUFFER,
             );
+            // P3 по решению пользователя: кадры идут в драйвер мимо qdisc интерфейса (Linux 3.14+): шейпинг `tc` на
+            // них не действует, буфера qdisc нет (занятую очередь передачи драйвера ядро отдаёт как ENOBUFS, его
+            // повторяет `TxHalf`), и другие AF_PACKET сокеты (tcpdump на интерфейсе скана) их не видят. Отказ
+            // безвреден: кадры идут прежним путём через qdisc.
+            let _ = setsockopt_int(fd.as_fd(), libc::SOL_PACKET, libc::PACKET_QDISC_BYPASS, 1);
         }
         Ok(PacketFd { fd })
     }

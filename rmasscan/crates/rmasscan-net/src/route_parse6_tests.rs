@@ -6,7 +6,7 @@
 use std::net::Ipv6Addr;
 
 use super::*;
-use crate::discover::{Iface, RouteV6};
+use crate::discover::RouteV6;
 
 fn v6(s: &str) -> Ipv6Addr {
     s.parse().unwrap()
@@ -43,8 +43,8 @@ fn rtattr(ty: u16, payload: &[u8]) -> Vec<u8> {
     b
 }
 
-fn route6_msg(kind: u8, dst_len: u8, table: u8, attrs: &[Vec<u8>]) -> Vec<u8> {
-    let mut b = vec![LINUX_AF_INET6, dst_len, 0, 0, table, 3, 0, kind];
+fn route6_msg(kind: RouteKind, dst_len: u8, table: u8, attrs: &[Vec<u8>]) -> Vec<u8> {
+    let mut b = vec![LINUX_AF_INET6, dst_len, 0, 0, table, 3, 0, kind.0];
     b.extend(0u32.to_ne_bytes());
     for a in attrs {
         b.extend(a);
@@ -129,7 +129,7 @@ fn netlink_ipv6_route_reply_parses_oif_gateway_and_prefsrc() {
         ],
     );
     // Чужое семейство (IPv4) в той же датаграмме: не маршрут IPv6.
-    let mut v4 = vec![AF_INET, 32, 0, 0, 254, 3, 0, RTN_UNICAST];
+    let mut v4 = vec![AF_INET, 32, 0, 0, 254, 3, 0, RTN_UNICAST.0];
     v4.extend(0u32.to_ne_bytes());
     v4.extend(rtattr(RTA_OIF, &7u32.to_ne_bytes()));
     buf.extend(nlmsg(RTM_NEWROUTE, 0, &v4));
@@ -184,7 +184,12 @@ fn netlink_ipv6_route_kinds_local_unreachable_and_short_attributes() {
             &[rtattr(RTA_OIF, &1u32.to_ne_bytes())],
         ))
         .unwrap();
-        assert_eq!(route6_from_nl(&x[0], |_| "lo".into()), None, "kind {kind}");
+        assert_eq!(
+            route6_from_nl(&x[0], |_| "lo".into()),
+            None,
+            "kind {}",
+            kind.0
+        );
     }
     // Без RTA_OIF (например RTA_MULTIPATH) маршрута нет.
     let multi =
@@ -236,7 +241,7 @@ fn netlink_ipv6_defaults_are_main_table_unicast_with_oif_by_priority() {
         &[rtattr(RTA_OIF, &4u32.to_ne_bytes())],
     ));
     buf.extend(done());
-    let d = netlink_defaults6(parse_netlink_routes6(&buf).unwrap());
+    let d = netlink_defaults(parse_netlink_routes6(&buf).unwrap());
     let gws: Vec<_> = d.iter().map(|r| (r.oif, r.gateway)).collect();
     assert_eq!(
         gws,
@@ -260,7 +265,7 @@ fn netlink_ipv6_addr_dump_skips_tentative_and_dadfailed() {
     ));
     buf.extend(addr6_msg(
         2,
-        IFA_F_TENTATIVE as u8,
+        IFA_F_TENTATIVE.0 as u8,
         0,
         &[rtattr(IFA_ADDRESS, &v6("2001:db8:1::4").octets())],
     ));
@@ -270,7 +275,7 @@ fn netlink_ipv6_addr_dump_skips_tentative_and_dadfailed() {
         0,
         &[
             rtattr(IFA_ADDRESS, &v6("2001:db8:1::5").octets()),
-            rtattr(IFA_FLAGS, &IFA_F_DEPRECATED.to_ne_bytes()),
+            rtattr(IFA_FLAGS, &IFA_F_DEPRECATED.0.to_ne_bytes()),
         ],
     ));
     buf.extend(addr6_msg(
@@ -279,7 +284,7 @@ fn netlink_ipv6_addr_dump_skips_tentative_and_dadfailed() {
         0,
         &[
             rtattr(IFA_ADDRESS, &v6("2001:db8:1::6").octets()),
-            rtattr(IFA_FLAGS, &(IFA_F_DADFAILED | 0x100).to_ne_bytes()),
+            rtattr(IFA_FLAGS, &(IFA_F_DADFAILED.0 | 0x100).to_ne_bytes()),
         ],
     ));
     buf.extend(addr6_msg(
@@ -335,12 +340,12 @@ fn sdl(index: u16, name: &str) -> Vec<u8> {
     b
 }
 
-fn rt_reply(flags: i32, index: u16, addrs: i32, sockaddrs: &[Vec<u8>]) -> Vec<u8> {
+fn rt_reply(flags: RtFlags, index: u16, addrs: i32, sockaddrs: &[Vec<u8>]) -> Vec<u8> {
     let mut b = vec![0u8; RT_MSGHDR_LEN];
     b[OFF_VERSION] = RTM_VERSION;
     b[OFF_TYPE] = RTM_GET;
     b[OFF_INDEX..OFF_INDEX + 2].copy_from_slice(&index.to_ne_bytes());
-    b[OFF_FLAGS..OFF_FLAGS + 4].copy_from_slice(&flags.to_ne_bytes());
+    b[OFF_FLAGS..OFF_FLAGS + 4].copy_from_slice(&flags.0.to_ne_bytes());
     b[OFF_ADDRS..OFF_ADDRS + 4].copy_from_slice(&addrs.to_ne_bytes());
     b[OFF_PID..OFF_PID + 4].copy_from_slice(&77i32.to_ne_bytes());
     b[OFF_SEQ..OFF_SEQ + 4].copy_from_slice(&5i32.to_ne_bytes());
@@ -487,23 +492,21 @@ fn rtm_get_ipv6_reply_strips_the_kame_gateway_scope() {
 
 // ---------- Windows IP Helper ----------
 
-fn win_iface(name: &str, index: u32) -> Iface {
-    Iface {
-        name: name.into(),
-        index,
-        device_id: format!("\\Device\\NPF_{{{name}}}"),
-        description: Some(name.into()),
-        mac: Some([2, 0, 0, 0, 0, index as u8]),
-        mac_masked: false,
-        ethernet: true,
-        up: true,
+fn win_adapter(name: &str, if_index: u32) -> WinAdapter {
+    WinAdapter {
+        if_index,
+        if_type: IF_TYPE_ETHERNET_CSMACD,
+        oper_up: true,
+        adapter_name: format!("{{{name}}}"),
+        friendly_name: Some(name.into()),
+        mac: Some([2, 0, 0, 0, 0, if_index as u8]),
         ipv4: Vec::new(),
     }
 }
 
 #[test]
 fn windows_best_route_ipv6_gateway_source_and_local() {
-    let ifaces = [win_iface("Ethernet 2", 7), win_iface("Loopback", 1)];
+    let adapters = [win_adapter("Ethernet 2", 7), win_adapter("Loopback", 1)];
     let row = Fwd6 {
         ifindex: 7,
         prefix_len: 0,
@@ -517,7 +520,7 @@ fn windows_best_route_ipv6_gateway_source_and_local() {
         Some(v6("2001:db8:1::5")),
         v6("2001:db8:9::1"),
         &[],
-        &ifaces,
+        &adapters,
     );
     assert_eq!(
         r,
@@ -535,18 +538,18 @@ fn windows_best_route_ipv6_gateway_source_and_local() {
         prefix_len: 64,
         ..row
     };
-    let r = route6_from_best(&onlink, None, v6("fd00:198:18::2"), &[], &ifaces);
+    let r = route6_from_best(&onlink, None, v6("fd00:198:18::2"), &[], &adapters);
     assert_eq!((r.gateway, r.local), (None, false));
     // Свой адрес или loopback-интерфейс: local, без шлюза.
     let own = [v6("fd00:198:18::1")];
-    let r = route6_from_best(&onlink, None, v6("fd00:198:18::1"), &own, &ifaces);
+    let r = route6_from_best(&onlink, None, v6("fd00:198:18::1"), &own, &adapters);
     assert!(r.local);
     let lo = Fwd6 {
         ifindex: 1,
         loopback_if: true,
         ..row
     };
-    let r = route6_from_best(&lo, None, v6("2001:db8::1"), &[], &ifaces);
+    let r = route6_from_best(&lo, None, v6("2001:db8::1"), &[], &adapters);
     assert!(r.local);
     assert_eq!(r.gateway, None);
     // Маршруты по умолчанию IPv6: prefix 0, не loopback, по метрике.
@@ -563,7 +566,7 @@ fn windows_best_route_ipv6_gateway_source_and_local() {
         },
         lo,
     ];
-    let d = defaults6_from_table(&rows, &ifaces);
+    let d = defaults6_from_table(&rows, &adapters);
     let got: Vec<_> = d.iter().map(|r| (r.ifindex, r.gateway)).collect();
     assert_eq!(
         got,
@@ -575,11 +578,11 @@ fn windows_best_route_ipv6_gateway_source_and_local() {
 #[test]
 fn windows_ipv6_addresses_follow_dad_state() {
     let entries = [
-        (v6("fe80::aa"), WIN_DAD_PREFERRED),
-        (v6("2001:db8:1::4"), WIN_DAD_TENTATIVE),
-        (v6("2001:db8:1::5"), WIN_DAD_DEPRECATED),
-        (v6("2001:db8:1::6"), WIN_DAD_DUPLICATE),
-        (v6("fd00:198:18::1"), WIN_DAD_PREFERRED),
+        (v6("fe80::aa"), WIN_DAD_PREFERRED.0),
+        (v6("2001:db8:1::4"), WIN_DAD_TENTATIVE.0),
+        (v6("2001:db8:1::5"), WIN_DAD_DEPRECATED.0),
+        (v6("2001:db8:1::6"), WIN_DAD_DUPLICATE.0),
+        (v6("fd00:198:18::1"), WIN_DAD_PREFERRED.0),
         (v6("2001:db8:1::7"), 0),
     ];
     assert_eq!(

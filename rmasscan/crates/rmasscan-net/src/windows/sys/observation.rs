@@ -36,12 +36,11 @@ fn adapters_buffer_with(
     let mut size = 32 * 1024u32;
     for attempt in 0..4 {
         check_observation(deadline, cancelled)?;
-        if (size as usize) < size_of::<IP_ADAPTER_ADDRESSES_LH>()
-            || size as usize > MAX_BUFFER_BYTES
-        {
+        let bytes = usize::try_from(size).unwrap_or(usize::MAX);
+        if bytes < size_of::<IP_ADAPTER_ADDRESSES_LH>() || bytes > MAX_BUFFER_BYTES {
             return Err(malformed("adapter buffer size exceeds bounds"));
         }
-        let mut buf = vec![0u64; (size as usize).div_ceil(8)];
+        let mut buf = vec![0u64; bytes.div_ceil(8)];
         check_observation(deadline, cancelled)?;
         let capacity = size;
         let rc = query(buf.as_mut_ptr().cast(), &mut size);
@@ -64,8 +63,9 @@ fn adapters_buffer_with(
 struct Buffer<'a>(&'a [u64]);
 impl Buffer<'_> {
     fn extent<T>(&self, p: *const T, bytes: usize) -> Result<(), NetError> {
-        let base = self.0.as_ptr() as usize;
-        let offset = (p as usize)
+        let base = self.0.as_ptr().addr();
+        let offset = p
+            .addr()
             .checked_sub(base)
             .ok_or_else(|| malformed("pointer before adapter buffer"))?;
         if p.is_null()
@@ -129,7 +129,7 @@ fn decode_adapters(
     let mut p = buf.as_ptr().cast::<IP_ADAPTER_ADDRESSES_LH>();
     while !p.is_null() {
         check_observation(deadline, cancelled)?;
-        if remaining_nodes == 0 || !seen.insert(p as usize) {
+        if remaining_nodes == 0 || !seen.insert(p.addr()) {
             return Err(malformed("adapter list cycle or node limit"));
         }
         remaining_nodes -= 1;
@@ -139,10 +139,11 @@ fn decode_adapters(
         let a = unsafe { p.read_unaligned() };
         // SAFETY: both union variants consist exclusively of integers.
         let header = unsafe { a.Anonymous1.Anonymous };
-        if (header.Length as usize) < size_of::<IP_ADAPTER_ADDRESSES_LH>() {
+        let length = usize::try_from(header.Length).unwrap_or(usize::MAX);
+        if length < size_of::<IP_ADAPTER_ADDRESSES_LH>() {
             return Err(malformed("adapter structure is too short"));
         }
-        buffer.extent(p, header.Length as usize)?;
+        buffer.extent(p, length)?;
         let prefixes = unicast_prefixes(
             &buffer,
             a.FirstUnicastAddress,
@@ -181,7 +182,7 @@ fn unicast_prefixes(
     let mut seen = BTreeSet::new();
     while !p.is_null() {
         check_observation(deadline, cancelled)?;
-        if *remaining_nodes == 0 || !seen.insert(p as usize) {
+        if *remaining_nodes == 0 || !seen.insert(p.addr()) {
             return Err(malformed("unicast list cycle or node limit"));
         }
         *remaining_nodes -= 1;
@@ -190,7 +191,7 @@ fn unicast_prefixes(
         // consists solely of integer values, integer unions and pointers.
         let u = unsafe { p.read_unaligned() };
         // SAFETY: the union's two variants are integer-only representations.
-        let length = unsafe { u.Anonymous.Anonymous.Length } as usize;
+        let length = usize::try_from(unsafe { u.Anonymous.Anonymous.Length }).unwrap_or(usize::MAX);
         if length < size_of::<IP_ADAPTER_UNICAST_ADDRESS_LH>() {
             return Err(malformed("unicast structure has no prefix length"));
         }

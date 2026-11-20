@@ -5,17 +5,22 @@
 //! `DLT_*`/`IFT_*` отсутствуют в `libc`, поэтому константы заданы здесь и
 //! сверяются с `libc` и SDK-заголовком в `tests/layout_tests.rs`.
 //!
-//! Каждый дескриптор живёт в `OwnedFd` и принадлежит одному потоку; `Sync` не
-//! реализуется. Выбор `poll`/`kevent` скрыт за [`BpfIo::poll_in`], поэтому
-//! замена по итогам спайка меняет только этот файл.
+//! Каждый дескриптор живёт в `std::fs::File` и принадлежит одному потоку; `Sync` не
+//! реализуется. Выбор `poll`/`kevent` скрыт за [`BpfIo::poll_in`]: спайк закрыт, выбран `poll`, и смена
+//! механизма ожидания затронула бы только этот файл.
 
 use std::ffi::CString;
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+use std::fs::{File, OpenOptions};
+use std::io::{Read, Write};
+use std::os::fd::{AsFd, AsRawFd, RawFd};
+use std::os::unix::fs::OpenOptionsExt;
 use std::time::Duration;
 
 use super::Errno;
 use super::abi::{BpfInsn, BpfStat, HDR_OFF_CAPLEN, HDR_OFF_DATALEN, HDR_OFF_HDRLEN};
-use super::adapter::{BpfIo, BpfOpener, BpfSetup, Readiness};
+use super::adapter::{BpfIo, BpfOpener, BpfSetup};
+use crate::adapter_common::Readiness;
+use crate::unix_sys::{last_errno, poll_one};
 
 /// `struct bpf_hdr` (net/bpf.h, `__LP64__`: `BPF_TIMEVAL = timeval32`): sizeof 20 (tail
 /// padding), как `libc::bpf_hdr`. Заголовок записи, который реально пишет ядро, это
@@ -64,12 +69,6 @@ pub(crate) const BIOCSRTIMEOUT: libc::c_ulong = 0x8010_426d;
 
 pub(crate) const IFT_ETHER: u8 = 0x06;
 
-fn last_errno() -> Errno {
-    std::io::Error::last_os_error()
-        .raw_os_error()
-        .unwrap_or(libc::EIO)
-}
-
 /// `ioctl` с указателем на значение вызывающего. Размер `T` обязан совпадать с
 /// `IOCPARM_LEN(req)` (биты 16..29 запроса): иначе `EINVAL` до системного вызова.
 ///
@@ -82,7 +81,7 @@ fn last_errno() -> Errno {
 /// оставаться валидным на весь вызов. Размер `T` проверяется здесь, остальное
 /// гарантирует вызывающий.
 pub(crate) unsafe fn ioctl_ptr<T>(fd: RawFd, req: libc::c_ulong, arg: &mut T) -> Result<(), Errno> {
-    if ((req >> 16) & 0x1fff) as usize != std::mem::size_of::<T>() {
+    if usize::try_from((req >> 16) & 0x1fff).unwrap_or(usize::MAX) != std::mem::size_of::<T>() {
         return Err(libc::EINVAL);
     }
     // SAFETY: любое значение `fd` безопасно для памяти (неверный даёт EBADF); `arg`
@@ -95,80 +94,51 @@ pub(crate) unsafe fn ioctl_ptr<T>(fd: RawFd, req: libc::c_ulong, arg: &mut T) ->
 
 /// Открытый `/dev/bpfN`, неблокирующий.
 pub(crate) struct BpfFd {
-    fd: OwnedFd,
+    file: File,
     buflen: usize,
 }
 
 impl BpfFd {
-    /// `open("/dev/bpfN", O_RDWR | O_NONBLOCK | O_CLOEXEC)`.
-    fn open_node(index: u32) -> Result<BpfFd, Errno> {
-        let path = CString::new(format!("/dev/bpf{index}")).map_err(|_| libc::EINVAL)?;
-        // SAFETY: `path` это NUL-terminated строка, живущая весь вызов; флаги
-        // это целые, предусловий по памяти нет.
-        let raw = unsafe {
-            libc::open(
-                path.as_ptr(),
-                libc::O_RDWR | libc::O_NONBLOCK | libc::O_CLOEXEC,
-            )
-        };
-        if raw < 0 {
-            return Err(last_errno());
-        }
-        // SAFETY: `raw` только что вернул open(), он >= 0 и больше нигде не
-        // хранится, поэтому `OwnedFd` единственный владелец.
-        let fd = unsafe { OwnedFd::from_raw_fd(raw) };
-        Ok(BpfFd { fd, buflen: 0 })
+    /// `open("/dev/bpfN", O_RDWR | O_NONBLOCK | O_CLOEXEC)`: `O_CLOEXEC` добавляет std. Ошибка это сырой errno (`EIO`,
+    /// если ОС его не назвала); текст строит только `errno_msg`. Отличие std: `open` повторяет `EINTR` внутри.
+    pub(crate) fn open_node(index: u32) -> Result<BpfFd, Errno> {
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .custom_flags(libc::O_NONBLOCK)
+            .open(format!("/dev/bpf{index}"))
+            .map_err(|e| e.raw_os_error().unwrap_or(libc::EIO))?;
+        Ok(BpfFd { file, buflen: 0 })
     }
 
     fn set_flag(&mut self, req: libc::c_ulong, on: bool) -> Result<(), Errno> {
         let mut v = u32::from(on);
         // SAFETY: `v` это `u32` (любой образ допустим), запросы `set_flag` (BIOCIMMEDIATE,
         // BIOCSSEESENT, BIOCSHDRCMPLT) принимают `u_int`; размер сверяется внутри.
-        unsafe { ioctl_ptr(self.fd.as_raw_fd(), req, &mut v) }
+        unsafe { ioctl_ptr(self.file.as_raw_fd(), req, &mut v) }
     }
 }
 
 impl BpfIo for BpfFd {
     fn write(&mut self, frame: &[u8]) -> Result<usize, Errno> {
-        // SAFETY: указатель и длина описывают именно срез `frame`; дескриптор
-        // открыт (владеет `OwnedFd`).
-        let n = unsafe {
-            libc::write(
-                self.fd.as_raw_fd(),
-                frame.as_ptr().cast::<libc::c_void>(),
-                frame.len(),
-            )
-        };
-        usize::try_from(n).map_err(|_| last_errno())
+        // Один системный вызов `write`, без повтора после `EINTR`.
+        self.file
+            .write(frame)
+            .map_err(|e| e.raw_os_error().unwrap_or(libc::EIO))
     }
 
     fn read(&mut self, buf: &mut [u8]) -> Result<usize, Errno> {
-        // SAFETY: указатель и длина описывают именно срез `buf`, доступный
-        // для записи; дескриптор открыт.
-        let n = unsafe {
-            libc::read(
-                self.fd.as_raw_fd(),
-                buf.as_mut_ptr().cast::<libc::c_void>(),
-                buf.len(),
-            )
-        };
-        usize::try_from(n).map_err(|_| last_errno())
+        // Один системный вызов `read`, без повтора после `EINTR`.
+        self.file
+            .read(buf)
+            .map_err(|e| e.raw_os_error().unwrap_or(libc::EIO))
     }
 
     fn poll_in(&mut self, timeout_ms: i32) -> Result<Readiness, Errno> {
-        let mut p = libc::pollfd {
-            fd: self.fd.as_raw_fd(),
-            events: libc::POLLIN,
-            revents: 0,
-        };
-        // SAFETY: `p` это одна валидная `pollfd`, `nfds == 1`.
-        let rc = unsafe { libc::poll(&mut p, 1, timeout_ms) };
-        if rc < 0 {
-            return Err(last_errno());
-        }
+        let (rc, revents) = poll_one(self.file.as_fd(), libc::POLLIN, timeout_ms)?;
         Ok(if rc == 0 {
             Readiness::Timeout
-        } else if p.revents & libc::POLLIN != 0 {
+        } else if revents & libc::POLLIN != 0 {
             Readiness::Ready
         } else {
             Readiness::Failed
@@ -179,7 +149,7 @@ impl BpfIo for BpfFd {
         let mut st = BpfStat::default();
         // SAFETY: `BpfStat` это `#[repr(C)]` из целых (любой образ допустим), BIOCGSTATS
         // пишет `struct bpf_stat` того же размера (сверяется внутри).
-        unsafe { ioctl_ptr(self.fd.as_raw_fd(), libc::BIOCGSTATS, &mut st) }?;
+        unsafe { ioctl_ptr(self.file.as_raw_fd(), libc::BIOCGSTATS, &mut st) }?;
         Ok(st)
     }
 
@@ -196,7 +166,7 @@ impl BpfSetup for BpfFd {
     fn set_buffer_len(&mut self, requested: u32) -> Result<(), Errno> {
         let mut v = requested;
         // SAFETY: `v` это `u32`, BIOCSBLEN принимает и возвращает `u_int`.
-        unsafe { ioctl_ptr(self.fd.as_raw_fd(), libc::BIOCSBLEN, &mut v) }
+        unsafe { ioctl_ptr(self.file.as_raw_fd(), libc::BIOCSBLEN, &mut v) }
     }
 
     fn bind_interface(&mut self, name: &str) -> Result<(), Errno> {
@@ -208,17 +178,17 @@ impl BpfSetup for BpfFd {
             return Err(libc::EINVAL);
         }
         for (dst, src) in req.ifr_name.iter_mut().zip(bytes) {
-            *dst = *src as libc::c_char;
+            *dst = libc::c_char::from_ne_bytes([*src]);
         }
         // SAFETY: `req` это нулевой `ifreq` с именем интерфейса, BIOCSETIF читает
         // `struct ifreq` того же размера (сверяется внутри); `ifreq` без `bool`/enum.
-        unsafe { ioctl_ptr(self.fd.as_raw_fd(), libc::BIOCSETIF, &mut req) }
+        unsafe { ioctl_ptr(self.file.as_raw_fd(), libc::BIOCSETIF, &mut req) }
     }
 
     fn data_link(&mut self) -> Result<u32, Errno> {
         let mut v = 0u32;
         // SAFETY: `v` это `u32`, BIOCGDLT пишет `u_int`.
-        unsafe { ioctl_ptr(self.fd.as_raw_fd(), libc::BIOCGDLT, &mut v) }?;
+        unsafe { ioctl_ptr(self.file.as_raw_fd(), libc::BIOCGDLT, &mut v) }?;
         Ok(v)
     }
 
@@ -243,13 +213,13 @@ impl BpfSetup for BpfFd {
         // SAFETY: `BpfProgram` это пара (длина, указатель) того же размера, что у
         // `struct bpf_program`; `bf_insns` указывает на `insns`, который живёт до
         // конца вызова, и ядро только читает его (копирует программу внутри BIOCSETF).
-        unsafe { ioctl_ptr(self.fd.as_raw_fd(), BIOCSETF, &mut p) }
+        unsafe { ioctl_ptr(self.file.as_raw_fd(), BIOCSETF, &mut p) }
     }
 
     fn refresh_buffer_len(&mut self) -> Result<(), Errno> {
         let mut v = 0u32;
         // SAFETY: `v` это `u32`, BIOCGBLEN пишет `u_int`.
-        unsafe { ioctl_ptr(self.fd.as_raw_fd(), libc::BIOCGBLEN, &mut v) }?;
+        unsafe { ioctl_ptr(self.file.as_raw_fd(), libc::BIOCGBLEN, &mut v) }?;
         self.buflen = usize::try_from(v).map_err(|_| libc::EINVAL)?;
         Ok(())
     }
@@ -286,13 +256,7 @@ fn sysctl_read(name: &str, buf: Option<&mut [u8]>) -> Result<usize, Errno> {
     // null (запрос размера, `len == 0`), либо указывает на `len` записываемых
     // байт буфера вызывающего; новое значение не задаётся (null, 0).
     let rc = unsafe { libc::sysctlbyname(c.as_ptr(), ptr, &mut len, std::ptr::null_mut(), 0) };
-    if rc == 0 {
-        Ok(len)
-    } else {
-        Err(std::io::Error::last_os_error()
-            .raw_os_error()
-            .unwrap_or(libc::EIO))
-    }
+    if rc == 0 { Ok(len) } else { Err(last_errno()) }
 }
 
 /// Строковый sysctl (без завершающего NUL). `Err(ENOENT)`, если ключа нет.

@@ -1,38 +1,31 @@
 //! Darwin read-only routing observations. PF_ROUTE handles are nonblocking;
 //! one absolute <=1s deadline covers writes, readiness, EINTR and foreign replies.
 use super::ifinfo;
+use crate::adapter_common::errno_msg;
 use crate::network_plan::{InterfaceObservation, check_observation};
 use crate::route_parse::{
     LO0, RtReply, defaults_from_rt, defaults6_from_rt, lookup_from_rt, lookup6_from_rt,
     parse_rt_reply, rt_get_request, rt_get_request6,
 };
+use crate::unix_sys::{last_errno, poll_one, socket};
 use crate::{
     NetError,
     discover::{Iface, Interfaces, Route, RouteTable, RouteV6},
 };
 use std::net::{Ipv4Addr, Ipv6Addr};
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::os::fd::{AsFd, AsRawFd, OwnedFd};
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::time::{Duration, Instant};
 const BUF_LEN: usize = 4096;
 static SEQ: AtomicI32 = AtomicI32::new(1);
-fn last_errno() -> i32 {
-    std::io::Error::last_os_error()
-        .raw_os_error()
-        .unwrap_or(libc::EIO)
-}
 fn sys(op: &str, e: i32) -> NetError {
-    NetError::System(format!("{op}: {}", std::io::Error::from_raw_os_error(e)))
+    NetError::System(errno_msg(op, e))
 }
 /// Сокет `PF_ROUTE` с фильтром семейства `family` (`AF_INET` или `AF_INET6`).
+/// Без `SOCK_CLOEXEC`: `FD_CLOEXEC` не ставится, а `O_NONBLOCK` ставит `fcntl` после открытия.
 fn route_socket(family: libc::c_int) -> Result<OwnedFd, NetError> {
-    // SAFETY: scalar socket arguments; the result is checked before ownership transfer.
-    let raw = unsafe { libc::socket(libc::PF_ROUTE, libc::SOCK_RAW, family) };
-    if raw < 0 {
-        return Err(sys("socket(PF_ROUTE)", last_errno()));
-    }
-    // SAFETY: raw is a newly acquired descriptor owned solely by this object.
-    let fd = unsafe { OwnedFd::from_raw_fd(raw) };
+    let fd =
+        socket(libc::PF_ROUTE, libc::SOCK_RAW, family).map_err(|e| sys("socket(PF_ROUTE)", e))?;
     // SAFETY: valid owned descriptor; F_GETFL has no pointer argument.
     let flags = unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_GETFL) };
     if flags < 0 {
@@ -45,25 +38,17 @@ fn route_socket(family: libc::c_int) -> Result<OwnedFd, NetError> {
     Ok(fd)
 }
 fn ready(fd: &OwnedFd, event: libc::c_short, wait: Duration) -> Result<bool, NetError> {
-    let mut p = libc::pollfd {
-        fd: fd.as_raw_fd(),
-        events: event,
-        revents: 0,
-    };
     // Floor to milliseconds; a sub-ms residual becomes a nonblocking poll.
-    let millis = wait.as_millis().min(50) as libc::c_int;
-    // SAFETY: p is one writable pollfd, fd is owned and millis is bounded.
-    let n = unsafe { libc::poll(&mut p, 1, millis) };
-    if n < 0 {
-        return match last_errno() {
-            libc::EINTR => Ok(false),
-            e => Err(sys("poll(PF_ROUTE)", e)),
-        };
-    }
-    if p.revents & (libc::POLLERR | libc::POLLHUP | libc::POLLNVAL) != 0 {
+    let millis = libc::c_int::try_from(wait.as_millis().min(50)).unwrap_or(libc::c_int::MAX);
+    let (n, revents) = match poll_one(fd.as_fd(), event, millis) {
+        Ok(r) => r,
+        Err(libc::EINTR) => return Ok(false),
+        Err(e) => return Err(sys("poll(PF_ROUTE)", e)),
+    };
+    if revents & (libc::POLLERR | libc::POLLHUP | libc::POLLNVAL) != 0 {
         return Err(NetError::System("route socket readiness error".into()));
     }
-    Ok(n > 0 && p.revents & event != 0)
+    Ok(n > 0 && revents & event != 0)
 }
 fn retry_until<T>(
     deadline: Instant,
@@ -124,7 +109,7 @@ fn exchange(
     check_observation(deadline, cancelled)?;
     let fd = route_socket(family)?;
     let seq = SEQ.fetch_add(1, Ordering::Relaxed);
-    let pid = std::process::id() as i32;
+    let pid = std::process::id().cast_signed();
     let req = request(seq, pid);
     let sent = retry_until(deadline, cancelled, Instant::now, |wait| {
         if !ready(&fd, libc::POLLOUT, wait)? {
@@ -240,6 +225,14 @@ mod bounded_tests {
         cell::Cell,
         time::{Duration, Instant},
     };
+    #[test]
+    fn route_socket_keeps_its_flags() {
+        use std::os::fd::AsFd;
+        let fd = route_socket(libc::AF_INET).unwrap();
+        let (status, cloexec) = crate::unix_fd_tests::fd_flags(fd.as_fd());
+        assert_ne!(status & libc::O_NONBLOCK, 0, "route_socket sets O_NONBLOCK");
+        assert!(!cloexec, "route_socket does not set FD_CLOEXEC");
+    }
     #[test]
     fn network_plan_foreign_replies_and_eintr_keep_original_deadline() {
         let start = Instant::now();

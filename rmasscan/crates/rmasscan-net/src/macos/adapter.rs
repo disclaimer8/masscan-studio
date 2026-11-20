@@ -36,18 +36,18 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use rmasscan_core::packet::LinkType;
 use rmasscan_core::probe::AdapterBinding;
 use rmasscan_engine::{AdapterPair, IoError, MAX_IO_TIMEOUT, Rx, RxHealth, SendStatus, Tx};
 
-use super::abi::errno::{
-    EACCES, EAGAIN, EBUSY, EINTR, EMSGSIZE, ENOBUFS, ENODEV, ENOENT, ENXIO, EPERM,
-};
+use super::abi::errno::{EACCES, EAGAIN, EBUSY, EINTR, EMSGSIZE, ENOBUFS, ENOENT, EPERM};
 use super::abi::{
     BpfInsn, BpfStat, DLT_EN10MB, DLT_NULL, MAX_HDRLEN, SIZEOF_BPF_HDR, bpf_wordalign,
     read_record_header,
 };
 use super::{Errno, errno_msg};
+use crate::adapter_common::{
+    Readiness, check_binding as common_check_binding, closed_error, map_setup_errno,
+};
 use crate::drop_counter::DropCounter;
 use crate::{Counters, NetError, NetStatsHandle, OpenedAdapter};
 
@@ -69,15 +69,6 @@ const MAX_NODES: u32 = 256;
 
 const GRANT_HINT: &str =
     "/dev/bpf* is 0600 root:wheel; run `rmasscan-lab macos-lab bpf-access --grant`";
-
-/// Результат ожидания готовности чтения.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Readiness {
-    Timeout,
-    Ready,
-    /// POLLERR/POLLHUP/POLLNVAL без POLLIN.
-    Failed,
-}
 
 /// Шов ввода-вывода одного дескриптора BPF. Все методы НЕБЛОКИРУЮЩИЕ, кроме
 /// `poll_in` (ждёт не дольше `timeout_ms`) и `backoff`.
@@ -149,10 +140,6 @@ pub(crate) fn drop_all_filter() -> [BpfInsn; 1] {
     }]
 }
 
-fn closed_error() -> IoError {
-    IoError::new("adapter closed after an earlier fatal error")
-}
-
 fn is_again(e: Errno) -> bool {
     e == EAGAIN
 }
@@ -183,7 +170,7 @@ impl Deadline {
     fn poll_ms(&self) -> i32 {
         let left = self.0.saturating_duration_since(Instant::now());
         let ms = left.as_nanos().div_ceil(1_000_000);
-        ms.min(IO_BUDGET.as_millis()) as i32
+        i32::try_from(ms.min(IO_BUDGET.as_millis())).unwrap_or(i32::MAX)
     }
 }
 
@@ -280,45 +267,65 @@ impl<I: BpfIo> Tx for TxHalf<I> {
 
 /// Результат разбора одной записи буфера.
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) enum Record {
-    /// Кадр целиком (`caplen == datalen`) лежит в `buf[start..end]`.
-    Frame { start: usize, end: usize },
+pub(crate) enum Record<'a> {
+    /// Кадр целиком (`caplen == datalen`).
+    Frame(&'a [u8]),
     /// Кадр усечён ядром (`caplen != datalen`): не выдаётся.
     Truncated,
 }
 
-/// Разбирает запись по смещению `*off` внутри `buf[..end]` и продвигает `*off`
-/// на `bpf_wordalign(bh_hdrlen + bh_caplen)`. `Err` значит, что раскладка
-/// нарушена и дальнейшему содержимому доверять нельзя.
-pub(crate) fn parse_record(
-    buf: &[u8],
-    off: &mut usize,
+/// Курсор по записям одной прочитанной пачки: разбирает запись по смещению
+/// `off` внутри `buf[..end]` и продвигает `off` на
+/// `bpf_wordalign(bh_hdrlen + bh_caplen)`. После `Err` курсор пуст: раскладка
+/// нарушена, остатку буфера доверять нельзя.
+#[derive(Debug)]
+pub(crate) struct RecordCursor {
+    off: usize,
     end: usize,
-) -> Result<Record, &'static str> {
-    let rest = buf
-        .get(*off..end)
-        .ok_or("BPF record offset is outside the read buffer")?;
-    let hdr = read_record_header(rest).ok_or("BPF record header is shorter than 18 bytes")?;
-    let hdrlen = usize::from(hdr.hdrlen);
-    if !(SIZEOF_BPF_HDR..=MAX_HDRLEN).contains(&hdrlen) {
-        return Err("BPF bh_hdrlen is outside 18..=64");
+}
+
+impl RecordCursor {
+    pub(crate) fn new(end: usize) -> Self {
+        Self { off: 0, end }
     }
-    let caplen = usize::try_from(hdr.caplen).map_err(|_| "BPF bh_caplen does not fit usize")?;
-    let total = hdrlen
-        .checked_add(caplen)
-        .filter(|t| *t <= rest.len())
-        .ok_or("BPF record extends past the read buffer")?;
-    let start = *off + hdrlen;
-    let frame_end = *off + total;
-    // Последняя запись может не содержать завершающего выравнивания.
-    *off = (*off + bpf_wordalign(total)).min(end);
-    if hdr.caplen != hdr.datalen {
-        return Ok(Record::Truncated);
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.off >= self.end
     }
-    Ok(Record::Frame {
-        start,
-        end: frame_end,
-    })
+
+    pub(crate) fn next<'b>(&mut self, buf: &'b [u8]) -> Option<Result<Record<'b>, &'static str>> {
+        if self.is_empty() {
+            return None;
+        }
+        let parsed = self.parse(buf);
+        if parsed.is_err() {
+            self.off = self.end;
+        }
+        Some(parsed)
+    }
+
+    fn parse<'b>(&mut self, buf: &'b [u8]) -> Result<Record<'b>, &'static str> {
+        let rest = buf
+            .get(self.off..self.end)
+            .ok_or("BPF record offset is outside the read buffer")?;
+        let hdr = read_record_header(rest).ok_or("BPF record header is shorter than 18 bytes")?;
+        let hdrlen = usize::from(hdr.hdrlen);
+        if !(SIZEOF_BPF_HDR..=MAX_HDRLEN).contains(&hdrlen) {
+            return Err("BPF bh_hdrlen is outside 18..=64");
+        }
+        let caplen = usize::try_from(hdr.caplen).map_err(|_| "BPF bh_caplen does not fit usize")?;
+        let total = hdrlen
+            .checked_add(caplen)
+            .filter(|t| *t <= rest.len())
+            .ok_or("BPF record extends past the read buffer")?;
+        let frame = &rest[hdrlen..total];
+        // Последняя запись может не содержать завершающего выравнивания.
+        self.off = (self.off + bpf_wordalign(total)).min(self.end);
+        if hdr.caplen != hdr.datalen {
+            return Ok(Record::Truncated);
+        }
+        Ok(Record::Frame(frame))
+    }
 }
 
 /// RX-половина.
@@ -327,10 +334,9 @@ pub(crate) struct RxHalf<I: BpfIo> {
     own_mac: [u8; 6],
     counters: Arc<Counters>,
     drops: DropCounter,
-    /// Последняя прочитанная пачка: `rbuf[off..end]` ещё не разобрано.
+    /// Последняя прочитанная пачка; курсор указывает на неразобранный остаток.
     rbuf: Vec<u8>,
-    off: usize,
-    end: usize,
+    cursor: RecordCursor,
 }
 
 enum RxStep {
@@ -353,8 +359,7 @@ impl<I: BpfIo> RxHalf<I> {
             counters,
             drops: DropCounter::new(baseline_drop),
             rbuf,
-            off: 0,
-            end: 0,
+            cursor: RecordCursor::new(0),
         }
     }
 
@@ -379,16 +384,12 @@ impl<I: BpfIo> RxHalf<I> {
     fn step(&mut self, buffer: &mut [u8], deadline: &Deadline) -> RxStep {
         loop {
             // 1. Уже прочитанные записи.
-            if self.off < self.end {
-                match parse_record(&self.rbuf, &mut self.off, self.end) {
-                    Err(why) => {
-                        // Остаток буфера недостоверен.
-                        self.off = self.end;
-                        return self.fatal(why.to_string());
-                    }
+            if let Some(record) = self.cursor.next(&self.rbuf) {
+                match record {
+                    // Курсор уже пуст: остаток буфера недостоверен.
+                    Err(why) => return self.fatal(why.to_string()),
                     Ok(Record::Truncated) => Counters::bump(&self.counters.rx_truncated),
-                    Ok(Record::Frame { start, end }) => {
-                        let frame = &self.rbuf[start..end];
+                    Ok(Record::Frame(frame)) => {
                         if frame.len() < MIN_TX_FRAME {
                             // Короче Ethernet-заголовка: не кадр, никогда не `Some(0)`.
                             Counters::bump(&self.counters.rx_truncated);
@@ -415,8 +416,7 @@ impl<I: BpfIo> RxHalf<I> {
             };
             match io.read(&mut self.rbuf) {
                 Ok(n) if n > 0 && n <= self.rbuf.len() => {
-                    self.off = 0;
-                    self.end = n;
+                    self.cursor = RecordCursor::new(n);
                 }
                 Ok(n) if n > self.rbuf.len() => {
                     return self.fatal(format!(
@@ -511,44 +511,9 @@ impl<I: BpfIo> Drop for RxHalf<I> {
 
 // ---------------------------------------------------------------- открытие
 
-pub(crate) fn mac_text(mac: &[u8; 6]) -> String {
-    format!(
-        "{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
-        mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]
-    )
-}
-
-/// Проверка binding без обращения к ОС.
+/// Проверка binding без обращения к ОС (общая с Windows, имя адаптера вставляется в текст отказа).
 pub(crate) fn check_binding(binding: &AdapterBinding) -> Result<(), NetError> {
-    if binding.link_type != LinkType::Ethernet {
-        return Err(NetError::UnsupportedLink(format!(
-            "{:?} (macOS BPF adapter supports Ethernet only)",
-            binding.link_type
-        )));
-    }
-    let mac = binding.source_mac;
-    if mac == [0; 6] || mac[0] & 1 == 1 {
-        return Err(NetError::InterfaceMismatch(format!(
-            "source MAC {} is not a unicast address",
-            mac_text(&mac)
-        )));
-    }
-    if mac == binding.next_hop_mac {
-        return Err(NetError::InterfaceMismatch(
-            "source MAC equals the next-hop MAC: own transmitted frames could not be told \
-             from replies"
-                .into(),
-        ));
-    }
-    Ok(())
-}
-
-fn map_setup_error(op: &str, e: Errno) -> NetError {
-    match e {
-        EPERM | EACCES => NetError::PermissionDenied(errno_msg(op, e)),
-        ENXIO | ENODEV => NetError::InterfaceMismatch(errno_msg(op, e)),
-        _ => NetError::System(errno_msg(op, e)),
-    }
+    common_check_binding(binding, "macOS BPF adapter")
 }
 
 /// Перебор `/dev/bpf0..`: занятый узел пропускается, `EACCES` запоминается,
@@ -577,7 +542,7 @@ fn open_device<O: BpfOpener>(opener: &mut O) -> Result<O::Dev, NetError> {
 fn check_dlt<D: BpfSetup>(dev: &mut D, name: &str) -> Result<(), NetError> {
     match dev
         .data_link()
-        .map_err(|e| map_setup_error("BIOCGDLT", e))?
+        .map_err(|e| map_setup_errno("BIOCGDLT", e))?
     {
         DLT_EN10MB => Ok(()),
         DLT_NULL => Err(NetError::UnsupportedLink(format!(
@@ -598,7 +563,7 @@ fn configure_rx<D: BpfSetup>(
     mac: [u8; 6],
     max_buffer: u32,
 ) -> Result<u32, NetError> {
-    let s = map_setup_error;
+    let s = map_setup_errno;
     dev.set_buffer_len(max_buffer)
         .map_err(|e| s("BIOCSBLEN", e))?;
     dev.bind_interface(name).map_err(|e| s("BIOCSETIF", e))?;
@@ -621,7 +586,7 @@ fn configure_rx<D: BpfSetup>(
 /// TX: `BIOCSBLEN 4096` → `BIOCSETIF` → `BIOCGDLT` → `BIOCSHDRCMPLT 1` →
 /// `BIOCSSEESENT 0` → `BIOCSETF(drop_all_filter)`.
 fn configure_tx<D: BpfSetup>(dev: &mut D, name: &str) -> Result<(), NetError> {
-    let s = map_setup_error;
+    let s = map_setup_errno;
     dev.set_buffer_len(TX_BUFFER_BYTES)
         .map_err(|e| s("BIOCSBLEN", e))?;
     dev.bind_interface(name).map_err(|e| s("BIOCSETIF", e))?;
@@ -671,4 +636,18 @@ pub(crate) fn open(binding: &AdapterBinding) -> Result<OpenedAdapter, NetError> 
     check_binding(binding)?;
     super::ifinfo::verify_binding(&super::ifinfo::OsIface, binding)?;
     open_with(&mut super::sys::SysOpener, binding)
+}
+
+#[cfg(test)]
+mod deadline_tests {
+    use super::*;
+
+    /// Таймаут `poll` не больше `IO_BUDGET`, даже когда остаток дедлайна в мс не помещается в `i32`; прошедший
+    /// дедлайн даёт 0.
+    #[test]
+    fn poll_ms_is_capped_by_the_io_budget() {
+        let far = Deadline(Instant::now() + Duration::from_secs(30 * 86_400));
+        assert_eq!(far.poll_ms(), i32::try_from(IO_BUDGET.as_millis()).unwrap());
+        assert_eq!(Deadline(Instant::now()).poll_ms(), 0);
+    }
 }

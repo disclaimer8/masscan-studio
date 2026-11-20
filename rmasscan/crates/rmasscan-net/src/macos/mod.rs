@@ -1,7 +1,7 @@
 //! macOS BPF: ABI-объявления, сведения об интерфейсе, инвентарь без
 //! привилегий, адаптер (`open`, TX/RX поверх шва `BpfIo`) и таблица маршрутов для
 //! обнаружения (`route`: route socket `RTM_GET`). `unsafe` только в `sys`, `ifinfo`,
-//! `process` и `route` (плюс тестовый `spike`, которого нет в продуктовой сборке).
+//! `process` и `route`.
 //!
 //! `abi` и `adapter` переносимы и собираются в тестах на любой ОС (seam-тесты
 //! адаптера идут и на Linux, и на Windows); остальное только на macOS.
@@ -34,19 +34,10 @@ pub(crate) mod route;
 #[cfg(test)]
 mod tests;
 
-#[cfg(all(target_os = "macos", test))]
-#[allow(unsafe_code)]
-mod spike;
-
 #[cfg(target_os = "macos")]
 pub(crate) use adapter::open;
 
-/// Сырой errno.
-pub(crate) type Errno = i32;
-
-pub(crate) fn errno_msg(op: &str, e: Errno) -> String {
-    format!("{op}: {}", std::io::Error::from_raw_os_error(e))
-}
+pub(crate) use crate::adapter_common::{Errno, errno_msg};
 
 #[cfg(target_os = "macos")]
 const INSTANT_CLOCK: &str = "CLOCK_UPTIME_RAW (std::time::Instant; stops during sleep)";

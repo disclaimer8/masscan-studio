@@ -12,23 +12,25 @@
 //!   который выбрало ядро) и dump адресов `RTM_GETADDR` `AF_INET6` с флагами DAD. Путь IPv4 их не вызывает.
 //!
 //! Каждый fd живёт в `OwnedFd`; буферы это срезы Rust с явной длиной; ответы принимаются только от ядра (`nl_pid` 0).
+//! `socket` и адрес ядра `sockaddr_nl` берутся из общих примитивов `crate::unix_sys`.
 
 use std::ffi::CStr;
-use std::mem;
 use std::net::{Ipv4Addr, Ipv6Addr};
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::os::fd::{AsRawFd, OwnedFd};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Instant;
 
 use super::socket::ifreq_for;
 use crate::NetError;
+use crate::adapter_common::{Errno, errno_msg};
 use crate::discover::{Iface, Interfaces, Route, RouteTable, RouteV6};
 use crate::network_plan::InterfaceObservation;
 use crate::route_parse::{
-    NlError, NlRoute, NlRoute6, netlink_addr_request6, netlink_defaults, netlink_defaults6,
-    netlink_done, netlink_route_request, netlink_route_request6, parse_netlink_addrs6,
-    parse_netlink_routes, parse_netlink_routes6, route_from_nl, route6_from_nl, usable_addrs6,
+    NlError, NlRoute, NlRoute6, netlink_addr_request6, netlink_defaults, netlink_done,
+    netlink_route_request, netlink_route_request6, parse_netlink_addrs6, parse_netlink_routes,
+    parse_netlink_routes6, route_from_nl, route6_from_nl, usable_addrs6,
 };
+use crate::unix_sys::{last_errno, mac_from_c_chars, nl_kernel_addr, socket, socklen_of};
 
 /// Буфер приёма: больше любой датаграммы dump ядра (`NLMSG_GOODSIZE` ≤ 8 КиБ, на новых ядрах до 32 КиБ).
 const RECV_BUF: usize = 64 * 1024;
@@ -42,14 +44,8 @@ static SEQ: AtomicU32 = AtomicU32::new(1);
 #[path = "route_observation.rs"]
 mod observation;
 
-fn last_errno() -> i32 {
-    std::io::Error::last_os_error()
-        .raw_os_error()
-        .unwrap_or(libc::EIO)
-}
-
 fn sys(op: &str, e: i32) -> NetError {
-    NetError::System(format!("{op}: {}", std::io::Error::from_raw_os_error(e)))
+    NetError::System(errno_msg(op, e))
 }
 
 /// Отказ обмена: ошибка сокета или ответ ядра (`NLMSG_ERROR`, искажённые байты).
@@ -67,111 +63,145 @@ impl From<Failure> for NetError {
     }
 }
 
-/// Сокет `NETLINK_ROUTE` на один запрос.
-struct Netlink {
-    fd: OwnedFd,
+/// Сокет `NETLINK_ROUTE` на один запрос, общий у старого блокирующего обмена и неблокирующего наблюдения. Сокет только
+/// передаёт байты ядру и обратно: повторы `EINTR`, предикат отправителя и тексты ошибок остаются у каждой политики
+/// (старая: [`BlockingNl`], [`exchange_on`]; наблюдение: `observation::DatagramIo`).
+struct NlSocket(OwnedFd);
+
+impl NlSocket {
+    /// `label` это операция в тексте отказа `socket` (`socket(NETLINK_ROUTE)`, `socket(NETLINK_ROUTE observation)`).
+    /// Блокирующий сокет получает `SO_RCVTIMEO` [`RECV_TIMEOUT_SECS`]; неблокирующий открывается с `SOCK_NONBLOCK` и
+    /// без таймаута.
+    fn open(label: &str, nonblocking: bool) -> Result<NlSocket, NetError> {
+        let nonblock = if nonblocking { libc::SOCK_NONBLOCK } else { 0 };
+        let fd = socket(
+            libc::AF_NETLINK,
+            libc::SOCK_RAW | libc::SOCK_CLOEXEC | nonblock,
+            libc::NETLINK_ROUTE,
+        )
+        .map_err(|e| sys(label, e))?;
+        if !nonblocking {
+            let tv = libc::timeval {
+                tv_sec: RECV_TIMEOUT_SECS,
+                tv_usec: 0,
+            };
+            // SAFETY: указатель и длина описывают живой `tv`; fd валиден (владеет OwnedFd).
+            let rc = unsafe {
+                libc::setsockopt(
+                    fd.as_raw_fd(),
+                    libc::SOL_SOCKET,
+                    libc::SO_RCVTIMEO,
+                    (&raw const tv).cast::<libc::c_void>(),
+                    socklen_of::<libc::timeval>(),
+                )
+            };
+            if rc < 0 {
+                return Err(sys("setsockopt(SO_RCVTIMEO)", last_errno()));
+            }
+        }
+        Ok(NlSocket(fd))
+    }
+
+    /// Один `sendto` ядру (`nl_pid` 0): число отправленных байт или errno.
+    fn send_to_kernel(&self, req: &[u8]) -> Result<usize, Errno> {
+        let kernel = nl_kernel_addr();
+        // SAFETY: указатель и длина берутся из одного живого среза; адрес назначения это живой `kernel` с его точным
+        // размером; fd валиден (владеет OwnedFd).
+        let n = unsafe {
+            libc::sendto(
+                self.0.as_raw_fd(),
+                req.as_ptr().cast::<libc::c_void>(),
+                req.len(),
+                0,
+                (&raw const kernel).cast::<libc::sockaddr>(),
+                socklen_of::<libc::sockaddr_nl>(),
+            )
+        };
+        usize::try_from(n).map_err(|_| last_errno())
+    }
+
+    /// Один `recvfrom` с `MSG_TRUNC`: `(ИСТИННАЯ длина датаграммы, адрес отправителя, длина адреса)` или errno; длина
+    /// может превышать `buf`. Адрес до вызова это `nl_kernel_addr()` (`nl_pid` 0, как у прежнего нулевого образа): при
+    /// нулевой длине адреса ядро в него ничего не пишет, и каждая политика сама решает, верить ли ему.
+    fn recv_from(
+        &self,
+        buf: &mut [u8],
+    ) -> Result<(usize, libc::sockaddr_nl, libc::socklen_t), Errno> {
+        let mut from = nl_kernel_addr();
+        let mut flen = socklen_of::<libc::sockaddr_nl>();
+        // SAFETY: буфер описан срезом (ядро пишет не более len байт); `from` и `flen` живые локальные объекты, `flen`
+        // равен размеру `from`; fd валиден (владеет OwnedFd).
+        let n = unsafe {
+            libc::recvfrom(
+                self.0.as_raw_fd(),
+                buf.as_mut_ptr().cast::<libc::c_void>(),
+                buf.len(),
+                libc::MSG_TRUNC,
+                (&raw mut from).cast::<libc::sockaddr>(),
+                &raw mut flen,
+            )
+        };
+        let n = usize::try_from(n).map_err(|_| last_errno())?;
+        Ok((n, from, flen))
+    }
 }
 
-impl Netlink {
-    fn open() -> Result<Netlink, NetError> {
-        // SAFETY: socket() принимает только целые аргументы; результат проверяется ниже.
-        let raw = unsafe {
-            libc::socket(
-                libc::AF_NETLINK,
-                libc::SOCK_RAW | libc::SOCK_CLOEXEC,
-                libc::NETLINK_ROUTE,
-            )
-        };
-        if raw < 0 {
-            return Err(sys("socket(NETLINK_ROUTE)", last_errno()));
-        }
-        // SAFETY: `raw` только что вернул socket(), он >= 0 и больше нигде не хранится.
-        let fd = unsafe { OwnedFd::from_raw_fd(raw) };
-        let tv = libc::timeval {
-            tv_sec: RECV_TIMEOUT_SECS,
-            tv_usec: 0,
-        };
-        // SAFETY: указатель и длина описывают живой `tv`; fd валиден (владеет OwnedFd).
-        let rc = unsafe {
-            libc::setsockopt(
-                fd.as_raw_fd(),
-                libc::SOL_SOCKET,
-                libc::SO_RCVTIMEO,
-                (&raw const tv).cast::<libc::c_void>(),
-                mem::size_of::<libc::timeval>() as libc::socklen_t,
-            )
-        };
-        if rc < 0 {
-            return Err(sys("setsockopt(SO_RCVTIMEO)", last_errno()));
-        }
-        Ok(Netlink { fd })
+/// Шов старого (блокирующего) обмена, как `DatagramIo` у наблюдения: тесты подставляют свои отправки и датаграммы.
+trait BlockingNl {
+    /// Один `sendto` ядру: число отправленных байт или errno.
+    fn send(&mut self, req: &[u8]) -> Result<usize, Errno>;
+    /// Одна датаграмма: `(ИСТИННАЯ длина, nl_pid отправителя)` или errno; длина может превышать `buf`.
+    fn recv(&mut self, buf: &mut [u8]) -> Result<(usize, u32), Errno>;
+}
+
+impl BlockingNl for NlSocket {
+    fn send(&mut self, req: &[u8]) -> Result<usize, Errno> {
+        self.send_to_kernel(req)
     }
 
-    fn send(&self, req: &[u8]) -> Result<(), NetError> {
-        // SAFETY: sockaddr_nl состоит из целых полей; нулевой образ корректен (nl_pid 0 это ядро).
-        let mut kernel: libc::sockaddr_nl = unsafe { mem::zeroed() };
-        kernel.nl_family = libc::AF_NETLINK as libc::sa_family_t;
-        loop {
-            // SAFETY: указатель и длина берутся из одного живого среза; адрес назначения это живой `kernel` с его
-            // точным размером; fd валиден.
-            let n = unsafe {
-                libc::sendto(
-                    self.fd.as_raw_fd(),
-                    req.as_ptr().cast::<libc::c_void>(),
-                    req.len(),
-                    0,
-                    (&raw const kernel).cast::<libc::sockaddr>(),
-                    mem::size_of::<libc::sockaddr_nl>() as libc::socklen_t,
-                )
-            };
-            match usize::try_from(n) {
-                Ok(sent) if sent == req.len() => return Ok(()),
-                Ok(_) => return Err(NetError::System("netlink: short send".into())),
-                Err(_) if last_errno() == libc::EINTR => {}
-                Err(_) => return Err(sys("sendto(NETLINK_ROUTE)", last_errno())),
-            }
+    /// Читается только `nl_pid`: он 0 и тогда, когда ядро ответило само, и тогда, когда адрес не записан (нулевая
+    /// длина адреса), поэтому длина адреса здесь не проверяется.
+    fn recv(&mut self, buf: &mut [u8]) -> Result<(usize, u32), Errno> {
+        self.recv_from(buf).map(|(n, from, _)| (n, from.nl_pid))
+    }
+}
+
+/// Отправка запроса старым обменом: `EINTR` повторяется, короткая отправка это ошибка.
+fn send_request(nl: &mut impl BlockingNl, req: &[u8]) -> Result<(), NetError> {
+    loop {
+        match nl.send(req) {
+            Ok(sent) if sent == req.len() => return Ok(()),
+            Ok(_) => return Err(NetError::System("netlink: short send".into())),
+            Err(libc::EINTR) => {}
+            Err(e) => return Err(sys("sendto(NETLINK_ROUTE)", e)),
         }
     }
+}
 
-    /// Одна датаграмма от ядра в `buf`; датаграммы других отправителей пропускаются. Возвращает длину.
-    fn recv(&self, buf: &mut [u8]) -> Result<usize, NetError> {
-        loop {
-            // SAFETY: sockaddr_nl из целых полей; нулевой образ корректен.
-            let mut from: libc::sockaddr_nl = unsafe { mem::zeroed() };
-            let mut flen = mem::size_of::<libc::sockaddr_nl>() as libc::socklen_t;
-            // SAFETY: буфер описан срезом (ядро пишет не более len байт); `from` и `flen` живые локальные объекты,
-            // `flen` равен их размеру. MSG_TRUNC возвращает ИСТИННУЮ длину датаграммы.
-            let n = unsafe {
-                libc::recvfrom(
-                    self.fd.as_raw_fd(),
-                    buf.as_mut_ptr().cast::<libc::c_void>(),
-                    buf.len(),
-                    libc::MSG_TRUNC,
-                    (&raw mut from).cast::<libc::sockaddr>(),
-                    &raw mut flen,
-                )
-            };
-            let Ok(n) = usize::try_from(n) else {
-                match last_errno() {
-                    libc::EINTR => continue,
-                    libc::EAGAIN => {
-                        return Err(NetError::System(format!(
-                            "netlink: no reply within {RECV_TIMEOUT_SECS} s"
-                        )));
-                    }
-                    e => return Err(sys("recvfrom(NETLINK_ROUTE)", e)),
-                }
-            };
-            if n > buf.len() {
+/// Одна датаграмма от ядра в `buf` (старый обмен); возвращает длину. `EINTR` повторяется, `EAGAIN` по `SO_RCVTIMEO`
+/// это «нет ответа»; усечённая датаграмма это ошибка (проверка раньше отправителя), датаграммы других отправителей
+/// (`nl_pid` не 0) пропускаются.
+fn recv_reply(nl: &mut impl BlockingNl, buf: &mut [u8]) -> Result<usize, NetError> {
+    loop {
+        let (n, pid) = match nl.recv(buf) {
+            Ok(r) => r,
+            Err(libc::EINTR) => continue,
+            Err(libc::EAGAIN) => {
                 return Err(NetError::System(format!(
-                    "netlink: reply of {n} bytes truncated"
+                    "netlink: no reply within {RECV_TIMEOUT_SECS} s"
                 )));
             }
-            if from.nl_pid != 0 {
-                continue;
-            }
-            return Ok(n);
+            Err(e) => return Err(sys("recvfrom(NETLINK_ROUTE)", e)),
+        };
+        if n > buf.len() {
+            return Err(NetError::System(format!(
+                "netlink: reply of {n} bytes truncated"
+            )));
         }
+        if pid != 0 {
+            continue;
+        }
+        return Ok(n);
     }
 }
 
@@ -182,12 +212,22 @@ fn exchange_with<T>(
     dump: bool,
     parse: impl Fn(&[u8]) -> Result<Vec<T>, NlError>,
 ) -> Result<Vec<T>, Failure> {
-    let nl = Netlink::open().map_err(Failure::Io)?;
-    nl.send(req).map_err(Failure::Io)?;
+    let mut nl = NlSocket::open("socket(NETLINK_ROUTE)", false).map_err(Failure::Io)?;
+    exchange_on(&mut nl, req, dump, parse)
+}
+
+/// [`exchange_with`] по шву [`BlockingNl`]: отправка, затем не больше [`MAX_DATAGRAMS`] датаграмм ответа.
+fn exchange_on<T>(
+    nl: &mut impl BlockingNl,
+    req: &[u8],
+    dump: bool,
+    parse: impl Fn(&[u8]) -> Result<Vec<T>, NlError>,
+) -> Result<Vec<T>, Failure> {
+    send_request(nl, req).map_err(Failure::Io)?;
     let mut buf = vec![0u8; RECV_BUF];
     let mut out = Vec::new();
     for _ in 0..MAX_DATAGRAMS {
-        let n = nl.recv(&mut buf).map_err(Failure::Io)?;
+        let n = recv_reply(nl, &mut buf).map_err(Failure::Io)?;
         let dgram = &buf[..n];
         out.extend(parse(dgram).map_err(Failure::Netlink)?);
         if !dump || netlink_done(dgram) {
@@ -229,13 +269,13 @@ fn is_no_route(errno: i32) -> bool {
 
 /// Имя интерфейса по индексу (`if_indextoname`); исчезнувший интерфейс называется индексом.
 fn ifname_of(index: u32) -> String {
-    let mut buf = [0 as libc::c_char; libc::IF_NAMESIZE];
+    let mut buf: [libc::c_char; libc::IF_NAMESIZE] = [0; libc::IF_NAMESIZE];
     // SAFETY: буфер на IF_NAMESIZE символов, как требует if_indextoname; функция пишет в него не больше.
     let p = unsafe { libc::if_indextoname(index, buf.as_mut_ptr()) };
     if p.is_null() {
         return format!("ifindex {index}");
     }
-    let bytes = buf.map(|c| c as u8);
+    let bytes = buf.map(|c| u8::from_ne_bytes(c.to_ne_bytes()));
     CStr::from_bytes_until_nul(&bytes).map_or_else(
         |_| format!("ifindex {index}"),
         |c| c.to_string_lossy().into_owned(),
@@ -290,7 +330,7 @@ impl RouteTable for OsRoutes {
 
     fn default_routes_v6(&self) -> Result<Vec<RouteV6>, NetError> {
         let routes = exchange6(None)?;
-        Ok(netlink_defaults6(routes)
+        Ok(netlink_defaults(routes)
             .iter()
             .filter_map(|r| route6_from_nl(r, ifname_of))
             .collect())
@@ -338,13 +378,9 @@ struct IfSock(OwnedFd);
 
 impl IfSock {
     fn open() -> Result<IfSock, NetError> {
-        // SAFETY: socket() только с целыми аргументами; результат проверяется.
-        let raw = unsafe { libc::socket(libc::AF_INET, libc::SOCK_DGRAM | libc::SOCK_CLOEXEC, 0) };
-        if raw < 0 {
-            return Err(sys("socket(AF_INET)", last_errno()));
-        }
-        // SAFETY: `raw` свежий fd >= 0, единственный владелец теперь OwnedFd.
-        Ok(IfSock(unsafe { OwnedFd::from_raw_fd(raw) }))
+        socket(libc::AF_INET, libc::SOCK_DGRAM | libc::SOCK_CLOEXEC, 0)
+            .map(IfSock)
+            .map_err(|e| sys("socket(AF_INET)", e))
     }
 
     /// ioctl запроса `req` (`SIOCGIF*`) для интерфейса `name`; `Err(errno)`.
@@ -352,7 +388,7 @@ impl IfSock {
         let mut ifr = ifreq_for(name)?;
         // SAFETY: `ifr` живой ifreq с NUL-terminated именем; для SIOCGIF* ядро читает имя и пишет результат в тот же
         // объект; fd валиден.
-        let rc = unsafe { libc::ioctl(self.0.as_raw_fd(), req as _, &raw mut ifr) };
+        let rc = unsafe { libc::ioctl(self.0.as_raw_fd(), req, &raw mut ifr) };
         if rc < 0 { Err(last_errno()) } else { Ok(ifr) }
     }
 
@@ -370,12 +406,8 @@ impl IfSock {
                 // sockaddr_in: sa_data[0..2] порт, sa_data[2..6] адрес в сетевом порядке.
                 (i32::from(sa.sa_family) == libc::AF_INET)
                     .then(|| {
-                        Ipv4Addr::new(
-                            sa.sa_data[2] as u8,
-                            sa.sa_data[3] as u8,
-                            sa.sa_data[4] as u8,
-                            sa.sa_data[5] as u8,
-                        )
+                        let b = sa.sa_data.map(|c| u8::from_ne_bytes(c.to_ne_bytes()));
+                        Ipv4Addr::new(b[2], b[3], b[4], b[5])
                     })
                     .into_iter()
                     .collect()
@@ -384,10 +416,7 @@ impl IfSock {
             Err(e) => return Err(e),
         };
         let ethernet = hw.sa_family == libc::ARPHRD_ETHER;
-        let mut mac = [0u8; 6];
-        for (d, s) in mac.iter_mut().zip(hw.sa_data.iter()) {
-            *d = *s as u8;
-        }
+        let mac = mac_from_c_chars(&hw.sa_data);
         Ok(Iface {
             name: name.to_string(),
             index,

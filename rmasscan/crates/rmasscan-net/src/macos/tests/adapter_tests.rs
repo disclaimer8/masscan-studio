@@ -19,13 +19,14 @@ use rmasscan_engine::{
 
 use super::fake::*;
 use crate::NetError;
+use crate::adapter_common::Readiness;
 use crate::macos::abi::errno::{
     EACCES, EAGAIN, EBUSY, EINTR, EMSGSIZE, ENOBUFS, ENODEV, ENXIO, EPERM,
 };
 use crate::macos::abi::{BpfInsn, BpfStat, SIZEOF_BPF_HDR};
 use crate::macos::adapter::{
-    BACKOFF_MAX, IO_BUDGET, MAX_TX_FRAME, MIN_TX_FRAME, Readiness, Record, check_binding,
-    drop_all_filter, open_with, own_mac_filter, parse_record,
+    BACKOFF_MAX, IO_BUDGET, MAX_TX_FRAME, MIN_TX_FRAME, Record, RecordCursor, check_binding,
+    drop_all_filter, open_with, own_mac_filter,
 };
 
 const OUR_MAC: [u8; 6] = [0x02, 0xac, 0x00, 0x00, 0x00, 0x01];
@@ -339,16 +340,27 @@ fn parse_record_advances_by_wordalign_and_tolerates_a_missing_final_pad() {
     let f = peer_frame(61);
     let mut data = record(SIZEOF_BPF_HDR, &f);
     data.truncate(SIZEOF_BPF_HDR + 61);
-    let mut off = 0;
-    let r = parse_record(&data, &mut off, data.len()).unwrap();
+    let mut cur = RecordCursor::new(data.len());
+    let r = cur.next(&data).unwrap().unwrap();
+    assert_eq!(r, Record::Frame(&data[SIZEOF_BPF_HDR..SIZEOF_BPF_HDR + 61]));
+    assert!(cur.is_empty());
+    assert!(cur.next(&data).is_none());
+}
+
+#[test]
+fn cursor_is_empty_after_a_malformed_record() {
+    let good = peer_frame(60);
+    let mut batch = raw_record(17, 60, 60, &good);
+    batch.extend(record(SIZEOF_BPF_HDR, &good));
+    let mut cur = RecordCursor::new(batch.len());
+    assert!(!cur.is_empty());
     assert_eq!(
-        r,
-        Record::Frame {
-            start: SIZEOF_BPF_HDR,
-            end: SIZEOF_BPF_HDR + 61
-        }
+        cur.next(&batch),
+        Some(Err("BPF bh_hdrlen is outside 18..=64"))
     );
-    assert_eq!(off, data.len());
+    // Остаток буфера недостоверен: вторая (годная) запись не выдаётся.
+    assert!(cur.is_empty());
+    assert!(cur.next(&batch).is_none());
 }
 
 #[test]
@@ -1406,5 +1418,435 @@ fn io_budget_leaves_margin_below_the_50ms_contract() {
     assert!(
         IO_BUDGET + worst_overshoot + margin <= Duration::from_millis(50),
         "{IO_BUDGET:?}"
+    );
+}
+
+// ---------------------------------------------------------------- exact texts
+
+/// The text of errno `e` in the table of the HOST OS, as `errno_msg` prints it (macOS numbers read as host
+/// numbers on Linux and Windows, so the expectation is built by the same function).
+fn os(e: i32) -> String {
+    std::io::Error::from_raw_os_error(e).to_string()
+}
+
+const CLOSED: &str = "adapter closed after an earlier fatal error";
+
+/// A plain seam without a scenario: `write` accepts everything, `read` copies one prepared batch of records
+/// (or, with `over_read`, claims one byte more than the buffer holds).
+struct PlainBpf {
+    batch: Vec<u8>,
+    over_read: bool,
+}
+
+impl crate::macos::adapter::BpfIo for PlainBpf {
+    fn write(&mut self, frame: &[u8]) -> Result<usize, crate::macos::Errno> {
+        Ok(frame.len())
+    }
+    fn read(&mut self, buf: &mut [u8]) -> Result<usize, crate::macos::Errno> {
+        if self.over_read {
+            return Ok(buf.len() + 1);
+        }
+        buf[..self.batch.len()].copy_from_slice(&self.batch);
+        Ok(self.batch.len())
+    }
+    fn poll_in(&mut self, _timeout_ms: i32) -> Result<Readiness, crate::macos::Errno> {
+        Ok(Readiness::Ready)
+    }
+    fn stats(&mut self) -> Result<BpfStat, crate::macos::Errno> {
+        Ok(BpfStat::default())
+    }
+    fn backoff(&mut self, _wait: Duration) {}
+    fn buffer_len(&self) -> usize {
+        4096
+    }
+}
+
+#[test]
+fn error_texts_are_byte_identical() {
+    use rmasscan_engine::Rx;
+    // check_binding
+    let refused = |b: &AdapterBinding| check_binding(b).unwrap_err().to_string();
+    let mut b = binding();
+    b.link_type = LinkType::Raw;
+    assert_eq!(
+        refused(&b),
+        "unsupported link type: Raw (macOS BPF adapter supports Ethernet only)"
+    );
+    let mut b = binding();
+    b.source_mac = [0x01, 0, 0x5e, 0, 0, 1];
+    assert_eq!(
+        refused(&b),
+        "interface does not match the binding: source MAC 01:00:5e:00:00:01 is not a unicast address"
+    );
+    let mut b = binding();
+    b.next_hop_mac = b.source_mac;
+    assert_eq!(
+        refused(&b),
+        "interface does not match the binding: source MAC equals the next-hop MAC: own transmitted \
+         frames could not be told from replies"
+    );
+
+    // opening /dev/bpf*
+    let w = world();
+    {
+        let mut s = lock(&w);
+        s.node_count = 2;
+        s.open_errors.insert(0, EACCES);
+        s.open_errors.insert(1, EBUSY);
+    }
+    assert_eq!(
+        open_err(&w).to_string(),
+        "permission denied (raw packet access needs elevated privileges): /dev/bpf* is 0600 \
+         root:wheel; run `rmasscan-lab macos-lab bpf-access --grant`"
+    );
+    let w = world();
+    {
+        let mut s = lock(&w);
+        s.node_count = 3;
+        for n in 0..3 {
+            s.open_errors.insert(n, EBUSY);
+        }
+    }
+    assert_eq!(
+        open_err(&w).to_string(),
+        "system error: no free /dev/bpf* device (3 busy)"
+    );
+    let w = world();
+    lock(&w).open_errors.insert(0, ENXIO);
+    assert_eq!(
+        open_err(&w).to_string(),
+        format!("system error: open /dev/bpf0: {}", os(ENXIO))
+    );
+
+    // setup: check_dlt, the kind of each ioctl errno, the kernel buffer
+    let w = world();
+    lock(&w).dlt = 0;
+    assert_eq!(
+        open_err(&w).to_string(),
+        "unsupported link type: interface \"feth4201\": loopback (DLT_NULL) is not Ethernet"
+    );
+    let w = world();
+    lock(&w).dlt = 12;
+    assert_eq!(
+        open_err(&w).to_string(),
+        "unsupported link type: interface \"feth4201\": DLT 12 is not Ethernet"
+    );
+    for (e, kind) in [
+        (
+            EPERM,
+            "permission denied (raw packet access needs elevated privileges)",
+        ),
+        (
+            EACCES,
+            "permission denied (raw packet access needs elevated privileges)",
+        ),
+        (ENXIO, "interface does not match the binding"),
+        (ENODEV, "interface does not match the binding"),
+        (EBUSY, "system error"),
+    ] {
+        let w = world();
+        lock(&w).setup_fail.push((1, "BIOCSETIF", e));
+        assert_eq!(
+            open_err(&w).to_string(),
+            format!("{kind}: BIOCSETIF: {}", os(e)),
+            "errno {e}"
+        );
+    }
+    // Every ioctl label of configure_rx (device 1) and configure_tx (device 2), in their order.
+    for (dev, op) in [
+        (1, "BIOCSBLEN"),
+        (1, "BIOCSETIF"),
+        (1, "BIOCGDLT"),
+        (1, "BIOCIMMEDIATE"),
+        (1, "BIOCSSEESENT"),
+        (1, "BIOCSETF"),
+        (1, "BIOCGBLEN"),
+        (2, "BIOCSBLEN"),
+        (2, "BIOCSETIF"),
+        (2, "BIOCGDLT"),
+        (2, "BIOCSHDRCMPLT"),
+        (2, "BIOCSSEESENT"),
+        (2, "BIOCSETF"),
+    ] {
+        let w = world();
+        lock(&w).setup_fail.push((dev, op, EBUSY));
+        assert_eq!(
+            open_err(&w).to_string(),
+            format!("system error: {op}: {}", os(EBUSY)),
+            "device {dev}"
+        );
+    }
+    // The baseline BIOCGSTATS of the new RX descriptor.
+    let w = world();
+    lock(&w).stats.push_back(Err(EBUSY));
+    assert_eq!(
+        open_err(&w).to_string(),
+        format!("system error: BIOCGSTATS: {}", os(EBUSY))
+    );
+    // No free node left for the TX descriptor (the RX one holds node 0).
+    let w = world();
+    {
+        let mut s = lock(&w);
+        s.node_count = 2;
+        s.open_errors.insert(1, EBUSY);
+    }
+    assert_eq!(
+        open_err(&w).to_string(),
+        "system error: no free /dev/bpf* device (2 busy)"
+    );
+    let w = world();
+    lock(&w).blen = 100;
+    assert_eq!(
+        open_err(&w).to_string(),
+        "system error: BPF buffer of 100 bytes is too small"
+    );
+
+    // TX
+    let w = world();
+    let mut a = open_pair(&w);
+    assert_eq!(
+        a.io.tx.send(&[0u8; 13], MS50).unwrap_err().message,
+        "frame length 13 is outside 14..=1514; nothing was sent"
+    );
+    lock(&w).writes.push_back(Err(EMSGSIZE));
+    assert_eq!(
+        a.io.tx.send(&own_frame(60), MS50).unwrap_err().message,
+        format!("write: {}; nothing was sent", os(EMSGSIZE))
+    );
+    lock(&w).writes.push_back(Err(ENETDOWN));
+    assert_eq!(
+        a.io.tx.send(&own_frame(60), MS50).unwrap_err().message,
+        format!("write: {}", os(ENETDOWN))
+    );
+    assert_eq!(
+        a.io.tx.send(&own_frame(60), MS50).unwrap_err().message,
+        CLOSED
+    );
+
+    // every text of the record walk (`bh_caplen` always fits a 64-bit usize)
+    let good = peer_frame(60);
+    // `end` past the buffer: the offset is outside the read buffer.
+    assert_eq!(
+        RecordCursor::new(40).next(&[0u8; 32]),
+        Some(Err("BPF record offset is outside the read buffer"))
+    );
+    assert_eq!(
+        RecordCursor::new(10).next(&[0u8; 10]),
+        Some(Err("BPF record header is shorter than 18 bytes"))
+    );
+    for (rec, why) in [
+        (
+            raw_record(17, 60, 60, &good),
+            "BPF bh_hdrlen is outside 18..=64",
+        ),
+        (
+            raw_record(SIZEOF_BPF_HDR, 9000, 9000, &good),
+            "BPF record extends past the read buffer",
+        ),
+    ] {
+        assert_eq!(RecordCursor::new(rec.len()).next(&rec), Some(Err(why)));
+        // ... and the adapter reports it verbatim.
+        let w = world();
+        let mut a = open_pair(&w);
+        push_batch(&w, rec);
+        assert_eq!(recv(&mut a, &mut buf()).unwrap_err().message, why);
+    }
+
+    // RX
+    let w = world();
+    let mut a = open_pair(&w);
+    lock(&w).reads.push_back(Err(ENETDOWN));
+    assert_eq!(
+        recv(&mut a, &mut buf()).unwrap_err().message,
+        format!("read: {}", os(ENETDOWN))
+    );
+    assert_eq!(recv(&mut a, &mut buf()).unwrap_err().message, CLOSED);
+    assert_eq!(a.io.rx.health(MS50).unwrap_err().message, CLOSED);
+    let w = world();
+    let mut a = open_pair(&w);
+    lock(&w).polls.push_back(Ok(Readiness::Failed));
+    assert_eq!(
+        recv(&mut a, &mut buf()).unwrap_err().message,
+        "poll(POLLIN): descriptor error"
+    );
+    let w = world();
+    let mut a = open_pair(&w);
+    lock(&w).polls.push_back(Err(ENXIO));
+    assert_eq!(
+        recv(&mut a, &mut buf()).unwrap_err().message,
+        format!("poll(POLLIN): {}", os(ENXIO))
+    );
+    let w = world();
+    let mut a = open_pair(&w);
+    lock(&w).stats.push_back(Err(EBUSY));
+    assert_eq!(
+        a.io.rx.health(MS50).unwrap_err().message,
+        format!("ioctl(BIOCGSTATS): {}", os(EBUSY))
+    );
+    let mut r = crate::macos::adapter::RxHalf::new(
+        PlainBpf {
+            batch: Vec::new(),
+            over_read: true,
+        },
+        OUR_MAC,
+        Arc::new(crate::Counters::default()),
+        0,
+    );
+    assert_eq!(
+        r.recv(&mut buf(), MS50).unwrap_err().message,
+        "read returned 4097 bytes into a 4096 byte buffer"
+    );
+}
+
+// ---------------------------------------------------------------- concurrent counters
+
+/// Frames each thread moves in the concurrent counters test.
+const CONCURRENT_FRAMES: usize = 20_000;
+
+/// Every field of `cur` is at least the same field of `prev` (`kernel_drops`: unknown < known, then by value).
+fn assert_monotonic(prev: &crate::NetStats, cur: &crate::NetStats) {
+    let pairs = [
+        ("tx_sent", prev.tx_sent, cur.tx_sent),
+        ("tx_would_block", prev.tx_would_block, cur.tx_would_block),
+        ("tx_uncertain", prev.tx_uncertain, cur.tx_uncertain),
+        ("tx_errors", prev.tx_errors, cur.tx_errors),
+        ("rx_packets", prev.rx_packets, cur.rx_packets),
+        ("rx_truncated", prev.rx_truncated, cur.rx_truncated),
+        ("rx_outgoing", prev.rx_outgoing, cur.rx_outgoing),
+        (
+            "rx_wrong_interface",
+            prev.rx_wrong_interface,
+            cur.rx_wrong_interface,
+        ),
+        ("rx_errors", prev.rx_errors, cur.rx_errors),
+        ("tx_batches", prev.tx_batches, cur.tx_batches),
+        ("tx_batch_max", prev.tx_batch_max, cur.tx_batch_max),
+        ("tx_over_budget", prev.tx_over_budget, cur.tx_over_budget),
+    ];
+    for (name, p, c) in pairs {
+        assert!(c >= p, "{name} went back: {prev:?} -> {cur:?}");
+    }
+    assert!(
+        cur.kernel_drops >= prev.kernel_drops,
+        "kernel_drops went back: {prev:?} -> {cur:?}"
+    );
+}
+
+#[test]
+fn stats_snapshot_is_monotonic_and_exact_under_concurrent_tx_and_rx() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let w = world();
+    let a = open_pair(&w);
+    // 40 records per read: the record walk runs between reads.
+    let batch = record(SIZEOF_BPF_HDR, &peer_frame(60)).repeat(40);
+    lock(&w)
+        .reads
+        .extend(std::iter::repeat_n(Ok(batch), CONCURRENT_FRAMES / 40));
+    let crate::OpenedAdapter {
+        io: AdapterPair { mut tx, mut rx },
+        stats,
+        ..
+    } = a;
+    let frame = own_frame(60);
+    let tx_done = &AtomicBool::new(false);
+    let rx_done = &AtomicBool::new(false);
+    let last = std::thread::scope(|s| {
+        s.spawn(move || {
+            for _ in 0..CONCURRENT_FRAMES {
+                assert_eq!(tx.send(&frame, MS50), Ok(SendStatus::Sent));
+            }
+            tx_done.store(true, Ordering::Release);
+        });
+        s.spawn(move || {
+            let mut b = buf();
+            let mut got = 0;
+            while got < CONCURRENT_FRAMES {
+                if rx.recv(&mut b, MS50).unwrap().is_some() {
+                    got += 1;
+                }
+            }
+            drop(rx);
+            rx_done.store(true, Ordering::Release);
+        });
+        let observer = s.spawn(|| {
+            let mut prev = stats.snapshot();
+            loop {
+                let done = tx_done.load(Ordering::Acquire) && rx_done.load(Ordering::Acquire);
+                let cur = stats.snapshot();
+                assert_monotonic(&prev, &cur);
+                prev = cur;
+                if done {
+                    return prev;
+                }
+            }
+        });
+        observer.join().unwrap()
+    });
+    let end = stats.snapshot();
+    assert_monotonic(&last, &end);
+    // `tx_over_budget` counts driver calls slower than 50 ms: timing-dependent, so only its monotonicity (checked
+    // above on every snapshot) is pinned. Every other field is exact.
+    assert_eq!(
+        crate::NetStats {
+            tx_over_budget: 0,
+            ..end
+        },
+        crate::NetStats {
+            tx_sent: CONCURRENT_FRAMES as u64,
+            rx_packets: CONCURRENT_FRAMES as u64,
+            kernel_drops: Some(0),
+            ..crate::NetStats::default()
+        }
+    );
+}
+
+// ---------------------------------------------------------------- microbenchmark
+
+/// Calls per thread in the microbenchmark.
+const BENCH_CALLS: u32 = 1_000_000;
+
+#[test]
+#[ignore = "microbenchmark: cargo test --release -p rmasscan-net adapter_hot_path -- --ignored --nocapture"]
+fn adapter_hot_path_two_threads() {
+    use rmasscan_engine::Rx;
+    let frame = own_frame(60);
+    let seam = || PlainBpf {
+        batch: record(SIZEOF_BPF_HDR, &peer_frame(60)),
+        over_read: false,
+    };
+    let c = Arc::new(crate::Counters::default());
+    let mut t = crate::macos::adapter::TxHalf::new(seam(), Arc::clone(&c));
+    let mut r = crate::macos::adapter::RxHalf::new(seam(), OUR_MAC, Arc::clone(&c), 0);
+    let start = std::sync::Barrier::new(2);
+    let (tx_time, rx_time) = std::thread::scope(|s| {
+        let tx_thread = s.spawn(|| {
+            start.wait();
+            let t0 = std::time::Instant::now();
+            for _ in 0..BENCH_CALLS {
+                std::hint::black_box(t.send(std::hint::black_box(&frame), MS50)).unwrap();
+            }
+            t0.elapsed()
+        });
+        let rx_thread = s.spawn(|| {
+            let mut b = buf();
+            start.wait();
+            let t0 = std::time::Instant::now();
+            for _ in 0..BENCH_CALLS {
+                std::hint::black_box(r.recv(&mut b, MS50)).unwrap();
+            }
+            t0.elapsed()
+        });
+        (tx_thread.join().unwrap(), rx_thread.join().unwrap())
+    });
+    let per = |d: Duration| d.as_nanos() as f64 / f64::from(BENCH_CALLS);
+    println!(
+        "adapter_hot_path macos: tx {:.1} ns/frame, rx {:.1} ns/frame ({BENCH_CALLS} calls per thread)",
+        per(tx_time),
+        per(rx_time)
+    );
+    let s = crate::NetStatsHandle::new(c).snapshot();
+    assert_eq!(
+        (s.tx_sent, s.rx_packets),
+        (u64::from(BENCH_CALLS), u64::from(BENCH_CALLS))
     );
 }

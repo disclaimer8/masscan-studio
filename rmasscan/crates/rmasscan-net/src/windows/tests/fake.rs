@@ -125,6 +125,8 @@ pub(super) struct Scenario {
     // ---- pcap_init ----
     pub init_rc: c_int,
     pub init_opts: Vec<c_uint>,
+    /// `(pcap_set_* name, rc)`: that setter returns rc on every handle.
+    pub set_fail: Option<(&'static str, c_int)>,
 }
 
 impl Default for Scenario {
@@ -184,6 +186,7 @@ impl Default for Scenario {
             nonblock: Vec::new(),
             init_rc: 0,
             init_opts: Vec::new(),
+            set_fail: None,
         }
     }
 }
@@ -332,25 +335,32 @@ unsafe extern "C" fn f_create(_d: *const c_char, err: *mut c_char) -> *mut PcapT
     }
     (FAKE_T + s.creates * STEP) as *mut PcapT
 }
+/// The scripted rc of a `pcap_set_*` call (`Scenario::set_fail`), 0 otherwise.
+fn set_rc(name: &str) -> c_int {
+    match st().set_fail {
+        Some((n, rc)) if n == name => rc,
+        _ => 0,
+    }
+}
 unsafe extern "C" fn f_set_snaplen(_p: *mut PcapT, _v: c_int) -> c_int {
     log("set_snaplen");
-    0
+    set_rc("pcap_set_snaplen")
 }
 unsafe extern "C" fn f_set_promisc(_p: *mut PcapT, v: c_int) -> c_int {
     log(&format!("set_promisc:{v}"));
-    0
+    set_rc("pcap_set_promisc")
 }
 unsafe extern "C" fn f_set_timeout(_p: *mut PcapT, _v: c_int) -> c_int {
     log("set_timeout");
-    0
+    set_rc("pcap_set_timeout")
 }
 unsafe extern "C" fn f_set_immediate(_p: *mut PcapT, _v: c_int) -> c_int {
     log("set_immediate_mode");
-    0
+    set_rc("pcap_set_immediate_mode")
 }
 unsafe extern "C" fn f_set_buffer(_p: *mut PcapT, _v: c_int) -> c_int {
     log("set_buffer_size");
-    0
+    set_rc("pcap_set_buffer_size")
 }
 unsafe extern "C" fn f_activate(p: *mut PcapT) -> c_int {
     let mut s = st();

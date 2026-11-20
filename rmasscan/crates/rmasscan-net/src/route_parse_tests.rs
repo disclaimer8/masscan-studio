@@ -1,6 +1,7 @@
 //! Разбор ответов ядра на синтетических байтах (любая ОС). Адреса только из документационных диапазонов, кроме разделов
 //! стенда m1 (macOS: 198.18.0.0/30 и MAC `02:ac:…` пары feth) и гостя n2 (лабораторный стенд 198.18.0.0/30, RFC 2544, и
-//! NIC управления QEMU 10.0.2.0/24): они воспроизводят стенды дословно.
+//! NIC управления QEMU 10.0.2.0/24): они воспроизводят стенды дословно; и кроме раздела наблюдения Linux (`mod
+//! observation`): его тесты перенесены из `linux/route_observation_tests.rs` со своими синтетическими адресами.
 
 use std::net::Ipv4Addr;
 
@@ -58,8 +59,8 @@ fn ip_attr(ty: u16, a: Ipv4Addr) -> Vec<u8> {
     rtattr(ty, &a.octets())
 }
 
-fn route_body(kind: u8, dst_len: u8, table: u8, attrs: &[Vec<u8>]) -> Vec<u8> {
-    let mut b = vec![AF_INET, dst_len, 0, 0, table, 4, 0, kind];
+fn route_body(kind: RouteKind, dst_len: u8, table: u8, attrs: &[Vec<u8>]) -> Vec<u8> {
+    let mut b = vec![AF_INET, dst_len, 0, 0, table, 4, 0, kind.0];
     b.extend(0u32.to_ne_bytes());
     for a in attrs {
         b.extend(a);
@@ -67,7 +68,7 @@ fn route_body(kind: u8, dst_len: u8, table: u8, attrs: &[Vec<u8>]) -> Vec<u8> {
     b
 }
 
-fn route_msg(kind: u8, dst_len: u8, table: u8, attrs: &[Vec<u8>]) -> Vec<u8> {
+fn route_msg(kind: RouteKind, dst_len: u8, table: u8, attrs: &[Vec<u8>]) -> Vec<u8> {
     nlmsg(RTM_NEWROUTE, 0, 1, &route_body(kind, dst_len, table, attrs))
 }
 
@@ -82,7 +83,7 @@ fn error_msg(code: i32) -> Vec<u8> {
 }
 
 fn nl(
-    kind: u8,
+    kind: RouteKind,
     dst_len: u8,
     table: u32,
     oif: Option<u32>,
@@ -95,6 +96,7 @@ fn nl(
         table,
         oif,
         gateway: gw,
+        prefsrc: None,
         priority: prio,
     }
 }
@@ -227,7 +229,7 @@ fn netlink_local_and_unreachable_kinds_are_kept() {
         &[ip_attr(RTA_GATEWAY, ip(192, 0, 2, 1))],
     ));
     let routes = parse_netlink_routes(&buf).unwrap();
-    let kinds: Vec<u8> = routes.iter().map(|r| r.kind).collect();
+    let kinds: Vec<RouteKind> = routes.iter().map(|r| r.kind).collect();
     assert_eq!(
         kinds,
         vec![
@@ -254,7 +256,7 @@ fn netlink_local_and_unreachable_kinds_are_kept() {
             route_from_nl(r, |_| "x".into()),
             None,
             "kind {} / oif {:?}",
-            r.kind,
+            r.kind.0,
             r.oif
         );
     }
@@ -309,6 +311,23 @@ fn netlink_error_message_is_err() {
     ));
     // Текст ошибки ядра называет errno.
     assert!(NlError::Kernel(101).to_string().starts_with("netlink: "));
+}
+
+/// `nlmsg_len` читается всеми 32 битами: длины, у которых младшие 16 бит дали бы точную длину сообщения, и `u32::MAX`
+/// отвергаются, а точная длина принимается.
+#[test]
+fn netlink_message_length_is_read_with_all_32_bits() {
+    let msg = route_msg(RTN_UNICAST, 32, 254, &[u32_attr(RTA_OIF, 2)]);
+    assert_eq!(parse_netlink_routes(&msg).map(|r| r.len()), Ok(1));
+    let exact = u32::try_from(msg.len()).unwrap();
+    for len in [exact | 0x1_0000, exact | 0x8000_0000, u32::MAX] {
+        let mut m = msg.clone();
+        m[0..4].copy_from_slice(&len.to_ne_bytes());
+        assert!(
+            matches!(parse_netlink_routes(&m), Err(NlError::Malformed(_))),
+            "nlmsg_len {len:#x}"
+        );
+    }
 }
 
 #[test]
@@ -406,11 +425,11 @@ fn netlink_constants_match_libc() {
     );
     assert_eq!(
         [
-            RTN_UNICAST,
-            RTN_LOCAL,
-            RTN_BLACKHOLE,
-            RTN_UNREACHABLE,
-            RTN_PROHIBIT
+            RTN_UNICAST.0,
+            RTN_LOCAL.0,
+            RTN_BLACKHOLE.0,
+            RTN_UNREACHABLE.0,
+            RTN_PROHIBIT.0
         ],
         [
             libc::RTN_UNICAST,
@@ -423,12 +442,388 @@ fn netlink_constants_match_libc() {
     assert_eq!(RT_TABLE_MAIN, u32::from(libc::RT_TABLE_MAIN));
 }
 
+// ---------- Linux rtnetlink: наблюдение (`observation_*`) ----------
+
+/// Разбор неблокирующего наблюдения интерфейсов и маршрута (`linux::route::observation`). Первые семь тестов
+/// перенесены из `linux/route_observation_tests.rs` без изменений утверждений; помощники байт тоже оттуда.
+mod observation {
+    use super::*;
+    use crate::NetError;
+    use crate::network_plan::Ipv4Prefix;
+    // The Darwin section of this file declares its own `RTM_NEWADDR` (u8); rtnetlink's is meant here.
+    use crate::route_parse::RTM_NEWADDR;
+
+    fn message(kind: u16, flags: u16, seq: u32, body: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend(((16 + body.len()) as u32).to_ne_bytes());
+        out.extend(kind.to_ne_bytes());
+        out.extend(flags.to_ne_bytes());
+        out.extend(seq.to_ne_bytes());
+        out.extend(0u32.to_ne_bytes());
+        out.extend(body);
+        out.resize((out.len() + 3) & !3, 0);
+        out
+    }
+
+    fn attr(kind: u16, value: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend(((4 + value.len()) as u16).to_ne_bytes());
+        out.extend(kind.to_ne_bytes());
+        out.extend(value);
+        out.resize((out.len() + 3) & !3, 0);
+        out
+    }
+
+    fn link(index: u32, name: &str, kind: u16, flags: u32) -> Vec<u8> {
+        let mut body = vec![0; 16];
+        body[2..4].copy_from_slice(&kind.to_ne_bytes());
+        body[4..8].copy_from_slice(&index.to_ne_bytes());
+        body[8..12].copy_from_slice(&flags.to_ne_bytes());
+        body.extend(attr(3, format!("{name}\0").as_bytes()));
+        body.extend(attr(1, &[2, 1, 2, 3, 4, 5]));
+        message(16, 0, 41, &body)
+    }
+
+    fn address(index: u32, address: [u8; 4], prefix: u8, local: Option<[u8; 4]>) -> Vec<u8> {
+        let mut body = vec![2, prefix, 0, 0];
+        body.extend(index.to_ne_bytes());
+        body.extend(attr(1, &address));
+        if let Some(local) = local {
+            body.extend(attr(2, &local));
+        }
+        // A legacy alias label must not cause a separate or missing interface.
+        body.extend(attr(3, b"eth0:office\0"));
+        message(20, 0, 42, &body)
+    }
+
+    #[test]
+    fn network_plan_keeps_all_alias_prefixes_and_uses_local_point_to_point_address() {
+        let links = [
+            link(2, "eth0", 1, 1),
+            link(7, "ppp0", 512, 1),
+            link(8, "down0", 1, 0),
+        ]
+        .concat();
+        let addrs = [
+            address(2, [192, 168, 5, 20], 24, None),
+            address(2, [10, 9, 0, 5], 16, Some([10, 9, 0, 5])),
+            address(2, [10, 9, 0, 5], 16, None),
+            address(7, [10, 0, 0, 2], 32, Some([10, 0, 0, 1])),
+        ]
+        .concat();
+        let result = observations(&links, 41, &addrs, 42).unwrap();
+        assert_eq!(result.len(), 3);
+        assert_eq!(result[0].iface.name, "eth0");
+        assert_eq!(
+            result[0].iface.ipv4,
+            vec![Ipv4Addr::new(10, 9, 0, 5), Ipv4Addr::new(192, 168, 5, 20)]
+        );
+        assert_eq!(
+            result[0].ipv4_prefixes,
+            vec![
+                Ipv4Prefix {
+                    address: Ipv4Addr::new(10, 9, 0, 5),
+                    length: 16
+                },
+                Ipv4Prefix {
+                    address: Ipv4Addr::new(192, 168, 5, 20),
+                    length: 24
+                },
+            ]
+        );
+        assert_eq!(result[0].iface.mac, Some([2, 1, 2, 3, 4, 5]));
+        assert!(result[0].iface.ethernet && result[0].iface.up);
+        assert_eq!(result[1].iface.ipv4, vec![Ipv4Addr::new(10, 0, 0, 1)]);
+        assert_eq!(result[1].ipv4_prefixes[0].length, 32);
+        assert!(!result[1].iface.ethernet);
+        assert_eq!(result[1].iface.mac, None);
+        assert!(!result[2].iface.up);
+        assert!(result[2].ipv4_prefixes.is_empty());
+    }
+
+    #[test]
+    fn network_plan_prefix_extremes_are_not_guessed_or_truncated() {
+        let links = link(2, "eth0", 1, 1);
+        for prefix in [0, 31, 32] {
+            let result =
+                observations(&links, 41, &address(2, [10, 0, 0, 1], prefix, None), 42).unwrap();
+            assert_eq!(result[0].ipv4_prefixes[0].length, prefix);
+        }
+        assert!(observations(&links, 41, &address(2, [10, 0, 0, 1], 33, None), 42).is_err());
+        assert!(observations(&links, 41, &address(99, [10, 0, 0, 1], 24, None), 42).is_err());
+    }
+
+    #[test]
+    fn network_plan_rejects_truncated_link_and_address_attributes() {
+        let links = link(2, "eth0", 1, 1);
+        for body in [vec![], vec![0; 7]] {
+            assert!(observations(&links, 41, &message(20, 0, 42, &body), 42).is_err());
+        }
+        let mut body = vec![2, 24, 0, 0, 2, 0, 0, 0];
+        body.extend(attr(1, &[10, 0, 1]));
+        assert!(observations(&links, 41, &message(20, 0, 42, &body), 42).is_err());
+        assert!(observations(&message(16, 0, 41, &[0; 15]), 41, &[], 42).is_err());
+    }
+
+    fn route_response(kind: u8) -> Vec<u8> {
+        // RTM_NEWROUTE: AF_INET, /32 destination, main table, static protocol,
+        // link scope, specified kernel route kind, no rtm_flags.
+        let mut body = vec![2, 32, 0, 0, 254, 4, 253, kind, 0, 0, 0, 0];
+        body.extend(attr(1, &[192, 0, 2, 42])); // RTA_DST
+        body.extend(attr(4, &2u32.to_ne_bytes())); // RTA_OIF
+        body.extend(attr(5, &[192, 0, 2, 1])); // RTA_GATEWAY
+        message(24, 0, 41, &body)
+    }
+
+    /// Прежний `route_reply`: в этих ответах нет `NLMSG_ERROR`, поэтому предикат «нет маршрута» не спрашивается.
+    fn route_reply(
+        bytes: &[u8],
+        ifname: impl FnOnce(u32) -> String,
+    ) -> Result<Option<Route>, NetError> {
+        observation_route_reply(
+            bytes,
+            |e| panic!("no-route predicate asked for {e}"),
+            ifname,
+        )
+    }
+
+    #[test]
+    fn network_plan_kernel_custom_broadcast_route_is_not_an_ordinary_destination() {
+        // 192.0.2.42 is neither endpoint of 192.0.2.0/24, but Linux may assign
+        // it as that interface's custom broadcast. The kernel route kind wins.
+        let result = route_reply(&route_response(3), |_| "eth0".into()).unwrap();
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn network_plan_kernel_anycast_multicast_and_unknown_route_kinds_are_refused() {
+        for kind in (0..=u8::MAX).filter(|kind| !matches!(kind, 1..=3)) {
+            let result = route_reply(&route_response(kind), |_| "eth0".into()).unwrap();
+            assert_eq!(result, None, "unsupported route kind {kind}");
+        }
+    }
+
+    #[test]
+    fn network_plan_kernel_unicast_and_local_route_kinds_retain_their_meaning() {
+        for (kind, local, gateway) in [
+            (1, false, Some(Ipv4Addr::new(192, 0, 2, 1))),
+            (2, true, None),
+        ] {
+            assert_eq!(
+                route_reply(&route_response(kind), |_| "eth0".into()).unwrap(),
+                Some(Route {
+                    ifindex: 2,
+                    ifname: "eth0".into(),
+                    gateway,
+                    local
+                })
+            );
+        }
+    }
+
+    /// `nlmsg_len` is read with all 32 bits: lengths whose low 16 bits would give the exact length, and `u32::MAX`, are
+    /// rejected; the exact length is accepted.
+    #[test]
+    fn netlink_length_is_read_with_all_32_bits() {
+        let msg = message(RTM_NEWLINK, 0, 7, &[0; 4]);
+        assert_eq!(observation_messages(&msg, 7).unwrap(), [msg.as_slice()]);
+        let exact = u32::try_from(msg.len()).unwrap();
+        for len in [exact | 0x1_0000, exact | 0x8000_0000, u32::MAX] {
+            let mut m = msg.clone();
+            m[0..4].copy_from_slice(&len.to_ne_bytes());
+            assert!(observation_messages(&m, 7).is_err(), "nlmsg_len {len:#x}");
+        }
+    }
+
+    /// Прежний `dump_request` из `linux/route_observation.rs` (база `bace6944`) дословно, литералы как были.
+    fn base_dump_request(kind: u16, seq: u32) -> Vec<u8> {
+        let payload_len = if kind == 18 { 16 } else { 8 };
+        let mut request = vec![0; 16 + payload_len];
+        let total = u32::try_from(16 + payload_len).unwrap_or(u32::MAX);
+        request[..4].copy_from_slice(&total.to_ne_bytes());
+        request[4..6].copy_from_slice(&kind.to_ne_bytes());
+        request[6..8].copy_from_slice(&0x301u16.to_ne_bytes()); // REQUEST | DUMP
+        request[8..12].copy_from_slice(&seq.to_ne_bytes());
+        request[16] = if kind == 22 { 2 } else { 0 };
+        request
+    }
+
+    #[test]
+    fn observation_dump_requests_are_byte_identical() {
+        for kind in 0..=40u16 {
+            for seq in [0, 1, 41, 0x8000_0000, u32::MAX] {
+                assert_eq!(
+                    observation_dump_request(kind, seq),
+                    base_dump_request(kind, seq),
+                    "kind {kind} seq {seq}"
+                );
+            }
+        }
+        assert_eq!(observation_dump_request(RTM_GETLINK, 1).len(), 32);
+        assert_eq!(observation_dump_request(RTM_GETADDR, 1).len(), 24);
+    }
+
+    /// Завершение ответа по одному сообщению, как в прежнем цикле `exchange_until`.
+    #[test]
+    fn observation_message_ends_as_before() {
+        let ends = |kind: u16, flags: u16, body: &[u8], dump: bool| {
+            observation_message_ends(&message(kind, flags, 41, body), dump)
+        };
+        for dump in [false, true] {
+            // NLMSG_DONE с нулевым кодом или без него завершает и dump, и lookup.
+            assert_eq!(ends(NLMSG_DONE, 0, &[], dump), Ok(true));
+            assert_eq!(ends(NLMSG_DONE, 0, &0i32.to_ne_bytes(), dump), Ok(true));
+            // ACK не завершает; ошибка ядра завершает (её прочтёт разбор маршрута).
+            assert_eq!(ends(NLMSG_ERROR, 0, &0i32.to_ne_bytes(), dump), Ok(false));
+            assert_eq!(
+                ends(NLMSG_ERROR, 0, &(-13i32).to_ne_bytes(), dump),
+                Ok(true)
+            );
+            // Типы ниже RTM_NEWLINK не завершают никогда.
+            assert_eq!(ends(1, 0, &[], dump), Ok(false));
+            assert_eq!(ends(RTM_NEWLINK - 1, 0, &[0; 4], dump), Ok(false));
+        }
+        // Первое сообщение данных завершает только lookup.
+        for kind in [RTM_NEWLINK, RTM_NEWADDR, RTM_NEWROUTE, u16::MAX] {
+            assert_eq!(ends(kind, 0, &[0; 4], false), Ok(true), "kind {kind}");
+            assert_eq!(ends(kind, 0, &[0; 4], true), Ok(false), "kind {kind}");
+        }
+    }
+
+    fn text(r: Result<impl std::fmt::Debug, NetError>) -> String {
+        r.unwrap_err().to_string()
+    }
+
+    /// Тексты разбора наблюдения дословно с базы (`linux/route_observation.rs`, `bace6944`); тексты без errno.
+    #[test]
+    fn observation_decoder_texts_are_byte_identical() {
+        let links = link(2, "eth0", 1, 1);
+        let obs = |links: &[u8], addrs: &[u8]| text(observations(links, 41, addrs, 42));
+        let malformed = |what: &str| format!("system error: netlink observation: malformed {what}");
+        // Заголовки сообщений.
+        assert_eq!(
+            text(observation_messages(&[0; 15], 41)),
+            malformed("netlink header")
+        );
+        let mut short = message(16, 0, 41, &[]);
+        short[0..4].copy_from_slice(&15u32.to_ne_bytes());
+        assert_eq!(
+            text(observation_messages(&short, 41)),
+            malformed("netlink length")
+        );
+        // Чтения полей: `u16` у одного байта вместо заголовка атрибута, `u32` у NLMSG_ERROR без кода.
+        let mut body = vec![0; 16];
+        body[4..8].copy_from_slice(&2u32.to_ne_bytes());
+        body.push(0);
+        assert_eq!(obs(&message(16, 0, 41, &body), &[]), malformed("u16"));
+        assert_eq!(obs(&message(2, 0, 41, &[]), &[]), malformed("u32"));
+        assert_eq!(
+            text(observation_message_ends(&message(2, 0, 41, &[]), true)),
+            malformed("u32")
+        );
+        // ifinfomsg и его атрибуты.
+        assert_eq!(
+            obs(&message(16, 0, 41, &[0; 15]), &[]),
+            malformed("ifinfomsg")
+        );
+        assert_eq!(
+            obs(&link(0, "eth0", 1, 1), &[]),
+            malformed("interface index")
+        );
+        let mut bad = vec![0; 16];
+        bad[4..8].copy_from_slice(&2u32.to_ne_bytes());
+        bad.extend([3, 0, 3, 0]);
+        assert_eq!(
+            obs(&message(16, 0, 41, &bad), &[]),
+            malformed("attribute length")
+        );
+        let named = |name: &[u8]| {
+            let mut body = vec![0; 16];
+            body[4..8].copy_from_slice(&2u32.to_ne_bytes());
+            body.extend(attr(3, name));
+            message(16, 0, 41, &body)
+        };
+        assert_eq!(obs(&named(b"eth0"), &[]), malformed("interface name"));
+        assert_eq!(obs(&named(b"\0"), &[]), malformed("empty interface name"));
+        assert_eq!(obs(&named_none(), &[]), malformed("missing interface name"));
+        // ifaddrmsg и его атрибуты.
+        assert_eq!(
+            obs(&links, &message(20, 0, 42, &[0; 7])),
+            malformed("ifaddrmsg")
+        );
+        assert_eq!(
+            obs(&links, &address(2, [10, 0, 0, 1], 33, None)),
+            malformed("IPv4 prefix length")
+        );
+        let mut body = vec![2, 24, 0, 0, 2, 0, 0, 0];
+        body.extend(attr(1, &[10, 0, 1]));
+        assert_eq!(
+            obs(&links, &message(20, 0, 42, &body)),
+            malformed("IPv4 address")
+        );
+        assert_eq!(
+            obs(&links, &address(99, [10, 0, 0, 1], 24, None)),
+            "system error: interfaces changed during network observation"
+        );
+        // Прерванный dump и ответ lookup без маршрута.
+        assert_eq!(
+            text(observation_message_ends(&message(3, 0x10, 41, &[]), true)),
+            "system error: netlink observation: interrupted dump"
+        );
+        assert_eq!(
+            text(observation_route_reply(
+                &message(3, 0, 41, &[]),
+                |_| false,
+                |_| String::new()
+            )),
+            malformed("route reply with no route")
+        );
+    }
+
+    fn named_none() -> Vec<u8> {
+        let mut body = vec![0; 16];
+        body[4..8].copy_from_slice(&2u32.to_ne_bytes());
+        body.extend(attr(1, &[2, 1, 2, 3, 4, 5]));
+        message(16, 0, 41, &body)
+    }
+
+    /// Ошибки ядра печатают errno таблицей ОС хоста: на любой ОС сверяются вид `NetError` и операция, не текст ОС.
+    #[test]
+    fn observation_kernel_errors_keep_their_operation_and_kind() {
+        let system_with = |r: NetError, prefix: &str| matches!(&r, NetError::System(m) if m.starts_with(prefix) && m.len() > prefix.len());
+        let error = message(2, 0, 41, &(-13i32).to_ne_bytes());
+        assert!(system_with(
+            observations(&error, 41, &[], 42).unwrap_err(),
+            "netlink interface dump: "
+        ));
+        let links = link(2, "eth0", 1, 1);
+        let addr_error = message(2, 0, 42, &(-13i32).to_ne_bytes());
+        assert!(system_with(
+            observations(&links, 41, &addr_error, 42).unwrap_err(),
+            "netlink interface dump: "
+        ));
+        assert!(system_with(
+            observation_message_ends(&message(3, 0, 41, &(-4i32).to_ne_bytes()), true).unwrap_err(),
+            "netlink dump: "
+        ));
+        // Ошибка ядра lookup: «нет маршрута» решает предикат вызывающего, прочие идут текстом `NlError`.
+        assert_eq!(
+            observation_route_reply(&error, |e| e == 13, |_| String::new()),
+            Ok(None)
+        );
+        assert!(system_with(
+            observation_route_reply(&error, |_| false, |_| String::new()).unwrap_err(),
+            "netlink: "
+        ));
+    }
+}
+
 // ---------- Darwin route socket ----------
 
 const RTA_GATEWAY_BIT: i32 = 0x2;
 const RTA_NETMASK_BIT: i32 = 0x4;
 const RTA_IFA_BIT: i32 = 0x20;
-const RTF_HOST: i32 = 0x4;
+const RTF_HOST: RtFlags = RtFlags(0x4);
 const SEQ: i32 = 5;
 const PID: i32 = 4100;
 
@@ -455,7 +850,7 @@ fn sdl(index: u16, name: &str, mac: Option<[u8; 6]>) -> Vec<u8> {
 
 /// Сообщение route socket: заголовок и sockaddr по возрастанию бита, каждый дополнен до `ROUNDUP(sa_len)`.
 fn rt_msg(
-    flags: i32,
+    flags: RtFlags,
     index: u16,
     sas: &[(i32, Vec<u8>)],
     pid: i32,
@@ -480,7 +875,7 @@ fn rt_msg(
     b[OFF_VERSION] = RTM_VERSION;
     b[OFF_TYPE] = RTM_GET;
     b[OFF_INDEX..OFF_INDEX + 2].copy_from_slice(&index.to_ne_bytes());
-    b[OFF_FLAGS..OFF_FLAGS + 4].copy_from_slice(&flags.to_ne_bytes());
+    b[OFF_FLAGS..OFF_FLAGS + 4].copy_from_slice(&flags.0.to_ne_bytes());
     b[OFF_ADDRS..OFF_ADDRS + 4].copy_from_slice(&addrs.to_ne_bytes());
     b[OFF_PID..OFF_PID + 4].copy_from_slice(&pid.to_ne_bytes());
     b[OFF_SEQ..OFF_SEQ + 4].copy_from_slice(&seq.to_ne_bytes());
@@ -513,7 +908,7 @@ fn rt_get_request_mirrors_the_c_oracle() {
     assert_eq!(usize::from(u16::from_ne_bytes([req[0], req[1]])), req.len());
     assert_eq!((req[OFF_VERSION], req[OFF_TYPE]), (RTM_VERSION, RTM_GET));
     let i32_at = |o: usize| i32::from_ne_bytes(req[o..o + 4].try_into().unwrap());
-    assert_eq!(i32_at(OFF_FLAGS), RTF_UP);
+    assert_eq!(i32_at(OFF_FLAGS), RTF_UP.0);
     assert_eq!(i32_at(OFF_ADDRS), RTA_DST_BIT | RTA_IFP_BIT);
     assert_eq!(
         (i32_at(OFF_PID), i32_at(OFF_SEQ), i32_at(OFF_ERRNO)),
@@ -649,7 +1044,7 @@ fn rt_reply_gateway_sockaddr_dl_means_on_link() {
 
 #[test]
 fn rt_reply_rtf_local_or_lo0_is_local() {
-    let reply = |flags: i32, ifname: &str| {
+    let reply = |flags: RtFlags, ifname: &str| {
         let m = rt_msg(
             flags,
             1,
@@ -821,12 +1216,12 @@ fn rt_msghdr_layout_and_constants_match_libc() {
     assert_eq!((RTA_DST_BIT, RTA_IFP_BIT), (libc::RTA_DST, libc::RTA_IFP));
     assert_eq!(
         [
-            RTF_UP,
-            RTF_GATEWAY,
-            RTF_REJECT,
-            RTF_LLINFO,
-            RTF_BLACKHOLE,
-            RTF_LOCAL
+            RTF_UP.0,
+            RTF_GATEWAY.0,
+            RTF_REJECT.0,
+            RTF_LLINFO.0,
+            RTF_BLACKHOLE.0,
+            RTF_LOCAL.0
         ],
         [
             libc::RTF_UP,
@@ -851,6 +1246,66 @@ fn rt_msghdr_layout_and_constants_match_libc() {
     assert_eq!(size_of::<libc::ifma_msghdr>(), 16);
 }
 
+/// Every constant of the route socket parser equals the `libc` declaration of the Darwin ABI it encodes
+/// (a later refactor may replace the literals; this pins their values to the system headers).
+#[cfg(target_os = "macos")]
+#[test]
+fn darwin_route_socket_constants_match_libc() {
+    use std::mem::{offset_of, size_of};
+    assert_eq!(RT_MSGHDR_LEN, size_of::<libc::rt_msghdr>());
+    assert_eq!(
+        [
+            OFF_MSGLEN,
+            OFF_VERSION,
+            OFF_TYPE,
+            OFF_INDEX,
+            OFF_FLAGS,
+            OFF_ADDRS,
+            OFF_PID,
+            OFF_SEQ,
+            OFF_ERRNO
+        ],
+        [
+            offset_of!(libc::rt_msghdr, rtm_msglen),
+            offset_of!(libc::rt_msghdr, rtm_version),
+            offset_of!(libc::rt_msghdr, rtm_type),
+            offset_of!(libc::rt_msghdr, rtm_index),
+            offset_of!(libc::rt_msghdr, rtm_flags),
+            offset_of!(libc::rt_msghdr, rtm_addrs),
+            offset_of!(libc::rt_msghdr, rtm_pid),
+            offset_of!(libc::rt_msghdr, rtm_seq),
+            offset_of!(libc::rt_msghdr, rtm_errno)
+        ]
+    );
+    assert_eq!(i32::from(RTM_VERSION), libc::RTM_VERSION);
+    assert_eq!(i32::from(RTM_GET), libc::RTM_GET);
+    assert_eq!(RTA_DST_BIT, libc::RTA_DST);
+    assert_eq!(RTA_IFP_BIT, libc::RTA_IFP);
+    assert_eq!(
+        [
+            RTF_UP.0,
+            RTF_GATEWAY.0,
+            RTF_REJECT.0,
+            RTF_LLINFO.0,
+            RTF_BLACKHOLE.0,
+            RTF_LOCAL.0
+        ],
+        [
+            libc::RTF_UP,
+            libc::RTF_GATEWAY,
+            libc::RTF_REJECT,
+            libc::RTF_LLINFO,
+            libc::RTF_BLACKHOLE,
+            libc::RTF_LOCAL
+        ]
+    );
+    assert_eq!(i32::from(AF_LINK), libc::AF_LINK);
+    assert_eq!(i32::from(AF_INET6_DARWIN), libc::AF_INET6);
+    assert_eq!(SDL_DATA, offset_of!(libc::sockaddr_dl, sdl_data));
+    assert_eq!(SIN6_LEN, size_of::<libc::sockaddr_in6>());
+    assert_eq!(SIN6_ADDR, offset_of!(libc::sockaddr_in6, sin6_addr));
+}
+
 // ---------- macOS: стенд m1 (PF4) ----------
 
 /// Индексы интерфейсов Mac в окне (`if_nameindex`; маршрут подсети в `netstat -rn` это `link#36`, то есть feth4202).
@@ -865,11 +1320,11 @@ const M1_PEER_MAC: [u8; 6] = [0x02, 0xac, 0, 0, 0, 2];
 const M1_EN0_IP: Ipv4Addr = Ipv4Addr::new(192, 0, 2, 10);
 const M1_EN0_GW: Ipv4Addr = Ipv4Addr::new(192, 0, 2, 1);
 const M1_EN0_MAC: [u8; 6] = [0x02, 0xbb, 0, 0, 0, 14];
-const RTF_DONE: i32 = 0x40;
-const RTF_CLONING: i32 = 0x100;
-const RTF_STATIC: i32 = 0x800;
-const RTF_WASCLONED: i32 = 0x2_0000;
-const RTF_IFSCOPE: i32 = 0x100_0000;
+const RTF_DONE: RtFlags = RtFlags(0x40);
+const RTF_CLONING: RtFlags = RtFlags(0x100);
+const RTF_STATIC: RtFlags = RtFlags(0x800);
+const RTF_WASCLONED: RtFlags = RtFlags(0x2_0000);
+const RTF_IFSCOPE: RtFlags = RtFlags(0x100_0000);
 
 /// Тексты таблицы случаев дословно (rmasscan-lab `autodetect_verify.rs`): `LOCAL_TARGET` это текст после `[-] FAIL: `
 /// строки m05_user_no_adapter и её `Preflight::Refusal` (его ждёт `preflight_expectation("m05_user_no_adapter")`),
@@ -921,7 +1376,7 @@ impl MacM1 {
 
     /// Ответ `RTM_GET` ядра к `dst` (самый длинный префикс). MAC в `RTAX_IFP` разбор не читает.
     fn reply(&self, dst: Ipv4Addr) -> Vec<u8> {
-        let msg = |flags: i32, index: u16, sas: &[(i32, Vec<u8>)]| {
+        let msg = |flags: RtFlags, index: u16, sas: &[(i32, Vec<u8>)]| {
             rt_msg(flags | RTF_DONE, index, sas, PID, SEQ, 0)
         };
         let mask = |len: u32| sin(Ipv4Addr::from(u32::MAX << (32 - len)));
@@ -1263,7 +1718,7 @@ fn mac_own_address_is_local_whatever_rtm_get_returned() {
         gateway: None,
         local: true,
     };
-    let feth = |flags: i32, gateway: Vec<u8>| {
+    let feth = |flags: RtFlags, gateway: Vec<u8>| {
         let m = rt_msg(
             RTF_UP | RTF_DONE | flags,
             M1_PEER,
@@ -1299,7 +1754,7 @@ fn mac_own_address_is_local_whatever_rtm_get_returned() {
     );
     assert_eq!(lookup_from_rt(None, ip(198, 18, 0, 1), &ifaces), None);
     let foreign = ip(192, 0, 2, 99);
-    let local_reply = |flags: i32, ifname: &str| {
+    let local_reply = |flags: RtFlags, ifname: &str| {
         let m = rt_msg(
             RTF_UP | RTF_DONE | flags,
             M1_EN0,
@@ -1519,12 +1974,12 @@ fn mac_m1_every_macos_case_detects_as_before_and_only_m05_reads_a_route() {
 fn m1_reply_flags_match_libc() {
     assert_eq!(
         [
-            RTF_HOST,
-            RTF_DONE,
-            RTF_CLONING,
-            RTF_STATIC,
-            RTF_WASCLONED,
-            RTF_IFSCOPE
+            RTF_HOST.0,
+            RTF_DONE.0,
+            RTF_CLONING.0,
+            RTF_STATIC.0,
+            RTF_WASCLONED.0,
+            RTF_IFSCOPE.0
         ],
         [
             libc::RTF_HOST,
@@ -1658,13 +2113,12 @@ fn win_adapter_iftype_71_is_ethernet_and_24_is_loopback() {
 #[test]
 fn fwd_row_iftype_24_or_own_unicast_is_local_the_mib_flag_alone_is_not() {
     let adapters = host_adapters();
-    let ifaces = ifaces_of(&adapters);
     // Флаг MIB `Loopback` строки сам по себе не делает чужой адрес локальным: это on-link маршрут интерфейса строки
     // (так Windows помечает /32 широковещательного адреса подсети), как RTN_BROADCAST на Linux.
     let mut flagged = fwd(12, 32, Ipv4Addr::UNSPECIFIED, 256);
     flagged.mib_loopback = true;
     assert_eq!(
-        route_from_best(&flagged, ip(192, 0, 2, 255), &ifaces),
+        route_from_best(&flagged, ip(192, 0, 2, 255), &adapters),
         Route {
             ifindex: 12,
             ifname: "Ethernet".into(),
@@ -1674,11 +2128,11 @@ fn fwd_row_iftype_24_or_own_unicast_is_local_the_mib_flag_alone_is_not() {
         "a MIB-flagged row to a foreign address is on-link"
     );
     // С флагом MIB и адресом адаптера назначение локально по адресу.
-    assert!(route_from_best(&flagged, ip(192, 0, 2, 10), &ifaces).local);
+    assert!(route_from_best(&flagged, ip(192, 0, 2, 10), &adapters).local);
     // IfType 24 интерфейса строки.
     let mut rows = [fwd(1, 8, Ipv4Addr::UNSPECIFIED, 256)];
     mark_loopback(&mut rows, &adapters);
-    let lo = route_from_best(&rows[0], ip(127, 0, 0, 1), &ifaces);
+    let lo = route_from_best(&rows[0], ip(127, 0, 0, 1), &adapters);
     assert_eq!(
         lo,
         Route {
@@ -1693,7 +2147,7 @@ fn fwd_row_iftype_24_or_own_unicast_is_local_the_mib_flag_alone_is_not() {
         route_from_best(
             &fwd(12, 32, Ipv4Addr::UNSPECIFIED, 256),
             ip(192, 0, 2, 10),
-            &ifaces
+            &adapters
         )
         .local
     );
@@ -1701,7 +2155,7 @@ fn fwd_row_iftype_24_or_own_unicast_is_local_the_mib_flag_alone_is_not() {
         route_from_best(
             &fwd(12, 32, Ipv4Addr::UNSPECIFIED, 256),
             ip(198, 51, 100, 20),
-            &ifaces
+            &adapters
         )
         .local
     );
@@ -1709,7 +2163,7 @@ fn fwd_row_iftype_24_or_own_unicast_is_local_the_mib_flag_alone_is_not() {
     let onlink = route_from_best(
         &fwd(12, 24, Ipv4Addr::UNSPECIFIED, 256),
         ip(192, 0, 2, 20),
-        &ifaces,
+        &adapters,
     );
     assert_eq!(
         onlink,
@@ -1723,25 +2177,24 @@ fn fwd_row_iftype_24_or_own_unicast_is_local_the_mib_flag_alone_is_not() {
     let via = route_from_best(
         &fwd(12, 0, ip(192, 0, 2, 1), 25),
         ip(203, 0, 113, 5),
-        &ifaces,
+        &adapters,
     );
     assert_eq!((via.gateway, via.local), (Some(ip(192, 0, 2, 1)), false));
     // Флаг MIB со шлюзом: строка не локальна, шлюз остаётся.
     let mut lgw = fwd(12, 0, ip(192, 0, 2, 1), 25);
     lgw.mib_loopback = true;
-    let r = route_from_best(&lgw, ip(203, 0, 113, 5), &ifaces);
+    let r = route_from_best(&lgw, ip(203, 0, 113, 5), &adapters);
     assert_eq!((r.gateway, r.local), (Some(ip(192, 0, 2, 1)), false));
     // Интерфейс IfType 24 отменяет шлюз.
     let mut rows = [fwd(1, 0, ip(192, 0, 2, 1), 25)];
     mark_loopback(&mut rows, &adapters);
-    let r = route_from_best(&rows[0], ip(203, 0, 113, 5), &ifaces);
+    let r = route_from_best(&rows[0], ip(203, 0, 113, 5), &adapters);
     assert_eq!((r.gateway, r.local), (None, true));
 }
 
 #[test]
 fn fwd_rows_prefix_zero_sorted_by_metric() {
     let adapters = host_adapters();
-    let ifaces = ifaces_of(&adapters);
     // Строка с префиксом 0 и флагом MIB `Loopback` на Ethernet: фильтр маршрутов по умолчанию её отбрасывает, как и
     // строку через IfType 24 (флаг MIB здесь значит то же, что до PF3).
     let mut mib_flagged = fwd(12, 0, ip(192, 0, 2, 254), 5);
@@ -1760,7 +2213,7 @@ fn fwd_rows_prefix_zero_sorted_by_metric() {
     mark_loopback(&mut rows, &adapters);
     assert_eq!(
         defaults_from_rows(table, &adapters),
-        defaults_from_table(&rows, &ifaces),
+        defaults_from_table(&rows, &adapters),
         "OsRoutes::default_routes is mark_loopback + defaults_from_table"
     );
     let r = |ifindex: u32, ifname: &str, gateway: Option<Ipv4Addr>| Route {
@@ -1770,7 +2223,7 @@ fn fwd_rows_prefix_zero_sorted_by_metric() {
         local: false,
     };
     assert_eq!(
-        defaults_from_table(&rows, &ifaces),
+        defaults_from_table(&rows, &adapters),
         vec![
             r(15, "Wi-Fi", Some(ip(198, 51, 100, 1))),
             r(15, "Wi-Fi", None),
@@ -2133,4 +2586,293 @@ fn if_type_constants_match_windows_sys() {
     assert_eq!(IF_TYPE_ETHERNET_CSMACD, h::IF_TYPE_ETHERNET_CSMACD);
     assert_eq!(IF_TYPE_SOFTWARE_LOOPBACK, h::IF_TYPE_SOFTWARE_LOOPBACK);
     assert_eq!(IF_TYPE_IEEE80211, h::IF_TYPE_IEEE80211);
+}
+
+fn hex(b: &[u8]) -> String {
+    b.iter().map(|x| format!("{x:02x}")).collect()
+}
+
+/// Запросы netlink побайтно, как их строила база до слияния построителей IPv4/IPv6: `seq` 7 и `u32::MAX`, lookup и dump,
+/// оба семейства и dump адресов IPv6. Поля заголовка в родном порядке байт (тест для little-endian).
+#[cfg(target_endian = "little")]
+#[test]
+fn netlink_requests_are_byte_identical_to_base() {
+    let a4 = ip(198, 51, 100, 7);
+    let a6: std::net::Ipv6Addr = "2001:db8:9::1".parse().unwrap();
+    let cases: [(u32, [&str; 5]); 2] = [
+        (
+            7,
+            [
+                "240000001a000100070000000000000002200000000000000000000008000100c6336407",
+                "1c0000001a0001030700000000000000020000000000000000000000",
+                "300000001a00010007000000000000000a80000000000000000000001400010020010db8000900000000000000000001",
+                "1c0000001a00010307000000000000000a0000000000000000000000",
+                "180000001600010307000000000000000a00000000000000",
+            ],
+        ),
+        (
+            u32::MAX,
+            [
+                "240000001a000100ffffffff0000000002200000000000000000000008000100c6336407",
+                "1c0000001a000103ffffffff00000000020000000000000000000000",
+                "300000001a000100ffffffff000000000a80000000000000000000001400010020010db8000900000000000000000001",
+                "1c0000001a000103ffffffff000000000a0000000000000000000000",
+                "1800000016000103ffffffff000000000a00000000000000",
+            ],
+        ),
+    ];
+    for (seq, want) in cases {
+        let got = [
+            hex(&netlink_route_request(seq, Some(a4))),
+            hex(&netlink_route_request(seq, None)),
+            hex(&netlink_route_request6(seq, Some(a6))),
+            hex(&netlink_route_request6(seq, None)),
+            hex(&netlink_addr_request6(seq)),
+        ];
+        assert_eq!(got, want.map(String::from), "seq {seq}");
+    }
+}
+
+fn nl_malformed<T>(m: &str) -> Result<T, NlError> {
+    Err(NlError::Malformed(m.to_string()))
+}
+
+/// Какая из двух ошибок побеждает, как на базе: IPv4 проверяет атрибуты по ходу (короткое значение раньше неверного
+/// `rta_len`), IPv6 и адреса IPv6 сначала проверяют все атрибуты; тело сообщения разбирается до перехода к следующему,
+/// а длины всех заголовков датаграммы проверяются до любого тела.
+#[test]
+fn netlink_first_error_wins_as_on_base() {
+    // Короткий OIF (2 байта), затем атрибут с rta_len за границей тела.
+    let bad_len = [64u8, 0, 15, 0];
+    let attrs = [rtattr(RTA_OIF, &[1, 0]), bad_len.to_vec()];
+
+    let v4 = route_msg(RTN_UNICAST, 32, 254, &attrs);
+    assert_eq!(
+        parse_netlink_routes(&v4),
+        nl_malformed("short route attribute")
+    );
+
+    let mut b6 = vec![10u8, 128, 0, 0, 254, 3, 0, RTN_UNICAST.0];
+    b6.extend(0u32.to_ne_bytes());
+    b6.extend(attrs.iter().flatten());
+    let v6 = nlmsg(RTM_NEWROUTE, 0, 1, &b6);
+    assert_eq!(
+        parse_netlink_routes6(&v6),
+        nl_malformed("rta_len out of bounds")
+    );
+
+    // Адреса IPv6: как маршруты IPv6, сначала все атрибуты.
+    let mut ba = vec![10u8, 64, 0, 0];
+    ba.extend(2u32.to_ne_bytes());
+    ba.extend(rtattr(IFA_ADDRESS, &[1, 2]));
+    ba.extend(bad_len);
+    let addr = nlmsg(super::netlink::RTM_NEWADDR, 0, 1, &ba);
+    assert_eq!(
+        parse_netlink_addrs6(&addr),
+        nl_malformed("rta_len out of bounds")
+    );
+
+    // Искажённое тело перед NLMSG_ERROR: Malformed; NLMSG_ERROR перед искажённым телом: Kernel.
+    let bad_body = route_msg(RTN_UNICAST, 32, 254, &[bad_len.to_vec()]);
+    let mut body_first = bad_body.clone();
+    body_first.extend(error_msg(-101));
+    assert_eq!(
+        parse_netlink_routes(&body_first),
+        nl_malformed("rta_len out of bounds")
+    );
+    let mut error_first = error_msg(-101);
+    error_first.extend(bad_body);
+    assert_eq!(
+        parse_netlink_routes(&error_first),
+        Err(NlError::Kernel(101))
+    );
+
+    // То же для IPv6 и адресов IPv6.
+    let bad6 = nlmsg(RTM_NEWROUTE, 0, 1, &{
+        let mut b = vec![10u8, 128, 0, 0, 254, 3, 0, RTN_UNICAST.0];
+        b.extend(0u32.to_ne_bytes());
+        b.extend(bad_len);
+        b
+    });
+    let mut e6 = error_msg(-101);
+    e6.extend(bad6.clone());
+    assert_eq!(parse_netlink_routes6(&e6), Err(NlError::Kernel(101)));
+    let mut b6e = bad6;
+    b6e.extend(error_msg(-101));
+    assert_eq!(
+        parse_netlink_routes6(&b6e),
+        nl_malformed("rta_len out of bounds")
+    );
+    let mut ae = error_msg(-101);
+    ae.extend(addr.clone());
+    assert_eq!(parse_netlink_addrs6(&ae), Err(NlError::Kernel(101)));
+    let mut ea = addr;
+    ea.extend(error_msg(-101));
+    assert_eq!(
+        parse_netlink_addrs6(&ea),
+        nl_malformed("rta_len out of bounds")
+    );
+
+    // Заголовок за NLMSG_ERROR обрезан: границы всех заголовков проверяются до разбора тел, побеждает Malformed.
+    let mut cut = error_msg(-101);
+    cut.extend([0u8; 3]);
+    assert_eq!(
+        parse_netlink_routes(&cut),
+        nl_malformed("truncated nlmsghdr")
+    );
+}
+
+/// Hex captured from the base builders (`rt_get_request`, `rt_get_request6`) before the shared `rt_request`; the
+/// header fields are native-endian, so the literals are little-endian (every supported host).
+#[cfg(target_endian = "little")]
+#[test]
+fn rt_requests_are_byte_identical_to_base() {
+    fn unhex(h: &str) -> Vec<u8> {
+        (0..h.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&h[i..i + 2], 16).unwrap())
+            .collect()
+    }
+    let v4 = ip(198, 51, 100, 7);
+    let v6: std::net::Ipv6Addr = "2001:db8::1:2".parse().unwrap();
+    let cases: [(i32, i32, &str, &str); 2] = [
+        (
+            0,
+            0,
+            concat!(
+                "6c00050400000000010000001100000000000000000000000000000000000000",
+                "0000000000000000000000000000000000000000000000000000000000000000",
+                "0000000000000000000000000000000000000000000000000000000010020000",
+                "c63364070000000000000000"
+            ),
+            concat!(
+                "7800050400000000010000001100000000000000000000000000000000000000",
+                "0000000000000000000000000000000000000000000000000000000000000000",
+                "000000000000000000000000000000000000000000000000000000001c1e0000",
+                "0000000020010db800000000000000000001000200000000"
+            ),
+        ),
+        (
+            i32::MAX,
+            i32::MAX,
+            concat!(
+                "6c000504000000000100000011000000ffffff7fffffff7f0000000000000000",
+                "0000000000000000000000000000000000000000000000000000000000000000",
+                "0000000000000000000000000000000000000000000000000000000010020000",
+                "c63364070000000000000000"
+            ),
+            concat!(
+                "78000504000000000100000011000000ffffff7fffffff7f0000000000000000",
+                "0000000000000000000000000000000000000000000000000000000000000000",
+                "000000000000000000000000000000000000000000000000000000001c1e0000",
+                "0000000020010db800000000000000000001000200000000"
+            ),
+        ),
+    ];
+    for (seq, pid, h4, h6) in cases {
+        assert_eq!(
+            rt_get_request(seq, pid, v4),
+            unhex(h4),
+            "v4 seq {seq} pid {pid}"
+        );
+        assert_eq!(
+            rt_get_request6(seq, pid, v6),
+            unhex(h6),
+            "v6 seq {seq} pid {pid}"
+        );
+    }
+}
+
+/// The interface name of a route row is found by ifindex in the adapter list: the first adapter with that index, its
+/// FriendlyName or else its AdapterName, and `ifindex N` for an index no adapter has. The reference is the old way,
+/// a `Vec<Iface>` of every adapter searched by `Iface::index`, kept here so the direct lookup cannot drift from it.
+#[test]
+fn win_name_lookup_matches_iface_list() {
+    let mut bare = adapter(20, IF_TYPE_ETHERNET_CSMACD, "unused", &[]);
+    bare.friendly_name = None;
+    let adapters = vec![
+        adapter(
+            12,
+            IF_TYPE_ETHERNET_CSMACD,
+            "Ethernet",
+            &[ip(192, 0, 2, 10)],
+        ),
+        adapter(7, IF_TYPE_ETHERNET_CSMACD, "First seven", &[]),
+        adapter(7, IF_TYPE_IEEE80211, "Second seven", &[]),
+        bare.clone(),
+        adapter(
+            1,
+            IF_TYPE_SOFTWARE_LOOPBACK,
+            "Loopback",
+            &[ip(127, 0, 0, 1)],
+        ),
+    ];
+    let ifaces = ifaces_of(&adapters);
+    let reference = |ifindex: u32| {
+        ifaces
+            .iter()
+            .find(|i| i.index == ifindex)
+            .map_or_else(|| format!("ifindex {ifindex}"), |i| i.name.clone())
+    };
+    let known = [
+        (12, "Ethernet".to_string()),
+        (7, "First seven".to_string()),
+        (20, bare.adapter_name.clone()),
+        (1, "Loopback".to_string()),
+        (99, "ifindex 99".to_string()),
+        (0, "ifindex 0".to_string()),
+    ];
+    let v6 = |s: &str| s.parse::<std::net::Ipv6Addr>().unwrap();
+    for (ifindex, want) in &known {
+        assert_eq!(
+            &reference(*ifindex),
+            want,
+            "reference for ifindex {ifindex}"
+        );
+        let dst = ip(203, 0, 113, 5);
+        let best = lookup_from_best(fwd(*ifindex, 0, ip(192, 0, 2, 1), 5), dst, &adapters);
+        assert_eq!(&best.ifname, want, "v4 lookup, ifindex {ifindex}");
+        let row6 = Fwd6 {
+            ifindex: *ifindex,
+            prefix_len: 0,
+            next_hop: v6("fe80::1"),
+            metric: 5,
+            mib_loopback: false,
+            loopback_if: false,
+        };
+        let best6 = lookup6_from_best(row6, None, v6("2001:db8::1"), &[], &adapters);
+        assert_eq!(&best6.ifname, want, "v6 lookup, ifindex {ifindex}");
+    }
+    // Default routes: the same name per row, in metric order.
+    let rows: Vec<Fwd> = [99u32, 7, 20, 12]
+        .iter()
+        .enumerate()
+        .map(|(n, i)| fwd(*i, 0, ip(192, 0, 2, 1), n as u32))
+        .collect();
+    let names: Vec<String> = defaults_from_rows(rows, &adapters)
+        .into_iter()
+        .map(|r| r.ifname)
+        .collect();
+    assert_eq!(
+        names,
+        [99u32, 7, 20, 12].map(reference).to_vec(),
+        "default routes carry the reference names"
+    );
+    let rows6: Vec<Fwd6> = [99u32, 7, 20, 12]
+        .iter()
+        .enumerate()
+        .map(|(n, i)| Fwd6 {
+            ifindex: *i,
+            prefix_len: 0,
+            next_hop: v6("fe80::1"),
+            metric: n as u32,
+            mib_loopback: false,
+            loopback_if: false,
+        })
+        .collect();
+    let names6: Vec<String> = defaults6_from_rows(rows6, &adapters)
+        .into_iter()
+        .map(|r| r.ifname)
+        .collect();
+    assert_eq!(names6, names, "IPv6 default routes carry the same names");
 }

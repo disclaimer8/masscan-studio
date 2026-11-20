@@ -38,7 +38,7 @@ pub fn silent_listener(ip: Ipv4Addr, port: u16) -> io::Result<TcpListener> {
 #[allow(unsafe_code)]
 mod imp {
     use std::{
-        io, mem,
+        io,
         net::TcpListener,
         os::fd::AsRawFd,
         sync::atomic::{AtomicBool, Ordering},
@@ -54,21 +54,9 @@ mod imp {
     pub fn install() -> io::Result<()> {
         STOP.store(false, Ordering::Relaxed);
         for signal in [libc::SIGINT, libc::SIGTERM, libc::SIGHUP] {
-            // SAFETY: an all-zero `sigaction` is a valid starting value; `sa_mask` is then
-            // initialised by `sigemptyset` on that same live local, `on_signal` is an
-            // `extern "C"` function that only stores to a static atomic, and the pointer
-            // passed to `sigaction` refers to the live, fully initialised local. The old
-            // action pointer is null, which `sigaction` permits.
-            let rc = unsafe {
-                let mut action: libc::sigaction = mem::zeroed();
-                action.sa_sigaction = on_signal as extern "C" fn(libc::c_int) as libc::sighandler_t;
-                action.sa_flags = libc::SA_RESTART;
-                libc::sigemptyset(&mut action.sa_mask);
-                libc::sigaction(signal, &action, std::ptr::null_mut())
-            };
-            if rc != 0 {
-                return Err(io::Error::last_os_error());
-            }
+            // `sigaction` with SA_RESTART and an empty mask; `on_signal` only stores to a static atomic.
+            crate::unix_sys::install_handler(signal, on_signal)
+                .map_err(io::Error::from_raw_os_error)?;
         }
         Ok(())
     }

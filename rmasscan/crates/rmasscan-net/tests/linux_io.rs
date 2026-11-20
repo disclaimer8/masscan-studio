@@ -276,3 +276,187 @@ fn lab_missing_interface_still_mismatches_with_privileges() {
         Err(NetError::InterfaceMismatch(_))
     ));
 }
+
+/// Descriptors of this process that are sockets (`/proc/self/fd/<n>` -> `socket:[inode]`).
+fn socket_fds() -> std::collections::BTreeSet<u32> {
+    std::fs::read_dir("/proc/self/fd")
+        .expect("/proc")
+        .filter_map(|e| {
+            let e = e.ok()?;
+            let fd = e.file_name().to_str()?.parse().ok()?;
+            let target = std::fs::read_link(e.path()).ok()?;
+            target.to_str()?.starts_with("socket:").then_some(fd)
+        })
+        .collect()
+}
+
+/// The `flags:` field of `/proc/self/fdinfo/<fd>`: octal, with `O_CLOEXEC` when close-on-exec is set.
+fn fdinfo_flags(fd: u32) -> i32 {
+    let info = std::fs::read_to_string(format!("/proc/self/fdinfo/{fd}")).expect("fdinfo");
+    let flags = info
+        .lines()
+        .find_map(|l| l.strip_prefix("flags:"))
+        .expect("flags line");
+    i32::from_str_radix(flags.trim(), 8).expect("octal flags")
+}
+
+/// The TX and RX AF_PACKET sockets are nonblocking and close-on-exec. Runs only in the adapter smoke run
+/// (`--test-threads=1`), so no other test opens sockets between the two snapshots of `/proc/self/fd`.
+#[test]
+#[ignore = "opens real AF_PACKET sockets: sealed lab only"]
+fn lab_packet_sockets_are_nonblocking_and_cloexec() {
+    let l = lab();
+    let before = socket_fds();
+    let a = open_explicit(&lab_binding(&l)).expect("open");
+    let new: Vec<u32> = socket_fds().difference(&before).copied().collect();
+    assert!(new.len() >= 2, "the TX and RX sockets: {new:?}");
+    for fd in new {
+        let flags = fdinfo_flags(fd);
+        assert_ne!(flags & libc::O_NONBLOCK, 0, "fd {fd}: flags {flags:o}");
+        assert_ne!(flags & libc::O_CLOEXEC, 0, "fd {fd}: flags {flags:o}");
+    }
+    drop(a);
+}
+
+/// One `c_int` socket option of descriptor `fd` of this process (`getsockopt`).
+fn int_sockopt(fd: u32, level: libc::c_int, name: libc::c_int) -> libc::c_int {
+    let mut value: libc::c_int = 0;
+    let mut len = std::mem::size_of::<libc::c_int>() as libc::socklen_t;
+    // SAFETY: `value` and `len` are live locals and `len` holds the size of `value`, so the kernel writes at most that
+    // many bytes; `fd` belongs to the adapter the caller holds open.
+    let rc = unsafe {
+        libc::getsockopt(
+            fd as libc::c_int,
+            level,
+            name,
+            (&raw mut value).cast::<libc::c_void>(),
+            &raw mut len,
+        )
+    };
+    assert_eq!(
+        rc,
+        0,
+        "getsockopt(fd {fd}): {}",
+        std::io::Error::last_os_error()
+    );
+    value
+}
+
+/// `sll_protocol` (host order) of the bound AF_PACKET socket `fd` (`getsockname`); `None` for another family.
+fn packet_protocol(fd: u32) -> Option<u16> {
+    // SAFETY: sockaddr_ll consists of integers and a byte array; the all-zero image is valid.
+    let mut sll: libc::sockaddr_ll = unsafe { std::mem::zeroed() };
+    let mut len = std::mem::size_of::<libc::sockaddr_ll>() as libc::socklen_t;
+    // SAFETY: `sll` and `len` are live locals and `len` holds the size of `sll`, so the kernel writes at most that many
+    // bytes; `fd` belongs to the adapter the caller holds open.
+    let rc = unsafe {
+        libc::getsockname(
+            fd as libc::c_int,
+            (&raw mut sll).cast::<libc::sockaddr>(),
+            &raw mut len,
+        )
+    };
+    assert_eq!(
+        rc,
+        0,
+        "getsockname(fd {fd}): {}",
+        std::io::Error::last_os_error()
+    );
+    (sll.sll_family == libc::AF_PACKET as u16).then(|| u16::from_be(sll.sll_protocol))
+}
+
+/// Opens the lab adapter and finds its two new AF_PACKET descriptors: RX (bound to ETH_P_ALL) and TX (bound to
+/// protocol 0), each exactly once. Finding them by a `/proc/self/fd` diff needs the adapter smoke run
+/// (`--test-threads=1`): no other test opens sockets between the two snapshots.
+fn open_and_find_rx_tx(l: &Lab) -> (rmasscan_net::OpenedAdapter, u32, u32) {
+    let before = socket_fds();
+    let a = open_explicit(&lab_binding(l)).expect("open");
+    let new: Vec<(u32, Option<u16>)> = socket_fds()
+        .difference(&before)
+        .map(|&fd| (fd, packet_protocol(fd)))
+        .collect();
+    let only = |protocol: u16| {
+        let fds: Vec<u32> = new
+            .iter()
+            .filter(|(_, p)| *p == Some(protocol))
+            .map(|(fd, _)| *fd)
+            .collect();
+        assert_eq!(
+            fds.len(),
+            1,
+            "AF_PACKET sockets of protocol {protocol:#06x}: {new:?}"
+        );
+        fds[0]
+    };
+    let (rx, tx) = (only(libc::ETH_P_ALL as u16), only(0));
+    (a, rx, tx)
+}
+
+/// A `net.core` sysctl of the host as an integer.
+fn net_core(name: &str) -> i64 {
+    std::fs::read_to_string(format!("/proc/sys/net/core/{name}"))
+        .unwrap_or_else(|e| panic!("{name}: {e}"))
+        .trim()
+        .parse()
+        .expect("number")
+}
+
+/// P3 (user decision): the TX socket asks for a 4 MiB send buffer with plain `SO_SNDBUF`, so the kernel clamps the
+/// request to `net.core.wmem_max` and stores double the clamped value; the RX socket keeps `net.core.wmem_default`.
+/// The expectation is computed from this host's `wmem_max`, never hard-coded.
+#[test]
+#[ignore = "opens real AF_PACKET sockets: sealed lab only"]
+fn lab_tx_socket_send_buffer_is_raised() {
+    let l = lab();
+    let (a, rx, tx) = open_and_find_rx_tx(&l);
+    let tx_buf = i64::from(int_sockopt(tx, libc::SOL_SOCKET, libc::SO_SNDBUF));
+    let rx_buf = i64::from(int_sockopt(rx, libc::SOL_SOCKET, libc::SO_SNDBUF));
+    let (max, default) = (net_core("wmem_max"), net_core("wmem_default"));
+    let granted = 2 * max.min(4 << 20);
+    eprintln!(
+        "TX SO_SNDBUF {tx_buf}, RX SO_SNDBUF {rx_buf}, wmem_max {max}, wmem_default {default}"
+    );
+    assert!(
+        tx_buf >= granted,
+        "TX SO_SNDBUF {tx_buf} is below what a 4 MiB request gets here ({granted})"
+    );
+    assert_eq!(rx_buf, default, "the RX socket keeps wmem_default");
+    drop(a);
+}
+
+/// P3 (user decision): the TX socket sends past the interface qdisc (`PACKET_QDISC_BYPASS` reads back 1); the RX
+/// socket, which never sends, keeps the default (0).
+#[test]
+#[ignore = "opens real AF_PACKET sockets: sealed lab only"]
+fn lab_tx_socket_bypasses_the_qdisc() {
+    let l = lab();
+    let (a, rx, tx) = open_and_find_rx_tx(&l);
+    let tx_bypass = int_sockopt(tx, libc::SOL_PACKET, libc::PACKET_QDISC_BYPASS);
+    let rx_bypass = int_sockopt(rx, libc::SOL_PACKET, libc::PACKET_QDISC_BYPASS);
+    eprintln!("TX PACKET_QDISC_BYPASS {tx_bypass}, RX PACKET_QDISC_BYPASS {rx_bypass}");
+    assert_eq!(tx_bypass, 1, "the TX socket bypasses the qdisc");
+    assert_eq!(rx_bypass, 0, "the RX socket keeps the qdisc path");
+    drop(a);
+}
+
+/// P5: the RX socket (bound to ETH_P_ALL) asks for a 4 MiB receive buffer (`SO_RCVBUFFORCE`, without CAP_NET_ADMIN
+/// `SO_RCVBUF`), and the kernel reports double what it stored; the TX socket (bound to protocol 0) keeps
+/// `net.core.rmem_default`. The two sockets are found as in `lab_packet_sockets_are_nonblocking_and_cloexec`, so this
+/// test too runs only in the adapter smoke run (`--test-threads=1`).
+#[test]
+#[ignore = "opens real AF_PACKET sockets: sealed lab only"]
+fn lab_rx_socket_buffer_is_raised() {
+    let l = lab();
+    let (a, rx, tx) = open_and_find_rx_tx(&l);
+    let rx_buf = int_sockopt(rx, libc::SOL_SOCKET, libc::SO_RCVBUF);
+    let tx_buf = int_sockopt(tx, libc::SOL_SOCKET, libc::SO_RCVBUF);
+    let default: libc::c_int = std::fs::read_to_string("/proc/sys/net/core/rmem_default")
+        .expect("rmem_default")
+        .trim()
+        .parse()
+        .expect("number");
+    eprintln!("RX SO_RCVBUF {rx_buf}, TX SO_RCVBUF {tx_buf}, rmem_default {default}");
+    assert!(rx_buf >= 4 << 20, "RX SO_RCVBUF {rx_buf} is below 4 MiB");
+    assert_eq!(tx_buf, default, "the TX socket keeps rmem_default");
+    drop(a);
+}

@@ -10,7 +10,8 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use crate::targets::{is_c_space, strtoul0};
+use crate::bytes::be16_at;
+use crate::targets::{PortListEnd, is_c_space, strtoul0, tokenize_ports};
 
 /// `length == 0xFFFFFFFF` в таблице C значит "длина строки" (templ-payloads.c:571).
 const LEN_STRLEN: u32 = 0xFFFF_FFFF;
@@ -80,108 +81,60 @@ impl CookieMutator {
     }
 }
 
-// --- ASN.1 для SNMP (proto-snmp.c:105-185). C читает `px[offset]` без проверки границ; здесь за границей 0. ---
-
-fn at(px: &[u8], i: u64) -> u8 {
-    usize::try_from(i)
-        .ok()
-        .and_then(|i| px.get(i))
-        .copied()
-        .unwrap_or(0)
-}
+// --- ASN.1 для SNMP (proto-snmp.c:105-185). Помощники читают срез-окно (в C это `px[..length]`) и возвращают значение
+// и смещение за ним. `None` стоит там, где C отдаёт сторож `0xFFFFFFFF` или тег 0 за концом окна: после этого
+// `snmp_set_cookie` C выходит, ничего не записав. ---
 
 /// proto-snmp.c:180 `asn1_tag`.
-fn asn1_tag(px: &[u8], length: u64, offset: &mut u64) -> u32 {
-    if *offset >= length {
-        return 0;
-    }
-    let t = u32::from(at(px, *offset));
-    *offset += 1;
-    t
+fn asn1_tag(px: &[u8], offset: usize) -> Option<(u8, usize)> {
+    px.get(offset).map(|&t| (t, offset + 1))
 }
 
-/// proto-snmp.c:106 `asn1_length`.
-fn asn1_length(px: &[u8], length: u64, offset: &mut u64) -> u64 {
-    let first = u64::from(at(px, *offset));
-    if *offset >= length || (first & 0x80 != 0 && *offset + (first & 0x7F) >= length) {
-        *offset = length;
-        return 0xFFFF_FFFF;
+/// proto-snmp.c:106 `asn1_length`: короткая форма или длинная из 1..=127 октетов внутри окна, значение не больше
+/// `0x10000`.
+fn asn1_length(px: &[u8], offset: usize) -> Option<(usize, usize)> {
+    let first = *px.get(offset)?;
+    if first & 0x80 == 0 {
+        return Some((usize::from(first), offset + 1));
     }
-    let mut result = first;
-    *offset += 1;
-    if result & 0x80 != 0 {
-        let mut length_of_length = result & 0x7F;
-        if length_of_length == 0 {
-            *offset = length;
-            return 0xFFFF_FFFF;
-        }
-        result = 0;
-        while length_of_length != 0 {
-            result = result * 256 + u64::from(at(px, *offset));
-            *offset += 1;
-            if result > 0x10000 {
-                *offset = length;
-                return 0xFFFF_FFFF;
-            }
-            length_of_length -= 1;
+    let n = usize::from(first & 0x7F);
+    if n == 0 {
+        return None;
+    }
+    let mut result = 0usize;
+    for &b in px.get(offset + 1..=offset + n)? {
+        result = result * 256 + usize::from(b);
+        if result > 0x10000 {
+            return None;
         }
     }
-    result
+    Some((result, offset + 1 + n))
 }
 
-/// proto-snmp.c:146 `asn1_integer`.
-fn asn1_integer(px: &[u8], length: u64, offset: &mut u64) -> u64 {
-    let tag = at(px, *offset);
-    *offset += 1;
+/// proto-snmp.c:146 `asn1_integer`: тег `0x02`, не больше 20 октетов внутри окна, значение по модулю 2^64 (`uint64_t`
+/// в C). C читает тег и за концом окна, но тогда `asn1_length` за ним всё равно отдаёт сторож.
+fn asn1_integer(px: &[u8], offset: usize) -> Option<(u64, usize)> {
+    let (tag, offset) = asn1_tag(px, offset)?;
     if tag != 0x02 {
-        *offset = length;
-        return 0xFFFF_FFFF;
+        return None;
     }
-    let int_length = asn1_length(px, length, offset);
-    if int_length == 0xFFFF_FFFF || *offset + int_length > length || int_length > 20 {
-        *offset = length;
-        return 0xFFFF_FFFF;
+    let (n, offset) = asn1_length(px, offset)?;
+    if n > 20 {
+        return None;
     }
-    let mut result = 0u64;
-    for _ in 0..int_length {
-        result = result
-            .wrapping_mul(256)
-            .wrapping_add(u64::from(at(px, *offset)));
-        *offset += 1;
-    }
-    result
+    let value = px
+        .get(offset..offset + n)?
+        .iter()
+        .fold(0u64, |r, &b| r.wrapping_mul(256).wrapping_add(u64::from(b)));
+    Some((value, offset + n))
 }
 
 /// proto-snmp.c:403 `snmp_set_cookie`: идёт по BER до request-id PDU и пишет туда `seqno` (старший бит чистится, чтобы
 /// INTEGER остался положительным).
 fn snmp_set_cookie(px: &mut [u8], seqno: u32) {
-    let mut length = px.len() as u64;
-    let mut offset = 0u64;
-    if asn1_tag(px, length, &mut offset) != 0x30 {
+    let Some((len, offset)) = snmp_request_id(px) else {
         return;
-    }
-    let outer = asn1_length(px, length, &mut offset);
-    if length > outer + offset {
-        length = outer + offset;
-    }
-    if asn1_integer(px, length, &mut offset) != 0 {
-        return; // версия 0
-    }
-    if asn1_tag(px, length, &mut offset) != 0x04 {
-        return; // community
-    }
-    let community_len = asn1_length(px, length, &mut offset);
-    offset += community_len;
-    let tag = asn1_tag(px, length, &mut offset);
-    if !(0xA0..=0xA5).contains(&tag) {
-        return;
-    }
-    let outer = asn1_length(px, length, &mut offset);
-    if length > outer + offset {
-        length = outer + offset;
-    }
-    asn1_tag(px, length, &mut offset); // тег request-id
-    let len = asn1_length(px, length, &mut offset);
+    };
     let be = seqno.to_be_bytes();
     let bytes: &[u8] = match len {
         1 => &[be[3] & 0x7F],
@@ -191,14 +144,38 @@ fn snmp_set_cookie(px: &mut [u8], seqno: u32) {
         5 => &[0, be[0], be[1], be[2], be[3]],
         _ => return,
     };
-    for (k, b) in bytes.iter().enumerate() {
-        if let Some(slot) = usize::try_from(offset + k as u64)
-            .ok()
-            .and_then(|i| px.get_mut(i))
-        {
-            *slot = *b;
-        }
+    // Граница записи — конец нагрузки, а не окна: длину request-id C с окном не сверяет.
+    for (slot, b) in px.iter_mut().skip(offset).zip(bytes) {
+        *slot = *b;
     }
+}
+
+/// Длина request-id и смещение его значения: SEQUENCE { INTEGER 0, OCTET STRING, PDU `0xA0..=0xA5` { тег, длина } }.
+/// Длины SEQUENCE и PDU только сужают окно; тег request-id не проверяется, как в C.
+fn snmp_request_id(px: &[u8]) -> Option<(usize, usize)> {
+    let (tag, offset) = asn1_tag(px, 0)?;
+    if tag != 0x30 {
+        return None;
+    }
+    let (outer, offset) = asn1_length(px, offset)?;
+    let px = &px[..px.len().min(offset + outer)];
+    let (version, offset) = asn1_integer(px, offset)?;
+    if version != 0 {
+        return None;
+    }
+    let (tag, offset) = asn1_tag(px, offset)?;
+    if tag != 0x04 {
+        return None; // community
+    }
+    let (community_len, offset) = asn1_length(px, offset)?;
+    let (tag, offset) = asn1_tag(px, offset + community_len)?;
+    if !(0xA0..=0xA5).contains(&tag) {
+        return None;
+    }
+    let (outer, offset) = asn1_length(px, offset)?;
+    let px = &px[..px.len().min(offset + outer)];
+    let (_, offset) = asn1_tag(px, offset)?;
+    asn1_length(px, offset)
 }
 
 /// Запись таблицы C (`struct PayloadUDP_Default`, templ-payloads.c:38): `buf` склеена из строковых литералов исходника.
@@ -756,11 +733,20 @@ pub struct PayloadEntry {
 impl PayloadEntry {
     /// Нагрузка зонда с вписанным cookie (`udp_payload_fixup`, templ-pkt.c:618).
     pub fn with_cookie(&self, seqno: u32) -> Vec<u8> {
-        let mut data = self.payload.to_vec();
-        if let Some(m) = self.set_cookie {
-            m.apply(&mut data, seqno);
-        }
+        let mut data = Vec::with_capacity(self.payload.len());
+        self.append_with_cookie(seqno, &mut data);
         data
+    }
+
+    /// [`PayloadEntry::with_cookie`] в конец `out`, без промежуточного `Vec`: так нагрузку дописывает в кадр
+    /// `UdpTemplate::build_udp`. Мутация видит только дописанные байты, как `length` нагрузки в C.
+    #[inline]
+    pub(crate) fn append_with_cookie(&self, seqno: u32, out: &mut Vec<u8>) {
+        let start = out.len();
+        out.extend_from_slice(&self.payload);
+        if let Some(m) = self.set_cookie {
+            m.apply(&mut out[start..], seqno);
+        }
     }
 }
 
@@ -887,7 +873,7 @@ impl PayloadTable {
         let mut lines = NmapLines {
             it: text.split((|b: &u8| *b == b'\n') as fn(&u8) -> bool),
             number: 0,
-            cur: Vec::new(),
+            cur: &[],
         };
         let mut added = 0;
         loop {
@@ -897,39 +883,35 @@ impl PayloadTable {
             if !lines.next_line() {
                 break;
             }
-            if !lines.cur.starts_with(b"udp") {
+            let Some(rest) = lines.cur.strip_prefix(b"udp") else {
                 return Err(lines.syntax("expected \"udp\""));
-            }
-            lines.cur.drain(..3);
-            trim(&mut lines.cur);
+            };
+            lines.cur = trim(rest);
             // [ports]
             if !lines.next_line() {
                 break;
             }
-            let (ranges, rest_at) =
-                parse_ports_prefix(&lines.cur).map_err(|_| lines.syntax("expected ports"))?;
-            lines.cur.drain(..rest_at);
-            trim(&mut lines.cur);
+            let (ranges, rest_at) = tokenize_ports(lines.cur, PortListEnd::StopAtNonPort)
+                .map_err(|_| lines.syntax("expected ports"))?;
+            lines.cur = trim(&lines.cur[rest_at..]);
             // [C string]
             loop {
-                trim(&mut lines.cur);
+                lines.cur = trim(lines.cur);
                 if !lines.next_line() || lines.cur[0] != b'"' {
                     break;
                 }
-                let rest_at = parse_c_string(&mut buf, &lines.cur);
-                lines.cur.drain(..rest_at);
-                trim(&mut lines.cur);
+                let rest_at = parse_c_string(&mut buf, lines.cur);
+                lines.cur = trim(&lines.cur[rest_at..]);
             }
             // [source]
-            if lines.cur.starts_with(b"source") {
-                lines.cur.drain(..6);
-                trim(&mut lines.cur);
+            if let Some(rest) = lines.cur.strip_prefix(b"source") {
+                lines.cur = trim(rest);
                 if !lines.cur.first().is_some_and(u8::is_ascii_digit) {
                     return Err(lines.syntax("expected source port"));
                 }
-                let mut pos = 0;
-                source_port = strtoul0(&lines.cur, &mut pos) as u32;
-                lines.cur.clear();
+                // Остаток строки после числа отбрасывается (:259-260).
+                source_port = strtoul0(lines.cur).0 as u32;
+                lines.cur = &[];
             }
             if !buf.is_empty() {
                 added += self.add(&buf, &ranges, source_port)?;
@@ -995,15 +977,21 @@ impl PayloadTable {
 struct NmapLines<'a> {
     it: std::slice::Split<'a, u8, fn(&u8) -> bool>,
     number: usize,
-    cur: Vec<u8>,
+    /// Неразобранный остаток текущей строки.
+    cur: &'a [u8],
 }
 
-fn trim(line: &mut Vec<u8>) {
-    while line.last().is_some_and(|&c| is_c_space(c)) {
-        line.pop();
-    }
-    let n = line.iter().take_while(|&&c| is_c_space(c)).count();
-    line.drain(..n);
+/// `trim` (:13): пробелы `isspace` C (вместе с `\v`) с обоих концов.
+fn trim(line: &[u8]) -> &[u8] {
+    let start = line
+        .iter()
+        .position(|&c| !is_c_space(c))
+        .unwrap_or(line.len());
+    let end = line
+        .iter()
+        .rposition(|&c| !is_c_space(c))
+        .map_or(start, |i| i + 1);
+    &line[start..end]
 }
 
 impl NmapLines<'_> {
@@ -1015,15 +1003,13 @@ impl NmapLines<'_> {
         }
         for raw in self.it.by_ref() {
             self.number += 1;
-            self.cur = raw.to_vec();
-            trim(&mut self.cur);
+            self.cur = trim(raw);
             if matches!(self.cur.first(), Some(b'#' | b'/' | b';')) || self.cur.is_empty() {
-                self.cur.clear();
                 continue;
             }
             return true;
         }
-        self.cur.clear();
+        self.cur = &[];
         false
     }
 
@@ -1033,64 +1019,6 @@ impl NmapLines<'_> {
             msg,
         }
     }
-}
-
-/// `rangelist_parse_ports` (massip-rangesv4.c:993) с остановкой на первом не-порте: возвращает диапазоны (с
-/// префиксным сдвигом, как в C) и смещение остатка строки. Ошибка: неизвестный префикс или порт вне диапазона.
-fn parse_ports_prefix(s: &[u8]) -> Result<(Vec<(u32, u32)>, usize), ()> {
-    use crate::targets::{TEMPL_ICMP_ECHO, TEMPL_OPROTO_FIRST, TEMPL_SCTP, TEMPL_TCP, TEMPL_UDP};
-    let mut p = 0;
-    let mut offset = TEMPL_TCP;
-    let mut out = Vec::new();
-    while p < s.len() {
-        while p < s.len() && is_c_space(s[p]) {
-            p += 1;
-        }
-        if p >= s.len() || s[p] == b'#' {
-            break;
-        }
-        if s[p].is_ascii_alphabetic() && s.get(p + 1) == Some(&b':') {
-            offset = match s[p] {
-                b'T' | b't' => TEMPL_TCP,
-                b'U' | b'u' => TEMPL_UDP,
-                b'S' | b's' => TEMPL_SCTP,
-                b'O' | b'o' => TEMPL_OPROTO_FIRST,
-                b'I' | b'i' => TEMPL_ICMP_ECHO,
-                _ => return Err(()),
-            };
-            p += 2;
-        }
-        let port = match s.get(p) {
-            Some(b'-') => 1,
-            Some(c) if c.is_ascii_digit() => strtoul0(s, &mut p),
-            _ => break,
-        };
-        let is_oproto = offset == TEMPL_OPROTO_FIRST;
-        let end = if s.get(p) == Some(&b'-') {
-            p += 1;
-            if s.get(p).is_some_and(u8::is_ascii_digit) {
-                strtoul0(s, &mut p)
-            } else if is_oproto {
-                0xFF
-            } else {
-                0xFFFF
-            }
-        } else {
-            port
-        };
-        if (port > 0xFF && is_oproto) || port > 0xFFFF || end > 0xFFFF || end < port {
-            return Err(());
-        }
-        out.push((port as u32 + offset, end as u32 + offset));
-        while p < s.len() && is_c_space(s[p]) {
-            p += 1;
-        }
-        if s.get(p) != Some(&b',') {
-            break;
-        }
-        p += 1;
-    }
-    Ok((out, p))
 }
 
 /// `parse_c_string` (templ-nmap-payloads.c:100): разбирает строку в кавычках, дописывает байты в `buf` (не больше 1500)
@@ -1159,10 +1087,7 @@ fn parse_c_string(buf: &mut Vec<u8>, line: &[u8]) -> usize {
 // --- разбор кадра для `--pcap-payloads` (proto-preprocess.c:55-212, подмножество) ---
 
 fn rd16(b: &[u8], i: usize) -> Option<usize> {
-    Some(usize::from(u16::from_be_bytes([
-        *b.get(i)?,
-        *b.get(i + 1)?,
-    ])))
+    be16_at(b, i).map(usize::from)
 }
 
 /// Порт назначения и нагрузка UDP-пакета Ethernet-кадра; `None` для всего остального и для искажённых кадров
@@ -1219,6 +1144,10 @@ fn udp_payload(frame: &[u8]) -> Option<(u16, &[u8])> {
 mod tests {
     use super::*;
     use crate::udp_c_vectors::{C_FORCED, C_FRAMES, C_RAW};
+    use proptest::prelude::*;
+    use proptest::sample::Index;
+    use proptest::test_runner::{Config, TestRunner};
+    use std::cell::Cell;
 
     fn unhex(s: &str) -> Vec<u8> {
         (0..s.len() / 2)
@@ -1378,6 +1307,314 @@ mod tests {
         }
     }
 
+    /// Копия базы (`a275ea9e`, payloads.rs:85-202) дословно: `at`, `asn1_tag`, `asn1_length`, `asn1_integer` со
+    /// смещением `&mut u64` и сторожем `0xFFFF_FFFF` и `snmp_set_cookie` над ними. Эталон
+    /// `snmp_cookie_matches_old_helpers`.
+    mod old {
+        fn at(px: &[u8], i: u64) -> u8 {
+            usize::try_from(i)
+                .ok()
+                .and_then(|i| px.get(i))
+                .copied()
+                .unwrap_or(0)
+        }
+
+        /// proto-snmp.c:180 `asn1_tag`.
+        fn asn1_tag(px: &[u8], length: u64, offset: &mut u64) -> u32 {
+            if *offset >= length {
+                return 0;
+            }
+            let t = u32::from(at(px, *offset));
+            *offset += 1;
+            t
+        }
+
+        /// proto-snmp.c:106 `asn1_length`.
+        fn asn1_length(px: &[u8], length: u64, offset: &mut u64) -> u64 {
+            let first = u64::from(at(px, *offset));
+            if *offset >= length || (first & 0x80 != 0 && *offset + (first & 0x7F) >= length) {
+                *offset = length;
+                return 0xFFFF_FFFF;
+            }
+            let mut result = first;
+            *offset += 1;
+            if result & 0x80 != 0 {
+                let mut length_of_length = result & 0x7F;
+                if length_of_length == 0 {
+                    *offset = length;
+                    return 0xFFFF_FFFF;
+                }
+                result = 0;
+                while length_of_length != 0 {
+                    result = result * 256 + u64::from(at(px, *offset));
+                    *offset += 1;
+                    if result > 0x10000 {
+                        *offset = length;
+                        return 0xFFFF_FFFF;
+                    }
+                    length_of_length -= 1;
+                }
+            }
+            result
+        }
+
+        /// proto-snmp.c:146 `asn1_integer`.
+        fn asn1_integer(px: &[u8], length: u64, offset: &mut u64) -> u64 {
+            let tag = at(px, *offset);
+            *offset += 1;
+            if tag != 0x02 {
+                *offset = length;
+                return 0xFFFF_FFFF;
+            }
+            let int_length = asn1_length(px, length, offset);
+            if int_length == 0xFFFF_FFFF || *offset + int_length > length || int_length > 20 {
+                *offset = length;
+                return 0xFFFF_FFFF;
+            }
+            let mut result = 0u64;
+            for _ in 0..int_length {
+                result = result
+                    .wrapping_mul(256)
+                    .wrapping_add(u64::from(at(px, *offset)));
+                *offset += 1;
+            }
+            result
+        }
+
+        /// proto-snmp.c:403 `snmp_set_cookie`: идёт по BER до request-id PDU и пишет туда `seqno` (старший бит чистится, чтобы
+        /// INTEGER остался положительным).
+        pub(super) fn snmp_set_cookie(px: &mut [u8], seqno: u32) {
+            let mut length = px.len() as u64;
+            let mut offset = 0u64;
+            if asn1_tag(px, length, &mut offset) != 0x30 {
+                return;
+            }
+            let outer = asn1_length(px, length, &mut offset);
+            if length > outer + offset {
+                length = outer + offset;
+            }
+            if asn1_integer(px, length, &mut offset) != 0 {
+                return; // версия 0
+            }
+            if asn1_tag(px, length, &mut offset) != 0x04 {
+                return; // community
+            }
+            let community_len = asn1_length(px, length, &mut offset);
+            offset += community_len;
+            let tag = asn1_tag(px, length, &mut offset);
+            if !(0xA0..=0xA5).contains(&tag) {
+                return;
+            }
+            let outer = asn1_length(px, length, &mut offset);
+            if length > outer + offset {
+                length = outer + offset;
+            }
+            asn1_tag(px, length, &mut offset); // тег request-id
+            let len = asn1_length(px, length, &mut offset);
+            let be = seqno.to_be_bytes();
+            let bytes: &[u8] = match len {
+                1 => &[be[3] & 0x7F],
+                2 => &[be[2] & 0x7F, be[3]],
+                3 => &[be[1] & 0x7F, be[2], be[3]],
+                4 => &[be[0] & 0x7F, be[1], be[2], be[3]],
+                5 => &[0, be[0], be[1], be[2], be[3]],
+                _ => return,
+            };
+            for (k, b) in bytes.iter().enumerate() {
+                if let Some(slot) = usize::try_from(offset + k as u64)
+                    .ok()
+                    .and_then(|i| px.get_mut(i))
+                {
+                    *slot = *b;
+                }
+            }
+        }
+    }
+
+    /// Байты, на которых ветвится разбор BER: теги, короткие и длинные длины, границы диапазона тегов PDU.
+    const BER_BYTES: &[u8] = &[
+        0x00, 0x01, 0x02, 0x04, 0x05, 0x14, 0x30, 0x7f, 0x80, 0x81, 0x82, 0x83, 0x84, 0x9f, 0xa0,
+        0xa1, 0xa5, 0xa6, 0xff,
+    ];
+
+    fn ber_byte() -> impl Strategy<Value = u8> {
+        prop_oneof![any::<u8>(), proptest::sample::select(BER_BYTES)]
+    }
+
+    /// Длина BER в генераторе: точная (короткая форма или `0x82`), больше точной на 1–100 в короткой форме (поле
+    /// уходит за конец), точная в длинной форме из 1–4 октетов или сырые байты.
+    #[derive(Clone, Debug)]
+    enum Len {
+        Exact,
+        Over(u8),
+        Long(u8),
+        Raw(Vec<u8>),
+    }
+
+    /// Длины, на которых база отдаёт сторож `0xFFFF_FFFF` или уводит смещение за конец.
+    fn raw_len() -> impl Strategy<Value = Vec<u8>> {
+        prop_oneof![
+            Just(vec![0x80]),                   // длина длины 0
+            Just(vec![0x83, 0x01, 0x00, 0x00]), // 0x10000: ещё не сторож
+            Just(vec![0x83, 0x01, 0x00, 0x01]), // 0x10001: сторож
+            Just(vec![0xff]),                   // 127 октетов длины, за концом
+            (0x81u8..=0x84, proptest::collection::vec(any::<u8>(), 0..=4))
+                .prop_map(|(h, t)| std::iter::once(h).chain(t).collect()),
+            proptest::collection::vec(ber_byte(), 1..=3),
+        ]
+    }
+
+    fn len_enc() -> impl Strategy<Value = Len> {
+        prop_oneof![
+            12 => Just(Len::Exact),
+            2 => (1u8..=100).prop_map(Len::Over),
+            2 => (1u8..=4).prop_map(Len::Long),
+            2 => raw_len().prop_map(Len::Raw),
+        ]
+    }
+
+    fn encode_len(n: usize, how: &Len) -> Vec<u8> {
+        match how {
+            Len::Exact if n < 0x80 => vec![n as u8],
+            Len::Exact => vec![0x82, (n >> 8) as u8, n as u8],
+            Len::Over(d) => vec![(n + usize::from(*d)) as u8],
+            Len::Long(k) => std::iter::once(0x80 | k)
+                .chain((0..*k).rev().map(|i| (n >> (8 * u32::from(i))) as u8))
+                .collect(),
+            Len::Raw(b) => b.clone(),
+        }
+    }
+
+    fn tag_or_any(t: u8) -> impl Strategy<Value = u8> {
+        prop_oneof![9 => Just(t), 1 => ber_byte()]
+    }
+
+    /// SEQUENCE { INTEGER версия, OCTET STRING community, PDU { INTEGER request-id, хвост } } с произвольными тегами и
+    /// длинами. Версия бывает пустой, из 20 и 21 нулевого октета и из 9 октетов `01 00 .. 00` (по модулю 2^64 это 0).
+    /// Длина community чаще обычного уходит за конец или даёт сторож.
+    fn snmp_message() -> impl Strategy<Value = Vec<u8>> {
+        let version = prop_oneof![
+            4 => Just(vec![0u8]),
+            1 => Just(vec![]),
+            1 => Just(vec![0u8; 20]),
+            1 => Just(vec![0u8; 21]),
+            1 => Just(vec![1, 0, 0, 0, 0, 0, 0, 0, 0]),
+            2 => proptest::collection::vec(prop_oneof![3 => Just(0u8), 1 => any::<u8>()], 0..=24),
+        ];
+        let community_len = prop_oneof![
+            2 => len_enc(),
+            1 => (1u8..=100).prop_map(Len::Over),
+            1 => raw_len().prop_map(Len::Raw),
+        ];
+        let pdu_tag =
+            prop_oneof![6 => 0xa0u8..=0xa5, 1 => Just(0x9f), 1 => Just(0xa6), 1 => any::<u8>()];
+        (
+            (tag_or_any(0x30), len_enc()),
+            (tag_or_any(0x02), len_enc(), version),
+            (
+                tag_or_any(0x04),
+                community_len,
+                proptest::collection::vec(any::<u8>(), 0..10),
+            ),
+            (pdu_tag, len_enc()),
+            (
+                tag_or_any(0x02),
+                len_enc(),
+                proptest::collection::vec(any::<u8>(), 0..=7),
+            ),
+            proptest::collection::vec(any::<u8>(), 0..24),
+        )
+            .prop_map(
+                |((t0, l0), (t1, l1, v), (t2, l2, c), (t3, l3), (t4, l4, id), rest)| {
+                    let tlv = |t: u8, l: &Len, body: &[u8]| {
+                        [&[t][..], &encode_len(body.len(), l), body].concat()
+                    };
+                    let pdu = tlv(t3, &l3, &[tlv(t4, &l4, &id), rest].concat());
+                    tlv(t0, &l0, &[tlv(t1, &l1, &v), tlv(t2, &l2, &c), pdu].concat())
+                },
+            )
+    }
+
+    /// Вход мутатора: нагрузка порта 161 с 0–4 заменами (три из четырёх в первых 22 байтах, где идёт разбор), сообщение
+    /// из `snmp_message` или случайные 0..64 байт (любые, из `BER_BYTES` или из них же с `0x30` первым). Затем в трети
+    /// случаев ещё 1–3 замены и в четверти обрезка до случайной длины `0..=len`.
+    fn snmp_input() -> impl Strategy<Value = Vec<u8>> {
+        let base = PayloadTable::builtin().get(161).unwrap().payload.to_vec();
+        let n = base.len();
+        let p161 =
+            proptest::collection::vec((prop_oneof![3 => 0..22usize, 1 => 0..n], ber_byte()), 0..5)
+                .prop_map(move |subs| {
+                    let mut p = base.clone();
+                    for (i, b) in subs {
+                        p[i] = b;
+                    }
+                    p
+                });
+        let random = prop_oneof![
+            proptest::collection::vec(any::<u8>(), 0..64),
+            proptest::collection::vec(ber_byte(), 0..64),
+            proptest::collection::vec(ber_byte(), 1..64).prop_map(|mut v| {
+                v[0] = 0x30;
+                v
+            }),
+        ];
+        (
+            prop_oneof![3 => p161, 4 => snmp_message(), 2 => random],
+            prop_oneof![
+                2 => Just(vec![]),
+                1 => proptest::collection::vec((any::<Index>(), ber_byte()), 1..=3),
+            ],
+            prop_oneof![3 => Just(None), 1 => any::<Index>().prop_map(Some)],
+        )
+            .prop_map(|(mut p, subs, cut)| {
+                if !p.is_empty() {
+                    for (i, b) in subs {
+                        let k = i.index(p.len());
+                        p[k] = b;
+                    }
+                }
+                if let Some(c) = cut {
+                    p.truncate(c.index(p.len() + 1));
+                }
+                p
+            })
+    }
+
+    const SNMP_PIN_CASES: u32 = 50_000;
+
+    /// Мутатор SNMP равен копии базы `old::snmp_set_cookie` байт в байт на входах `snmp_input` при любом `seqno`
+    /// (случайном и граничном). Не меньше десятой части входов база действительно переписывает: генератор доходит до
+    /// записи request-id, а не отсеивается на первых тегах.
+    #[test]
+    fn snmp_cookie_matches_old_helpers() {
+        let seqno = prop_oneof![
+            4 => any::<u32>(),
+            1 => proptest::sample::select(&[0, 1, 0x7f, 0x80, 0x7fff_ffff, 0x8000_0000, u32::MAX][..]),
+        ];
+        let mut runner = TestRunner::new(Config {
+            cases: SNMP_PIN_CASES,
+            failure_persistence: None,
+            ..Config::default()
+        });
+        let written = Cell::new(0u32);
+        runner
+            .run(&(snmp_input(), seqno), |(px, seqno)| {
+                let mut got = px.clone();
+                CookieMutator::Snmp.apply(&mut got, seqno);
+                let mut want = px.clone();
+                old::snmp_set_cookie(&mut want, seqno);
+                prop_assert_eq!(&got, &want, "input {:02x?} seqno {:#x}", px, seqno);
+                written.set(written.get() + u32::from(want != px));
+                Ok(())
+            })
+            .unwrap();
+        assert!(
+            written.get() >= SNMP_PIN_CASES / 10,
+            "only {} of {SNMP_PIN_CASES} inputs reach the request-id write",
+            written.get()
+        );
+    }
+
     // Синтаксис `nmap-payloads`: короткая рукописная проверка, не строки из файла Nmap.
     const NMAP_FIXTURE: &str = "\
 # comment
@@ -1503,6 +1740,45 @@ udp 7-8 \"x\"
             PayloadTable::empty().load_pcap_payloads(&pcap_file(false, 1, &junk)),
             Ok(0)
         );
+    }
+
+    /// Все записи таблицы по возрастанию порта.
+    fn entries(t: &PayloadTable) -> Vec<(u32, PayloadEntry)> {
+        t.map.iter().map(|(&p, e)| (p, e.clone())).collect()
+    }
+
+    /// `trim` (:13) и разбор портов снимают все пробелы `isspace` C, вместе с `\v` и `\f`: они вокруг `udp`, вокруг
+    /// портов, между портами и вокруг строки дают ту же запись, что чистый файл.
+    #[test]
+    fn nmap_vertical_tab_and_form_feed_are_whitespace() {
+        let load = |f: &[u8]| {
+            let mut t = PayloadTable::empty();
+            let n = t.load_nmap_payloads_bytes(f);
+            (n, entries(&t))
+        };
+        let clean = load(b"udp 53,161\n\"abc\"\nudp 7\n\"x\"\n");
+        let dirty = load(
+            b"\x0b\x0cudp\x0c\x0b\n\x0c\x0b53\x0b,\x0c161\x0b\x0c\n\x0b\x0c\"abc\"\x0c\x0b\n\
+              \x0budp\x0b7\x0c\x0b\"x\"\x0b\n",
+        );
+        assert_eq!(clean.0, Ok(3));
+        assert_eq!(dirty, clean);
+    }
+
+    /// Строка `source N` (:250-261): число читается, остаток строки после него отбрасывается без ошибки, следующая
+    /// запись `udp` разбирается как обычно и своего `source` не наследует.
+    #[test]
+    fn nmap_source_line_tail_is_ignored() {
+        let mut t = PayloadTable::empty();
+        let n = t.load_nmap_payloads("udp 7\n\"x\"\nsource 5 junk \"y\"\nudp 8\n\"z\"\n");
+        assert_eq!(n, Ok(2));
+        let e7 = t.get(7).unwrap();
+        assert_eq!(&e7.payload[..], b"x");
+        assert_eq!(e7.source_port, 5);
+        let e8 = t.get(8).unwrap();
+        assert_eq!(&e8.payload[..], b"z");
+        assert_eq!(e8.source_port, 0x10000);
+        assert_eq!(t.len(), 2);
     }
 
     fn pcap_file(big: bool, linktype: u32, frames: &[Vec<u8>]) -> Vec<u8> {

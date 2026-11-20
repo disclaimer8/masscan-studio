@@ -9,12 +9,13 @@
 //! Rust `as` из `f64` в `u64` насыщается, где в C неопределённое поведение
 //! (значения >= 2^64 или NaN); для реальных скоростей результаты совпадают.
 
+use std::fmt;
 use std::net::Ipv4Addr;
 use std::ops::ControlFlow;
 
-use crate::blackrock::{BlackRock, BlackRockError};
+use crate::blackrock::{BlackRock, BlackRockError, Divisors, SHUFFLE_LANES};
 use crate::massip::{MassIp, RangeOverflow, TargetIp};
-use crate::ranges6::format_ipv6_c;
+use crate::ranges6::CIpv6;
 
 /// `--shard one/of` (masscan.h `shard.one`, `shard.of`; по умолчанию 1/1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -58,26 +59,41 @@ pub enum ScanError {
     NonTerminating { index: u64 },
 }
 
-/// Строка `-sL` (main-listscan.c:53-62, только IPv4): при ровно одном порте
-/// печатается один IP, иначе `ip:port`.
-pub fn format_list_line(ip: u32, port: u32, single_port: bool) -> String {
-    let ip = Ipv4Addr::from(ip);
-    if single_port {
-        ip.to_string()
-    } else {
-        format!("{ip}:{port}")
+/// Строка `-sL` (main-listscan.c:53-62) для IPv4 и IPv6: один порт даёт только адрес (:54-56), иначе `ip:port` для
+/// IPv4 и `[ip]:port` для IPv6 (:58-60). Адрес IPv6 печатает `ipv6address_fmt` ([`CIpv6`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ListLine {
+    pub target: TargetIp,
+    pub port: u32,
+    /// В списке ровно один порт.
+    pub single_port: bool,
+}
+
+impl fmt::Display for ListLine {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match (self.target, self.single_port) {
+            (TargetIp::V4(ip), true) => write!(f, "{}", Ipv4Addr::from(ip)),
+            (TargetIp::V4(ip), false) => write!(f, "{}:{}", Ipv4Addr::from(ip), self.port),
+            (TargetIp::V6(ip), true) => write!(f, "{}", CIpv6(ip)),
+            (TargetIp::V6(ip), false) => write!(f, "[{}]:{}", CIpv6(ip), self.port),
+        }
     }
 }
 
-/// Строка `-sL` (main-listscan.c:53-62) для IPv4 и IPv6: один порт даёт только
-/// адрес (:54-56), иначе `ip:port` для IPv4 и `[ip]:port` для IPv6 (:58-60).
-/// Адрес IPv6 печатает `ipv6address_fmt` ([`format_ipv6_c`]).
+/// Строка `-sL` (main-listscan.c:53-62, только IPv4): при ровно одном порте
+/// печатается один IP, иначе `ip:port`.
+pub fn format_list_line(ip: u32, port: u32, single_port: bool) -> String {
+    format_list_line_v46(TargetIp::V4(ip), port, single_port)
+}
+
+/// Строка `-sL` (main-listscan.c:53-62) для IPv4 и IPv6: текст [`ListLine`].
 pub fn format_list_line_v46(target: TargetIp, port: u32, single_port: bool) -> String {
-    match target {
-        TargetIp::V4(ip) => format_list_line(ip, port, single_port),
-        TargetIp::V6(ip) if single_port => format_ipv6_c(ip),
-        TargetIp::V6(ip) => format!("[{}]:{port}", format_ipv6_c(ip)),
+    ListLine {
+        target,
+        port,
+        single_port,
     }
+    .to_string()
 }
 
 /// Итератор индексов `-sL`: `for (i=start; i<end; i += increment)`.
@@ -117,9 +133,23 @@ pub fn list_scan_indices(
     retries: u32,
     max_rate: f64,
 ) -> impl Iterator<Item = u64> {
-    let (i, end, increment) =
-        list_bounds(range, shard, resume_index, resume_count, retries, max_rate);
-    ListIndices { i, end, increment }
+    let Bounds {
+        start,
+        end,
+        increment,
+    } = list_bounds(range, shard, resume_index, resume_count, retries, max_rate);
+    ListIndices {
+        i: start,
+        end,
+        increment,
+    }
+}
+
+/// Границы цикла: `i` от `start` до `end` с шагом `increment`.
+struct Bounds {
+    start: u64,
+    end: u64,
+    increment: u64,
 }
 
 fn list_bounds(
@@ -129,7 +159,7 @@ fn list_bounds(
     resume_count: Option<u64>,
     retries: u32,
     max_rate: f64,
-) -> (u64, u64, u64) {
+) -> Bounds {
     assert!(shard.of != 0, "shard.of must be non-zero");
     // :31 `resume.index + (shard.one-1)`: `shard.one-1` — unsigned (32 бита).
     let start = resume_index.wrapping_add(u64::from(shard.one.wrapping_sub(1)));
@@ -144,11 +174,15 @@ fn list_bounds(
     // :35 `end += (uint64_t)(retries * max_rate)`: умножение в double
     // (unsigned * double), затем усечение; max_rate, не range.
     end = end.wrapping_add((f64::from(retries) * max_rate) as u64);
-    (start, end, u64::from(shard.of)) // :14
+    Bounds {
+        start,
+        end,
+        increment: u64::from(shard.of), // :14
+    }
 }
 
 /// Итератор transmit (main.c:280-333, :421-424).
-struct TransmitIndices {
+pub(crate) struct TransmitIndices {
     i: u64,
     end: u64,
     range: u64,
@@ -157,6 +191,18 @@ struct TransmitIndices {
     /// `unsigned r` (main.c:213).
     r: u32,
     increment: u64,
+}
+
+impl TransmitIndices {
+    /// `i` следующего `next()` (main.c:280 `i < end`), `None` в конце цикла. Ничего не сдвигает.
+    pub(crate) fn peek_index(&self) -> Option<u64> {
+        (self.i < self.end).then_some(self.i)
+    }
+
+    /// Конец цикла `end` (main.c:270-273).
+    pub(crate) fn end(&self) -> u64 {
+        self.end
+    }
 }
 
 impl Iterator for TransmitIndices {
@@ -196,6 +242,27 @@ pub fn transmit_bounds(
     resume_count: Option<u64>,
     retries: u32,
 ) -> (u64, u64, u64) {
+    let b = transmit_bounds_of(
+        range,
+        shard,
+        nic_count,
+        nic_index,
+        resume_index,
+        resume_count,
+        retries,
+    );
+    (b.start, b.end, b.increment)
+}
+
+fn transmit_bounds_of(
+    range: u64,
+    shard: Shard,
+    nic_count: u32,
+    nic_index: u32,
+    resume_index: u64,
+    resume_count: Option<u64>,
+    retries: u32,
+) -> Bounds {
     // :223 `unsigned increment = shard.of * nic_count`
     let increment = shard.of.wrapping_mul(nic_count);
     // :269 `resume.index + (shard.one-1) * nic_count + nic_index`;
@@ -212,7 +279,11 @@ pub fn transmit_bounds(
     }
     // :273 `end += retries * range` (в отличие от -sL, где max_rate)
     end = end.wrapping_add(u64::from(retries).wrapping_mul(range));
-    (start, end, u64::from(increment))
+    Bounds {
+        start,
+        end,
+        increment: u64::from(increment),
+    }
 }
 
 /// Пред-shuffle поток transmit (main.c:203-448): пары `(i, xXx)`, где `i` —
@@ -233,7 +304,35 @@ pub fn transmit_index_stream(
     retries: u32,
     max_rate: f64,
 ) -> impl Iterator<Item = (u64, u64)> {
-    let (start, end, increment) = transmit_bounds(
+    transmit_indices(
+        range,
+        shard,
+        nic_count,
+        nic_index,
+        resume_index,
+        resume_count,
+        retries,
+        max_rate,
+    )
+}
+
+/// Тело [`transmit_index_stream`] с конкретным типом итератора.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn transmit_indices(
+    range: u64,
+    shard: Shard,
+    nic_count: u32,
+    nic_index: u32,
+    resume_index: u64,
+    resume_count: Option<u64>,
+    retries: u32,
+    max_rate: f64,
+) -> TransmitIndices {
+    let Bounds {
+        start,
+        end,
+        increment,
+    } = transmit_bounds_of(
         range,
         shard,
         nic_count,
@@ -251,6 +350,104 @@ pub fn transmit_index_stream(
         retries,
         r: retries.wrapping_add(1), // :213 `(unsigned)retries + 1`
         increment,
+    }
+}
+
+/// Пары `(tag, m)` внутреннего итератора как `(tag, blackrock.shuffle(m))`, в том же порядке. Пустой буфер
+/// набирается до `SHUFFLE_LANES` пар: полная пачка идёт через `BlackRock::shuffle_batch_with` с делителями,
+/// построенными один раз в [`Shuffled::new`], неполная (конец потока) через скалярный `shuffle`. Буфер набирается
+/// лениво, только когда пуст; кто остановился раньше (`Break`), теряет уже перемешанные дорожки пачки, а внутренний
+/// итератор дальше пачки не читается. После первого `None` внутренний итератор больше не опрашивается (`exhausted`):
+/// поток кончается один раз, даже если внутренний итератор потом снова отдал бы пары. Буфер это упреждение: у
+/// `Shuffled<TransmitIndices>` следующий индекс показывает [`Shuffled::peek_index`], а не внутренний итератор.
+pub(crate) struct Shuffled<I> {
+    inner: I,
+    blackrock: BlackRock,
+    /// `blackrock.divisors()`: делители `a` и `b` для пачек.
+    divisors: Divisors,
+    buf: [(u64, u64); SHUFFLE_LANES],
+    head: usize,
+    len: usize,
+    /// Внутренний итератор вернул `None`.
+    exhausted: bool,
+}
+
+impl<I> Shuffled<I> {
+    pub(crate) fn new(inner: I, blackrock: BlackRock) -> Self {
+        Shuffled {
+            inner,
+            divisors: blackrock.divisors(),
+            blackrock,
+            buf: [(0, 0); SHUFFLE_LANES],
+            head: 0,
+            len: 0,
+            exhausted: false,
+        }
+    }
+}
+
+impl Shuffled<TransmitIndices> {
+    /// `i` пары, которую отдаст следующий `next()`: голова буфера, иначе следующий индекс внутреннего потока;
+    /// `None` в конце. Ничего не сдвигает.
+    pub(crate) fn peek_index(&self) -> Option<u64> {
+        if self.head < self.len {
+            Some(self.buf[self.head].0)
+        } else if self.exhausted {
+            None
+        } else {
+            self.inner.peek_index()
+        }
+    }
+
+    /// Конец цикла внутреннего потока ([`TransmitIndices::end`]).
+    pub(crate) fn end(&self) -> u64 {
+        self.inner.end()
+    }
+}
+
+impl<I: Iterator<Item = (u64, u64)>> Shuffled<I> {
+    /// Набирает следующую пачку; после конца потока `len == 0`.
+    fn fill(&mut self) {
+        self.head = 0;
+        self.len = 0;
+        if self.exhausted {
+            return;
+        }
+        while self.len < SHUFFLE_LANES {
+            let Some(pair) = self.inner.next() else {
+                self.exhausted = true;
+                break;
+            };
+            self.buf[self.len] = pair;
+            self.len += 1;
+        }
+        if self.len == SHUFFLE_LANES {
+            let shuffled = self
+                .blackrock
+                .shuffle_batch_with(&self.divisors, self.buf.map(|(_, m)| m));
+            for (slot, x) in self.buf.iter_mut().zip(shuffled) {
+                slot.1 = x;
+            }
+        } else {
+            for slot in &mut self.buf[..self.len] {
+                slot.1 = self.blackrock.shuffle(slot.1);
+            }
+        }
+    }
+}
+
+impl<I: Iterator<Item = (u64, u64)>> Iterator for Shuffled<I> {
+    type Item = (u64, u64);
+    fn next(&mut self) -> Option<(u64, u64)> {
+        if self.head == self.len {
+            self.fill();
+            if self.len == 0 {
+                return None;
+            }
+        }
+        let pair = self.buf[self.head];
+        self.head += 1;
+        Some(pair)
     }
 }
 
@@ -323,8 +520,11 @@ pub fn list_scan_v46<F: FnMut(TargetIp, u32)>(
     let blackrock = BlackRock::try_new(range, seed, rounds)?; // :29
     // Индексы `>= range` бывают только из-за `retries * max_rate` (:35). Их
     // cycle-walk может не завершиться; проверяем ДО первого вывода.
-    let (start, end, inc) =
-        list_bounds(range, shard, resume_index, resume_count, retries, max_rate);
+    let Bounds {
+        start,
+        end,
+        increment: inc,
+    } = list_bounds(range, shard, resume_index, resume_count, retries, max_rate);
     if end > range {
         let mut i = start;
         if i < range {
@@ -341,8 +541,13 @@ pub fn list_scan_v46<F: FnMut(TargetIp, u32)>(
             }
         }
     }
-    for i in list_scan_indices(range, shard, resume_index, resume_count, retries, max_rate) {
-        let x = blackrock.shuffle(i); // :42
+    let indices = ListIndices {
+        i: start,
+        end,
+        increment: inc,
+    };
+    for (_, x) in Shuffled::new(indices.map(|i| (i, i)), blackrock) {
+        // x = blackrock_shuffle(i), :42
         let (target, port) = massip.pick_list(x); // :44
         emit(target, port);
     }
@@ -464,7 +669,7 @@ pub fn transmit_scan_flow_v46<B, F: FnMut(u64, u64, u64, TargetIp, u32) -> Contr
     }
     let blackrock = BlackRock::try_new(range, seed, rounds)?; // main.c:261
     let repeats = 0u64; // main.c:226
-    for (i, x) in transmit_index_stream(
+    let indices = transmit_indices(
         range,
         shard,
         nic_count,
@@ -473,8 +678,9 @@ pub fn transmit_scan_flow_v46<B, F: FnMut(u64, u64, u64, TargetIp, u32) -> Contr
         resume_count,
         retries,
         max_rate,
-    ) {
-        let xxx = blackrock.shuffle(x); // main.c:334
+    );
+    // xxx = blackrock_shuffle(x), main.c:334
+    for (i, xxx) in Shuffled::new(indices, blackrock) {
         let (target, port, xxx) = massip.pick_transmit(xxx);
         if let ControlFlow::Break(b) = emit(i, repeats, xxx, target, port) {
             return Ok(ControlFlow::Break(b));
@@ -581,6 +787,45 @@ mod tests {
             transmit_index_stream(0, ONE, 1, 0, 0, None, 3, 7.0).count(),
             0
         );
+    }
+
+    /// A copy of the base `TransmitIndices::next` (one `x %= range`): the reference the stream is pinned against.
+    fn base_next(t: &mut TransmitIndices) -> Option<(u64, u64)> {
+        if t.i >= t.end {
+            return None;
+        }
+        let cur = t.i;
+        let mut x = t.i.wrapping_add(u64::from(t.r).wrapping_mul(t.rate));
+        t.r = t.r.wrapping_sub(1);
+        x %= t.range;
+        if t.r == 0 {
+            t.i = t.i.wrapping_add(t.increment);
+            t.r = t.retries.wrapping_add(1);
+        }
+        Some((cur, x))
+    }
+
+    /// main.c:328: `r * rate` wraps past 2^64 (rate 1.8e19, r up to 3), so every unreduced `xXx` is far above
+    /// `2 * range`. The test pins the stream in that case: it equals the copy of the base `next` pair by pair.
+    #[test]
+    fn transmit_stream_with_wrapping_rate_term() {
+        let (range, retries, rate) = (40u64, 2u32, 1.8e19);
+        let rate_u = rate as u64;
+        assert!(rate_u.checked_mul(u64::from(retries) + 1).is_none());
+        let mut base = transmit_indices(range, ONE, 1, 0, 0, None, retries, rate);
+        let mut want = Vec::new();
+        while base.i < base.end {
+            let raw = base
+                .i
+                .wrapping_add(u64::from(base.r).wrapping_mul(base.rate));
+            assert!(raw >= 2 * range, "i {} r {}: raw {raw}", base.i, base.r);
+            want.push(base_next(&mut base).unwrap());
+        }
+        assert_eq!(base_next(&mut base), None);
+        assert_eq!(want.len(), 360); // end = range + retries * range = 120 indices, 3 sends each
+        let got: Vec<(u64, u64)> =
+            transmit_index_stream(range, ONE, 1, 0, 0, None, retries, rate).collect();
+        assert_eq!(got, want);
     }
 
     #[test]
@@ -965,5 +1210,241 @@ mod tests {
             })
             .unwrap();
         assert_eq!(n, 8);
+    }
+
+    /// `Shuffled` yields `(tag, shuffle(m))` in input order for every length (full batches and a partial tail) and
+    /// pulls the inner iterator only when its buffer is empty, `SHUFFLE_LANES` pairs at a time.
+    #[test]
+    fn shuffled_matches_scalar_and_fills_lazily() {
+        let range = 1_000_003u64;
+        let br = BlackRock::new(range, 0xdead_beef, 14);
+        for len in 0..=3 * SHUFFLE_LANES + 1 {
+            let input: Vec<(u64, u64)> = (0..len as u64)
+                .map(|k| (3 * k + 1, (7919 * k) % range))
+                .collect();
+            let pulled = std::cell::Cell::new(0usize);
+            let inner = input
+                .iter()
+                .copied()
+                .inspect(|_| pulled.set(pulled.get() + 1));
+            let mut it = Shuffled::new(inner, br);
+            assert_eq!(
+                pulled.get(),
+                0,
+                "len {len}: nothing is pulled before the first next"
+            );
+            for (n, &(tag, m)) in input.iter().enumerate() {
+                assert_eq!(it.next(), Some((tag, br.shuffle(m))), "len {len} n {n}");
+                let batch_end = ((n / SHUFFLE_LANES + 1) * SHUFFLE_LANES).min(len);
+                assert_eq!(pulled.get(), batch_end, "len {len} n {n}");
+            }
+            assert_eq!(it.next(), None, "len {len}");
+            assert_eq!(it.next(), None, "len {len}");
+            assert_eq!(pulled.get(), len);
+        }
+    }
+
+    /// After the inner iterator's first `None` the stream is over: `Shuffled` never polls it again, even when the
+    /// inner iterator would resume (here it yields `(99, 0)` after the `None`).
+    #[test]
+    fn shuffled_never_polls_an_exhausted_inner_again() {
+        let br = BlackRock::new(1_000_003, 0xdead_beef, 14);
+        for len in [0usize, 3, SHUFFLE_LANES, SHUFFLE_LANES + 3] {
+            let polls = std::cell::Cell::new(0usize);
+            let inner = std::iter::from_fn(|| {
+                let k = polls.get();
+                polls.set(k + 1);
+                match k.cmp(&len) {
+                    std::cmp::Ordering::Less => Some((k as u64, 7 * k as u64)),
+                    std::cmp::Ordering::Equal => None,
+                    std::cmp::Ordering::Greater => Some((99, 0)),
+                }
+            });
+            let mut it = Shuffled::new(inner, br);
+            for k in 0..len {
+                assert_eq!(
+                    it.next(),
+                    Some((k as u64, br.shuffle(7 * k as u64))),
+                    "len {len} k {k}"
+                );
+            }
+            for _ in 0..3 {
+                assert_eq!(it.next(), None, "len {len}");
+            }
+            assert_eq!(polls.get(), len + 1, "len {len}: polled once past the end");
+        }
+    }
+
+    /// `Shuffled<TransmitIndices>::peek_index` is the `i` of the next `next()` at every step (buffer head while the
+    /// lookahead holds pairs, then the inner stream), `None` at the end; `end()` is `transmit_bounds`' end.
+    #[test]
+    fn shuffled_transmit_peek_index_is_the_next_index() {
+        let br = BlackRock::new(40, 42, 14);
+        let mut longest = 0;
+        for (shard, nic_count, nic_index) in [(ONE, 1u32, 0u32), (Shard { one: 2, of: 3 }, 2, 1)] {
+            for retries in [0u32, 2] {
+                for (resume_index, resume_count) in [(0u64, None), (5, Some(17))] {
+                    let mut it = Shuffled::new(
+                        transmit_indices(
+                            40,
+                            shard,
+                            nic_count,
+                            nic_index,
+                            resume_index,
+                            resume_count,
+                            retries,
+                            7.0,
+                        ),
+                        br,
+                    );
+                    let (_, end, _) = transmit_bounds(
+                        40,
+                        shard,
+                        nic_count,
+                        nic_index,
+                        resume_index,
+                        resume_count,
+                        retries,
+                    );
+                    assert_eq!(it.end(), end);
+                    let mut n = 0;
+                    loop {
+                        let peek = it.peek_index();
+                        let next = it.next();
+                        assert_eq!(peek, next.map(|(i, _)| i), "step {n}");
+                        if next.is_none() {
+                            break;
+                        }
+                        n += 1;
+                    }
+                    longest = longest.max(n);
+                    assert_eq!(it.peek_index(), None);
+                    assert_eq!(it.end(), end);
+                }
+            }
+        }
+        assert!(
+            longest > 2 * SHUFFLE_LANES,
+            "{longest}: the lookahead must be exercised"
+        );
+    }
+
+    /// `Break` at every position `p` of a full flow: the flow returns `Ok(Break(p))` at once, `emit` ran exactly
+    /// `p + 1` times and saw the prefix of the full run. The full run itself is the scalar order: `transmit_index_stream`,
+    /// one `BlackRock::shuffle` per index, `pick_transmit` (main.c:280-373).
+    #[test]
+    fn transmit_flow_break_at_every_position() {
+        type Sent = (u64, u64, u64, TargetIp, u32);
+        let (seed, rounds, rate) = (42u64, 14u32, 7.0f64);
+        let mut positions = 0usize;
+        for n in 1..=40u32 {
+            let t = massip(&format!("10.0.0.1-10.0.0.{n}"), "80");
+            let range = t.try_range().unwrap();
+            assert_eq!(range, u64::from(n));
+            let br = BlackRock::try_new(range, seed, rounds).unwrap();
+            for retries in [0u32, 2] {
+                for shard in [ONE, Shard { one: 2, of: 3 }] {
+                    for (nic_count, nic_index) in [(1u32, 0u32), (2, 1)] {
+                        let run = |stop: Option<usize>| {
+                            let mut got: Vec<Sent> = Vec::new();
+                            let flow = transmit_scan_flow_v46(
+                                &t,
+                                seed,
+                                rounds,
+                                shard,
+                                nic_count,
+                                nic_index,
+                                0,
+                                None,
+                                retries,
+                                rate,
+                                |i, rep, xxx, tg, port| {
+                                    got.push((i, rep, xxx, tg, port));
+                                    match stop {
+                                        Some(p) if p + 1 == got.len() => ControlFlow::Break(p),
+                                        _ => ControlFlow::Continue(()),
+                                    }
+                                },
+                            )
+                            .unwrap();
+                            (flow, got)
+                        };
+                        let ctx = format!(
+                            "n {n} retries {retries} shard {shard:?} nic {nic_index}/{nic_count}"
+                        );
+                        let (flow, full) = run(None);
+                        assert_eq!(flow, ControlFlow::Continue(()), "{ctx}");
+                        let want: Vec<Sent> = transmit_index_stream(
+                            range, shard, nic_count, nic_index, 0, None, retries, rate,
+                        )
+                        .map(|(i, x)| {
+                            let (tg, port, xxx) = t.pick_transmit(br.shuffle(x));
+                            (i, 0, xxx, tg, port)
+                        })
+                        .collect();
+                        assert_eq!(full, want, "{ctx}");
+                        for p in 0..full.len() {
+                            let (flow, got) = run(Some(p));
+                            assert_eq!(flow, ControlFlow::Break(p), "{ctx} p {p}");
+                            assert_eq!(got.len(), p + 1, "{ctx} p {p}");
+                            assert_eq!(got[..], full[..=p], "{ctx} p {p}");
+                        }
+                        positions += full.len();
+                    }
+                }
+            }
+        }
+        // 40 sizes x 8 configurations: the count of `i` in `start..end` by `increment` (main.c:269-280), times
+        // `retries + 1`, summed over the configurations; shard 2/3 and the second NIC start past the smallest ranges.
+        assert_eq!(positions, 16326);
+    }
+
+    #[test]
+    fn list_line_display_equals_format() {
+        // Копии прежних `format_list_line` и `format_list_line_v46` (до `ListLine`).
+        fn old_v4(ip: u32, port: u32, single_port: bool) -> String {
+            let ip = Ipv4Addr::from(ip);
+            if single_port {
+                ip.to_string()
+            } else {
+                format!("{ip}:{port}")
+            }
+        }
+        fn old_v46(target: TargetIp, port: u32, single_port: bool) -> String {
+            match target {
+                TargetIp::V4(ip) => old_v4(ip, port, single_port),
+                TargetIp::V6(ip) if single_port => crate::ranges6::format_ipv6_c(ip),
+                TargetIp::V6(ip) => format!("[{}]:{port}", crate::ranges6::format_ipv6_c(ip)),
+            }
+        }
+        let v4 = [0, 1, 0x0a00_0001, 0x01FF_00A3, u32::MAX];
+        let v6 = [0, 1, 1 << 127, 0x2001_0db8 << 96, u128::MAX];
+        let ports = [0, 1, 80, 65535, 65536, 196_609, u32::MAX];
+        for single_port in [false, true] {
+            for port in ports {
+                let targets = v4
+                    .iter()
+                    .map(|&a| TargetIp::V4(a))
+                    .chain(v6.iter().map(|&a| TargetIp::V6(a)));
+                for target in targets {
+                    let line = ListLine {
+                        target,
+                        port,
+                        single_port,
+                    };
+                    assert_eq!(line.to_string(), old_v46(target, port, single_port));
+                    assert_eq!(
+                        format_list_line_v46(target, port, single_port),
+                        old_v46(target, port, single_port)
+                    );
+                    if let TargetIp::V4(ip) = target {
+                        assert_eq!(
+                            format_list_line(ip, port, single_port),
+                            old_v4(ip, port, single_port)
+                        );
+                    }
+                }
+            }
+        }
     }
 }

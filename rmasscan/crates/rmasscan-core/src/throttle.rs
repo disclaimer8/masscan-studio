@@ -6,12 +6,16 @@
 //! для корзин (с оборачиванием при вычитании), тот же порядок вызовов часов и
 //! сна, та же структура цикла (`goto again` -> `loop`/`continue`).
 
+use std::num::NonZeroU64;
 use std::time::{Duration, Instant};
 
 /// Максимальный отрезок сна внутри [`Throttler::next_batch_interruptible`]:
 /// между отрезками проверяется флаг отмены (требование runtime: Stop/Pause
 /// обрабатываются за доли секунды даже на rate=1).
 pub const MAX_SLEEP_CHUNK_MICROS: u64 = 50_000;
+
+/// [`MAX_SLEEP_CHUNK_MICROS`] как отрезок сна `next_batch_impl` (`None` — сон без дробления).
+const SLEEP_CHUNK: Option<NonZeroU64> = NonZeroU64::new(MAX_SLEEP_CHUNK_MICROS);
 
 /// Ожидание throttle прервано флагом отмены.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -52,7 +56,8 @@ impl Default for SystemClock {
 
 impl Clock for SystemClock {
     fn now_micros(&self) -> u64 {
-        self.origin.elapsed().as_micros() as u64
+        // `as u64` усекал бы `u128` по модулю 2^64 (после 584 542 лет работы часы пошли бы с нуля); теперь потолок.
+        u64::try_from(self.origin.elapsed().as_micros()).unwrap_or(u64::MAX)
     }
 
     fn sleep_micros(&self, us: u64) {
@@ -65,8 +70,8 @@ impl Clock for SystemClock {
 pub struct Throttler {
     /// (timestamp, packet_count), main-throttle.h:13.
     buckets: [(u64, u64); 256],
-    /// `unsigned index` в C: оборачивается по 2^32, маска 0xFF не меняется.
-    index: u32,
+    /// `unsigned index & 0xFF` в C: 2^32 кратно 256, поэтому `u8` с оборачиванием даёт ту же корзину.
+    index: u8,
     batch_size: f64,
     max_rate: f64,
     current_rate: f64,
@@ -113,7 +118,7 @@ impl Throttler {
     /// плановой скоростью; `start` и `next_batch` получают одни и те же часы;
     /// результат 0 означает "вызвать снова".
     pub fn next_batch(&mut self, packet_count: u64, clock: &(impl Clock + ?Sized)) -> u64 {
-        self.next_batch_impl(packet_count, clock, &|| false, u64::MAX)
+        self.next_batch_impl(packet_count, clock, &|| false, None)
             .unwrap_or(0)
     }
 
@@ -128,7 +133,7 @@ impl Throttler {
         clock: &(impl Clock + ?Sized),
         cancelled: impl Fn() -> bool,
     ) -> Result<u64, ThrottleCancelled> {
-        self.next_batch_impl(packet_count, clock, &cancelled, MAX_SLEEP_CHUNK_MICROS)
+        self.next_batch_impl(packet_count, clock, &cancelled, SLEEP_CHUNK)
     }
 
     fn next_batch_impl(
@@ -136,7 +141,7 @@ impl Throttler {
         packet_count: u64,
         clock: &(impl Clock + ?Sized),
         cancelled: &dyn Fn() -> bool,
-        chunk: u64,
+        chunk: Option<NonZeroU64>,
     ) -> Result<u64, ThrottleCancelled> {
         let max_rate = self.max_rate;
         loop {
@@ -147,12 +152,12 @@ impl Throttler {
             let timestamp = clock.now_micros();
 
             // :76-78
-            let mut index = (self.index & 0xFF) as usize;
+            let mut index = usize::from(self.index);
             self.buckets[index] = (timestamp, packet_count);
 
             // :80-82
             self.index = self.index.wrapping_add(1);
-            index = (self.index & 0xFF) as usize;
+            index = usize::from(self.index);
             let (old_timestamp, old_packet_count) = self.buckets[index];
 
             // :88-92 разрыв > 1 с: сброс batch_size и повтор (без сна).
@@ -180,7 +185,7 @@ impl Throttler {
                     if cancelled() {
                         return Err(ThrottleCancelled);
                     }
-                    let part = remaining.min(chunk);
+                    let part = chunk.map_or(remaining, |c| remaining.min(c.get()));
                     clock.sleep_micros(part);
                     remaining -= part;
                     if cancelled() {
@@ -332,7 +337,7 @@ mod tests {
             c.advance_micros(100);
             t.next_batch(i, &c);
         }
-        assert_eq!(t.index, 600);
+        assert_eq!(t.index, 88); // u8: 600 вызовов, оборот по 256 (600 - 2 * 256)
     }
 
     #[test]

@@ -5,6 +5,19 @@
 //! Список используется и для адресов (u32), и для портов (0..=65535 плюс
 //! смещения протоколов), поэтому, как и в C, всё хранится как `u32`.
 
+/// Двоичный поиск значения в диапазонах, отсортированных по началу и не пересекающихся: O(log n). Общий для IPv4,
+/// портов и IPv6 (`bounds` отдаёт `(begin, end)` элемента).
+pub(crate) fn contains_sorted<R, V: Ord + Copy>(
+    ranges: &[R],
+    value: V,
+    bounds: impl Fn(&R) -> (V, V),
+) -> bool {
+    let idx = ranges.partition_point(|r| bounds(r).0 <= value);
+    idx.checked_sub(1)
+        .and_then(|i| ranges.get(i))
+        .is_some_and(|r| value <= bounds(r).1)
+}
+
 /// Инклюзивный диапазон `[begin, end]`. `begin > end` означает «пустой».
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Range {
@@ -160,8 +173,12 @@ impl RangeList {
         self.is_sorted = true;
     }
 
-    /// massip-rangesv4.c:60 `rangelist_is_contains` (линейный поиск).
+    /// massip-rangesv4.c:60 `rangelist_is_contains` (в C всегда линейный поиск).
+    /// Здесь отсортированный список (`sort_and_merge`, `optimize`, `exclude`) ищется двоичным поиском, иначе линейно.
     pub fn is_contains(&self, value: u32) -> bool {
+        if self.is_sorted {
+            return contains_sorted(&self.list, value, |r| (r.begin, r.end));
+        }
         self.list.iter().any(|r| r.begin <= value && value <= r.end)
     }
 
@@ -245,9 +262,7 @@ impl RangeList {
 
         let mut newlist = RangeList::new();
         let mut x = 0usize;
-        for i in 0..self.list.len() {
-            let mut range = self.list[i];
-
+        for mut range in self.list.iter().copied() {
             // Двигаем exclude вперёд до возможного пересечения
             while x < excludes.list.len() && excludes.list[x].end < range.begin {
                 x += 1;
@@ -319,6 +334,7 @@ pub fn range_is_cidr(range: Range) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
     #[test]
     fn range_is_cidr_cases() {
@@ -406,6 +422,69 @@ mod tests {
             l.add_range(b, e);
         }
         l
+    }
+
+    /// Копия линейного `is_contains` базы: эталон для двоичного поиска.
+    fn linear_contains(l: &RangeList, v: u32) -> bool {
+        l.list.iter().any(|r| r.begin <= v && v <= r.end)
+    }
+
+    fn value() -> impl Strategy<Value = u32> {
+        prop_oneof![0u32..40, (u32::MAX - 40)..=u32::MAX, any::<u32>(),]
+    }
+
+    fn pairs() -> impl Strategy<Value = Vec<(u32, u32)>> {
+        // `begin > end` возможен: оба конца берутся независимо.
+        proptest::collection::vec((value(), value()), 0..12)
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(3000))]
+
+        #[test]
+        fn is_contains_binary_equals_linear(
+            adds in pairs(),
+            excl in pairs(),
+            mode in 0u8..4,
+            extra in proptest::collection::vec(value(), 64),
+        ) {
+            let mut l = list(&adds);
+            match mode {
+                0 => {}
+                1 => l.sort_and_merge(),
+                2 => {
+                    let mut e = list(&excl);
+                    l.exclude(&mut e);
+                }
+                _ => {
+                    // исключение от 0.0.0.0
+                    let mut e = list(&excl);
+                    let hi = excl.first().map_or(7, |p| p.1);
+                    e.add_range(0, hi);
+                    l.exclude(&mut e);
+                }
+            }
+            let mut probes = extra;
+            for r in l.as_slice() {
+                for v in [r.begin, r.end] {
+                    probes.extend([v, v.saturating_sub(1), v.saturating_add(1)]);
+                }
+            }
+            for &(b, e) in adds.iter().chain(excl.iter()) {
+                probes.extend([b, e]);
+            }
+            for v in probes {
+                let want = linear_contains(&l, v);
+                prop_assert_eq!(l.is_contains(v), want, "is_contains {} sorted {}", v, l.is_sorted);
+                if l.is_sorted {
+                    prop_assert_eq!(
+                        contains_sorted(l.as_slice(), v, |r| (r.begin, r.end)),
+                        want,
+                        "sorted {}", v
+                    );
+                }
+            }
+        }
     }
 
     #[test]
@@ -567,5 +646,123 @@ mod tests {
         all.exclude(&mut mid);
         assert_eq!(all.as_slice(), &[r(0, 4), r(6, u32::MAX)]);
         assert_eq!(all.count(), 0xffff_ffff);
+    }
+
+    /// Копия цикла `pick` из базы (двоичный поиск по префиксным суммам). `pick` сохраняет этот цикл, и копия, а не
+    /// вызов, закрепляет его. Замена на `partition_point` отклонена: дифференциальный тест разошёлся с ней на списках с
+    /// диапазоном `begin > end` (его размер оборачивается, и префиксные суммы немонотонны).
+    /// `None` — цикл не завершается за 1000 шагов или выходит за список (на несортированных суммах).
+    fn old_pick_mid(picker: &[u32], index: u64) -> Option<usize> {
+        let maxmax = picker.len();
+        let (mut min, mut max) = (0usize, maxmax);
+        for _ in 0..1000 {
+            let mid = min + (max - min) / 2;
+            if mid >= maxmax {
+                return None;
+            }
+            if index < u64::from(picker[mid]) {
+                max = mid;
+                continue;
+            }
+            if mid + 1 == maxmax || index < u64::from(picker[mid + 1]) {
+                return Some(mid);
+            }
+            min = mid + 1;
+        }
+        None
+    }
+
+    fn splitmix(state: &mut u64) -> u64 {
+        *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = *state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    }
+
+    fn rand_value(state: &mut u64) -> u32 {
+        match splitmix(state) % 4 {
+            0 => (splitmix(state) % 64) as u32,
+            1 => (splitmix(state) % (1 << 16)) as u32,
+            2 => [0, 1, 2, u32::MAX - 1, u32::MAX][(splitmix(state) % 5) as usize],
+            _ => splitmix(state) as u32,
+        }
+    }
+
+    #[test]
+    fn pick_matches_the_kept_search() {
+        // Случайные списки 1..64 диапазонов (в том числе `begin > end`, после `exclude` от 0.0.0.0, с оборачиванием
+        // префиксных сумм): `pick` равен копии старого поиска на всех индексах меньше суммы и на трёх за концом.
+        let mut state = 0x7069_636b_u64;
+        let (mut compared, mut skipped, mut non_monotone) = (0u32, 0u32, 0u32);
+        for case in 0..4000 {
+            let mut l = RangeList::new();
+            let reversed_heavy = case % 4 == 3;
+            for _ in 0..1 + splitmix(&mut state) % 64 {
+                let (b, e) = (rand_value(&mut state), rand_value(&mut state));
+                if reversed_heavy {
+                    l.add_range(b.max(e), b.min(e));
+                    continue;
+                }
+                // половина диапазонов нормальные, остальные как попало (в том числе `begin > end`)
+                match splitmix(&mut state) % 4 {
+                    0 | 1 => l.add_range(b.min(e), b.max(e)),
+                    2 => l.add_range(b, e),
+                    // обратный диапазон (`begin > end`): его размер оборачивается и делает суммы немонотонными
+                    _ => l.add_range(b.max(e), b.min(e)),
+                }
+            }
+            if splitmix(&mut state).is_multiple_of(2) {
+                l.sort_and_merge();
+            }
+            if splitmix(&mut state).is_multiple_of(3) {
+                let mut x = RangeList::new();
+                x.add_range(0, rand_value(&mut state));
+                for _ in 0..splitmix(&mut state) % 5 {
+                    let (b, e) = (rand_value(&mut state), rand_value(&mut state));
+                    x.add_range(b.min(e), b.max(e));
+                }
+                l.exclude(&mut x);
+            }
+            l.optimize();
+            let Some(picker) = l.picker.clone() else {
+                continue;
+            };
+            if picker.windows(2).any(|w| w[0] > w[1]) {
+                non_monotone += 1;
+            }
+            let count = l.count();
+            let mut indices: Vec<u64> = if count <= 4096 {
+                (0..count).collect()
+            } else {
+                let mut v: Vec<u64> = picker
+                    .iter()
+                    .flat_map(|&p| [u64::from(p), u64::from(p).wrapping_sub(1)])
+                    .filter(|&i| i < count)
+                    .collect();
+                v.extend((0..64).map(|_| splitmix(&mut state) % count));
+                v.extend([0, count - 1]);
+                v
+            };
+            indices.extend([count, count + 1, count + 2]);
+            for index in indices {
+                let Some(mid) = old_pick_mid(&picker, index) else {
+                    skipped += 1;
+                    continue;
+                };
+                let want = std::panic::catch_unwind(|| {
+                    l.list[mid]
+                        .begin
+                        .wrapping_add((index - u64::from(picker[mid])) as u32)
+                });
+                let got = std::panic::catch_unwind(|| l.pick(index));
+                assert_eq!(got.ok(), want.ok(), "case {case} index {index}");
+                compared += 1;
+            }
+        }
+        assert!(compared > 50_000, "compared {compared}");
+        eprintln!(
+            "pick differential: compared {compared}, old search stuck {skipped}, non-monotone lists {non_monotone}"
+        );
     }
 }

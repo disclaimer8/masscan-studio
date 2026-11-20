@@ -214,6 +214,10 @@ impl MassIp {
             index < self.ipv4_index_threshold,
             "massip pick: index out of range"
         );
+        // Один порт: порог равен `count_ipv4s * 1`, индекс меньше `count_ipv4s`, так что `%` и `/` дают `index` и 0.
+        if self.count_ports == 1 {
+            return (self.ipv4.pick(index), self.ports.pick(0));
+        }
         let ip = self.ipv4.pick(index % self.count_ipv4s);
         let port = self.ports.pick(index / self.count_ipv4s);
         (ip, port)
@@ -559,6 +563,33 @@ mod tests {
             let (ip, port) = t.pick(x);
             assert_eq!(t.pick_list(x), (TargetIp::V4(ip), port));
             assert_eq!(t.pick_transmit(x), (TargetIp::V4(ip), port, x));
+        }
+    }
+
+    /// massip.c:30-34 with one port: `pick` equals the `%`/`/` split (address `index % count_ipv4s`, port
+    /// `index / count_ipv4s`) at every index of three target lists (one address; scattered ranges; several hundred
+    /// addresses over many ranges), each with a single port.
+    #[test]
+    fn single_port_pick_equals_division() {
+        for (list, port) in [
+            ("192.0.2.1", "80"),
+            ("198.18.0.0/28,10.1.0.5-10.1.0.9,203.0.113.77", "U:53"),
+            (
+                "10.0.0.0/23,10.2.0.0/26,10.3.0.0/30,172.16.5.9,192.0.2.128/25",
+                "443",
+            ),
+        ] {
+            let mut t = MassIp::new();
+            t.add_target_string(list).unwrap();
+            targets::parse_ports(t.ports_mut(), port).unwrap();
+            t.optimize();
+            assert_eq!(t.count_ports(), 1, "{list}");
+            let n = t.count_ipv4s();
+            assert_eq!(t.range(), n, "{list}");
+            for index in 0..n {
+                let want = (t.ipv4().pick(index % n), t.ports().pick(index / n));
+                assert_eq!(t.pick(index), want, "{list} index {index}");
+            }
         }
     }
 

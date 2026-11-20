@@ -25,6 +25,9 @@ pub const SBOX: [u8; 256] = [
     0x74, 0x4a, 0xa6, 0x5e, 0xd2, 0xe2, 0x4d, 0xf3, 0xf4, 0xc6, 0xbc, 0xa2, 0x51, 0x58, 0xe8, 0xae,
 ];
 
+/// Число дорожек [`BlackRock::shuffle_batch_with`] в `transmit` и `-sL` (`scan.rs`).
+pub(crate) const SHUFFLE_LANES: usize = 8;
+
 /// Ошибки конструктора.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum BlackRockError {
@@ -100,6 +103,36 @@ impl BlackRock {
         c
     }
 
+    /// Делители `a` и `b` для [`BlackRock::shuffle_batch_with`]; строятся один раз на поток.
+    pub(crate) fn divisors(&self) -> Divisors {
+        Divisors {
+            a: InvariantDiv::new(self.a),
+            b: InvariantDiv::new(self.b),
+        }
+    }
+
+    /// `K` независимых [`BlackRock::shuffle`] сразу; результат равен `m.map(|x| self.shuffle(x))`. `d` это
+    /// [`BlackRock::divisors`] этой же перестановки.
+    ///
+    /// Первый `ENCRYPT` идёт по всем дорожкам раунд за раундом (`encrypt_lanes`): цепочка раундов одной дорожки
+    /// ждёт каждое деление, а `K` цепочек рядом прячут эту задержку друг за другом; деления на `a` и `b` там идут
+    /// умножением ([`InvariantDiv`]). Cycle-walk (:268-276) нужен редко и у каждой дорожки свой, поэтому он
+    /// скалярный и на `%`.
+    pub(crate) fn shuffle_batch_with<const K: usize>(&self, d: &Divisors, m: [u64; K]) -> [u64; K] {
+        debug_assert_eq!(
+            (d.a.d, d.b.d),
+            (self.a, self.b),
+            "divisors of another BlackRock"
+        );
+        let mut c = encrypt_lanes(self.rounds, d, m, self.seed);
+        for x in &mut c {
+            while *x >= self.range {
+                *x = encrypt(self.rounds, self.a, self.b, *x, self.seed);
+            }
+        }
+        c
+    }
+
     /// Размер области перестановки `a*b` (всегда больше `range`).
     pub fn domain(&self) -> u64 {
         self.a.wrapping_mul(self.b)
@@ -140,19 +173,114 @@ impl BlackRock {
     }
 }
 
-/// `READ`, crypto-blackrock.c:164.
-fn read(r: u64, big_r: u64, seed: u64) -> u64 {
-    // :171. r in 1..64, так что оба сдвига < 64.
-    let big_r = big_r ^ (seed.wrapping_shl(r as u32) ^ seed.wrapping_shr((64 - r) as u32));
-    let byte = |n: u32| -> usize { ((((big_r >> (n * 8)) ^ seed ^ r) & 0xFF) as u8) as usize };
+/// Делители `a` и `b` одной [`BlackRock`] для [`BlackRock::shuffle_batch_with`].
+pub(crate) struct Divisors {
+    a: InvariantDiv,
+    b: InvariantDiv,
+}
+
+/// Деление на неизменный делитель `d >= 1` умножением (метод `libdivide_u64_gen` / `libdivide_u64_do`): `div(n)` и
+/// `rem(n)` равны `n / d` и `n % d` при любом `n`. `l = floor(log2 d)`:
+/// - `d` степень двойки ([`DIV_SHIFT`]): `q = n >> l`;
+/// - иначе `m = floor(2^(64+l) / d)`, `rem = 2^(64+l) mod d` (в u128). При `d - rem < 2^l` ([`DIV_MUL`])
+///   `magic = m + 1` и `q = mulhi(magic, n) >> l`; иначе ([`DIV_ADD`]) множитель 65-битный, `2^64 + magic` с
+///   `magic = 2m + 1` по модулю 2^64 (+1, если `2*rem >= d`), и `t = mulhi(magic, n)`, `q = (((n - t) >> 1) + t) >> l`.
+struct InvariantDiv {
+    d: u64,
+    magic: u64,
+    shift: u32,
+    kind: u8,
+}
+
+/// [`InvariantDiv`]: `d` степень двойки, только сдвиг.
+const DIV_SHIFT: u8 = 0;
+/// [`InvariantDiv`]: 64-битный множитель.
+const DIV_MUL: u8 = 1;
+/// [`InvariantDiv`]: 65-битный множитель, шаг сложения.
+const DIV_ADD: u8 = 2;
+
+/// Старшие 64 бита произведения `a * b`.
+fn mulhi(a: u64, b: u64) -> u64 {
+    ((u128::from(a) * u128::from(b)) >> 64) as u64
+}
+
+impl InvariantDiv {
+    /// Паникует при `d == 0`.
+    fn new(d: u64) -> Self {
+        assert!(d != 0, "InvariantDiv: zero divisor");
+        let l = d.ilog2();
+        if d.is_power_of_two() {
+            return InvariantDiv {
+                d,
+                magic: 0,
+                shift: l,
+                kind: DIV_SHIFT,
+            };
+        }
+        // d > 2^l, поэтому m < 2^64 - 1 и `m + 1` не переполняется.
+        let p = 1u128 << (64 + l);
+        let m = (p / u128::from(d)) as u64;
+        let rem = (p % u128::from(d)) as u64;
+        if d - rem < 1u64 << l {
+            InvariantDiv {
+                d,
+                magic: m + 1,
+                shift: l,
+                kind: DIV_MUL,
+            }
+        } else {
+            // libdivide: +1, если 2*rem >= d или 2*rem переполнилось; здесь 2*rem считается в u128. В этой ветке
+            // rem <= d - 2^l < d/2, так что прибавка равна 0; она оставлена, чтобы метод совпадал с libdivide.
+            let carry = u64::from(2 * u128::from(rem) >= u128::from(d));
+            InvariantDiv {
+                d,
+                magic: m.wrapping_mul(2).wrapping_add(carry).wrapping_add(1),
+                shift: l,
+                kind: DIV_ADD,
+            }
+        }
+    }
+
+    /// `n / d`.
+    #[inline]
+    fn div(&self, n: u64) -> u64 {
+        match self.kind {
+            DIV_SHIFT => n >> self.shift,
+            DIV_MUL => mulhi(self.magic, n) >> self.shift,
+            _ => {
+                // t <= n, потому что magic < 2^64.
+                let t = mulhi(self.magic, n);
+                (((n - t) >> 1) + t) >> self.shift
+            }
+        }
+    }
+
+    /// `n % d`.
+    #[inline]
+    fn rem(&self, n: u64) -> u64 {
+        n - self.div(n) * self.d
+    }
+}
+
+/// Маска раунда `r` (1..=63) для `READ`, crypto-blackrock.c:164-178. В C `R ^= rot(seed, r)`, затем байт `n` индекса
+/// S-box равен `((R >> 8n) ^ seed ^ r) & 0xFF`; значит индекс байта `n` есть байт `n` числа `R ^ mask`, где `mask`
+/// складывает вращение и повторенный во всех байтах младший байт `seed ^ r`.
+fn round_mask(seed: u64, r: u64) -> u64 {
+    // r in 1..64, так что оба сдвига < 64.
+    let rot = seed.wrapping_shl(r as u32) ^ seed.wrapping_shr((64 - r) as u32);
+    rot ^ ((seed ^ r) & 0xFF).wrapping_mul(0x0101_0101_0101_0101)
+}
+
+/// Смешивание S-box из `READ` (:171-178) по байтам `x = R ^ round_mask(seed, r)`.
+fn sbox_mix(x: u64) -> u64 {
+    let s = |n: u32| -> u64 { SBOX[((x >> (n * 8)) & 0xFF) as usize] as u64 };
     // В C `sbox[..]<<24UL` имеет тип int (сдвиг берёт тип левого операнда);
     // gcc даёт знаковое значение, которое затем расширяется и маскируется
     // `& 0x0ffffFFFF`, т.е. результат равен вычислению в u32/u64 с маской.
-    let s = |n: u32| -> u32 { SBOX[byte(n)] as u32 };
-    let r0 = (s(0) as u64) | ((s(1) as u64) << 8);
-    let r1 = (((s(2) as u64) << 16) | ((s(3) as u64) << 24)) & 0xffff_ffff;
-    let r2 = (s(4) as u64) | ((s(5) as u64) << 8);
-    let r3 = (((s(6) as u64) << 16) | ((s(7) as u64) << 24)) & 0xffff_ffff;
+    let r0 = s(0) | (s(1) << 8);
+    let r1 = ((s(2) << 16) | (s(3) << 24)) & 0xffff_ffff;
+    let r2 = s(4) | (s(5) << 8);
+    let r3 = ((s(6) << 16) | (s(7) << 24)) & 0xffff_ffff;
     // :178. `r2<<23UL ^ r3<<33UL`: старшие биты отбрасываются, как в C.
     r0 ^ r1 ^ r2.wrapping_shl(23) ^ r3.wrapping_shl(33)
 }
@@ -162,7 +290,7 @@ fn encrypt(r: u32, a: u64, b: u64, m: u64, seed: u64) -> u64 {
     let mut l = m % a;
     let mut rr = m / a;
     for j in 1..=r {
-        let t = l.wrapping_add(read(j as u64, rr, seed));
+        let t = l.wrapping_add(sbox_mix(rr ^ round_mask(seed, j as u64)));
         let tmp = if j & 1 != 0 { t % a } else { t % b };
         l = rr;
         rr = tmp;
@@ -172,6 +300,38 @@ fn encrypt(r: u32, a: u64, b: u64, m: u64, seed: u64) -> u64 {
     } else {
         a.wrapping_mul(rr).wrapping_add(l)
     }
+}
+
+/// `encrypt` для `K` индексов сразу: те же раунды, но каждый раунд проходит все дорожки, а маска раунда
+/// считается один раз на пачку; `/ a`, `% a` и `% b` идут через делители `d` (`a == d.a.d`, `b == d.b.d`). Дорожки
+/// друг от друга не зависят, результат каждой равен `encrypt` её индекса.
+fn encrypt_lanes<const K: usize>(r: u32, d: &Divisors, m: [u64; K], seed: u64) -> [u64; K] {
+    let a = d.a.d;
+    let mut l = [0u64; K];
+    let mut rr = [0u64; K];
+    for ((lk, rk), x) in l.iter_mut().zip(rr.iter_mut()).zip(m) {
+        let q = d.a.div(x);
+        *lk = x - q * a;
+        *rk = q;
+    }
+    for j in 1..=r {
+        let mask = round_mask(seed, u64::from(j));
+        let modulus = if j & 1 != 0 { &d.a } else { &d.b };
+        for (lk, rk) in l.iter_mut().zip(rr.iter_mut()) {
+            let t = lk.wrapping_add(sbox_mix(*rk ^ mask));
+            *lk = *rk;
+            *rk = modulus.rem(t);
+        }
+    }
+    let mut out = [0u64; K];
+    for ((o, lk), rk) in out.iter_mut().zip(l).zip(rr) {
+        *o = if r & 1 != 0 {
+            a.wrapping_mul(lk).wrapping_add(rk)
+        } else {
+            a.wrapping_mul(rk).wrapping_add(lk)
+        };
+    }
+    out
 }
 
 /// `UNENCRYPT`, crypto-blackrock.c:220.
@@ -186,7 +346,7 @@ fn unencrypt(r: u32, a: u64, b: u64, m: u64, seed: u64) -> u64 {
     }
     for j in (1..=r).rev() {
         let modulus = if j & 1 != 0 { a } else { b };
-        let mut tmp = read(j as u64, l, seed);
+        let mut tmp = sbox_mix(l ^ round_mask(seed, j as u64));
         if tmp > rr {
             tmp -= rr;
             tmp = modulus - (tmp % modulus);
@@ -205,6 +365,148 @@ fn unencrypt(r: u32, a: u64, b: u64, m: u64, seed: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn splitmix(state: &mut u64) -> u64 {
+        *state = state.wrapping_add(0x9e37_79b9_7f4a_7c15);
+        let mut z = *state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        z ^ (z >> 31)
+    }
+
+    /// Прежний `READ` (crypto-blackrock.c:164) дословно: эталон для `round_mask` + `sbox_mix`.
+    fn read(r: u64, big_r: u64, seed: u64) -> u64 {
+        // :171. r in 1..64, так что оба сдвига < 64.
+        let big_r = big_r ^ (seed.wrapping_shl(r as u32) ^ seed.wrapping_shr((64 - r) as u32));
+        let byte = |n: u32| -> usize { ((((big_r >> (n * 8)) ^ seed ^ r) & 0xFF) as u8) as usize };
+        // В C `sbox[..]<<24UL` имеет тип int (сдвиг берёт тип левого операнда);
+        // gcc даёт знаковое значение, которое затем расширяется и маскируется
+        // `& 0x0ffffFFFF`, т.е. результат равен вычислению в u32/u64 с маской.
+        let s = |n: u32| -> u32 { SBOX[byte(n)] as u32 };
+        let r0 = (s(0) as u64) | ((s(1) as u64) << 8);
+        let r1 = (((s(2) as u64) << 16) | ((s(3) as u64) << 24)) & 0xffff_ffff;
+        let r2 = (s(4) as u64) | ((s(5) as u64) << 8);
+        let r3 = (((s(6) as u64) << 16) | ((s(7) as u64) << 24)) & 0xffff_ffff;
+        // :178. `r2<<23UL ^ r3<<33UL`: старшие биты отбрасываются, как в C.
+        r0 ^ r1 ^ r2.wrapping_shl(23) ^ r3.wrapping_shl(33)
+    }
+
+    #[test]
+    fn round_mask_matches_c_read() {
+        let mut st = 0x1234_5678u64;
+        let mut seeds = vec![0u64, 1, u64::MAX, 0x0123_4567_89ab_cdef];
+        seeds.extend((0..1000).map(|_| splitmix(&mut st)));
+        for &seed in &seeds {
+            for r in 1..=63u64 {
+                let big_r = splitmix(&mut st);
+                assert_eq!(
+                    read(r, big_r, seed),
+                    sbox_mix(big_r ^ round_mask(seed, r)),
+                    "seed {seed:#x} r {r}"
+                );
+            }
+        }
+    }
+
+    /// `shuffle_batch_with` (the permutation's own `divisors()`) equals `shuffle` lane by lane: windows of
+    /// `SHUFFLE_LANES` consecutive indices (wrapping at the end) at the start, middle and end of the range, plus
+    /// batches of 1 and 3 lanes.
+    #[test]
+    fn shuffle_batch_equals_scalar() {
+        let ranges = [
+            1u64,
+            2,
+            3,
+            9,
+            40,
+            290_112,
+            1_000_003,
+            1 << 22,
+            (1 << 63) - 1,
+        ];
+        let seeds = [1u64, 2, 0xFFFF_FFFF, u64::MAX];
+        let rounds = [0u32, 1, 2, 3, 4, 14, 63];
+        let mut walked = 0usize;
+        for &range in &ranges {
+            for &seed in &seeds {
+                for &r in &rounds {
+                    let br = BlackRock::new(range, seed, r);
+                    let d = br.divisors();
+                    let lanes = SHUFFLE_LANES as u64;
+                    for s in [0, range / 2, range.saturating_sub(lanes), range - 1] {
+                        let m: [u64; SHUFFLE_LANES] =
+                            std::array::from_fn(|k| (s + k as u64) % range);
+                        let want = m.map(|x| br.shuffle(x));
+                        let ctx = format!("range {range} seed {seed:#x} rounds {r} s {s}");
+                        assert_eq!(br.shuffle_batch_with(&d, m), want, "{ctx}");
+                        assert_eq!(br.shuffle_batch_with(&d, [m[0]]), [want[0]], "{ctx}");
+                        assert_eq!(
+                            br.shuffle_batch_with(&d, [m[0], m[1], m[2]]),
+                            want[..3],
+                            "{ctx}"
+                        );
+                        // Lanes whose first ENCRYPT lands at or above range take the scalar cycle-walk.
+                        walked += m
+                            .iter()
+                            .filter(|&&x| encrypt(r, br.a, br.b, x, seed) >= range)
+                            .count();
+                    }
+                }
+            }
+        }
+        assert!(walked > 0);
+    }
+
+    /// `InvariantDiv` equals `/` and `%`: divisors 1, 2, 3, 7, every `a` and `b` of `BlackRock` for range 1..=1000 and
+    /// 2^22, 2^28, 290112, 1000003, 2^63-1, 20 000 random in 1..2^32, 2000 random in 1..u64::MAX, plus every power of
+    /// two with its neighbours and the divisors next to 2^63 and 2^64; numerators 0, 1, d-1, d, d+1, 2d-1 (wrapping),
+    /// three random multiples k*d, u64::MAX-1, u64::MAX and 27 random.
+    #[test]
+    fn invariant_div_is_exact() {
+        let mut st = 0xd1d1_5eed_u64;
+        let mut ds: Vec<u64> = vec![1, 2, 3, 7];
+        for range in (1..=1000u64).chain([1 << 22, 1 << 28, 290_112, 1_000_003, (1 << 63) - 1]) {
+            let br = BlackRock::new(range, 1, 14);
+            ds.extend([br.a, br.b]);
+        }
+        ds.extend((0..20_000).map(|_| 1 + splitmix(&mut st) % ((1 << 32) - 1)));
+        ds.extend((0..2000).map(|_| 1 + splitmix(&mut st) % (u64::MAX - 1)));
+        for k in 0..64 {
+            let p = 1u64 << k;
+            ds.extend([p, (p - 1).max(1), p + 1]);
+        }
+        ds.extend([
+            (1 << 63) - 1,
+            1 << 63,
+            (1 << 63) + 1,
+            u64::MAX - 1,
+            u64::MAX,
+        ]);
+        let mut kinds = [0usize; 3];
+        for &d in &ds {
+            let v = InvariantDiv::new(d);
+            kinds[usize::from(v.kind)] += 1;
+            let mut ns = vec![
+                0,
+                1,
+                d - 1,
+                d,
+                d.wrapping_add(1),
+                d.wrapping_mul(2).wrapping_sub(1),
+                u64::MAX - 1,
+                u64::MAX,
+            ];
+            for _ in 0..3 {
+                ns.push(splitmix(&mut st) % (u64::MAX / d).saturating_add(1) * d);
+            }
+            ns.extend((0..27).map(|_| splitmix(&mut st)));
+            for n in ns {
+                assert_eq!(v.div(n), n / d, "d {d} n {n}");
+                assert_eq!(v.rem(n), n % d, "d {d} n {n}");
+            }
+        }
+        assert!(kinds.iter().all(|&k| k > 0), "{kinds:?}");
+    }
 
     #[test]
     fn shuffle_bounded_is_exact_for_small_ranges() {

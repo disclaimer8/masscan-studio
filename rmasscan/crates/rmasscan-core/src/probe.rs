@@ -16,7 +16,6 @@
 //!   [`ControlFlow`].
 
 use std::collections::{BTreeMap, VecDeque};
-use std::iter::Peekable;
 use std::ops::ControlFlow;
 use std::sync::Arc;
 
@@ -31,11 +30,11 @@ use crate::packet::{
 use crate::payloads::PayloadTable;
 use crate::ranges::RangeList;
 use crate::scan::{
-    ScanError, Shard, transmit_bounds, transmit_index_stream, transmit_scan_flow_v46,
+    ScanError, Shard, Shuffled, TransmitIndices, transmit_bounds, transmit_indices,
+    transmit_scan_flow_v46,
 };
 use crate::targets::{
-    TEMPL_ARP, TEMPL_ICMP_ECHO, TEMPL_OPROTO_FIRST, TEMPL_OPROTO_LAST, TEMPL_SCTP, TEMPL_SCTP_LAST,
-    TEMPL_UDP, TEMPL_UDP_LAST,
+    PortProto, TEMPL_ARP, TEMPL_ICMP_ECHO, TEMPL_OPROTO_FIRST, TEMPL_OPROTO_LAST,
 };
 
 /// Раунды BlackRock, которые принимает runtime v1 (masscan по умолчанию).
@@ -236,7 +235,6 @@ struct Builder {
     sctp: SctpTemplate,
     /// Шаблон ARP who-has (`--arp`, `I:2`, templ-pkt.c:162): тот же путь адаптера, всегда широковещательный.
     arp: ArpTemplate,
-    payloads: Arc<PayloadTable>,
     ip_me0: u32,
     first: u16,
     port_mask: u32,
@@ -246,12 +244,7 @@ struct Builder {
 }
 
 impl Builder {
-    fn from_nic(
-        nic: &NicBinding,
-        seed: u64,
-        mods: &PacketModifiers,
-        payloads: &Arc<PayloadTable>,
-    ) -> Result<Builder, PlanError> {
+    fn from_nic(nic: &NicBinding, seed: u64, mods: &PacketModifiers) -> Result<Builder, PlanError> {
         let binding = &nic.binding;
         let (first, last) = binding.source_ports;
         check_source_ports(first, last, nic.legacy_c_17_port_mask)?;
@@ -300,7 +293,6 @@ impl Builder {
                 mods.ttl,
             ),
             arp: ArpTemplate::new(binding.source_mac),
-            payloads: payloads.clone(),
             ip_me0: binding.source_ipv4,
             ipv4_mask: nic.source_ipv4_last - binding.source_ipv4,
             first,
@@ -310,8 +302,27 @@ impl Builder {
         })
     }
 
+    /// `(ip_me, port_me)` зонда `i` (main.c:379-384): ротация по cookie только при `ipv4_mask != 0 || port_mask != 0`,
+    /// иначе первый адрес и первый порт. Одинаково для всех видов протокола.
+    #[inline]
+    fn source(&self, i: u64, repeats: u64, xxx: u64) -> (u32, u32) {
+        let ipv4_mask = self.ipv4_mask;
+        if ipv4_mask == 0 && self.port_mask == 0 {
+            return (self.ip_me0, u32::from(self.first));
+        }
+        let (n_lo, n_hi) = split_u64(i.wrapping_add(repeats));
+        let (x_lo, x_hi) = split_u64(xxx);
+        let ck = syn_cookie_ipv4(n_lo, n_hi, x_lo, x_hi, self.entropy);
+        (
+            self.ip_me0.wrapping_add(((ck >> 16) as u32) & ipv4_mask),
+            u32::from(self.first).wrapping_add(ck as u32 & self.port_mask),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn fill(
         &self,
+        payloads: &PayloadTable,
         p: &mut Probe,
         i: u64,
         repeats: u64,
@@ -320,117 +331,58 @@ impl Builder {
         port_them: u32,
     ) -> Result<(), PlanError> {
         p.target = TargetIp::V4(ip_them);
-        let ipv4_mask = self.ipv4_mask;
-        let (ip_me, port_me) = if ipv4_mask != 0 || self.port_mask != 0 {
-            let n = i.wrapping_add(repeats);
-            // main.c:379-384.
-            let ck = syn_cookie_ipv4(
-                n as u32,
-                (n >> 32) as u32,
-                xxx as u32,
-                (xxx >> 32) as u32,
-                self.entropy,
-            );
-            (
-                self.ip_me0.wrapping_add(((ck >> 16) as u32) & ipv4_mask),
-                u32::from(self.first).wrapping_add(ck as u32 & self.port_mask),
-            )
-        } else {
-            (self.ip_me0, u32::from(self.first))
-        };
-        if port_them == TEMPL_ARP {
+        let (ip_me, port_me) = self.source(i, repeats, xxx);
+        // Индекс порта разбирается один раз. Отказ идёт до сборки кадра и до остальных полей: порт источника вне
+        // 16 бит у любого вида, а у `I:n` и `O:n` без построителя ещё и сам индекс (в базе они падали в ветку TCP).
+        let doesnt_fit = || PlanError::PortDoesNotFit { port_them, port_me };
+        let port_me16 = u16::try_from(port_me).map_err(|_| doesnt_fit())?;
+        let (kind, port16) = PortProto::from_raw(port_them);
+        // main.c:389/:402: seqno = (unsigned)cookie. У ICMP Echo это только ip_id (templ-pkt.c:942), у ARP в кадр
+        // не попадает, но считается как у остальных, чтобы поток источников не зависел от типа скана.
+        let seqno = syn_cookie_ipv4(ip_them, port_them, ip_me, port_me, self.entropy) as u32;
+        let frame = &mut p.frame;
+        match kind {
             // templ-pkt.c:914-928: у ARP нет ни порта, ни cookie в кадре, только `spa = ip_me` и `tpa = ip_them`.
-            // Cookie и порт источника считаются как у остальных (main.c:389), чтобы поток источников адаптера
-            // не зависел от типа скана; в кадр они не попадают.
-            let port_me16 = u16::try_from(port_me)
-                .map_err(|_| PlanError::PortDoesNotFit { port_them, port_me })?;
-            let seqno = syn_cookie_ipv4(ip_them, port_them, ip_me, port_me, self.entropy) as u32;
-            self.arp.build_arp(ip_them, ip_me, &mut p.frame);
-            p.index = i;
-            p.ip_me = ip_me;
-            p.port_me = port_me16;
-            p.ip_them = ip_them;
-            p.port_them = 0;
-            p.port_index = port_them;
-            p.seqno = seqno;
-            return Ok(());
-        }
-        if port_them == TEMPL_ICMP_ECHO {
-            // main.c:389 даёт seqno с реальным port_me: он идёт только в ip_id (templ-pkt.c:942); [id|seq] кадра
-            // это cookie с port_me = 0 (templ-pkt.c:1067), его считает `build_echo`.
-            let port_me16 = u16::try_from(port_me)
-                .map_err(|_| PlanError::PortDoesNotFit { port_them, port_me })?;
-            let seqno = syn_cookie_ipv4(ip_them, port_them, ip_me, port_me, self.entropy) as u32;
-            self.icmp
-                .build_echo(ip_them, ip_me, seqno, self.entropy, &mut p.frame);
-            p.index = i;
-            p.ip_me = ip_me;
-            p.port_me = port_me16;
-            p.ip_them = ip_them;
-            // у ICMP порта получателя нет: индекс 196608 в u16 не помещается, как в кадре его нет вовсе
-            p.port_them = 0;
-            p.port_index = port_them;
-            p.seqno = seqno;
-            return Ok(());
-        }
-        if (TEMPL_UDP..=TEMPL_UDP_LAST).contains(&port_them) {
-            // templ-pkt.c:903-906: порт в кадре 16-битный (`port_them &= 0xFFFF`), а cookie (main.c:389) берётся по
-            // индексу `Templ_UDP + порт`. Нагрузка ищется по порту; нет записи - 0 байт.
-            let port16 = (port_them & 0xFFFF) as u16;
-            let port_me16 = u16::try_from(port_me)
-                .map_err(|_| PlanError::PortDoesNotFit { port_them, port_me })?;
-            let seqno = syn_cookie_ipv4(ip_them, port_them, ip_me, port_me, self.entropy) as u32;
-            self.udp.build_udp(
+            PortProto::Arp => self.arp.build_arp(ip_them, ip_me, frame),
+            // [id|seq] кадра это cookie с port_me = 0 (templ-pkt.c:1067), его считает `build_echo`.
+            PortProto::IcmpEcho => self
+                .icmp
+                .build_echo(ip_them, ip_me, seqno, self.entropy, frame),
+            // templ-pkt.c:903-906: порт в кадре 16-битный, cookie по индексу `Templ_UDP + порт`; нет записи в
+            // таблице нагрузок - 0 байт.
+            PortProto::Udp => self.udp.build_udp(
                 (ip_them, port16),
                 (ip_me, port_me16),
                 seqno,
-                self.payloads.get(port16),
-                &mut p.frame,
-            );
-            p.index = i;
-            p.ip_me = ip_me;
-            p.port_me = port_me16;
-            p.ip_them = ip_them;
-            p.port_them = port16;
-            p.port_index = port_them;
-            p.seqno = seqno;
-            return Ok(());
+                payloads.get(port16),
+                frame,
+            ),
+            // templ-pkt.c:907-910: initiate_tag INIT это cookie по индексу `Templ_SCTP + порт`.
+            PortProto::Sctp => {
+                self.sctp
+                    .build_init((ip_them, port16), (ip_me, port_me16), seqno, frame)
+            }
+            PortProto::Tcp => self
+                .tmpl
+                .build_syn(ip_them, port16, ip_me, port_me16, seqno, frame),
+            PortProto::IcmpOther(_) | PortProto::Oproto(_) => return Err(doesnt_fit()),
         }
-        if (TEMPL_SCTP..=TEMPL_SCTP_LAST).contains(&port_them) {
-            // templ-pkt.c:907-910: порт в кадре 16-битный (`port_them &= 0xFFFF`), cookie (main.c:389) берётся по
-            // индексу `Templ_SCTP + порт`; он же идёт в initiate_tag INIT, а приёмник сверяет с ним verification tag.
-            let port16 = (port_them & 0xFFFF) as u16;
-            let port_me16 = u16::try_from(port_me)
-                .map_err(|_| PlanError::PortDoesNotFit { port_them, port_me })?;
-            let seqno = syn_cookie_ipv4(ip_them, port_them, ip_me, port_me, self.entropy) as u32;
-            self.sctp
-                .build_init((ip_them, port16), (ip_me, port_me16), seqno, &mut p.frame);
-            p.index = i;
-            p.ip_me = ip_me;
-            p.port_me = port_me16;
-            p.ip_them = ip_them;
-            p.port_them = port16;
-            p.port_index = port_them;
-            p.seqno = seqno;
-            return Ok(());
-        }
-        let (Ok(port_them16), Ok(port_me16)) = (u16::try_from(port_them), u16::try_from(port_me))
-        else {
-            return Err(PlanError::PortDoesNotFit { port_them, port_me });
-        };
-        // main.c:389/:402: seqno = (unsigned)cookie.
-        let seqno = syn_cookie_ipv4(ip_them, port_them, ip_me, port_me, self.entropy) as u32;
-        self.tmpl
-            .build_syn(ip_them, port_them16, ip_me, port_me16, seqno, &mut p.frame);
         p.index = i;
         p.ip_me = ip_me;
         p.port_me = port_me16;
         p.ip_them = ip_them;
-        p.port_them = port_them16;
+        // у ARP и ICMP Echo порта получателя нет: индекс 196608 в u16 не помещается, в кадре его нет вовсе
+        p.port_them = port16;
         p.port_index = port_them;
         p.seqno = seqno;
         Ok(())
     }
+}
+
+/// Младшая и старшая половины `v` (аргументы cookie main.c:379-384).
+#[inline]
+fn split_u64(v: u64) -> (u32, u32) {
+    (v as u32, (v >> 32) as u32)
 }
 
 impl Builder {
@@ -503,12 +455,7 @@ pub fn for_each_probe_nic_with_payloads<B>(
     payloads: &PayloadTable,
     mut f: impl FnMut(&Probe) -> ControlFlow<B>,
 ) -> Result<ControlFlow<B>, PlanError> {
-    let builder = Builder::from_nic(
-        nic,
-        eff.seed(),
-        &eff.packet_modifiers(),
-        &Arc::new(payloads.clone()),
-    )?;
+    let builder = Builder::from_nic(nic, eff.seed(), &eff.packet_modifiers())?;
     let mut probe = Probe::default();
     // main.c:336-373: цели IPv6 на нижних индексах (`Builder::fill_v6`), IPv4 после них; без целей IPv6
     // `range_ipv6 == 0` и поток побайтно прежний.
@@ -526,7 +473,7 @@ pub fn for_each_probe_nic_with_payloads<B>(
         |i, repeats, xxx, target, port_them| {
             let built = match target {
                 TargetIp::V4(ip_them) => {
-                    builder.fill(&mut probe, i, repeats, xxx, ip_them, port_them)
+                    builder.fill(payloads, &mut probe, i, repeats, xxx, ip_them, port_them)
                 }
                 TargetIp::V6(ip_them) => builder.fill_v6(&mut probe, i, ip_them, port_them),
             };
@@ -783,14 +730,7 @@ impl ReadyPlan {
         }
         let builders = nics
             .iter()
-            .map(|n| {
-                Builder::from_nic(
-                    n,
-                    effective.seed(),
-                    &effective.packet_modifiers(),
-                    &payloads,
-                )
-            })
+            .map(|n| Builder::from_nic(n, effective.seed(), &effective.packet_modifiers()))
             .collect::<Result<Vec<_>, _>>()?;
         // Студия (`new`) принимает только TCP; план CLI проверил порты в `check_cli_ports`.
         if tcp_only
@@ -939,29 +879,29 @@ impl ReadyPlan {
                 limit,
             });
         }
-        let (start, end) = self.bounds(nic_index, base);
-        let stream = transmit_index_stream(
-            range,
-            e.shard(),
-            count as u32,
-            nic_index,
-            base,
-            e.resume_count(),
-            e.retries(),
-            e.max_rate(),
+        let stream = Shuffled::new(
+            transmit_indices(
+                range,
+                e.shard(),
+                count as u32,
+                nic_index,
+                base,
+                e.resume_count(),
+                e.retries(),
+                e.max_rate(),
+            ),
+            self.inner.blackrock,
         );
-        let stream: Box<dyn Iterator<Item = (u64, u64)> + Send> = Box::new(stream);
         let mut cursor = ProbeCursor {
             plan: self.clone(),
             nic_index: nic_index as usize,
-            stream: stream.peekable(),
+            stream,
             loaded: VecDeque::new(),
+            spare: Vec::new(),
             ended: false,
             failed: None,
-            blackrock: self.inner.blackrock,
             repeats: 0,
-            position: start,
-            end,
+            position: 0,
         };
         cursor.refresh_position();
         Ok(cursor)
@@ -974,25 +914,27 @@ impl ReadyPlan {
 pub struct ProbeCursor {
     plan: ReadyPlan,
     nic_index: usize,
-    stream: Peekable<Box<dyn Iterator<Item = (u64, u64)> + Send>>,
+    /// Пары `(i, xXx после shuffle)` текущего прохода (`main.c:280-334`). Перестановка у прохода `n` это
+    /// `BlackRock(seed + n)` (`main.c:225-228, 445-449`), у прохода 0 перестановка плана. До `SHUFFLE_LANES` пар
+    /// лежат в упреждении потока: следующий индекс и конец прохода спрашиваются у потока
+    /// ([`Shuffled::peek_index`], [`Shuffled::end`]), не у внутреннего итератора.
+    stream: Shuffled<TransmitIndices>,
     /// Загруженные, ещё не подтверждённые probe, по порядку индексов.
     loaded: VecDeque<Probe>,
+    /// Подтверждённые probe с их буферами кадров: `load_one` берёт отсюда, а не заводит новый `Vec` на зонд. `fill` и
+    /// `fill_v6` перезаписывают все поля `Probe`, `build_*` начинают с `out.clear()`, поэтому прежнее содержимое не видно.
+    spare: Vec<Probe>,
     /// Поток кончился или probe не построился: новых probe нет. Липкий, чтобы
     /// пропущенный индекс не сдвинул последовательность.
     ended: bool,
     /// Probe не построился: конец не естественный, `--infinite` не перезапускает проход, а движок обязан
     /// объявить отказ ([`ProbeCursor::build_error`]).
     failed: Option<PlanError>,
-    /// Перестановка текущего прохода: у прохода `n` это `BlackRock(seed + n)` (`main.c:225-228, 445-449`), у
-    /// прохода 0 перестановка плана.
-    blackrock: BlackRock,
     /// Счётчик `--infinite` (`repeats` в C): номер прохода, входит в `(unsigned)(i + repeats)` (`main.c:379`).
     repeats: u64,
     /// Внешний индекс `i` следующего неподтверждённого probe (main.c:431
     /// `parms->my_index = i`), не число отправленных кадров.
     position: u64,
-    /// `effective_end` потока: позиция после последнего кадра.
-    end: u64,
 }
 
 impl std::fmt::Debug for ProbeCursor {
@@ -1020,14 +962,14 @@ impl ProbeCursor {
     }
 
     /// Ставит `position` по внешнему индексу: голова загруженных, иначе
-    /// следующий `i` потока, иначе `end`.
+    /// следующий `i` потока (с упреждением), иначе `end` потока (`effective_end`: позиция после последнего кадра).
     fn refresh_position(&mut self) {
         self.position = match self.loaded.front() {
             Some(p) => p.index,
-            None => match self.stream.peek() {
-                Some(&(i, _)) => i,
-                None => self.end,
-            },
+            None => self
+                .stream
+                .peek_index()
+                .unwrap_or_else(|| self.stream.end()),
         };
     }
 
@@ -1037,21 +979,23 @@ impl ProbeCursor {
         if self.ended {
             return false;
         }
-        let Some((i, x)) = self.stream.next() else {
+        // xxx = blackrock_shuffle(x), main.c:334: перемешано в потоке.
+        let Some((i, xxx)) = self.stream.next() else {
             self.ended = true;
             return false;
         };
         let inner = &*self.plan.inner;
         let builder = &inner.builders[self.nic_index];
-        let xxx = self.blackrock.shuffle(x);
         // main.c:336-373: индексы `< range_ipv6` это цели IPv6 (`Builder::fill_v6`), остальные IPv4.
         let (target, port, xxx) = inner.effective.massip().pick_transmit(xxx);
-        let mut p = Probe::default();
+        let mut p = self.spare.pop().unwrap_or_default();
         // `ReadyPlan::new` и `new_cli` отклоняют порты без построителя заранее, поэтому отказ здесь это
         // нарушение инварианта или адаптер без `source_ipv6`/`next_hop_mac_ipv6` у цели IPv6. Он не паникует и не
         // выдаётся за конец скана: курсор останавливается и хранит причину, а движок завершает запуск отказом.
         let built = match target {
-            TargetIp::V4(ip) => builder.fill(&mut p, i, self.repeats, xxx, ip, port),
+            TargetIp::V4(ip) => {
+                builder.fill(&inner.payloads, &mut p, i, self.repeats, xxx, ip, port)
+            }
             TargetIp::V6(ip) => builder.fill_v6(&mut p, i, ip, port),
         };
         match built {
@@ -1067,6 +1011,7 @@ impl ProbeCursor {
                 true
             }
             Err(e) => {
+                self.spare.push(p);
                 self.ended = true;
                 self.failed = Some(e);
                 false
@@ -1087,12 +1032,12 @@ impl ProbeCursor {
     }
 
     /// Следующий проход `--infinite` (`main.c:445-449` `seed++; repeats++; goto infinite`, метка на `:251`).
-    /// Только когда `effective.infinite()` включён и текущий проход дошёл до `effective_end` (поток исчерпан и всё
-    /// отправлено): тогда пересоздаёт `BlackRock::new(range, seed + repeats + 1, rounds)` (`:262`), увеличивает
-    /// `repeats` и сбрасывает поток на начало (`:269-273`) с базой 0 и без `resume-count`: оба параметра действуют
-    /// только на первом проходе (спец Р5). Это сознательное отличие от C: метка `:251` стоит до
+    /// Только когда `effective.infinite()` включён и текущий проход дошёл до `effective_end` (поток исчерпан вместе с
+    /// упреждением и всё отправлено): тогда пересоздаёт `BlackRock::new(range, seed + repeats + 1, rounds)`
+    /// (`:262`), увеличивает `repeats` и сбрасывает поток на начало (`:269-273`) с базой 0 и без `resume-count`: оба
+    /// параметра действуют только на первом проходе (спец Р5). Это сознательное отличие от C: метка `:251` стоит до
     /// `start = resume.index + ...`, и C повторяет окно на каждом проходе. Здесь следующие проходы покрывают весь
-    /// диапазон `[0, range)` и повторы. `end` пересчитывается для нового прохода.
+    /// диапазон `[0, range)` и повторы. `end` нового прохода берётся из его потока.
     /// `entropy` построителя остаётся исходным `seed` (`:227` `entropy = masscan->seed` задан до метки), поэтому
     /// `seqno` и порт источника проверяются приёмом для обоих проходов. `true`, если проход начат заново.
     pub fn advance_pass(&mut self) -> bool {
@@ -1100,7 +1045,7 @@ impl ProbeCursor {
         if !e.infinite()
             || self.failed.is_some()
             || !self.loaded.is_empty()
-            || self.stream.peek().is_some()
+            || self.stream.peek_index().is_some()
         {
             return false;
         }
@@ -1113,34 +1058,24 @@ impl ProbeCursor {
         ) else {
             return false;
         };
-        let stream = transmit_index_stream(
-            inner.range,
-            e.shard(),
-            inner.nics.len() as u32,
-            self.nic_index as u32,
-            0,
-            None,
-            e.retries(),
-            e.max_rate(),
+        let stream = Shuffled::new(
+            transmit_indices(
+                inner.range,
+                e.shard(),
+                inner.nics.len() as u32,
+                self.nic_index as u32,
+                0,
+                None,
+                e.retries(),
+                e.max_rate(),
+            ),
+            blackrock,
         );
-        let (_, end, _) = transmit_bounds(
-            inner.range,
-            e.shard(),
-            inner.nics.len() as u32,
-            self.nic_index as u32,
-            0,
-            None,
-            e.retries(),
-        );
-        let stream: Box<dyn Iterator<Item = (u64, u64)> + Send> = Box::new(stream);
-        let mut stream = stream.peekable();
         // Пустой проход не перезапускается: движок крутился бы вхолостую.
-        if stream.peek().is_none() {
+        if stream.peek_index().is_none() {
             return false;
         }
         self.stream = stream;
-        self.end = end;
-        self.blackrock = blackrock;
         self.repeats = next;
         self.ended = false;
         self.refresh_position();
@@ -1184,7 +1119,7 @@ impl ProbeCursor {
             self.loaded.len()
         );
         let k = k.min(self.loaded.len());
-        self.loaded.drain(..k);
+        self.spare.extend(self.loaded.drain(..k));
         self.refresh_position();
     }
 
@@ -1199,7 +1134,9 @@ mod tests {
     use super::*;
     use crate::config::{ScanConfig, validate};
     use crate::massip::MassIp;
-    use crate::targets::{add_target_string, parse_ports};
+    use crate::targets::{
+        TEMPL_ICMP_ECHO, TEMPL_OPROTO_FIRST, TEMPL_SCTP, TEMPL_UDP, add_target_string, parse_ports,
+    };
     use std::collections::BTreeSet;
 
     const IP_ME: u32 = 0x0aff_0001;
@@ -1692,6 +1629,51 @@ mod tests {
     }
 
     #[test]
+    fn fill_refusal_leaves_only_the_target_written() {
+        // Отказ `fill` (порт источника вне 16 бит; `I:n` и `O:n` без построителя) пишет только `target`: ни одно
+        // другое поле и ни один байт кадра не меняются.
+        let payloads = PayloadTable::builtin();
+        let mods = PacketModifiers::default();
+        let nic = NicBinding::from(binding());
+        let mut wide = Builder::from_nic(&nic, 0x1234_5678, &mods).unwrap();
+        wide.first = 0xFFFF;
+        wide.port_mask = 0xFFFF;
+        let narrow = Builder::from_nic(&nic, 0x1234_5678, &mods).unwrap();
+        let dirty = || Probe {
+            index: 0x1111_1111_1111_1111,
+            ip_me: 0x2222_2222,
+            port_me: 0x3333,
+            ip_them: 0x4444_4444,
+            target: TargetIp::V6(0x5555),
+            port_them: 0x6666,
+            port_index: 0x7777_7777,
+            seqno: 0x8888_8888,
+            frame: vec![0xAB; 2040],
+        };
+        let (i, repeats, xxx, ip_them) = (7, 0, 9, 0xC612_0201);
+        let (_, port_me) = wide.source(i, repeats, xxx);
+        assert!(port_me > 0xFFFF, "the case must make port_me too wide");
+        let icmp_other = TEMPL_ICMP_ECHO + 1;
+        let oproto = TEMPL_OPROTO_FIRST + 47;
+        let cases = [
+            (&wide, 80, port_me),
+            (&wide, TEMPL_ICMP_ECHO, port_me),
+            (&narrow, icmp_other, narrow.source(i, repeats, xxx).1),
+            (&narrow, oproto, narrow.source(i, repeats, xxx).1),
+        ];
+        for (b, port_them, port_me) in cases {
+            let mut p = dirty();
+            let err = b
+                .fill(&payloads, &mut p, i, repeats, xxx, ip_them, port_them)
+                .unwrap_err();
+            assert_eq!(err, PlanError::PortDoesNotFit { port_them, port_me });
+            let mut want = dirty();
+            want.target = TargetIp::V4(ip_them);
+            assert_eq!(p, want, "port index {port_them}");
+        }
+    }
+
+    #[test]
     fn sticky_port_prefixes_and_oproto_live_refusal() {
         // Р1/R1/R3: O:* и I:n (кроме I:0 и ARP = I:2) отклоняются планом CLI.
         for ports in ["O:47", "o:0", "O:255", "T:80,O:47", "U:53,O:1-3"] {
@@ -1828,6 +1810,31 @@ mod tests {
         let e = cur.build_error().expect("failure must be recorded");
         assert!(matches!(e, PlanError::ProbeBuild(_)), "{e:?}");
         assert!(e.to_string().contains("does not fit TCP"), "{e}");
+    }
+
+    #[test]
+    fn fill_error_matches_base_for_each_kind() {
+        // Порт без построителя (O:n, I:n кроме I:0/ARP) отказывает `PortDoesNotFit` с индексом порта и портом
+        // источника на той же позиции, что у базы: первым идёт зонд `p.target`, отказ до сборки кадра.
+        for (ports, port_them) in [
+            ("80,O:6", 196_870),
+            ("80,I:1", 196_609),
+            ("80,I:600", 197_208),
+        ] {
+            let plan = ReadyPlan::new_cli_without_port_checks(
+                eff("198.18.2.0/30", ports, |_| {}),
+                nics(1),
+            )
+            .unwrap();
+            let want = PlanError::ProbeBuild(Box::new(PlanError::PortDoesNotFit {
+                port_them,
+                port_me: 40000,
+            }));
+            let mut cur = plan.cursor_for_nic(0, None).unwrap();
+            let sent = drain(&mut cur).len();
+            assert_eq!(sent, 3, "{ports}: refusal position");
+            assert_eq!(cur.build_error(), Some(want), "{ports}");
+        }
     }
 
     /// Независимая проверка кадра SCTP INIT: сумма IP, CRC-32C (побитово, без таблицы), длины, порты и поля INIT.

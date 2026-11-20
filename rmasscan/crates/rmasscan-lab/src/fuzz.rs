@@ -83,7 +83,8 @@ use crate::banners_verify::{
 };
 use rmasscan_core::payloads::PayloadTable;
 use rmasscan_core::stack::{
-    ConnAddrs, ConnKey, SegmentIn, StackOutput, StackStats, TableParams, TcpStack, TcpStackFactory,
+    ConnAddrs, ConnKey, SegmentIn, SourceRanges, StackOutput, StackStats, TableParams, TcpStack,
+    TcpStackFactory,
 };
 use rmasscan_proto::{
     MAX_BANNER_BYTES, StreamAction, StreamResult, TcpBannerSettings, UdpContext, app_id,
@@ -972,8 +973,10 @@ fn run_udp(rest: &[String]) -> Result<i32, String> {
 
 // ------------------------------------------------------------------ fuzz tcp (sub-stage 4b)
 
-/// The families of `fuzz tcp`: the eleven parsers of 4b with `force_app`, the framework, the stack.
-pub const TCP_FAMILIES: [&str; 13] = [
+/// The families of `fuzz tcp`: the eleven parsers of 4b and TLS/X.509 of 4c with `force_app`, the framework,
+/// the stack. The `x509` family feeds DER bytes to `rmasscan_proto::x509_stream` instead of `banner_stream`
+/// (its marker force_app is the X509 application number, and the input carries a separate certificate count).
+pub const TCP_FAMILIES: [&str; 15] = [
     "http",
     "ftp",
     "smtp",
@@ -985,6 +988,8 @@ pub const TCP_FAMILIES: [&str; 13] = [
     "rdp",
     "memcached",
     "minecraft",
+    "tls",
+    "x509",
     "framework",
     "stack",
 ];
@@ -1032,6 +1037,8 @@ pub fn family_app(family: &str) -> Option<(u16, u16)> {
         "rdp" => (app_id::RDP, 3389),
         "memcached" => (app_id::MEMCACHED, 11211),
         "minecraft" => (app_id::MC, 25565),
+        "tls" => (app_id::SSL3, 443),
+        "x509" => (app_id::X509_CERT, 443),
         _ => return None,
     })
 }
@@ -1059,6 +1066,7 @@ fn family_of_port(port: u16) -> Option<&'static str> {
         3389 => "rdp",
         11211 => "memcached",
         25565 => "minecraft",
+        443 => "tls",
         _ => return None,
     })
 }
@@ -1078,17 +1086,80 @@ fn whole_of(stream: &[u8]) -> Vec<&[u8]> {
     }
 }
 
+/// Configuration for decoding a recorded stream in memory. These bytes form
+/// part of the input identity independently of certificate or record syntax.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct DecodeOptions {
+    capture_cert: bool,
+    capture_heartbleed: bool,
+    capture_ticketbleed: bool,
+    heartbleed: bool,
+    ticketbleed: bool,
+    poodle: bool,
+    x509_count: u32,
+}
+
+impl Default for DecodeOptions {
+    fn default() -> Self {
+        Self {
+            capture_cert: true,
+            capture_heartbleed: false,
+            capture_ticketbleed: false,
+            heartbleed: false,
+            ticketbleed: false,
+            poodle: false,
+            x509_count: 1,
+        }
+    }
+}
+
+impl DecodeOptions {
+    fn flags(self) -> [u8; 6] {
+        [
+            self.capture_cert,
+            self.capture_heartbleed,
+            self.capture_ticketbleed,
+            self.heartbleed,
+            self.ticketbleed,
+            self.poodle,
+        ]
+        .map(u8::from)
+    }
+
+    fn draw(mut self, family: &str, rng: &mut Rng) -> Self {
+        if family == "tls" && rng.below(2) == 0 {
+            let mode = rng.below(4);
+            self.heartbleed = mode == 1;
+            self.ticketbleed = mode == 2;
+            self.poodle = mode == 3;
+            self.capture_cert = rng.below(2) == 0;
+            self.capture_heartbleed = rng.below(2) == 0;
+            self.capture_ticketbleed = rng.below(2) == 0;
+        } else if family == "x509" && rng.below(2) == 0 {
+            self.x509_count = 1 + rng.below(3) as u32;
+        }
+        self
+    }
+}
+
 /// One server stream of the corpus: its port, `--capture html`, the bytes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TcpSeed {
     pub port: u16,
     pub capture_html: bool,
+    pub decode: DecodeOptions,
     pub stream: Vec<u8>,
+    /// Lengths of the supplied TLS segments within the retained stream prefix.
+    pub golden_segments: Vec<usize>,
     pub origin: Origin,
 }
 impl TcpSeed {
-    /// The family of the parser the classifier picks on the whole stream, else the port's.
+    /// The family of the parser the classifier picks on the whole stream, else the port's. Port 444 is the
+    /// marker of the x509 family's DER seeds (no parser family serves it; `family_app` knows it by force_app).
     pub fn family(&self) -> Option<&'static str> {
+        if self.port == 444 {
+            return Some("x509");
+        }
         let r = std::panic::catch_unwind(|| {
             banner_stream(
                 &settings(self.capture_html),
@@ -1115,6 +1186,8 @@ pub fn tcp_scenario_seeds() -> Vec<TcpSeed> {
             port,
             capture_html: false,
             stream,
+            decode: DecodeOptions::default(),
+            golden_segments: Vec::new(),
             origin: Origin::Scenario,
         })
         .collect()
@@ -1162,31 +1235,135 @@ pub fn parse_tcp_input(text: &str) -> Result<(u16, bool, Vec<u8>), String> {
     Ok((port.ok_or("no port")?, capture_html, stream))
 }
 
-/// The response cases of a `tcp-banners` golden directory: `manifest.json` names each case's input file.
-pub fn tcp_golden_seeds(dir: &Path) -> Result<Vec<TcpSeed>, String> {
+fn parse_golden_stream(text: &str) -> Result<(&str, TcpSeed), String> {
+    let mut lines = text
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#'));
+    let header = lines.next().ok_or("missing input format")?;
+    let mut seed = TcpSeed {
+        port: 443,
+        capture_html: false,
+        decode: DecodeOptions::default(),
+        stream: Vec::new(),
+        golden_segments: Vec::new(),
+        origin: Origin::Golden,
+    };
+    match header {
+        "tcp-banner-input v1" => {
+            (seed.port, seed.capture_html, seed.stream) = parse_tcp_input(text)?;
+        }
+        "tls-input v1" => {
+            let flags = lines
+                .next()
+                .and_then(|line| line.strip_prefix("flags "))
+                .ok_or("expected flags")?;
+            let tokens: Vec<_> = flags.split_whitespace().collect();
+            let unique: std::collections::BTreeSet<_> = tokens.iter().copied().collect();
+            if tokens.len() != unique.len() || unique.contains("cert") == unique.contains("nocert")
+            {
+                return Err(format!("ambiguous flags: {flags}"));
+            }
+            for flag in unique {
+                match flag {
+                    "cert" => seed.decode.capture_cert = true,
+                    "nocert" => seed.decode.capture_cert = false,
+                    "cap-hb" => seed.decode.capture_heartbleed = true,
+                    "cap-tb" => seed.decode.capture_ticketbleed = true,
+                    "heartbleed" => seed.decode.heartbleed = true,
+                    "ticketbleed" => seed.decode.ticketbleed = true,
+                    "poodle" => seed.decode.poodle = true,
+                    _ => return Err(format!("unknown TLS flag {flag}")),
+                }
+            }
+            let mut segments = 0;
+            for line in lines {
+                let data = line
+                    .strip_prefix("segment ")
+                    .ok_or_else(|| format!("expected TLS segment: {line}"))?;
+                let bytes = unhex(data)?;
+                let keep = bytes.len().min(MAX_STREAM - seed.stream.len());
+                if keep != 0 {
+                    seed.stream.extend_from_slice(&bytes[..keep]);
+                    seed.golden_segments.push(keep);
+                }
+                segments += 1;
+            }
+            if segments == 0 {
+                return Err("missing TLS segments".into());
+            }
+        }
+        "x509-input v1" => {
+            seed.port = 444;
+            let count = lines
+                .next()
+                .and_then(|line| line.strip_prefix("count "))
+                .ok_or("expected count")?;
+            seed.decode.x509_count = count.parse().map_err(|e| format!("count {count}: {e}"))?;
+            for line in lines {
+                let data = line
+                    .strip_prefix("der ")
+                    .ok_or_else(|| format!("expected DER: {line}"))?;
+                let bytes = unhex(data)?;
+                seed.stream
+                    .extend(bytes.into_iter().take(MAX_STREAM - seed.stream.len()));
+            }
+        }
+        _ => return Err(format!("unknown stream format {header}")),
+    }
+    Ok((header, seed))
+}
+
+/// Every manifest must have at least one case and one consistent file format.
+/// The header determines the decoder even for an intentionally empty DER seed.
+fn golden_streams(dir: &Path, expected: Option<&str>) -> Result<Vec<TcpSeed>, String> {
     let man: Value = serde_json::from_slice(
         &fs::read(dir.join("manifest.json")).map_err(|e| format!("{}: {e}", dir.display()))?,
     )
     .map_err(|e| format!("manifest.json: {e}"))?;
     let cases = man["cases"]
         .as_array()
-        .ok_or("manifest.json has no cases")?;
-    let mut out = Vec::new();
-    for c in cases {
-        let input = c["input"]
-            .as_str()
-            .ok_or_else(|| format!("a case without input: {}", c["name"]))?;
-        let text = fs::read_to_string(dir.join(input)).map_err(|e| format!("{input}: {e}"))?;
-        let (port, capture_html, stream) =
-            parse_tcp_input(&text).map_err(|e| format!("{input}: {e}"))?;
-        out.push(TcpSeed {
-            port,
-            capture_html,
-            stream,
-            origin: Origin::Golden,
-        });
+        .filter(|cases| !cases.is_empty())
+        .ok_or("manifest has no cases")?;
+    let mut format = expected.map(str::to_owned);
+    let mut seeds = Vec::with_capacity(cases.len());
+    for case in cases {
+        let name = case["input"].as_str().ok_or("case without an input")?;
+        let text = fs::read_to_string(dir.join(name)).map_err(|e| format!("{name}: {e}"))?;
+        let (header, seed) = parse_golden_stream(&text).map_err(|e| format!("{name}: {e}"))?;
+        if header != format.get_or_insert_with(|| header.to_owned()) {
+            return Err(format!("{name}: unexpected format {header}"));
+        }
+        seeds.push(seed);
     }
-    Ok(out)
+    Ok(seeds)
+}
+
+pub fn tcp_golden_seeds(dir: &Path) -> Result<Vec<TcpSeed>, String> {
+    golden_streams(dir, Some("tcp-banner-input v1"))
+}
+
+pub fn x509_golden_seeds(dir: &Path) -> Result<Vec<TcpSeed>, String> {
+    golden_streams(dir, Some("x509-input v1"))
+}
+
+/// DER seeds built in (four input files of the x509 goldens, embedded): the x509 family has no stand
+/// scenario of its own, and a fuzz run without `--corpus` still has its corpus.
+pub fn x509_builtin_seeds() -> Vec<TcpSeed> {
+    const INPUTS: [&str; 4] = [
+        include_str!("../../../tests/golden/x509/cases/google-leaf.in.txt"),
+        include_str!("../../../tests/golden/x509/cases/case3-leaf.in.txt"),
+        include_str!("../../../tests/golden/x509/cases/mini-cn.in.txt"),
+        include_str!("../../../tests/golden/x509/cases/mini-san.in.txt"),
+    ];
+    INPUTS
+        .iter()
+        .map(|text| {
+            let (_, mut seed) = parse_golden_stream(text).expect("embedded X.509 input");
+            seed.origin = Origin::Scenario;
+            seed
+        })
+        .collect()
 }
 
 /// A record: the application and its bytes.
@@ -1247,6 +1424,8 @@ pub fn tcp_capture_seeds(pcap: &[u8]) -> Result<Vec<TcpSeed>, String> {
                 port,
                 capture_html: false,
                 stream: buf,
+                decode: DecodeOptions::default(),
+                golden_segments: Vec::new(),
                 origin: Origin::Capture,
             });
         }
@@ -1261,6 +1440,7 @@ pub struct StreamInput {
     pub port: u16,
     pub force_app: Option<u16>,
     pub capture_html: bool,
+    pub decode: DecodeOptions,
     pub stream: Vec<u8>,
     pub split: Vec<usize>,
 }
@@ -1329,6 +1509,10 @@ impl TcpInput {
                 h.update(s.port.to_be_bytes());
                 h.update(s.force_app.unwrap_or(0).to_be_bytes());
                 h.update([u8::from(s.capture_html)]);
+                if matches!(s.force_app, Some(app_id::SSL3 | app_id::X509_CERT)) {
+                    h.update(s.decode.flags());
+                    h.update(s.decode.x509_count.to_be_bytes());
+                }
                 n(h, s.stream.len());
                 h.update(&s.stream);
                 n(h, s.split.len());
@@ -1498,7 +1682,11 @@ impl<'a> TcpInputs<'a> {
     }
     fn draw_stream(&mut self) -> StreamInput {
         let s = self.seed();
-        let stream = self.mutated(s);
+        let stream = if matches!(self.family, "tls" | "x509") && self.rng.below(4) == 0 {
+            s.stream.clone()
+        } else {
+            self.mutated(s)
+        };
         let rng = &mut self.rng;
         let (force_app, port) = match family_app(self.family) {
             Some((app, port)) => {
@@ -1520,12 +1708,26 @@ impl<'a> TcpInputs<'a> {
         };
         let capture_html =
             s.capture_html || (matches!(self.family, "http" | "framework") && rng.below(4) == 0);
-        let bound = split_bound(rng);
-        let split = split(rng, stream.len(), bound);
+        let split = if !s.golden_segments.is_empty() && stream == s.stream && rng.below(2) == 0 {
+            // Keep the supplied boundaries. Oversized golden chunks need smaller
+            // deliveries to fit the stream checker's segment-size contract.
+            let mut lengths = Vec::new();
+            for &n in &s.golden_segments {
+                lengths.extend(std::iter::repeat_n(MAX_SEGMENT, n / MAX_SEGMENT));
+                if n % MAX_SEGMENT != 0 {
+                    lengths.push(n % MAX_SEGMENT);
+                }
+            }
+            lengths
+        } else {
+            let bound = split_bound(rng);
+            split(rng, stream.len(), bound)
+        };
         StreamInput {
             port,
             force_app,
             capture_html,
+            decode: s.decode.draw(self.family, rng),
             stream,
             split,
         }
@@ -2076,6 +2278,7 @@ fn holds_unsent(t: &Target, plan: &StackPlan, events: &[StackEvent], sent: u32) 
         seed: plan.table_seed,
         capacity: plan.capacity,
         banner_byte_budget: plan.budget,
+        source: SourceRanges::default(),
     });
     let mut last = T0;
     for e in events {
@@ -2218,10 +2421,26 @@ fn result_diff(whole: &StreamResult, split: &StreamResult) -> String {
 }
 
 fn check_stream(t: &Target, i: &StreamInput) -> Checked {
-    let s = settings(i.capture_html);
+    let mut s = settings(i.capture_html);
+    if i.force_app == Some(app_id::SSL3) {
+        s.tls.capture_cert = i.decode.capture_cert;
+        s.tls.capture_heartbleed = i.decode.capture_heartbleed;
+        s.tls.capture_ticketbleed = i.decode.capture_ticketbleed;
+        s.tls.heartbleed = i.decode.heartbleed;
+        s.tls.ticketbleed = i.decode.ticketbleed;
+        s.tls.poodle_sslv3 = i.decode.poodle;
+    }
     let run = |segs: &[&[u8]]| {
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            (t.stream)(&s, i.port, i.force_app, segs)
+            if i.force_app == Some(app_id::X509_CERT) {
+                rmasscan_proto::StreamResult {
+                    app_proto: Some(app_id::SSL3),
+                    records: rmasscan_proto::x509_stream(i.decode.x509_count, segs),
+                    actions: Vec::new(),
+                }
+            } else {
+                (t.stream)(&s, i.port, i.force_app, segs)
+            }
         }))
     };
     let segs = i.segments();
@@ -2372,6 +2591,7 @@ fn drive(t: &Target, plan: &StackPlan, log: &RefCell<Vec<StackEvent>>) -> Driven
         seed: plan.table_seed,
         capacity: plan.capacity,
         banner_byte_budget: plan.budget,
+        source: SourceRanges::default(),
     });
     let mut f = Feeder {
         plan,
@@ -2519,6 +2739,9 @@ pub struct TcpStats {
     /// Parser families: inputs whose parser sent or closed on the whole stream; stack: inputs where the scanner sent
     /// data (a hello or a parser's reply).
     pub with_actions: u64,
+    /// Number of recorded inputs per parser configuration (six TLS bits, or certificate index).
+    pub tls_flags: BTreeMap<u8, u64>,
+    pub x509_counts: BTreeMap<u32, u64>,
     pub max_stream: usize,
     /// The most segments of a split (stack: events of an input).
     pub max_segments: usize,
@@ -2613,6 +2836,22 @@ pub fn fuzz_tcp_with(
         let mut dt = c.timed;
         let split_dt = c.split_timed;
         let st = &mut o.stats;
+        if let TcpInput::Stream(input) = &i {
+            match input.force_app {
+                Some(app_id::SSL3) => {
+                    let flags = input
+                        .decode
+                        .flags()
+                        .into_iter()
+                        .fold(0u8, |word, bit| (word << 1) | bit);
+                    *st.tls_flags.entry(flags).or_default() += 1;
+                }
+                Some(app_id::X509_CERT) => {
+                    *st.x509_counts.entry(input.decode.x509_count).or_default() += 1
+                }
+                _ => {}
+            }
+        }
         st.with_records += u64::from(c.records > 0);
         st.records += c.records;
         st.with_actions += u64::from(c.acted);
@@ -2696,7 +2935,7 @@ fn tcp_finding_json(f: &TcpFinding) -> Value {
     match &f.input {
         TcpInput::Stream(s) => {
             json!({"kind": f.kind, "index": f.index, "port": s.port, "force_app": s.force_app,
-            "capture_html": s.capture_html, "input": hex(&s.stream), "split": s.split, "what": f.what})
+            "capture_html": s.capture_html, "decode": s.decode, "input": hex(&s.stream), "split": s.split, "what": f.what})
         }
         TcpInput::Stack(p) => json!({"kind": f.kind, "index": f.index, "plan": plan_json(p),
             "events": f.events.iter().map(StackEvent::text).collect::<Vec<_>>(), "what": f.what}),
@@ -2731,6 +2970,7 @@ pub fn tcp_report(seed: u64, limit: &str, corpus: &[TcpSeed], o: &TcpOutcome) ->
             "inputs_with_records": s.with_records, "records": s.records, "inputs_with_actions": s.with_actions,
             "max_stream_bytes": s.max_stream, "max_segments": s.max_segments, "max_record_bytes": s.max_record,
             "connections": s.connections,
+            "tls_flags": s.tls_flags, "x509_counts": s.x509_counts,
             "delivered": {"compared": s.delivered_compared, "incomplete": s.delivered_incomplete,
                 "closed": s.delivered_closed, "stalled_on_own_queue": s.delivered_own_queue},
             "max_us": s.max_ns / 1000,
@@ -2783,8 +3023,9 @@ fn run_tcp(rest: &[String]) -> Result<i32, String> {
     };
     let common = Common::parse(&o)?;
     let mut corpus = tcp_scenario_seeds();
+    corpus.extend(x509_builtin_seeds());
     for d in o.get("corpus").into_iter().flatten() {
-        corpus.extend(tcp_golden_seeds(Path::new(d))?);
+        corpus.extend(golden_streams(Path::new(d), None)?);
     }
     for f in o.get("pcap").into_iter().flatten() {
         corpus.extend(tcp_capture_seeds(
@@ -2818,6 +3059,13 @@ mod tests {
     fn tcp_corpus() -> Vec<TcpSeed> {
         let mut c = tcp_scenario_seeds();
         c.extend(tcp_golden_seeds(&tcp_golden_dir()).unwrap());
+        c.extend(x509_builtin_seeds());
+        c.extend(
+            x509_golden_seeds(
+                &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/golden/x509"),
+            )
+            .unwrap(),
+        );
         c
     }
 
@@ -3142,15 +3390,27 @@ mod tests {
         let man: Value =
             serde_json::from_slice(&fs::read(tcp_golden_dir().join("manifest.json")).unwrap())
                 .unwrap();
-        let cases = man["cases"].as_array().unwrap().len();
+        let xman: Value = serde_json::from_slice(
+            &fs::read(
+                Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/golden/x509/manifest.json"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let cases =
+            man["cases"].as_array().unwrap().len() + xman["cases"].as_array().unwrap().len();
         assert_eq!(
             c.iter().filter(|s| s.origin == Origin::Golden).count(),
             cases
         );
-        // Every scenario with a server stream (the silent 3389 server has none).
+        // Silent peers have no decoder input.
         assert_eq!(
             c.iter().filter(|s| s.origin == Origin::Scenario).count(),
-            TCP_SCENARIOS.len() - 1
+            TCP_SCENARIOS
+                .iter()
+                .filter(|scenario| !scenario.stream().is_empty())
+                .count()
+                + x509_builtin_seeds().len()
         );
         for f in TCP_FAMILIES.iter().filter(|f| family_app(f).is_some()) {
             for origin in [Origin::Scenario, Origin::Golden] {
@@ -3178,6 +3438,95 @@ mod tests {
         );
         // A UDP golden directory is not a TCP corpus.
         assert!(tcp_golden_seeds(&golden_dir()).is_err());
+    }
+
+    #[test]
+    fn golden_formats_are_strict_and_keep_decoder_configuration() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/golden");
+        let tls = golden_streams(&root.join("tls-records"), None).unwrap();
+        assert_eq!(tls.len(), 43);
+        assert!(
+            tls.iter()
+                .all(|s| s.family() == Some("tls") && !s.stream.is_empty())
+        );
+        assert!(tls.iter().any(|s| s.decode.capture_cert));
+        assert!(tls.iter().any(|s| !s.decode.capture_cert));
+        assert!(
+            tls.iter()
+                .any(|s| s.decode.capture_heartbleed && s.decode.heartbleed)
+        );
+        let (_, segmented) =
+            parse_golden_stream("tls-input v1\nflags nocert\nsegment 1603\nsegment 0300ff")
+                .unwrap();
+        assert_eq!(segmented.golden_segments, [2, 3]);
+        assert_eq!(segmented.stream, [22, 3, 3, 0, 255]);
+        assert!(x509_golden_seeds(&root.join("tls-records")).is_err());
+        assert!(tcp_golden_seeds(&root.join("x509")).is_err());
+        let der = x509_golden_seeds(&root.join("x509")).unwrap();
+        for count in [0, 1, 2, 3] {
+            assert!(der.iter().any(|s| s.decode.x509_count == count));
+        }
+        assert!(
+            der.iter()
+                .any(|s| s.stream.is_empty() && s.decode.x509_count == 1)
+        );
+        for bad in [
+            "foreign v1\ncount 1",
+            "x509-input v1\ncount 3\nsegment 00",
+            "x509-input v1\ncount 1\ncount 2",
+            "x509-input v1\ncount -1",
+            "x509-input v1\nder 30",
+            "tls-input v1\nflags cert",
+            "tls-input v1\nflags cert nocert\nsegment 30",
+            "tls-input v1\nflags cert typo\nsegment 30",
+        ] {
+            assert!(parse_golden_stream(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn intact_certificates_reach_independent_decoder_settings() {
+        for (family, text, expected_configs) in [
+            (
+                "tls",
+                include_str!("../../../tests/golden/tls-records/cases/cert-early-subject.in.txt"),
+                32,
+            ),
+            (
+                "x509",
+                include_str!("../../../tests/golden/x509/cases/mini-cn.in.txt"),
+                3,
+            ),
+        ] {
+            let seed = parse_golden_stream(text).unwrap().1;
+            let corpus = [seed.clone()];
+            let mut inputs = TcpInputs::new(44, family, &corpus).unwrap();
+            let mut configs = std::collections::BTreeSet::new();
+            let mut distinct_hashes = std::collections::BTreeSet::new();
+            for _ in 0..5000 {
+                let mut input = inputs.draw_stream();
+                if input.stream != seed.stream
+                    || !configs.insert((input.decode.flags(), input.decode.x509_count))
+                {
+                    continue;
+                }
+                input.split = vec![input.stream.len()];
+                input.port = seed.port;
+                let checked = check_stream(&Target::PRODUCT, &input);
+                assert!(
+                    checked.problem.is_none() && checked.crash.is_none(),
+                    "{checked:?}"
+                );
+                let mut h = Sha256::new();
+                TcpInput::Stream(input).hash_into(&mut h);
+                distinct_hashes.insert(h.finalize().to_vec());
+                if configs.len() == expected_configs {
+                    break;
+                }
+            }
+            assert_eq!(configs.len(), expected_configs, "{family}");
+            assert_eq!(distinct_hashes.len(), expected_configs, "{family}");
+        }
     }
 
     /// An Ethernet frame of a TCP segment (no checksums: the capture reader does not need them).
@@ -3937,7 +4286,7 @@ mod tests {
         fs::remove_dir_all(&dir).unwrap();
     }
 
-    /// The short mode of R15 for 4b: ten seconds over the thirteen TCP families find nothing, and every family gets
+    /// The short mode of R15 for 4b: ten seconds over the fifteen TCP families find nothing, and every family gets
     /// past its parser's first checks (records, sends and closes; the stack creates connections, sends, flushes and
     /// compares delivered streams with the framework).
     #[test]
@@ -3959,7 +4308,10 @@ mod tests {
                 "{fam}: {} inputs, {s:?}",
                 o.inputs
             );
-            if !matches!(fam, "http" | "rdp" | "memcached" | "framework") {
+            if !matches!(
+                fam,
+                "http" | "rdp" | "memcached" | "framework" | "tls" | "x509"
+            ) {
                 assert!(s.with_actions > 0, "{fam}: {s:?}");
             }
             if fam == "stack" {

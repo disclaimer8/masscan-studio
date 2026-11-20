@@ -11,6 +11,8 @@
 //! sender MAC в ARP. Ответчик ([`incoming_request`], [`answer_request`]) принимает запрос ровно как C, со всеми этими
 //! странностями: его ответ уходит на провод и обязан совпасть с ответом C.
 
+use crate::bytes::{array_at, be32_at};
+
 /// Длина кадра запроса: ARP 42 байта, дополнение до минимума Ethernet 60.
 pub const ARP_FRAME_LEN: usize = 60;
 const ETH_LEN: usize = 14;
@@ -49,14 +51,6 @@ pub struct ArpPacket {
     pub sender_ip: u32,
     pub target_mac: [u8; 6],
     pub target_ip: u32,
-}
-
-fn mac_at(b: &[u8], i: usize) -> Option<[u8; 6]> {
-    b.get(i..i + 6)?.try_into().ok()
-}
-
-fn ip_at(b: &[u8], i: usize) -> Option<u32> {
-    Some(u32::from_be_bytes(b.get(i..i + 4)?.try_into().ok()?))
 }
 
 /// Запрос "кто имеет `target_ip`", stack-arpv4.c:121-160 (без VLAN).
@@ -131,14 +125,15 @@ pub fn decode(frame: &[u8]) -> Result<ArpPacket, ArpError> {
         2 => ArpOp::Reply,
         other => return Err(ArpError::BadOpcode(other)),
     };
-    let bad = ArpError::Truncated(frame.len());
+    // Кадр не короче 42 байт (проверено выше): чтения ниже не отказывают, `Truncated` остаётся прежней защитой.
+    let bad = || ArpError::Truncated(frame.len());
     Ok(ArpPacket {
-        eth_src: mac_at(frame, 6).ok_or(bad.clone())?,
+        eth_src: array_at::<6>(frame, 6).ok_or_else(bad)?,
         op,
-        sender_mac: mac_at(a, 8).ok_or(bad.clone())?,
-        sender_ip: ip_at(a, 14).ok_or(bad.clone())?,
-        target_mac: mac_at(a, 18).ok_or(bad.clone())?,
-        target_ip: ip_at(a, 24).ok_or(bad)?,
+        sender_mac: array_at::<6>(a, 8).ok_or_else(bad)?,
+        sender_ip: be32_at(a, 14).ok_or_else(bad)?,
+        target_mac: array_at::<6>(a, 18).ok_or_else(bad)?,
+        target_ip: be32_at(a, 24).ok_or_else(bad)?,
     })
 }
 
@@ -190,9 +185,9 @@ pub fn incoming_request(frame: &[u8]) -> Option<IncomingRequest> {
         return None;
     }
     Some(IncomingRequest {
-        sender_mac: mac_at(frame, addrs)?,
-        sender_ip: ip_at(frame, addrs + hl)?,
-        target_ip: ip_at(frame, addrs + 2 * hl + pl)?,
+        sender_mac: array_at::<6>(frame, addrs)?,
+        sender_ip: be32_at(frame, addrs + hl)?,
+        target_ip: be32_at(frame, addrs + 2 * hl + pl)?,
     })
 }
 

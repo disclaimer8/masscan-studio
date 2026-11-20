@@ -5,6 +5,7 @@
 pub mod arp;
 pub mod banner;
 pub mod blackrock;
+mod bytes;
 pub mod checksum;
 pub mod config;
 pub mod cookie;

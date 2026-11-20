@@ -1,0 +1,7 @@
+x509-oracle v1 count=1 bytes=184
+run whole calls=1
+record 9 20 ", one.test, two.test"
+end
+run bytewise calls=184
+record 9 20 ", one.test, two.test"
+end

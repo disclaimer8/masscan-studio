@@ -21,6 +21,7 @@
 //!   Address запроса игнорируют оба.
 //! * Расширения IPv6 в кадрах NDP не допускаются (`next_header` обязан быть 58): C проходит цепочку расширений.
 
+use crate::bytes::{array_at, be16_at, be128_at};
 use crate::checksum::checksum_ipv6;
 
 /// Длина кадра NS и NA: Ethernet 14 + IPv6 40 + ICMPv6 32 (заголовок 8, адрес цели 16, одна опция 8).
@@ -183,7 +184,9 @@ fn common(frame: &[u8], icmp_type: u8) -> Result<(u128, u128, &[u8]), NdpError> 
     if frame.len() < ETH + IP + 4 {
         return Err(NdpError::Truncated(frame.len()));
     }
-    let ethertype = u16::from_be_bytes([frame[12], frame[13]]);
+    // Длина проверена выше (не короче `ETH + IP + 4`): чтения ниже не отказывают.
+    let truncated = || NdpError::Truncated(frame.len());
+    let ethertype = be16_at(frame, 12).ok_or_else(truncated)?;
     if ethertype != 0x86dd {
         return Err(NdpError::NotIpv6(ethertype));
     }
@@ -194,14 +197,14 @@ fn common(frame: &[u8], icmp_type: u8) -> Result<(u128, u128, &[u8]), NdpError> 
     if ip[6] != NEXT_HEADER_ICMPV6 {
         return Err(NdpError::NotIcmpv6(ip[6]));
     }
-    let payload = usize::from(u16::from_be_bytes([ip[4], ip[5]]));
+    let payload = usize::from(be16_at(ip, 4).ok_or_else(truncated)?);
     let available = ip.len() - IP;
     if payload > available {
         return Err(NdpError::PayloadBeyondFrame { payload, available });
     }
     let icmp = &ip[IP..IP + payload];
-    let src = u128::from_be_bytes(ip[8..24].try_into().expect("16 bytes"));
-    let dst = u128::from_be_bytes(ip[24..40].try_into().expect("16 bytes"));
+    let src = be128_at(ip, 8).ok_or_else(truncated)?;
+    let dst = be128_at(ip, 24).ok_or_else(truncated)?;
     if icmp.len() < 4 {
         return Err(NdpError::Length(icmp.len()));
     }
@@ -217,7 +220,7 @@ fn common(frame: &[u8], icmp_type: u8) -> Result<(u128, u128, &[u8]), NdpError> 
     if icmp.len() < 24 {
         return Err(NdpError::Length(icmp.len()));
     }
-    let stored = u16::from_be_bytes([icmp[2], icmp[3]]);
+    let stored = be16_at(icmp, 2).ok_or(NdpError::Length(icmp.len()))?;
     if checksum_ipv6(src, dst, NEXT_HEADER_ICMPV6, icmp) != stored {
         return Err(NdpError::Checksum);
     }
@@ -237,7 +240,7 @@ fn find_lla(options: &[u8], wanted: u8) -> Result<Option<[u8; 6]>, NdpError> {
             return Err(NdpError::BadOption);
         }
         if o[0] == wanted && len == 8 && found.is_none() {
-            found = Some(o[2..8].try_into().expect("6 bytes"));
+            found = Some(array_at::<6>(o, 2).ok_or(NdpError::BadOption)?);
         }
         o = &o[len..];
     }
@@ -263,7 +266,7 @@ pub struct NeighborAdvertisement {
 pub fn decode_neighbor_advertisement(frame: &[u8]) -> Result<NeighborAdvertisement, NdpError> {
     let (src, dst, icmp) = common(frame, NEIGHBOR_ADVERTISEMENT)?;
     let flags = icmp[4];
-    let target = u128::from_be_bytes(icmp[8..24].try_into().expect("16 bytes"));
+    let target = be128_at(icmp, 8).ok_or(NdpError::Length(icmp.len()))?;
     if is_multicast(target) {
         return Err(NdpError::TargetMulticast);
     }
@@ -272,8 +275,8 @@ pub fn decode_neighbor_advertisement(frame: &[u8]) -> Result<NeighborAdvertiseme
     }
     let target_lla = find_lla(&icmp[24..], OPT_TLLA)?.ok_or(NdpError::NoTargetLla)?;
     Ok(NeighborAdvertisement {
-        eth_dst: frame[0..6].try_into().expect("6 bytes"),
-        eth_src: frame[6..12].try_into().expect("6 bytes"),
+        eth_dst: array_at::<6>(frame, 0).ok_or(NdpError::Truncated(frame.len()))?,
+        eth_src: array_at::<6>(frame, 6).ok_or(NdpError::Truncated(frame.len()))?,
         src_ip: src,
         dst_ip: dst,
         flags,
@@ -295,7 +298,7 @@ pub struct NeighborSolicitation {
 /// Источник `::` (DAD) это `UnspecifiedSource`: ответа на него нет.
 pub fn decode_neighbor_solicitation(frame: &[u8]) -> Result<NeighborSolicitation, NdpError> {
     let (src, dst, icmp) = common(frame, NEIGHBOR_SOLICITATION)?;
-    let target = u128::from_be_bytes(icmp[8..24].try_into().expect("16 bytes"));
+    let target = be128_at(icmp, 8).ok_or(NdpError::Length(icmp.len()))?;
     if is_multicast(target) {
         return Err(NdpError::TargetMulticast);
     }
@@ -304,7 +307,7 @@ pub fn decode_neighbor_solicitation(frame: &[u8]) -> Result<NeighborSolicitation
     }
     find_lla(&icmp[24..], OPT_SLLA)?;
     Ok(NeighborSolicitation {
-        eth_src: frame[6..12].try_into().expect("6 bytes"),
+        eth_src: array_at::<6>(frame, 6).ok_or(NdpError::Truncated(frame.len()))?,
         src_ip: src,
         dst_ip: dst,
         target,

@@ -12,7 +12,7 @@
 //! - очередь отправки ограничена ([`SEND_QUEUE_MAX_SEGMENTS`]); C без предела, но его приложения предела не достают.
 //!
 //! Не переносятся поля, которые C читает только в отладочном журнале: `ackno_me`, `seqno_me_first`,
-//! `seqno_them_first` (`:240-263`, `:1451-1455`), и `syns_sent` переподключения (4c). Баннер, состояние парсера и поток
+//! `seqno_them_first` (`:240-263`, `:1451-1455`), и `syns_sent` (только счётчик журнала). Баннер, состояние парсера и поток
 //! hello (`banout`, `banner1_state`, `stream`, `app_state`) живут у приложения ([`App`]).
 
 use std::collections::VecDeque;
@@ -229,6 +229,9 @@ pub(crate) struct Tcb {
     /// Срок таймера блока; `None` значит, что запись таймера отвязана (`timeout_unlink`). Таблица снимает срок перед
     /// событием `Timeout` и ставит +2 с, если автомат его не поставил (`tcpcon_timeouts`, `:314-327`).
     pub(crate) deadline_micros: Option<u64>,
+    /// Приложение попросило второе соединение (`tcpapi_reconnect`, `src/stack-tcp-core.c:1781-1794`): таблица
+    /// создаёт его после события и сбрасывает флаг.
+    pub(crate) reconnect_pending: bool,
 }
 
 impl Tcb {
@@ -254,6 +257,7 @@ impl Tcb {
             segments: VecDeque::new(),
             created_micros: now_micros,
             deadline_micros: Some(now_micros.saturating_add(SEC)),
+            reconnect_pending: false,
         }
     }
 
@@ -352,6 +356,18 @@ impl TcbCtl<'_> {
             self.lifetime_secs,
             self.out,
         );
+    }
+
+    /// `tcpapi_reconnect(socket, stream->next, App_Connect)` (`src/stack-tcp-core.c:1781-1794`): таблица создаст
+    /// второе соединение после события (у C создаётся внутри вызова; наблюдаемо то же, см. заметки задачи 7).
+    pub(crate) fn reconnect(&mut self) {
+        self.tcb.reconnect_pending = true;
+    }
+
+    /// `banner_set_small_window(socket, true)` (`src/stack-tcp-core.c:1556-1563`): все следующие кадры блока с
+    /// окном 600.
+    pub(crate) fn set_small_window(&mut self) {
+        self.tcb.is_small_window = true;
     }
 
     /// `tcpapi_set_timeout(socket, secs, 0)` (`src/stack-tcp-core.c:1712-1729`): срок от времени события

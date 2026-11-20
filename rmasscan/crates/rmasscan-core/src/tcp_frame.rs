@@ -12,13 +12,14 @@
 //! - TSval `--tcp-tsecho` целиком, как в SYN rmasscan (C пишет `field[2]` дважды, `src/templ-tcp-hdr.c:1111-1112`):
 //!   кадры стека копируют шаблон SYN и несут его опции.
 
+use crate::bytes::be16_at;
 use crate::checksum::{checksum_ipv4, checksum_ipv6, ip_header_checksum};
 use crate::cookie::{syn_cookie_ipv4, syn_cookie_ipv6};
 use crate::packet::{LinkType, Tcp6SynTemplate, TcpSynTemplate};
 use crate::probe::ReadyPlan;
 use crate::receive::{
-    MAX_FRAME_LEN, Reply, be16, ipv4_packet, ipv6_packet, is_my_ip, is_my_ip6, is_my_port,
-    locate_ipv4, locate_ipv6, tcp_header,
+    FLAG_RST, MAX_FRAME_LEN, PROTO_TCP, Reply, ipv4_packet, ipv6_packet, is_my_ip, is_my_ip6,
+    is_my_port, locate_ipv4, locate_ipv6, tcp_header, tcp_status,
 };
 use crate::stack::{ConnAddrs, ConnKey, SegmentIn, SegmentOut};
 
@@ -31,9 +32,6 @@ const C_FRAME_BUFFER: usize = 2040;
 
 /// Минимум Ethernet, до которого C добивает кадр IPv4 нулями на любом канале (`src/templ-pkt.c:510-513`).
 const MIN_FRAME_LEN: usize = 60;
-
-const FLAG_RST: u8 = 0x04;
-const FLAG_SYNACK_MASK: u8 = 0x12;
 
 /// Входящий сегмент TCP, адресованный нам: тот же разбор канала, IP и заголовка TCP, что у
 /// [`crate::receive::parse_reply`] (`locate_ipv4`/`locate_ipv6`, `ipv4_packet`/`ipv6_packet`, `tcp_header`), до
@@ -55,13 +53,13 @@ pub fn tcp_segment<'a>(frame: &'a [u8], link: LinkType, plan: &ReadyPlan) -> Opt
         return None;
     }
     // ARP разбирается до IPv4 и в стек не идёт (main.c:874-906).
-    if link == LinkType::Ethernet && be16(frame, 12) == Some(0x0806) {
+    if link == LinkType::Ethernet && be16_at(frame, 12) == Some(0x0806) {
         return None;
     }
     match locate_ipv4(frame, link).ok()? {
         Some(ip) => {
             let p = ipv4_packet(ip).ok()?;
-            if p.proto != 6 {
+            if p.proto != PROTO_TCP {
                 return None;
             }
             let seg = p.ip.get(p.header_len..)?;
@@ -70,7 +68,7 @@ pub fn tcp_segment<'a>(frame: &'a [u8], link: LinkType, plan: &ReadyPlan) -> Opt
                 return None;
             }
             if ip_header_checksum(p.ip, 0, p.header_len) != 0xffff
-                || checksum_ipv4(p.ip_them, p.ip_me, 6, seg) != h.checksum
+                || checksum_ipv4(p.ip_them, p.ip_me, PROTO_TCP, seg) != h.checksum
             {
                 return None;
             }
@@ -94,7 +92,7 @@ pub fn tcp_segment<'a>(frame: &'a [u8], link: LinkType, plan: &ReadyPlan) -> Opt
             // План без `source_ipv6` (IPv4 и Студия) IPv6 не принимает вовсе, как `parse_reply`.
             plan.nics().first()?.source_ipv6?;
             let p = ipv6_packet(locate_ipv6(frame, link).ok()??).ok()?;
-            if p.next != 6 {
+            if p.next != PROTO_TCP {
                 return None;
             }
             let seg = p.ip.get(p.offset..)?;
@@ -102,7 +100,7 @@ pub fn tcp_segment<'a>(frame: &'a [u8], link: LinkType, plan: &ReadyPlan) -> Opt
             if !is_my_ip6(plan, p.ip_me) || !is_my_port(plan, h.port_me) {
                 return None;
             }
-            if checksum_ipv6(p.ip_them, p.ip_me, 6, seg) != h.checksum {
+            if checksum_ipv6(p.ip_them, p.ip_me, PROTO_TCP, seg) != h.checksum {
                 return None;
             }
             Some(SegmentIn {
@@ -135,13 +133,27 @@ struct FrameTemplate {
 
 impl FrameTemplate {
     /// `offset_payload = offset_tcp + doff * 4` (`src/templ-pkt.c:435`): данные начинаются после опций шаблона.
+    ///
+    /// Голова всегда содержит полные заголовки IP и TCP: шаблоны SYN строят `packet` как заголовки канала, IP и TCP с
+    /// опциями без данных, `doff` равен длине TCP шаблона, поэтому `offset_app == packet.len()`. Построители кадров
+    /// пишут поля прямо в голову по индексам.
+    ///
+    /// Инвариант проверяется `assert!` (не `debug_assert!`): конструктор зовётся раз на построитель, не на кадр, и
+    /// сюда приходят только внутренние шаблоны, которые ему удовлетворяют.
     fn new((packet, offset_ip, offset_tcp): (&[u8], usize, usize)) -> FrameTemplate {
         let doff = packet
             .get(offset_tcp + 12)
             .map_or(5, |b| usize::from(b >> 4));
         let offset_app = (offset_tcp + doff * 4).min(packet.len());
+        let head = packet.get(..offset_app).unwrap_or(packet).to_vec();
+        assert!(
+            head.len() >= offset_tcp + 20 && offset_tcp >= offset_ip + 20,
+            "frame template: head {} bytes must cover the IP header ({offset_ip}..{offset_tcp}, at least 20 bytes) \
+             and the 20-byte TCP header",
+            head.len(),
+        );
         FrameTemplate {
-            head: packet.get(..offset_app).unwrap_or(packet).to_vec(),
+            head,
             offset_ip,
             offset_tcp,
         }
@@ -149,16 +161,6 @@ impl FrameTemplate {
 
     fn offset_app(&self) -> usize {
         self.head.len()
-    }
-}
-
-/// Записать `bytes` в `px` с `at`; за границей ничего (кадр своего шаблона, границы известны заранее).
-fn put(px: &mut [u8], at: usize, bytes: &[u8]) {
-    if let Some(dst) = at
-        .checked_add(bytes.len())
-        .and_then(|end| px.get_mut(at..end))
-    {
-        dst.copy_from_slice(bytes);
     }
 }
 
@@ -206,92 +208,99 @@ impl TcpFrameBuilder {
 
     /// Кадр сегмента (`tcp_create_packet`, `src/templ-pkt.c:419-613`, и `tcp_set_window` при `window: Some`,
     /// `src/stack-tcp-core.c:1163-1164`). Пустой `Vec`: кадра нет, потому что он длиннее буфера C (2040 байт, C
-    /// возвращает длину 0) или сегмент IPv6, а у плана нет `source_ipv6`.
+    /// возвращает длину 0) или сегмент IPv6, а у плана нет `source_ipv6`. Обёртка над [`Self::build_into`].
     pub fn build(&self, s: &SegmentOut) -> Vec<u8> {
+        let mut out = Vec::new();
+        self.build_into(s, &mut out);
+        out
+    }
+
+    /// То же, что [`Self::build`], но `out` очищается и получает кадр; кадра нет (см. [`Self::build`]), `out` пуст.
+    /// Ёмкость `out` переиспользуется между вызовами.
+    pub fn build_into(&self, s: &SegmentOut, out: &mut Vec<u8>) {
+        out.clear();
         match s.key.addrs {
-            ConnAddrs::V4 { local, remote } => build_v4(&self.v4, local, remote, s),
-            ConnAddrs::V6 { local, remote } => match &self.v6 {
-                Some(t) => build_v6(t, local, remote, s),
-                None => Vec::new(),
-            },
+            ConnAddrs::V4 { local, remote } => build_v4(&self.v4, local, remote, s, out),
+            ConnAddrs::V6 { local, remote } => {
+                if let Some(t) = &self.v6 {
+                    build_v6(t, local, remote, s, out);
+                }
+            }
         }
     }
 }
 
 /// Поля TCP, общие для обоих семейств (`src/templ-pkt.c:480-501`, `:581-602`): порты, seq, ack, байт флагов
-/// целиком, окно 1200 (или `tcp_set_window`), сумма обнулена.
+/// целиком, окно 1200 (или `tcp_set_window`), сумма обнулена. `px` это голова шаблона и данные: голова всегда
+/// содержит полные заголовки IP и TCP (см. [`FrameTemplate::new`]), поэтому индексы `ot..ot + 20` в границах.
 fn put_tcp_fields(px: &mut [u8], ot: usize, s: &SegmentOut) {
-    put(px, ot, &s.key.local_port.to_be_bytes());
-    put(px, ot + 2, &s.key.remote_port.to_be_bytes());
-    put(px, ot + 4, &s.seq.to_be_bytes());
-    put(px, ot + 8, &s.ack.to_be_bytes());
-    put(px, ot + 13, &[s.flags]);
-    put(px, ot + 14, &s.window.unwrap_or(STACK_WINDOW).to_be_bytes());
-    put(px, ot + 16, &[0, 0]);
+    px[ot..ot + 2].copy_from_slice(&s.key.local_port.to_be_bytes());
+    px[ot + 2..ot + 4].copy_from_slice(&s.key.remote_port.to_be_bytes());
+    px[ot + 4..ot + 8].copy_from_slice(&s.seq.to_be_bytes());
+    px[ot + 8..ot + 12].copy_from_slice(&s.ack.to_be_bytes());
+    px[ot + 13] = s.flags;
+    px[ot + 14..ot + 16].copy_from_slice(&s.window.unwrap_or(STACK_WINDOW).to_be_bytes());
+    px[ot + 16..ot + 18].fill(0);
 }
 
-/// Ветка IPv4 `tcp_create_packet` (`src/templ-pkt.c:430-514`).
-fn build_v4(t: &FrameTemplate, local: u32, remote: u32, s: &SegmentOut) -> Vec<u8> {
+/// Ветка IPv4 `tcp_create_packet` (`src/templ-pkt.c:430-514`). `out` уже пуст; кадра нет: остаётся пустым.
+fn build_v4(t: &FrameTemplate, local: u32, remote: u32, s: &SegmentOut, out: &mut Vec<u8>) {
     let new_length = t.offset_app() + s.payload.len();
     if new_length > C_FRAME_BUFFER {
-        return Vec::new();
+        return;
     }
     let (oi, ot) = (t.offset_ip, t.offset_tcp);
-    let mut px = Vec::with_capacity(new_length.max(MIN_FRAME_LEN));
-    px.extend_from_slice(&t.head);
-    px.extend_from_slice(&s.payload);
+    out.reserve(new_length.max(MIN_FRAME_LEN));
+    out.extend_from_slice(&t.head);
+    out.extend_from_slice(&s.payload);
+    let px = out.as_mut_slice();
 
     // :447-464: длина, ID, адреса. `ip_id = ip_them ^ port_them ^ seqno` (:432), в поле младшие 16 бит.
     let ip_len = new_length.saturating_sub(oi) as u16;
     let ip_id = remote ^ u32::from(s.key.remote_port) ^ s.seq;
-    put(&mut px, oi + 2, &ip_len.to_be_bytes());
-    put(&mut px, oi + 4, &(ip_id as u16).to_be_bytes());
-    put(&mut px, oi + 12, &local.to_be_bytes());
-    put(&mut px, oi + 16, &remote.to_be_bytes());
+    px[oi + 2..oi + 4].copy_from_slice(&ip_len.to_be_bytes());
+    px[oi + 4..oi + 6].copy_from_slice(&(ip_id as u16).to_be_bytes());
+    px[oi + 12..oi + 16].copy_from_slice(&local.to_be_bytes());
+    px[oi + 16..oi + 20].copy_from_slice(&remote.to_be_bytes());
     // E1.10: сумма заголовка заново и полностью, а не приращением C с двумя свёртками (:466-473).
-    put(&mut px, oi + 10, &[0, 0]);
-    let ip_sum = !ip_header_checksum(&px, oi, px.len());
-    put(&mut px, oi + 10, &ip_sum.to_be_bytes());
+    px[oi + 10..oi + 12].fill(0);
+    let ip_sum = !ip_header_checksum(px, oi, px.len());
+    px[oi + 10..oi + 12].copy_from_slice(&ip_sum.to_be_bytes());
 
-    put_tcp_fields(&mut px, ot, s);
+    put_tcp_fields(px, ot, s);
     // :503-508: полная сумма сегмента с псевдозаголовком (нечётный хвост дополняется нулём).
-    let tcp_sum = px
-        .get(ot..)
-        .map_or(0, |seg| checksum_ipv4(local, remote, 6, seg));
-    put(&mut px, ot + 16, &tcp_sum.to_be_bytes());
+    let tcp_sum = checksum_ipv4(local, remote, PROTO_TCP, &px[ot..]);
+    px[ot + 16..ot + 18].copy_from_slice(&tcp_sum.to_be_bytes());
 
     // :510-513: набивка нулями до 60 на любом канале.
-    if px.len() < MIN_FRAME_LEN {
-        px.resize(MIN_FRAME_LEN, 0);
+    if out.len() < MIN_FRAME_LEN {
+        out.resize(MIN_FRAME_LEN, 0);
     }
-    px
 }
 
 /// Ветка IPv6 `tcp_create_packet` (`src/templ-pkt.c:515-611`): `payload_length`, адреса, те же поля TCP, сумма
 /// RFC 8200; hop limit шаблона (всегда 255: `template_set_ttl` правит только IPv4, `:1473-1488`), без набивки.
-fn build_v6(t: &FrameTemplate, local: u128, remote: u128, s: &SegmentOut) -> Vec<u8> {
+fn build_v6(t: &FrameTemplate, local: u128, remote: u128, s: &SegmentOut, out: &mut Vec<u8>) {
     let new_length = t.offset_app() + s.payload.len();
     if new_length > C_FRAME_BUFFER {
-        return Vec::new();
+        return;
     }
     let (oi, ot) = (t.offset_ip, t.offset_tcp);
-    let mut px = Vec::with_capacity(new_length);
-    px.extend_from_slice(&t.head);
-    px.extend_from_slice(&s.payload);
+    out.reserve(new_length);
+    out.extend_from_slice(&t.head);
+    out.extend_from_slice(&s.payload);
+    let px = out.as_mut_slice();
 
     // :535-539: всё после 40 байт заголовка IPv6.
     let payload_length = new_length.saturating_sub(oi + 40) as u16;
-    put(&mut px, oi + 4, &payload_length.to_be_bytes());
-    put(&mut px, oi + 8, &local.to_be_bytes());
-    put(&mut px, oi + 24, &remote.to_be_bytes());
+    px[oi + 4..oi + 6].copy_from_slice(&payload_length.to_be_bytes());
+    px[oi + 8..oi + 24].copy_from_slice(&local.to_be_bytes());
+    px[oi + 24..oi + 40].copy_from_slice(&remote.to_be_bytes());
 
-    put_tcp_fields(&mut px, ot, s);
+    put_tcp_fields(px, ot, s);
     // :604-606.
-    let tcp_sum = px
-        .get(ot..)
-        .map_or(0, |seg| checksum_ipv6(local, remote, 6, seg));
-    put(&mut px, ot + 16, &tcp_sum.to_be_bytes());
-    px
+    let tcp_sum = checksum_ipv6(local, remote, PROTO_TCP, &px[ot..]);
+    px[ot + 16..ot + 18].copy_from_slice(&tcp_sum.to_be_bytes());
 }
 
 /// RST без состояния (Р8, справка A7): ответ на SYN-ACK или RST, прошедший cookie (`src/main.c:1094-1100`,
@@ -307,7 +316,7 @@ fn build_v6(t: &FrameTemplate, local: u128, remote: u128, s: &SegmentOut) -> Vec
 /// ответа: `Reply` своего ack не несёт, а `parse_reply` принял ответ только при `cookie == ack - 1`.
 pub fn stateless_rst(reply: &Reply, seed: u64) -> Option<SegmentOut> {
     let f = reply.tcp_flags;
-    if reply.ip_proto != 6 || (f & FLAG_SYNACK_MASK != FLAG_SYNACK_MASK && f & FLAG_RST == 0) {
+    if reply.ip_proto != PROTO_TCP || tcp_status(f).is_none() {
         return None;
     }
     let (port_them, port_me) = (u32::from(reply.remote_port), u32::from(reply.local_port));

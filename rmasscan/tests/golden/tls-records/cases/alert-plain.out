@@ -1,0 +1,7 @@
+tls-oracle v1 segments=1 bytes=7
+run whole calls=1
+record 9 15 " ALERT(0x0228) "
+end
+run bytewise calls=7
+record 9 15 " ALERT(0x0228) "
+end

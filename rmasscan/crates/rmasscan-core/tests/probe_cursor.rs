@@ -9,8 +9,10 @@ use rmasscan_core::config::{EffectiveConfig, Operation, ScanConfig, validate};
 use rmasscan_core::cookie::syn_cookie_ipv4;
 use rmasscan_core::massip::MassIp;
 use rmasscan_core::packet::{LinkType, TcpSynTemplate};
-use rmasscan_core::probe::{AdapterBinding, PlanError, ProbeCursor, ReadyPlan, for_each_probe};
-use rmasscan_core::scan::transmit_scan;
+use rmasscan_core::probe::{
+    AdapterBinding, NicBinding, PlanError, Probe, ProbeCursor, ReadyPlan, for_each_probe,
+};
+use rmasscan_core::scan::{Shard, transmit_scan};
 use rmasscan_core::targets::{add_target_string, parse_ports};
 
 const IP_ME: u32 = 0x0aff_0001;
@@ -560,4 +562,215 @@ fn position_moves_only_in_advance() {
         [6, 7, 8, 9, 10]
     );
     assert_eq!(cur.position(), 6);
+}
+
+// ---- lookahead: pause, build failure, end of an `--infinite` pass (plan Review Focus 1-3) ----
+
+/// Like `eff` in `tests/native_digests.rs`: IPv4 and IPv6 targets through `MassIp::add_target_string`, seed 42, then `f`.
+fn cli_eff(targets: &str, ports: &str, f: impl FnOnce(&mut ScanConfig)) -> EffectiveConfig {
+    let mut m = MassIp::new();
+    m.add_target_string(targets).unwrap();
+    parse_ports(m.ports_mut(), ports).unwrap();
+    let mut cfg = ScanConfig {
+        targets: m,
+        seed: 42,
+        ..ScanConfig::default()
+    };
+    f(&mut cfg);
+    eff(&cfg)
+}
+
+/// A CLI-plan adapter with one source address `ip` and the source ports `ports` (inclusive).
+fn cli_nic(id: &str, ip: u32, ports: (u16, u16)) -> NicBinding {
+    NicBinding::from(AdapterBinding {
+        interface_id: id.to_string(),
+        source_ipv4: ip,
+        ..binding(ports.0, ports.1)
+    })
+}
+
+/// The probes of the cursor one at a time (`preload(1)` + `advance_sent_n(1)`) up to the end of the pass.
+fn drain_probes(cur: &mut ProbeCursor) -> Vec<Probe> {
+    let mut v = Vec::new();
+    while let Some(p) = cur.preload(1).first() {
+        v.push(p.clone());
+        cur.advance_sent_n(1);
+    }
+    v
+}
+
+/// Review Focus 1: Ctrl-C after any number of confirmed probes, also in the middle of a preloaded batch.
+/// `position()` is the index of the first unconfirmed probe, `resume_base()` drops the shard/NIC offset, and a cursor
+/// from that base serves the tail from the first probe of that index (the retries of the index go out again, as in C).
+/// Batches of 1 and 5 leave pairs in the stream's lookahead while `loaded` is empty; 64 does not.
+#[test]
+fn pause_at_every_k_resumes_the_exact_suffix() {
+    let e = cli_eff("198.18.0.0/27", "80,443", |c| {
+        c.retries = 2;
+        c.shard = Shard { one: 2, of: 3 };
+    });
+    let nics = vec![
+        cli_nic("test0", 0x0aff_0001, (40000, 40015)),
+        cli_nic("test1", 0x0aff_0002, (41000, 41015)),
+    ];
+    let plan = ReadyPlan::new_cli(e, nics).unwrap();
+    assert_eq!(plan.effective_end(1), 192);
+    let offset = plan.nic_offset(1);
+    assert_eq!(offset, 3);
+    let full = drain_probes(&mut plan.cursor_for_nic(1, None).unwrap());
+    assert_eq!(full.len(), 96);
+    for n in [1usize, 5, 64] {
+        for k in 0..=full.len() {
+            let mut cur = plan.cursor_for_nic(1, None).unwrap();
+            let mut sent = 0;
+            while sent < k {
+                let got = cur.preload(n).len();
+                assert!(
+                    got > 0,
+                    "batch {n}, pause at {k}: the pass ended after {sent}"
+                );
+                let step = got.min(k - sent);
+                cur.advance_sent_n(step);
+                sent += step;
+            }
+            let index = full.get(k).map_or(192, |p| p.index);
+            assert_eq!(cur.position(), index, "batch {n}, pause at {k}: position");
+            assert_eq!(
+                cur.resume_base(),
+                index - offset,
+                "batch {n}, pause at {k}: resume_base"
+            );
+            let first = full
+                .iter()
+                .position(|p| p.index == index)
+                .unwrap_or(full.len());
+            let mut resumed = plan.cursor_for_nic(1, Some(cur.resume_base())).unwrap();
+            assert_eq!(
+                drain_probes(&mut resumed),
+                full[first..],
+                "batch {n}, pause at {k}: resumed tail"
+            );
+        }
+    }
+}
+
+/// `(confirmed, position(), build_error())` after `preload(batch)` + `advance_sent_n(len)` until nothing loads.
+fn sent_until_failure(plan: &ReadyPlan, batch: usize) -> (usize, u64, Option<PlanError>) {
+    let mut cur = plan.cursor_for_nic(0, None).unwrap();
+    let mut sent = 0;
+    loop {
+        let k = cur.preload(batch).len();
+        if k == 0 {
+            break;
+        }
+        cur.advance_sent_n(k);
+        sent += k;
+    }
+    (sent, cur.position(), cur.build_error())
+}
+
+/// Review Focus 2: an IPv6 target without `source_ipv6` (and a port without a builder) in the middle of a pass. The
+/// scan stops on the same probe, with the same error and position as on the base (the base facts that
+/// `native_digests.rs` also pins). The position depends on the batch size: with batch 1 the failure happens in the
+/// `preload` after the last `advance_sent_n` and the position stays on the failing index; with batch 64 the
+/// `advance_sent_n` after the failure sets it to the next index. The batch sizes are not compared with each other.
+#[test]
+fn failure_position_matches_base() {
+    let one = || vec![cli_nic("test0", IP_ME, (40000, 40000))];
+    let e = cli_eff("198.18.0.0/26,2001:db8::10", "80,443", |c| c.seed = 13);
+    let plan = ReadyPlan::new_cli(e, one()).unwrap();
+    let no_src6 = Some(PlanError::ProbeBuild(Box::new(PlanError::NoSourceIpv6)));
+    assert_eq!(
+        sent_until_failure(&plan, 1),
+        (37, 37, no_src6.clone()),
+        "v46_no_src6 preload(1)"
+    );
+    assert_eq!(
+        sent_until_failure(&plan, 64),
+        (37, 38, no_src6),
+        "v46_no_src6 preload(64)"
+    );
+
+    let e = cli_eff("198.18.0.0/26", "80,O:6", |_| {});
+    let plan = ReadyPlan::new_cli_without_port_checks(e, one()).unwrap();
+    let oproto = Some(PlanError::ProbeBuild(Box::new(PlanError::PortDoesNotFit {
+        port_them: 196870,
+        port_me: 40000,
+    })));
+    assert_eq!(
+        sent_until_failure(&plan, 1),
+        (1, 1, oproto.clone()),
+        "bad_oproto preload(1)"
+    );
+    assert_eq!(
+        sent_until_failure(&plan, 64),
+        (1, 2, oproto),
+        "bad_oproto preload(64)"
+    );
+}
+
+/// Review Focus 3: `--infinite` at the end of a pass. Confirming one probe at a time, `advance_pass()` refuses while
+/// pairs of pass 0 are left in the stream (also in the lookahead while `loaded` is empty) and starts pass 1 only after
+/// the last one. Pass 1 has `repeats() == 1` and 256 probes, two per index 0..128; the `infinite/cursor1` digest
+/// holds its bytes.
+#[test]
+fn advance_pass_refused_while_lookahead_holds_pairs() {
+    let e = cli_eff("198.18.0.0/26", "80", |c| {
+        c.infinite = true;
+        c.retries = 1;
+        c.max_rate = 102.0;
+    });
+    let plan = ReadyPlan::new_cli(e, vec![cli_nic("test0", IP_ME, (40000, 40000))]).unwrap();
+    assert_eq!(plan.effective_end(0), 128);
+    let mut cur = plan.cursor_for_nic(0, None).unwrap();
+    for k in 1..=256 {
+        assert_eq!(cur.preload(1).len(), 1, "pass 0, probe {k}");
+        cur.advance_sent_n(1);
+        if k < 256 {
+            assert!(
+                !cur.advance_pass(),
+                "a new pass started after {k} of 256 probes"
+            );
+            assert_eq!(cur.repeats(), 0);
+        }
+    }
+    assert_eq!(cur.position(), 128);
+    assert!(cur.advance_pass(), "the pass after the last probe starts");
+    assert_eq!(cur.repeats(), 1);
+    let pass1: Vec<u64> = drain_probes(&mut cur).iter().map(|p| p.index).collect();
+    assert_eq!(pass1, (0..128).flat_map(|i| [i, i]).collect::<Vec<u64>>());
+}
+
+/// Studio plan with a different MAC per target: every IPv4 frame starts with its own target's MAC, all other bytes
+/// equal the frame of the same plan without a map.
+#[test]
+fn mapped_plan_uses_each_targets_own_mac() {
+    let c = config("10.0.0.0/26", "80", 7, 100.0);
+    let e = eff(&c);
+    let map: BTreeMap<u32, [u8; 6]> = (0..64u32)
+        .map(|k| {
+            let k = k as u8;
+            (
+                0x0a00_0000 + u32::from(k),
+                [2, 0x10 + k, 0x20 ^ k, 0x30 + k, 0x40 ^ k, k],
+            )
+        })
+        .collect();
+    let mapped =
+        ReadyPlan::with_destinations(e.clone(), binding(40000, 40003), map.clone()).unwrap();
+    let plain = ReadyPlan::new(e, binding(40000, 40003)).unwrap();
+    let mut a = ProbeCursor::new(&mapped, 0).unwrap();
+    let mut b = ProbeCursor::new(&plain, 0).unwrap();
+    let pa = a.preload(64).to_vec();
+    let pb = b.preload(64).to_vec();
+    assert_eq!(pa.len(), 64);
+    assert_eq!(pb.len(), 64);
+    let mut seen = std::collections::BTreeSet::new();
+    for (x, y) in pa.iter().zip(&pb) {
+        assert_eq!(x.ip_them, y.ip_them);
+        assert_eq!(x.frame[..6], map[&x.ip_them], "{:#x}", x.ip_them);
+        assert_eq!(x.frame[6..], y.frame[6..]);
+        seen.insert(x.frame[..6].to_vec());
+    }
+    assert_eq!(seen.len(), 64);
 }

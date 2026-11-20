@@ -8,6 +8,7 @@
 //! Модуль ничего не передаёт в сеть.
 
 use crate::targets::{ParseError, is_c_space};
+use std::fmt::{self, Write as _};
 
 /// Адрес IPv6 в сетевом порядке байт (массив `tmp[16]` из `ipv6address_fmt`,
 /// massip-addr.c:84-92).
@@ -102,13 +103,19 @@ impl Range6List {
     /// добавляется в конец; список после этого считается неотсортированным
     /// (кроме первого элемента). Отличие от C: устаревший `picker` сбрасывается.
     pub fn add(&mut self, begin: u128, end: u128) {
-        let range = Ipv6Range { begin, end };
         self.picker = None;
-        let Some(last) = self.list.last_mut() else {
+        self.add_after(self.list.len().checked_sub(1), Ipv6Range { begin, end });
+    }
+
+    /// Тело [`Range6List::add`] относительно последнего живого элемента `last` (`None` — живых нет): при
+    /// уплотнении в `remove_range` это не обязательно последний элемент буфера.
+    fn add_after(&mut self, last: Option<usize>, range: Ipv6Range) {
+        let Some(last) = last else {
             self.list.push(range);
             self.is_sorted = true;
             return;
         };
+        let last = &mut self.list[last];
         if is_overlap(*last, range) {
             // :250-257 `range6_combine`
             if range.begin <= last.begin {
@@ -217,47 +224,66 @@ impl Range6List {
     /// заканчивается на `ffff:...:ffff` внутри цели (`PLUS_ONE(MAX)` = 0
     /// воссоздаёт `[0, MAX]`); проверено запуском C. Здесь в этих двух
     /// случаях пустая половина не создаётся.
+    ///
+    /// Один проход с уплотнением на месте вместо `Vec::remove(i)`: `list[..w]` — просмотренные живые диапазоны,
+    /// `list[r]` — текущий (индекс `i` в C равен `w`), `list[r + 1..]` — непросмотренные, `list[w..r]` — мёртвые
+    /// слоты. Живой список (`list[..w]`, затем `list[r..]`) на каждом шаге тот же, что у C: удаление — `r += 1`,
+    /// повторный просмотр того же индекса — итерация без сдвига.
     fn remove_range(&mut self, begin: u128, end: u128) {
         let x = Ipv6Range { begin, end };
         self.picker = None;
-        let mut i = 0usize;
-        while i < self.list.len() {
-            let cur = self.list[i];
-            if !is_overlap(cur, x) {
-                i += 1;
-                continue;
-            }
-            // Исключение целиком накрывает диапазон: удалить (:395-401).
-            if begin <= cur.begin && cur.end <= end {
-                self.list.remove(i);
-                continue;
-            }
-            // Исключение делит диапазон: усечь нижнюю часть, добавить верхнюю
-            // (:405-420). C затем повторно просматривает тот же индекс.
-            if cur.begin <= begin && end <= cur.end {
-                // Порядок как в C (:411-416): сначала усечение, потом добавление,
-                // иначе новый диапазон слился бы с самой целью.
-                if begin == 0 {
-                    self.list.remove(i);
-                } else {
-                    self.list[i].end = begin - 1;
+        let (mut w, mut r) = (0usize, 0usize);
+        while r < self.list.len() {
+            let mut cur = self.list[r];
+            if is_overlap(cur, x) {
+                // Исключение целиком накрывает диапазон: удалить (:395-401).
+                if begin <= cur.begin && cur.end <= end {
+                    r += 1;
+                    continue;
                 }
-                if end != u128::MAX {
-                    self.add(end.wrapping_add(1), cur.end);
+                // Исключение делит диапазон: усечь нижнюю часть, добавить верхнюю
+                // (:405-420). C затем повторно просматривает тот же индекс.
+                if cur.begin <= begin && end <= cur.end {
+                    // Порядок как в C (:411-416): сначала усечение, потом добавление,
+                    // иначе новый диапазон слился бы с самой целью.
+                    if begin == 0 {
+                        r += 1;
+                    } else {
+                        self.list[r].end = begin - 1;
+                    }
+                    if end != u128::MAX {
+                        // `add` к последнему ЖИВОМУ элементу: хвост `list[r..]`, если он есть, иначе `list[w - 1]`
+                        // (не мёртвый слот в конце буфера). Добавленная в конец половина просматривается тем же
+                        // проходом, как в C.
+                        let last = if r < self.list.len() {
+                            Some(self.list.len() - 1)
+                        } else {
+                            w.checked_sub(1)
+                        };
+                        self.add_after(
+                            last,
+                            Ipv6Range {
+                                begin: end.wrapping_add(1),
+                                end: cur.end,
+                            },
+                        );
+                    }
+                    continue;
                 }
-                continue;
+                // Пересечение снизу (:423-425) и сверху (:428-430); второе
+                // условие читает уже обновлённый `begin` цели.
+                if cur.begin <= end && end <= cur.end {
+                    cur.begin = end.wrapping_add(1);
+                }
+                if cur.begin <= begin && begin <= cur.end {
+                    cur.end = begin.wrapping_sub(1);
+                }
             }
-            // Пересечение снизу (:423-425) и сверху (:428-430); второе
-            // условие читает уже обновлённый `begin` цели.
-            if cur.begin <= end && end <= cur.end {
-                self.list[i].begin = end.wrapping_add(1);
-            }
-            let cur = self.list[i];
-            if cur.begin <= begin && begin <= cur.end {
-                self.list[i].end = begin.wrapping_sub(1);
-            }
-            i += 1;
+            self.list[w] = cur;
+            w += 1;
+            r += 1;
         }
+        self.list.truncate(w);
     }
 
     /// massip-rangesv6.c:447-472 `range6list_exclude`: удаляет каждый
@@ -274,47 +300,59 @@ impl Range6List {
     }
 }
 
-/// massip-addr.c:33-109 `ipv6address_fmt`: слова по 16 бит в hex без ведущих
-/// нулей; сжимается ПЕРВАЯ серия нулевых слов (не самая длинная, в отличие от
-/// `Ipv6Addr::Display`), одиночный нулевой слово тоже сжимается в `::`.
-pub fn format_ipv6_c(addr: u128) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let ip = Ipv6AddrBytes::from_u128(addr).0;
-    let mut out = String::with_capacity(39);
-    let mut is_ellision = false;
-    let mut i = 0usize;
-    // `for (i = 0; i < 16; i += 2)`, :36-77
-    while i < 16 {
-        let n = (u32::from(ip[i]) << 8) | u32::from(ip[i + 1]);
-        if n == 0 && !is_ellision {
-            is_ellision = true;
-            while i < 13 && ip[i + 2] == 0 && ip[i + 3] == 0 {
+/// Адрес IPv6 для печати как в C (`ipv6address_fmt`, massip-addr.c:33-109): слова по 16 бит в hex без ведущих
+/// нулей; сжимается ПЕРВАЯ серия нулевых слов (не самая длинная, в отличие от `Ipv6Addr::Display`), одиночное
+/// нулевое слово тоже сжимается в `::`. [`format_ipv6_c`] печатает его же.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct CIpv6(pub u128);
+
+impl fmt::Display for CIpv6 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        let ip = Ipv6AddrBytes::from_u128(self.0).0;
+        let mut is_ellision = false;
+        let mut i = 0usize;
+        // `for (i = 0; i < 16; i += 2)`, :36-77
+        while i < 16 {
+            let n = (u32::from(ip[i]) << 8) | u32::from(ip[i + 1]);
+            if n == 0 && !is_ellision {
+                is_ellision = true;
+                while i < 13 && ip[i + 2] == 0 && ip[i + 3] == 0 {
+                    i += 2;
+                }
+                f.write_char(':')?;
+                // Нулевой адрес целиком: вывод "::" (:58-62).
+                while i == 14 && ip[i] == 0 && ip[i + 1] == 0 {
+                    i = 16;
+                    f.write_char(':')?;
+                }
                 i += 2;
+                continue;
             }
-            out.push(':');
-            // Нулевой адрес целиком: вывод "::" (:58-62).
-            while i == 14 && ip[i] == 0 && ip[i + 1] == 0 {
-                i = 16;
-                out.push(':');
+            if i != 0 {
+                f.write_char(':')?;
             }
+            if n >> 12 != 0 {
+                f.write_char(char::from(HEX[((n >> 12) & 0xF) as usize]))?;
+            }
+            if n >> 8 != 0 {
+                f.write_char(char::from(HEX[((n >> 8) & 0xF) as usize]))?;
+            }
+            if n >> 4 != 0 {
+                f.write_char(char::from(HEX[((n >> 4) & 0xF) as usize]))?;
+            }
+            f.write_char(char::from(HEX[(n & 0xF) as usize]))?;
             i += 2;
-            continue;
         }
-        if i != 0 {
-            out.push(':');
-        }
-        if n >> 12 != 0 {
-            out.push(char::from(HEX[((n >> 12) & 0xF) as usize]));
-        }
-        if n >> 8 != 0 {
-            out.push(char::from(HEX[((n >> 8) & 0xF) as usize]));
-        }
-        if n >> 4 != 0 {
-            out.push(char::from(HEX[((n >> 4) & 0xF) as usize]));
-        }
-        out.push(char::from(HEX[(n & 0xF) as usize]));
-        i += 2;
+        Ok(())
     }
+}
+
+/// massip-addr.c:33-109 `ipv6address_fmt`: текст [`CIpv6`].
+pub fn format_ipv6_c(addr: u128) -> String {
+    let mut out = String::with_capacity(39);
+    // запись в `String` не отказывает
+    let _ = write!(out, "{}", CIpv6(addr));
     out
 }
 
@@ -631,6 +669,7 @@ pub fn parse_ipv6_target(spec: &str) -> Result<Ipv6Range, ParseError> {
 mod tests {
     use super::*;
     use crate::targets::ParseError;
+    use proptest::prelude::*;
     use std::net::Ipv6Addr;
 
     fn v(s: &str) -> u128 {
@@ -1148,5 +1187,407 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Копия цикла `pick` из базы (двоичный поиск по префиксным суммам). `pick` сохраняет этот цикл, и копия, а не
+    /// вызов, закрепляет его. Замена на `partition_point` отклонена: дифференциальный тест разошёлся с ней на списках с
+    /// диапазоном `begin > end`, а здесь и на правильных списках (все `begin <= end`, по возрастанию, без перекрытий), у
+    /// которых число адресов в `u128` больше 2^64: `picker` хранит сумму, обрезанную до `u64`, и после переполнения
+    /// префиксные суммы немонотонны. Пример: `[2^70, 2^70+2^64-2]`, за ним шесть диапазонов по 10 адресов от `2^101` с
+    /// шагом 100, `picker` `[0, 2^64-1, 9, 19, 29, 39, 49]`; индекс 9: старый цикл `2^70+9`, `partition_point`
+    /// `2^101+100`. Результат `partition_point` на таком неразбитом `picker` зависит от порядка поиска в текущей std,
+    /// для неразбитого входа он не определён. `MassIp::try_range` такие суммы отвергает: проверяется всё число целей
+    /// на порты, и 2^63 и больше не проходит, а публичный `Range6List::pick` их принимает.
+    /// `None` — цикл не завершается за 1000 шагов или выходит за список (на несортированных суммах).
+    fn old_pick_mid(picker: &[u64], index: u64) -> Option<usize> {
+        let maxmax = picker.len();
+        let (mut min, mut max) = (0usize, maxmax);
+        for _ in 0..1000 {
+            let mid = min + (max - min) / 2;
+            if mid >= maxmax {
+                return None;
+            }
+            if index < picker[mid] {
+                max = mid;
+                continue;
+            }
+            if mid + 1 == maxmax || index < picker[mid + 1] {
+                return Some(mid);
+            }
+            min = mid + 1;
+        }
+        None
+    }
+
+    fn splitmix(state: &mut u64) -> u64 {
+        *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = *state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    }
+
+    fn rand_addr(state: &mut u64) -> u128 {
+        match splitmix(state) % 5 {
+            0 => u128::from(splitmix(state) % 300),
+            1 => u128::MAX - u128::from(splitmix(state) % 300),
+            2 => (0x2001_0db8u128 << 96) | u128::from(splitmix(state) % (1 << 16)),
+            3 => [0, 1, u128::MAX - 1, u128::MAX][(splitmix(state) % 4) as usize],
+            _ => (u128::from(splitmix(state)) << 64) | u128::from(splitmix(state)),
+        }
+    }
+
+    #[test]
+    fn pick_matches_the_kept_search() {
+        // Случайные списки 1..64 диапазонов (в том числе `begin > end`, после исключений от `::`, с оборачиванием
+        // префиксных сумм): `pick` равен копии старого поиска на всех индексах меньше суммы (у больших списков на
+        // границах сумм и случайных) и на трёх за концом.
+        let mut state = 0x7069_636b_0036_u64;
+        let (mut compared, mut skipped, mut non_monotone) = (0u32, 0u32, 0u32);
+        for case in 0..4000 {
+            let mut l = Range6List::new();
+            let reversed_heavy = case % 4 == 3;
+            for _ in 0..1 + splitmix(&mut state) % 64 {
+                let (b, e) = (rand_addr(&mut state), rand_addr(&mut state));
+                if reversed_heavy {
+                    l.add(b.max(e), b.min(e));
+                    continue;
+                }
+                match splitmix(&mut state) % 4 {
+                    0 | 1 => l.add(b.min(e), b.max(e)),
+                    2 => l.add(b, e),
+                    _ => l.add(b.max(e), b.min(e)),
+                }
+            }
+            if splitmix(&mut state).is_multiple_of(2) {
+                l.sort_and_merge();
+            }
+            if splitmix(&mut state).is_multiple_of(3) {
+                let mut x = Range6List::new();
+                x.add(0, u128::from(splitmix(&mut state) % 300));
+                for _ in 0..splitmix(&mut state) % 5 {
+                    let b = rand_addr(&mut state);
+                    x.add(b, b.saturating_add(u128::from(splitmix(&mut state) % 8)));
+                }
+                l.apply_excludes(&x);
+            }
+            l.optimize();
+            let Some(picker) = l.picker.clone() else {
+                continue;
+            };
+            if picker.windows(2).any(|w| w[0] > w[1]) {
+                non_monotone += 1;
+            }
+            let count = l.count_u128();
+            let mut indices: Vec<u64> = if count <= 4096 {
+                (0..count as u64).collect()
+            } else {
+                let mut v: Vec<u64> = picker
+                    .iter()
+                    .flat_map(|&p| [p, p.wrapping_sub(1)])
+                    .collect();
+                v.extend((0..64).map(|_| splitmix(&mut state)));
+                v.extend([0, u64::MAX]);
+                v
+            };
+            let end = count as u64;
+            indices.extend([end, end.wrapping_add(1), end.wrapping_add(2)]);
+            for index in indices {
+                let Some(mid) = old_pick_mid(&picker, index) else {
+                    skipped += 1;
+                    continue;
+                };
+                let want = std::panic::catch_unwind(|| {
+                    l.list[mid]
+                        .begin
+                        .wrapping_add(u128::from(index - picker[mid]))
+                });
+                let got = std::panic::catch_unwind(|| l.pick(index));
+                assert_eq!(got.ok(), want.ok(), "case {case} index {index}");
+                compared += 1;
+            }
+        }
+        assert!(compared > 50_000, "compared {compared}");
+        eprintln!(
+            "pick6 differential: compared {compared}, old search stuck {skipped}, non-monotone lists {non_monotone}"
+        );
+    }
+
+    /// Копия `format_ipv6_c` из базы (до `CIpv6`): сверка нового `Display` с прежним текстом.
+    fn old_format_ipv6_c(addr: u128) -> String {
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        let ip = Ipv6AddrBytes::from_u128(addr).0;
+        let mut out = String::with_capacity(39);
+        let mut is_ellision = false;
+        let mut i = 0usize;
+        while i < 16 {
+            let n = (u32::from(ip[i]) << 8) | u32::from(ip[i + 1]);
+            if n == 0 && !is_ellision {
+                is_ellision = true;
+                while i < 13 && ip[i + 2] == 0 && ip[i + 3] == 0 {
+                    i += 2;
+                }
+                out.push(':');
+                while i == 14 && ip[i] == 0 && ip[i + 1] == 0 {
+                    i = 16;
+                    out.push(':');
+                }
+                i += 2;
+                continue;
+            }
+            if i != 0 {
+                out.push(':');
+            }
+            if n >> 12 != 0 {
+                out.push(char::from(HEX[((n >> 12) & 0xF) as usize]));
+            }
+            if n >> 8 != 0 {
+                out.push(char::from(HEX[((n >> 8) & 0xF) as usize]));
+            }
+            if n >> 4 != 0 {
+                out.push(char::from(HEX[((n >> 4) & 0xF) as usize]));
+            }
+            out.push(char::from(HEX[(n & 0xF) as usize]));
+            i += 2;
+        }
+        out
+    }
+
+    #[test]
+    fn cipv6_display_equals_format_ipv6_c() {
+        let mut fixed: Vec<u128> = [
+            "2a03:9060:0:400:0:0:0:2",
+            "2001:db8:0:0:0:0:0:1",
+            "1:0:0:0:0:0:0:0",
+            "0:0:0:0:0:0:0:0",
+            "::1",
+            "1::",
+            "0:0:0:0:0:0:1:0",
+            "1:0:2:0:0:0:3:0",
+            "0:1:0:0:2:0:0:0",
+            "1:0:0:2:0:0:0:0",
+            "1:2:3:4:5:6:7:0",
+            "1:0:2:3:4:5:6:7",
+            "0:2:3:4:5:6:7:8",
+            "1:2:3:4:5:6:0:0",
+            "1:2:3:4:5:6:0:8",
+            "ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+            "1:2:3:4:5:6:7:8",
+            "a:b::",
+            "0:0:1:0:0:0:0:0",
+            "1:0:0:2:0:0:3:0",
+        ]
+        .iter()
+        .map(|s| v(s))
+        .collect();
+        fixed.extend([0, 1, u128::MAX]);
+        for a in fixed {
+            assert_eq!(CIpv6(a).to_string(), old_format_ipv6_c(a), "{a:#x}");
+            assert_eq!(format_ipv6_c(a), old_format_ipv6_c(a), "{a:#x}");
+        }
+        // 10 000 случайных адресов: каждая из восьми групп нулевая с вероятностью 1/2.
+        let mut state = 0x6369_7076_u64;
+        for _ in 0..10_000 {
+            let mut a = 0u128;
+            for _ in 0..8 {
+                let group = if splitmix(&mut state) & 1 == 0 {
+                    0
+                } else {
+                    splitmix(&mut state) & 0xFFFF
+                };
+                a = (a << 16) | u128::from(group);
+            }
+            assert_eq!(CIpv6(a).to_string(), old_format_ipv6_c(a), "{a:#x}");
+        }
+    }
+
+    /// Копия `add` базы (слияние только с последним элементом буфера). Копия, а не вызов: эталон ниже не зависит от
+    /// меняемого кода.
+    fn old_add(l: &mut Range6List, begin: u128, end: u128) {
+        let range = Ipv6Range { begin, end };
+        l.picker = None;
+        let Some(last) = l.list.last_mut() else {
+            l.list.push(range);
+            l.is_sorted = true;
+            return;
+        };
+        if is_overlap(*last, range) {
+            if range.begin <= last.begin {
+                last.begin = range.begin;
+            }
+            if last.end <= range.end {
+                last.end = range.end;
+            }
+        } else {
+            l.list.push(range);
+        }
+        l.is_sorted = false;
+    }
+
+    /// Копия `remove_range` базы (`Vec::remove(i)` в цикле, повторный просмотр того же индекса после деления).
+    /// На перевёрнутом исключении (`begin > end`) не завершается, если оно пересекается (по `is_overlap`) с любым
+    /// диапазоном упорядоченного списка целей, а не только когда делит последний.
+    fn old_remove_range(l: &mut Range6List, begin: u128, end: u128) {
+        let x = Ipv6Range { begin, end };
+        l.picker = None;
+        let mut i = 0usize;
+        while i < l.list.len() {
+            let cur = l.list[i];
+            if !is_overlap(cur, x) {
+                i += 1;
+                continue;
+            }
+            if begin <= cur.begin && cur.end <= end {
+                l.list.remove(i);
+                continue;
+            }
+            if cur.begin <= begin && end <= cur.end {
+                if begin == 0 {
+                    l.list.remove(i);
+                } else {
+                    l.list[i].end = begin - 1;
+                }
+                if end != u128::MAX {
+                    old_add(l, end.wrapping_add(1), cur.end);
+                }
+                continue;
+            }
+            if cur.begin <= end && end <= cur.end {
+                l.list[i].begin = end.wrapping_add(1);
+            }
+            let cur = l.list[i];
+            if cur.begin <= begin && begin <= cur.end {
+                l.list[i].end = begin.wrapping_sub(1);
+            }
+            i += 1;
+        }
+    }
+
+    /// Копия `apply_excludes` базы поверх [`old_remove_range`].
+    fn old_apply_excludes(l: &mut Range6List, excludes: &Range6List) -> u128 {
+        let mut count: u128 = 0;
+        for r in &excludes.list {
+            count = count.wrapping_add(r.end.wrapping_sub(r.begin).wrapping_add(1));
+            old_remove_range(l, r.begin, r.end);
+        }
+        l.picker = None;
+        count
+    }
+
+    const MID6: u128 = 0x2001_0db8 << 96;
+
+    /// Адрес: в пределах 256 от одной из трёх опор (`::`, середина пространства, `ffff:…:ffff`), чтобы концы целей и
+    /// исключений часто совпадали, касались и перекрывались, или любой.
+    fn addr6() -> impl Strategy<Value = u128> {
+        prop_oneof![
+            3 => 0u128..256,
+            3 => MID6..MID6 + 256,
+            3 => (u128::MAX - 255)..=u128::MAX,
+            1 => any::<u128>(),
+        ]
+    }
+
+    /// Цель: до 64 адресов от `addr6`, от `::`, до `ffff:…:ffff` или два независимых конца (`begin > end` достижим
+    /// через `add`, как в корпусе `ranges6`).
+    fn target6() -> impl Strategy<Value = (u128, u128)> {
+        prop_oneof![
+            6 => (addr6(), 0u128..64).prop_map(|(b, n)| (b, b.saturating_add(n))),
+            1 => (0u128..300).prop_map(|e| (0, e)),
+            1 => (0u128..300).prop_map(|n| (u128::MAX - n, u128::MAX)),
+            1 => (addr6(), addr6()),
+        ]
+    }
+
+    /// Исключение, никогда не перевёрнутое (на нём база может не завершиться): узкое (до 8 адресов) пробивает дыры и
+    /// делит цели; реже от `::`, до `ffff:…:ffff` и широкое между двумя адресами (иначе список почти всегда пуст).
+    fn exclude6() -> impl Strategy<Value = (u128, u128)> {
+        prop_oneof![
+            24 => (addr6(), 0u128..8).prop_map(|(b, n)| (b, b.saturating_add(n))),
+            3 => (0u128..300).prop_map(|e| (0, e)),
+            3 => (0u128..300).prop_map(|n| (u128::MAX - n, u128::MAX)),
+            1 => (addr6(), addr6()).prop_map(|(a, b)| (a.min(b), a.max(b))),
+        ]
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(3000))]
+
+        /// `apply_excludes` равен копии базы: список (порядок, слияния, добавленные в конец половины), `is_sorted`,
+        /// сброшенный `picker` и возвращённое число. Цели — через `add` (несортированные, с перекрытиями), после
+        /// `sort_and_merge` или `optimize`; исключения — через `add`, как их строит разбор, или как есть (соседние
+        /// перекрываются).
+        #[test]
+        fn remove_range_matches_reference(
+            ts in proptest::collection::vec(target6(), 1..200),
+            xs in proptest::collection::vec(exclude6(), 1..300),
+            mode in 0u8..3,
+            raw_excludes in any::<bool>(),
+        ) {
+            let mut got = list(&ts);
+            match mode {
+                1 => got.sort_and_merge(),
+                2 => got.optimize(),
+                _ => {}
+            }
+            let ex = if raw_excludes {
+                Range6List {
+                    list: xs.iter().map(|&(begin, end)| Ipv6Range { begin, end }).collect(),
+                    picker: None,
+                    is_sorted: false,
+                }
+            } else {
+                list(&xs)
+            };
+            let mut want = got.clone();
+            let n = got.apply_excludes(&ex);
+            let m = old_apply_excludes(&mut want, &ex);
+            prop_assert_eq!(n, m);
+            prop_assert_eq!(&got.list, &want.list);
+            prop_assert_eq!(got.is_sorted, want.is_sorted);
+            prop_assert!(got.picker.is_none() && want.picker.is_none());
+        }
+    }
+
+    /// Время (`--release -- --ignored --nocapture`): 20 000 целей — блоки /120 по возрастанию с промежутками; 20 000
+    /// исключений — адрес в середине блока `j`, но каждое сотое исключение — сеть, накрывающая целиком первые 50 блоков
+    /// своей сотни (100 удалений за проход: 50 нижних частей и 50 добавленных в конец половин). Печатает время
+    /// `apply_excludes` и копии базы; длина списка, сам список и возвращённое число равны копии базы.
+    #[test]
+    #[ignore = "timing: run in --release with --ignored --nocapture"]
+    fn many_ipv6_excludes_time() {
+        const N: u128 = 20_000;
+        let block = |k: u128| MID6 + (k << 12);
+        let mut t = Range6List::new();
+        for k in 0..N {
+            t.add(block(k), block(k) + 0xff);
+        }
+        let mut x = Range6List::new();
+        for j in 0..N {
+            if j % 100 == 99 {
+                let g = j - 99;
+                x.add(block(g), block(g + 49) + 0xff);
+            } else {
+                x.add(block(j) + 0x80, block(j) + 0x80);
+            }
+        }
+        assert_eq!((t.len(), x.len()), (20_000, 20_000));
+        let mut want = t.clone();
+        let start = std::time::Instant::now();
+        let n = t.apply_excludes(&x);
+        let took = start.elapsed();
+        let start = std::time::Instant::now();
+        let m = old_apply_excludes(&mut want, &x);
+        let took_ref = start.elapsed();
+        println!(
+            "IPV6_EXCLUDES apply_excludes_ms={:.1} reference_ms={:.1} ranges={} count={}",
+            took.as_secs_f64() * 1e3,
+            took_ref.as_secs_f64() * 1e3,
+            t.len(),
+            n
+        );
+        assert_eq!(t.len(), want.len());
+        assert_eq!(t.len(), 19_800);
+        assert_eq!(n, m);
+        assert_eq!(t.list, want.list);
     }
 }

@@ -168,6 +168,13 @@ fn name(app: u16) -> &'static str {
         25 => "memcached",
         28 => "coap",
         35 => "isakmp",
+        9 => "ssl",
+        15 => "X509",
+        16 => "X509CA",
+        20 => "vuln",
+        21 => "heartbleed",
+        22 => "ticketbleed",
+        24 => "safe",
         _ => panic!("app {app}"),
     }
 }
@@ -702,15 +709,13 @@ fn tcp_wire(c: &TcpCase, who: Who, t0: f64) -> (Frames, Vec<SimRec>, (usize, usi
     let probes = tcp_plan_stream(c).unwrap();
     let src = c.source();
     let mut stack = c.banners.then(|| {
-        rmasscan_proto::tcp_stack_factory(
-            rmasscan_proto::TcpBannerSettings::default(),
-            c.connection_timeout.unwrap_or(0),
-        )
-        .new_table(TableParams {
-            seed: 1,
-            capacity: 4096,
-            banner_byte_budget: 1 << 29,
-        })
+        rmasscan_proto::tcp_stack_factory(tcp_case_settings(c), c.connection_timeout.unwrap_or(0))
+            .new_table(TableParams {
+                seed: 1,
+                capacity: 4096,
+                banner_byte_budget: 1 << 29,
+                source: tcp_case_source_ranges(c),
+            })
     });
     let isn0: u32 = if who == Who::Oracle {
         0x7000_0000
@@ -738,6 +743,7 @@ fn tcp_wire(c: &TcpCase, who: Who, t0: f64) -> (Frames, Vec<SimRec>, (usize, usi
     };
     let mut fr: Frames = vec![(t0, marker(&st, START_PAYLOAD))];
     let mut recs: Vec<SimRec> = Vec::new();
+    let mut status_written: std::collections::BTreeSet<usize> = Default::default();
     let mut conns: Vec<PeerConn> = probes
         .iter()
         .map(|p| {
@@ -978,10 +984,14 @@ fn tcp_wire(c: &TcpCase, who: Who, t0: f64) -> (Frames, Vec<SimRec>, (usize, usi
             let first_reply =
                 h.flags & 0x12 == 0x12 && h.seq.wrapping_add(1) == pc.snd_nxt && !pc.established
                     || h.flags == 0x14 && h.seq == 0;
-            if first_reply && !recs.iter().any(|r| matches!(r, SimRec::TcpStatus { ip, port, .. } if *ip == pc.ip && *port == pc.port))
-                && (h.flags & 0x12 == 0x12)
-            {
-                recs.push(SimRec::TcpStatus { ip: pc.ip, port: pc.port, ts: at as u32, ttl: ttl_of(pc.ip) });
+            if first_reply && !status_written.contains(&i) && (h.flags & 0x12 == 0x12) {
+                status_written.insert(i);
+                recs.push(SimRec::TcpStatus {
+                    ip: pc.ip,
+                    port: pc.port,
+                    ts: at as u32,
+                    ttl: ttl_of(pc.ip),
+                });
             }
             let fresh = (h.flags & 0x12 == 0x12 && (at - pc.reply_t).abs() < 1e-6)
                 || (h.flags == 0x14 && h.seq == 0);
@@ -1028,10 +1038,59 @@ fn tcp_wire(c: &TcpCase, who: Who, t0: f64) -> (Frames, Vec<SimRec>, (usize, usi
         }
         for (at, g) in sent {
             fr.push((at, builder.build(&g)));
-            let i = conns
+            let i = match conns
                 .iter()
                 .position(|pc| key_of(pc.ip, pc.port, pc.sport) == g.key)
-                .unwrap();
+            {
+                Some(i) => i,
+                // The stack's own SYN (the TLS second connection, task 7): the peer kernel accepts it and
+                // runs the scenario script on it, as its socket would.
+                None if g.flags == 0x02 => {
+                    let (ip, sport) = match g.key.addrs {
+                        ConnAddrs::V4 { remote, .. } => {
+                            (IpAddr::V4(remote.into()), g.key.local_port)
+                        }
+                        ConnAddrs::V6 { remote, .. } => {
+                            (IpAddr::V6(remote.into()), g.key.local_port)
+                        }
+                    };
+                    let idx = conns.len();
+                    let isn = isn0.wrapping_add((idx as u32) << 20);
+                    conns.push(PeerConn {
+                        ip,
+                        port: g.key.remote_port,
+                        sport,
+                        syn_seq: g.seq,
+                        sc: tcp_scenario(g.key.remote_port, ip),
+                        snd_nxt: isn.wrapping_add(1),
+                        rcv_nxt: g.seq.wrapping_add(1),
+                        established: false,
+                        pc: 0,
+                        ready_at: 0.0,
+                        unread: 0,
+                        eof: false,
+                        done: false,
+                        dead: false,
+                        end_at: None,
+                        reply_t: at + 0.001,
+                    });
+                    pending.push((
+                        at + 0.001,
+                        idx,
+                        peer_seg(
+                            ip,
+                            src,
+                            (g.key.remote_port, sport),
+                            isn,
+                            g.seq.wrapping_add(1),
+                            0x12,
+                            &[],
+                        ),
+                    ));
+                    continue;
+                }
+                None => panic!("segment of no connection: {g:?}"),
+            };
             to_peer(&mut conns[i], &g, at, &mut pending, i, src);
         }
         for flush in out.banners {
@@ -1529,6 +1588,40 @@ fn an_extra_banner_of_rmasscan_fails_against_c() {
     }
 }
 
+/// A changed byte of the static default ClientHello FAILs against C in the normal TLS case: the
+/// 'tls-hello-random' mask is not on t10, and even where it is (t12) it covers only the dynamic templates'
+/// random field, never another byte.
+#[test]
+fn a_corrupt_static_clienthello_fails_against_c() {
+    for at in [11usize, 60] {
+        let mut sim = Sim::new("t10_tls4");
+        let st = sim.step_mut("binary");
+        let k = st
+            .frames
+            .iter()
+            .position(|(_, f)| {
+                f.get(6..12) == Some(&SCANNER_MAC[..])
+                    && tcp_head(f).is_some_and(|h| h.payload.len() == 198 && h.payload[0] == 0x16)
+            })
+            .expect("no ClientHello frame in t10_tls4");
+        let f = &mut st.frames[k].1;
+        let (_, l4) = ip_bounds(f);
+        let doff = usize::from(f[l4 + 12] >> 4) * 4;
+        f[l4 + doff + at] ^= 0x01;
+        set_sums(f);
+        let (v, b) = judge_one(&sim);
+        assert_eq!(v, FAIL, "byte {at}: {b:#?}");
+        assert!(
+            has(
+                &b,
+                FAIL,
+                "every connection's scanner segments equal the C oracle's"
+            ),
+            "byte {at}: {b:#?}"
+        );
+    }
+}
+
 #[test]
 fn a_lost_banner_of_rmasscan_fails_against_c() {
     let mut sim = Sim::new("b01_banners");
@@ -1750,7 +1843,10 @@ fn the_case_table_is_the_window_of_the_plan() {
             "t06_noreset",
             "t07_resolve_arp",
             "t08_resolve_ndp",
-            "t09_quiet_timers"
+            "t09_quiet_timers",
+            "t10_tls4",
+            "t11_tls6",
+            "t12_heartbleed"
         ]
     );
     let s = steps("b01_banners").unwrap();
@@ -1851,7 +1947,10 @@ fn tcp_scenarios_make_the_declared_banners_and_their_scripts_follow_the_parsers(
     let settings = TcpBannerSettings::default();
     for sc in &TCP_SCENARIOS {
         // The product's parsers on the server's whole stream, in the script's segments (C's flush order, B3).
-        let r = banner_stream(&settings, sc.port, None, &sc.sends());
+        // A TLS scenario's classification needs the sent hello the offline driver has no step for (the
+        // classifier's SSL3 gate, B1.2), so its parser is forced, as the fuzzer's tls family forces it.
+        let force = (sc.port == 443).then_some(rmasscan_proto::app_id::SSL3);
+        let r = banner_stream(&settings, sc.port, force, &sc.sends());
         let apps: Vec<&str> = r.records.iter().map(|(a, _)| name(*a)).collect();
         assert_eq!(apps, sc.apps, "{}:{} {}", sc.port, sc.peer, sc.about);
         // Every Recv or Peek waits for one segment of the scanner: a hello (B4, when the server waits) or a send of
@@ -2028,7 +2127,7 @@ fn the_tcp_cases_scan_from_their_own_source_with_one_argv_for_both_scanners() {
     assert!(after("--tcp-ips").ends_with("fd00:198:18::5"));
     assert_eq!(
         after("--tcp-ports"),
-        "21,22,23,25,80,110,143,3389,5900,11211,25565"
+        "21,22,23,25,80,110,143,443,3389,5900,11211,25565"
     );
     assert_eq!(after("--heartbeat-iface"), "veth-b");
     assert_eq!(after("--heartbeat-dst"), "02:aa:00:00:00:01");
@@ -2061,6 +2160,55 @@ fn every_tcp_case_passes_on_the_products_own_stack() {
         let (v, b) = judge_tcp(c.tag, |_| {});
         assert_eq!(v, PASS, "{}: {b:#?}", c.tag);
     }
+}
+
+#[test]
+fn a_scanner_that_never_opens_the_second_tls_connection_fails() {
+    // The --cert second connection is an obligation of the case and the scenario, not a permission the
+    // verifier checks only when one shows up: cut rmasscan's second connection to .2:443 out of its steps
+    // entirely (both directions' frames, its open record, its banners) and the case fails on the missing
+    // connection itself, not only against C's records.
+    let (v, b) = judge_tcp("t10_tls4", |sim| {
+        for st in sim.steps.iter_mut().filter(|s| s.spec.who == Who::Rmasscan) {
+            // The source ports of the scanner's SYNs to .2:443, in order: the plan's, then the stack's.
+            let mut sports: Vec<u16> = Vec::new();
+            for (_, f) in &st.frames {
+                if f.get(6..12) == Some(&SCANNER_MAC[..])
+                    && let Some(h) = tcp_head(f)
+                    && h.dst == ip4(2)
+                    && h.dp == 443
+                    && h.flags & 0x3f == 0x02
+                    && !sports.contains(&h.sp)
+                {
+                    sports.push(h.sp);
+                }
+            }
+            assert_eq!(sports.len(), 2, "SYN source ports to .2:443: {sports:?}");
+            let second = sports[1];
+            st.frames.retain(|(_, f)| {
+                tcp_head(f).is_none_or(|h| {
+                    !((h.dst == ip4(2) && h.dp == 443 && h.sp == second)
+                        || (h.src == ip4(2) && h.sp == 443 && h.dp == second))
+                })
+            });
+            let (mut opened, mut apps) = (false, Vec::new());
+            st.recs.retain(|r| match r {
+                SimRec::TcpStatus { port: 443, .. } => {
+                    let keep = !opened;
+                    opened = true;
+                    keep
+                }
+                SimRec::TcpBanner { port: 443, app, .. } => {
+                    let keep = !apps.contains(app);
+                    apps.push(*app);
+                    keep
+                }
+                _ => true,
+            });
+        }
+    });
+    assert_eq!(v, FAIL, "{b:#?}");
+    assert!(has(&b, FAIL, "opens C's second connection"), "{b:#?}");
 }
 
 #[test]

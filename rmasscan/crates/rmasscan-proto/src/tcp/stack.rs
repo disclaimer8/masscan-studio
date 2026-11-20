@@ -37,7 +37,14 @@ pub(crate) fn new_stack(
         connection_timeout_secs
     };
     TcpBannerStack {
-        table: Table::new(sessions, lifetime, p.capacity, p.banner_byte_budget),
+        table: Table::new(
+            sessions,
+            lifetime,
+            p.capacity,
+            p.banner_byte_budget,
+            p.seed,
+            p.source,
+        ),
         rst: RstFilter::new(p.seed),
     }
 }
@@ -147,10 +154,11 @@ impl TcpStack for TcpBannerStack {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tcp::app::{ByteBudget, Session, SessionAction};
+    use crate::tcp::app::{ByteBudget, Session, SessionAction, StreamDesc};
     use crate::tcp::tcb::{SEND_QUEUE_MAX_SEGMENTS, TcpState};
     use rmasscan_core::banner::BannerRecord;
     use rmasscan_core::stack::ConnAddrs;
+    use rmasscan_core::stack::SourceRanges;
     use std::collections::HashMap;
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
     use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -189,7 +197,10 @@ mod tests {
     /// `APP` столько, сколько дал бюджет.
     #[derive(Clone, Default)]
     struct Script {
-        hello: Option<Vec<u8>>,
+        hello: Option<Arc<[u8]>>,
+        next: Option<Arc<[u8]>>,
+        close_after: bool,
+        small: bool,
         replies: Vec<(usize, Vec<SessionAction>)>,
         parses: Arc<AtomicUsize>,
     }
@@ -197,13 +208,23 @@ mod tests {
     impl Script {
         fn hello(h: &[u8]) -> Script {
             Script {
-                hello: Some(h.to_vec()),
+                hello: Some(Arc::from(h)),
                 ..Script::default()
             }
         }
 
         fn null() -> Script {
             Script::default()
+        }
+
+        /// Поток TLS для реконнекта: hello первого соединения, `next`, FIN за hello.
+        fn tls_pair() -> Script {
+            Script {
+                hello: Some(Arc::from(&b"HELLO-A"[..])),
+                next: Some(Arc::from(&b"HELLO-B"[..])),
+                close_after: true,
+                ..Script::default()
+            }
         }
 
         fn reply(mut self, k: usize, acts: Vec<SessionAction>) -> Script {
@@ -218,13 +239,14 @@ mod tests {
 
     struct Stub {
         script: Script,
+        desc: StreamDesc,
         banner: Vec<u8>,
         parsed: usize,
     }
 
     impl Session for Stub {
-        fn hello(&self) -> Option<&[u8]> {
-            self.script.hello.as_deref()
+        fn stream(&self) -> &StreamDesc {
+            &self.desc
         }
 
         fn parse(&mut self, px: &[u8], budget: &mut ByteBudget, acts: &mut Vec<SessionAction>) {
@@ -249,8 +271,32 @@ mod tests {
     }
 
     impl Sessions for Script {
+        fn new_reconnect_session(&self, _remote_port: u16) -> Option<Box<dyn Session>> {
+            Some(Box::new(Stub {
+                desc: StreamDesc {
+                    hello: self.next.clone(),
+                    close_after_hello: false,
+                    next: None,
+                    small_window: self.small,
+                    is_tls: true,
+                    sets_ssl_hello: true,
+                },
+                script: self.clone(),
+                banner: Vec::new(),
+                parsed: 0,
+            }))
+        }
+
         fn new_session(&self, _remote_port: u16) -> Box<dyn Session> {
             Box::new(Stub {
+                desc: StreamDesc {
+                    hello: self.hello.clone(),
+                    close_after_hello: self.close_after,
+                    next: self.next.clone(),
+                    small_window: self.small,
+                    is_tls: self.next.is_some(),
+                    sets_ssl_hello: self.next.is_some(),
+                },
                 script: self.clone(),
                 banner: Vec::new(),
                 parsed: 0,
@@ -271,12 +317,52 @@ mod tests {
                 seed: 0x1122_3344_5566_7788,
                 capacity,
                 banner_byte_budget: budget,
+                source: rmasscan_core::stack::SourceRanges::default(),
             },
         )
     }
 
     fn stack(script: &Script) -> TcpBannerStack {
         stack_with(script, 30, 64, 1 << 20)
+    }
+
+    fn stack_with_source(
+        script: &Script,
+        lifetime: u32,
+        capacity: usize,
+        source: SourceRanges,
+    ) -> TcpBannerStack {
+        new_stack(
+            Arc::new(script.clone()),
+            lifetime,
+            TableParams {
+                seed: 0x1122_3344_5566_7788,
+                capacity,
+                banner_byte_budget: 1 << 20,
+                source,
+            },
+        )
+    }
+
+    const SEED: u64 = 0x1122_3344_5566_7788;
+
+    fn cookie_of(k: &ConnKey) -> u32 {
+        match k.addrs {
+            ConnAddrs::V4 { local, remote } => rmasscan_core::cookie::syn_cookie_ipv4(
+                remote,
+                u32::from(k.remote_port),
+                local,
+                u32::from(k.local_port),
+                SEED,
+            ) as u32,
+            ConnAddrs::V6 { local, remote } => rmasscan_core::cookie::syn_cookie_ipv6(
+                remote,
+                u32::from(k.remote_port),
+                local,
+                u32::from(k.local_port),
+                SEED,
+            ) as u32,
+        }
     }
 
     /// Кадр в сравнении: флаги, seq, ack, длина нагрузки.
@@ -377,7 +463,8 @@ mod tests {
                 tcbs_created: 1,
                 tcbs_live: 1,
                 table_full: 0,
-                banner_bytes_dropped: 0
+                banner_bytes_dropped: 0,
+                reconnect_no_port: 0
             }
         );
     }
@@ -606,7 +693,8 @@ mod tests {
                 tcbs_created: 2,
                 tcbs_live: 2,
                 table_full: 2,
-                banner_bytes_dropped: 0
+                banner_bytes_dropped: 0,
+                reconnect_no_port: 0
             }
         );
         let (took, _) = send(&mut st, T0 + 3, key(1), RST, R, 0, b"");
@@ -794,6 +882,345 @@ mod tests {
         assert_eq!(st.table.budget().left(), 10);
     }
 
+    /// Реконнект: на Connected потока с `next` таблица создаёт второй блок в SYN_SENT со следующего порта;
+    /// его SYN уходит на первом тике (+1 с) с seq = cookie нового четырёхкортежа и повторяется на тиках
+    /// (`src/stack-tcp-core.c:1646-1700,2005-2012`, справка §D1-D2).
+    #[test]
+    fn reconnect_creates_syn_sent_tcb_on_next_port() {
+        let script = Script::tls_pair();
+        let source = SourceRanges {
+            ports: (40000, 40016),
+            ipv4: Some((0x0a00_0001, 0x0a00_0001)),
+            ipv6: None,
+        };
+        let mut st = stack_with_source(&script, 30, 64, source);
+        let k1 = key(1);
+        let k2 = ConnKey {
+            local_port: 40001,
+            ..k1
+        };
+        synack(&mut st, T0, k1);
+        assert!(st.table.contains(&k2), "second TCB created");
+        assert_eq!(st.stats().tcbs_created, 2);
+        let cookie = cookie_of(&k2);
+        let mut out = StackOutput::default();
+        st.on_tick(T0 + SEC, &mut out);
+        let syns: Vec<&SegmentOut> = out
+            .segments
+            .iter()
+            .filter(|s| s.key == k2 && s.flags == 0x02)
+            .collect();
+        assert_eq!(syns.len(), 1);
+        assert_eq!(syns[0].seq, cookie);
+        assert_eq!(syns[0].ack, 0);
+        // Повтор на следующем тике сетки (+2 с от запланированного срока).
+        let mut out = StackOutput::default();
+        st.on_tick(T0 + 3 * SEC, &mut out);
+        assert!(
+            out.segments
+                .iter()
+                .any(|s| s.key == k2 && s.flags == 0x02 && s.seq == cookie),
+            "SYN resent"
+        );
+    }
+
+    /// Cookie реконнекта по IPv6 тот же, что проверит движок в `parse_reply`.
+    #[test]
+    fn reconnect_syn_seq_is_cookie_ipv6() {
+        let script = Script::tls_pair();
+        let source = SourceRanges {
+            ports: (40000, 40016),
+            ipv4: None,
+            ipv6: Some((
+                0xfd00_0000_0000_0000_0000_0000_0000_0001,
+                0xfd00_0000_0000_0000_0000_0000_0000_0001,
+            )),
+        };
+        let mut st = stack_with_source(&script, 30, 64, source);
+        let k1 = ConnKey {
+            addrs: ConnAddrs::V6 {
+                local: 0xfd00_0000_0000_0000_0000_0000_0000_0001,
+                remote: 0xfd00_0000_0000_0000_0000_0000_0000_0002,
+            },
+            local_port: 40000,
+            remote_port: 443,
+        };
+        let k2 = ConnKey {
+            local_port: 40001,
+            ..k1
+        };
+        synack(&mut st, T0, k1);
+        let mut out = StackOutput::default();
+        st.on_tick(T0 + SEC, &mut out);
+        let syn = out
+            .segments
+            .iter()
+            .find(|s| s.key == k2 && s.flags == 0x02)
+            .expect("SYN of the second connection");
+        assert_eq!(syn.seq, cookie_of(&k2));
+    }
+
+    /// `_next_IP_port` на границах: ширина 2 не даёт другого порта (`>= last` оборачивает), обёртка порта
+    /// двигает адрес, у IPv6 сравнение строгое.
+    #[test]
+    fn next_port_wraps_and_advances_ip() {
+        use super::super::table::next_ip_port;
+        let src = SourceRanges {
+            ports: (40000, 40001),
+            ipv4: Some((0x0a00_0001, 0x0a00_0003)),
+            ipv6: None,
+        };
+        let k = key(1);
+        let (addrs, port) = next_ip_port(&k, &src).expect("next");
+        assert_eq!(port, 40000);
+        assert_eq!(
+            addrs,
+            ConnAddrs::V4 {
+                local: 0x0a00_0002,
+                remote: 0x0a00_0101
+            }
+        );
+        // Ширина 17: с предпоследнего порта обёртка в первый и сдвиг адреса.
+        let src17 = SourceRanges {
+            ports: (40000, 40016),
+            ipv4: Some((0x0a00_0001, 0x0a00_0003)),
+            ipv6: None,
+        };
+        let k15 = ConnKey {
+            local_port: 40015,
+            ..k
+        };
+        let (addrs, port) = next_ip_port(&k15, &src17).expect("next");
+        assert_eq!(port, 40000);
+        assert!(matches!(
+            addrs,
+            ConnAddrs::V4 {
+                local: 0x0a00_0002,
+                ..
+            }
+        ));
+        // Обычный следующий порт без обёртки адреса не трогает.
+        let (addrs, port) = next_ip_port(&k, &src17).expect("next");
+        assert_eq!(port, 40001);
+        assert_eq!(addrs, k.addrs);
+    }
+
+    /// Один порт источника: реконнект считается, второго блока нет, первое соединение живёт дальше.
+    #[test]
+    fn reconnect_same_port_counted_not_created_twice() {
+        let script = Script::tls_pair();
+        let mut st = stack(&script);
+        synack(&mut st, T0, key(1));
+        synack(&mut st, T0, key(2));
+        assert_eq!(st.stats().reconnect_no_port, 2);
+        assert_eq!(st.stats().tcbs_created, 2);
+        assert_eq!(st.stats().tcbs_live, 2);
+    }
+
+    /// Второе соединение получает hello `next` без FIN за ним; первое — FIN за hello после подтверждения.
+    #[test]
+    fn second_connection_gets_next_hello_without_close() {
+        let script = Script::tls_pair();
+        let source = SourceRanges {
+            ports: (40000, 40016),
+            ipv4: Some((0x0a00_0001, 0x0a00_0001)),
+            ipv6: None,
+        };
+        let mut st = stack_with_source(&script, 30, 64, source);
+        let k1 = key(1);
+        let k2 = ConnKey {
+            local_port: 40001,
+            ..k1
+        };
+        synack(&mut st, T0, k1);
+        // Первое hello на +2 с, за ним в очереди FIN (уйдёт после ACK).
+        let mut out = StackOutput::default();
+        st.on_tick(T0 + 2 * SEC, &mut out);
+        let hello_a: Vec<&SegmentOut> = out
+            .segments
+            .iter()
+            .filter(|s| s.key == k1 && s.payload == b"HELLO-A")
+            .collect();
+        assert_eq!(hello_a.len(), 1);
+        let (_, _) = send(&mut st, T0 + 3 * SEC, k1, ACK, R, S + 7, b"");
+        // FIN за данными уходит на следующем тике (`fin_behind_hello_leaves_on_next_tick` автомата).
+        let mut out = StackOutput::default();
+        st.on_tick(T0 + 5 * SEC, &mut out);
+        assert!(
+            out.segments
+                .iter()
+                .any(|s| s.key == k1 && s.flags == 0x11 && s.payload.is_empty()),
+            "FIN after the first hello is acked: {:?}",
+            frames(&out)
+        );
+        // SYN-ACK второго: ACK на месте, hello B на +2 с от установления, без FIN следом.
+        let cookie = cookie_of(&k2);
+        let (took, _) = send(
+            &mut st,
+            T0 + 4 * SEC,
+            k2,
+            SYNACK,
+            R0,
+            cookie.wrapping_add(1),
+            b"",
+        );
+        assert!(took);
+        let mut out = StackOutput::default();
+        st.on_tick(T0 + 6 * SEC, &mut out);
+        let hello_b: Vec<&SegmentOut> = out
+            .segments
+            .iter()
+            .filter(|s| s.key == k2 && s.payload == b"HELLO-B")
+            .collect();
+        assert_eq!(hello_b.len(), 1);
+        let (_, out) = send(
+            &mut st,
+            T0 + 7 * SEC,
+            k2,
+            ACK,
+            R,
+            cookie.wrapping_add(1).wrapping_add(7),
+            b"",
+        );
+        assert!(
+            !out.segments
+                .iter()
+                .any(|s| s.key == k2 && s.flags & 0x01 != 0),
+            "no FIN after the next hello: {:?}",
+            frames(&out)
+        );
+    }
+
+    /// Малое окно heartbleed: кадры до SendFirst с окном шаблона, после — все с окном 600.
+    #[test]
+    fn small_window_on_all_frames_after_send_first() {
+        let mut script = Script::hello(b"HELLO");
+        script.small = true;
+        let mut st = stack(&script);
+        let (_, out) = {
+            let mut out = StackOutput::default();
+            let took = st.on_segment(T0, &seg_in(key(1), SYNACK, R0, S, b""), &mut out);
+            (took, out)
+        };
+        assert!(
+            out.segments.iter().all(|s| s.window.is_none()),
+            "before SendFirst"
+        );
+        let mut out = StackOutput::default();
+        st.on_tick(T0 + 2 * SEC, &mut out);
+        assert_eq!(out.segments.len(), 1);
+        assert_eq!(out.segments[0].window, Some(600));
+        let (_, out) = send(&mut st, T0 + 3 * SEC, key(1), PSHACK, R, S + 5, b"data");
+        assert!(
+            out.segments.iter().all(|s| s.window == Some(600)),
+            "after SendFirst: {:?}",
+            out.segments.iter().map(|s| s.window).collect::<Vec<_>>()
+        );
+    }
+
+    /// Реконнект без ответа умирает RST по сроку жизни, как обычное соединение; finish сбрасывает оба.
+    #[test]
+    fn reconnect_tcb_dies_by_lifetime_and_finish() {
+        let script = Script::tls_pair().reply(0, vec![]);
+        let source = SourceRanges {
+            ports: (40000, 40016),
+            ipv4: Some((0x0a00_0001, 0x0a00_0001)),
+            ipv6: None,
+        };
+        let mut st = stack_with_source(&script, 6, 64, source);
+        let k1 = key(1);
+        let k2 = ConnKey {
+            local_port: 40001,
+            ..k1
+        };
+        synack(&mut st, T0, k1);
+        // Срок жизни 6: RST на тике +8 с у обоих (созданы в T0).
+        let mut out = StackOutput::default();
+        st.on_tick(T0 + 8 * SEC, &mut out);
+        assert!(
+            out.segments.iter().any(|s| s.key == k2 && s.flags == RST),
+            "lifetime RST for the reconnect: {:?}",
+            frames(&out)
+        );
+        assert_eq!(st.stats().tcbs_live, 0);
+    }
+
+    /// Полная таблица: реконнект не создаётся и считается table_full, первое соединение не страдает.
+    #[test]
+    fn table_full_refuses_reconnect_without_status_loss() {
+        let script = Script::tls_pair();
+        let source = SourceRanges {
+            ports: (40000, 40016),
+            ipv4: Some((0x0a00_0001, 0x0a00_0001)),
+            ipv6: None,
+        };
+        let mut st = stack_with_source(&script, 30, 1, source);
+        synack(&mut st, T0, key(1));
+        assert_eq!(st.stats().tcbs_created, 1);
+        assert_eq!(st.stats().table_full, 1);
+        let mut out = StackOutput::default();
+        st.on_tick(T0 + 2 * SEC, &mut out);
+        assert!(
+            out.segments.iter().any(|s| s.payload == b"HELLO-A"),
+            "first connection still gets its hello"
+        );
+    }
+
+    /// Случайные сегменты и тики по паре соединений с реконнектом: таблица держит инварианты (один таймер на
+    /// блок, предел, потолок срока), кадры только флагов C (включая SYN реконнекта) и не длиннее MSS.
+    #[test]
+    fn stack_never_panics_with_reconnects() {
+        let script = Script::tls_pair();
+        let source = SourceRanges {
+            ports: (40000, 40016),
+            ipv4: Some((0x0a00_0001, 0x0a00_0002)),
+            ipv6: None,
+        };
+        let mut st = stack_with_source(&script, 6, 8, source);
+        let mut rng = Rng(0xABCD_EF01_2345_6789);
+        let pool = [key(1), key(2)];
+        let mut now = T0;
+        for _ in 0..3000 {
+            let k = pool[rng.below(pool.len())];
+            let mut out = StackOutput::default();
+            match rng.below(6) {
+                0 => st.on_tick(now, &mut out),
+                _ => {
+                    let flags = [SYNACK, ACK, PSHACK, FINACK, RST][rng.below(5)];
+                    let seq = [R0, R, R + 7, 0, u32::MAX][rng.below(5)];
+                    let ack = [
+                        S,
+                        S + 1,
+                        S + 7,
+                        cookie_of(&k),
+                        cookie_of(&k).wrapping_add(1),
+                    ][rng.below(5)];
+                    let plen = rng.below(64);
+                    let payload = rng.bytes(plen);
+                    let _ = st.on_segment(now, &seg_in(k, flags, seq, ack, &payload), &mut out);
+                }
+            }
+            for s in &out.segments {
+                assert!(s.payload.len() <= 1400);
+                assert!(
+                    matches!(s.flags, 0x02 | 0x04 | 0x10 | 0x11 | 0x18 | 0x19),
+                    "{:#x}",
+                    s.flags
+                );
+                assert!(
+                    s.key.local_port >= 40000 && s.key.local_port <= 40016,
+                    "local port {}",
+                    s.key.local_port
+                );
+            }
+            st.table.check();
+            now += (rng.below(3) as u64) * MS;
+        }
+        let mut out = StackOutput::default();
+        while st.finish(2, &mut out) {}
+        assert_eq!(st.stats().tcbs_live, 0);
+    }
+
     /// Ответ парсера уходит раньше ACK его данных (`_tcb_seg_recv`, `src/stack-tcp-core.c:1884-1896`), закрытие встаёт
     /// FIN-ом за ним (`tcpapi_send`, `tcpapi_close` из `banner1_parse`, `src/stack-tcp-core.c:2038-2041`).
     #[test]
@@ -833,7 +1260,9 @@ mod tests {
     #[test]
     fn hello_buffer_shared_across_connections() {
         let hello: Vec<u8> = (0..3000u32).map(|i| (i % 251) as u8).collect();
-        let mut st = stack(&Script::hello(&hello));
+        let script = Script::hello(&hello);
+        let shared = script.hello.as_ref().expect("hello");
+        let mut st = stack(&script);
         for n in 1..=3 {
             synack(&mut st, T0, key(n));
         }
@@ -842,19 +1271,15 @@ mod tests {
         for s in &out.segments {
             assert_eq!(s.payload, hello[..1400]);
         }
-        let shared = st.table.hellos().get(80).cloned().expect("port 80 hello");
-        assert_eq!(*shared, *hello);
         for n in 1..=3 {
             let tcb = st.table.tcb(&key(n)).expect("live");
             let spans: Vec<(usize, bool)> = tcb.queue_spans().iter().map(|s| (s.1, s.2)).collect();
             assert_eq!(spans, [(1400, false), (1400, false), (200, false)]);
             assert!(
-                tcb.queue_buffers().iter().all(|b| Arc::ptr_eq(b, &shared)),
+                tcb.queue_buffers().iter().all(|b| Arc::ptr_eq(b, shared)),
                 "conn {n}"
             );
         }
-        // Таблица и 3 x 3 сегмента, копий нет.
-        assert_eq!(Arc::strong_count(&shared), 1 + 1 + 9);
     }
 
     /// Финальное ревью, M1: посылка общего буфера (KEX SSH) встаёт в очередь каждого соединения без копии, а на провод
@@ -971,7 +1396,7 @@ mod tests {
 
     /// Нижняя граница памяти соединения: запись карты с TCB, запись таймера и сама сессия баннера (её `Box` в
     /// соединении указывает на `Banner1Session`). Значения скана сессия не копирует, а держит одним `Arc` (M4 ревью
-    /// задачи 8): сессия не больше 64 байт (было 80 с копиями hello, `--capture html` и выбора парсера).
+    /// задачи 8). Буферы повторных записей выделяют память только после приёма сертификата.
     #[test]
     fn memory_floor_counts_table_entry_tcb_and_session() {
         let floor = connection_memory_floor();
@@ -984,7 +1409,7 @@ mod tests {
             floor >= size_of::<crate::tcp::tcb::Tcb>() + session,
             "{floor}"
         );
-        assert!((48..=64).contains(&session), "{session}");
+        assert!((48..=120).contains(&session), "{session}");
         assert!(floor < 1024, "{floor}");
     }
 
@@ -1022,7 +1447,7 @@ mod tests {
 
     struct ChaosSession {
         rng: Rng,
-        hello: Option<Vec<u8>>,
+        desc: StreamDesc,
         banner: Vec<u8>,
         held: Arc<AtomicUsize>,
     }
@@ -1034,20 +1459,45 @@ mod tests {
                 80 => Some(b"GET / HTTP/1.0\r\n\r\n".to_vec()),
                 23 => Some(Vec::new()),
                 3389 => Some(vec![b'h'; 3000]),
+                443 => Some(b"CHAOS-HELLO-A".to_vec()),
                 _ => None,
             };
+            let mut desc = StreamDesc::plain(hello.map(|h| Arc::from(h.as_slice())));
+            if remote_port == 443 {
+                desc.next = Some(Arc::from(&b"CHAOS-HELLO-B"[..]));
+                desc.close_after_hello = true;
+                desc.is_tls = true;
+                desc.sets_ssl_hello = true;
+            }
             Box::new(ChaosSession {
                 rng: Rng((self.seed ^ n.wrapping_mul(0x9E37_79B9_7F4A_7C15)) | 1),
-                hello,
+                desc,
                 banner: Vec::new(),
                 held: Arc::clone(&self.held),
             })
         }
+
+        fn new_reconnect_session(&self, _remote_port: u16) -> Option<Box<dyn Session>> {
+            let n = self.made.fetch_add(1, Ordering::Relaxed);
+            Some(Box::new(ChaosSession {
+                rng: Rng((self.seed ^ n.wrapping_mul(0x9E37_79B9_7F4A_7C15)) | 1),
+                desc: StreamDesc {
+                    hello: Some(Arc::from(&b"CHAOS-HELLO-B"[..])),
+                    close_after_hello: false,
+                    next: None,
+                    small_window: false,
+                    is_tls: true,
+                    sets_ssl_hello: true,
+                },
+                banner: Vec::new(),
+                held: Arc::clone(&self.held),
+            }))
+        }
     }
 
     impl Session for ChaosSession {
-        fn hello(&self) -> Option<&[u8]> {
-            self.hello.as_deref()
+        fn stream(&self) -> &StreamDesc {
+            &self.desc
         }
 
         fn parse(&mut self, px: &[u8], budget: &mut ByteBudget, acts: &mut Vec<SessionAction>) {
@@ -1109,6 +1559,7 @@ mod tests {
                     seed: rng.next(),
                     capacity,
                     banner_byte_budget: budget,
+                    source: rmasscan_core::stack::SourceRanges::default(),
                 },
             );
             let keys: Vec<ConnKey> = [80u16, 23, 3389, 21, 80, 22]
@@ -1334,5 +1785,185 @@ mod tests {
             ConnAddrs::V4 { remote, .. } => IpAddr::V4(Ipv4Addr::from(remote)),
             ConnAddrs::V6 { remote, .. } => IpAddr::V6(Ipv6Addr::from(remote)),
         }
+    }
+}
+
+#[cfg(test)]
+mod certificate_connections {
+    use super::*;
+    use crate::TcpBannerSettings;
+    use crate::banner1::session::BannerConfig;
+    use rmasscan_core::stack::{ConnAddrs, SourceRanges};
+    use std::collections::HashSet;
+
+    fn k(remote: u32, local_port: u16, remote_port: u16) -> ConnKey {
+        ConnKey {
+            addrs: ConnAddrs::V4 {
+                local: 0x0a000001,
+                remote,
+            },
+            local_port,
+            remote_port,
+        }
+    }
+    fn new(s: &TcpBannerSettings) -> TcpBannerStack {
+        new_stack(
+            Arc::new(BannerConfig::new(s)),
+            3000,
+            TableParams {
+                seed: 42,
+                capacity: 1024,
+                banner_byte_budget: 0,
+                source: SourceRanges {
+                    ports: (40000, 40016),
+                    ipv4: Some((0x0a000001, 0x0a000001)),
+                    ipv6: None,
+                },
+            },
+        )
+    }
+    fn synack(st: &mut TcpBannerStack, key: ConnKey, now: u64) {
+        st.on_segment(
+            now,
+            &SegmentIn {
+                key,
+                seq: 100,
+                ack: 1000,
+                flags: 0x12,
+                ttl: 64,
+                payload: &[],
+            },
+            &mut StackOutput::default(),
+        );
+    }
+    fn timeout(st: &mut TcpBannerStack, key: ConnKey, now: u64) -> StackOutput {
+        let mut out = StackOutput::default();
+        st.table.event(
+            &key,
+            super::super::tcb::What::Timeout,
+            &[],
+            101,
+            1000,
+            now,
+            &mut out,
+        );
+        out
+    }
+
+    #[test]
+    fn shared_first_hello_survives_reconnect_hello() {
+        let mut s = TcpBannerSettings::default();
+        s.hello_strings.push((443, vec![b'x'; 8192]));
+        let mut st = new(&s);
+        let mut first_buffers = HashSet::new();
+        for n in 1..=8 {
+            let first = k(0x0a000100 + n, 40000, 443);
+            let second = k(0x0a000100 + n, 40001, 443);
+            let base = u64::from(n - 1) * 3_000_000;
+            synack(&mut st, first, base);
+            let mut out = StackOutput::default();
+            st.on_tick(base + 1_000_000, &mut out);
+            let syn = out
+                .segments
+                .iter()
+                .find(|s| s.key == second && s.flags == 2)
+                .unwrap();
+            st.on_segment(
+                base + 1_000_000,
+                &SegmentIn {
+                    key: second,
+                    seq: 100,
+                    ack: syn.seq.wrapping_add(1),
+                    flags: 0x12,
+                    ttl: 64,
+                    payload: &[],
+                },
+                &mut StackOutput::default(),
+            );
+            st.on_tick(base + 2_000_000, &mut StackOutput::default());
+            st.on_tick(base + 3_000_000, &mut StackOutput::default());
+            let q = st.table.tcb(&first).unwrap().queue_buffers();
+            first_buffers.insert(q[0].as_ptr() as usize);
+        }
+        assert_eq!(
+            first_buffers.len(),
+            1,
+            "same scan/port/hello must share the immutable buffer across reconnect interleaving"
+        );
+    }
+
+    #[test]
+    fn certificate_records_respect_shared_budget_and_return_it_on_finish() {
+        let one = [22, 3, 3, 0, 11, 11, 0, 0, 7, 0, 0, 4, 0, 0, 1, 97];
+        let stream = one.repeat(2000);
+        for capture in [false, true] {
+            for limit in [0, 267] {
+                let mut settings = TcpBannerSettings::default();
+                settings.tls.capture_cert = capture;
+                let mut st = new_stack(
+                    Arc::new(BannerConfig::new(&settings)),
+                    30,
+                    TableParams {
+                        seed: 1,
+                        capacity: 200,
+                        banner_byte_budget: limit,
+                        source: SourceRanges::default(),
+                    },
+                );
+                let mut observed = StackOutput::default();
+                for n in 0..200 {
+                    synack(&mut st, k(0xc0000200 + n, 40000, 443), 0);
+                }
+                st.on_tick(3_000_000, &mut observed);
+                let hello = observed
+                    .segments
+                    .iter()
+                    .find(|s| !s.payload.is_empty())
+                    .unwrap();
+                let ack = hello.seq.wrapping_add(hello.payload.len() as u32);
+                for n in 0..200 {
+                    let key = k(0xc0000200 + n, 40000, 443);
+                    let mut seq = 101;
+                    for chunk in stream.chunks(1459) {
+                        let mut out = StackOutput::default();
+                        st.on_segment(
+                            3_000_001,
+                            &SegmentIn {
+                                key,
+                                seq,
+                                ack,
+                                flags: 0x18,
+                                ttl: 64,
+                                payload: chunk,
+                            },
+                            &mut out,
+                        );
+                        seq += chunk.len() as u32;
+                    }
+                }
+                let mut out = StackOutput::default();
+                assert!(!st.finish(200, &mut out));
+                let kept: usize = out.banners.iter().flatten().map(|r| r.payload.len()).sum();
+                let total = if capture { 200 * 2000 * 4 } else { 0 };
+                assert_eq!(st.stats().banner_bytes_dropped, (total - kept) as u64);
+                assert!(kept <= limit);
+                assert_eq!(st.table.budget().left(), limit);
+                assert_eq!(st.stats().tcbs_live, 0);
+            }
+        }
+    }
+
+    #[test]
+    fn empty_tls_hello_sends_no_fin_like_c() {
+        let mut s = TcpBannerSettings::default();
+        s.hello_strings.push((443, Vec::new()));
+        let mut st = new(&s);
+        let key = k(0x0a000123, 40000, 443);
+        synack(&mut st, key, 0);
+        let out = timeout(&mut st, key, 2_000_000);
+        assert!(
+            out.segments.is_empty(),
+            "C only closes inside the non-empty hello branch"
+        );
     }
 }

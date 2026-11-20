@@ -1,0 +1,3 @@
+tls-input v1
+flags nocert poodle
+segment 15030000020228

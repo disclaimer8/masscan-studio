@@ -81,35 +81,106 @@ impl Default for PacketModifiers {
     }
 }
 
+/// Байты опций TCP SYN: все четыре опции занимают 19 байт, с выравниванием 20, поэтому `doff <= 10`.
+struct TcpOptionBytes {
+    buf: [u8; 20],
+    len: usize,
+}
+
+impl TcpOptionBytes {
+    fn as_slice(&self) -> &[u8] {
+        &self.buf[..self.len]
+    }
+}
+
 /// Байты опций TCP, дополненные нулями (EOL) до границы 4 байт
 /// (templ-tcp-hdr.c:1066-1119 `templ_tcp_apply_options`, :843 `tcp_add_opt`).
-/// Не длиннее 20 байт, поэтому `doff <= 10`.
-fn tcp_option_bytes(o: &TcpHeaderOptions) -> Vec<u8> {
-    let mut b = Vec::new();
+/// Буфер нулевой, поэтому дополнение это округление длины вверх до кратной 4.
+fn tcp_option_bytes(o: &TcpHeaderOptions) -> TcpOptionBytes {
+    let mut buf = [0u8; 20];
+    let mut len = 0;
+    let mut put = |bytes: &[u8]| {
+        buf[len..len + bytes.len()].copy_from_slice(bytes);
+        len += bytes.len();
+    };
     if let Some(mss) = o.mss {
         // kind 2, len 4.
-        b.extend_from_slice(&[2, 4]);
-        b.extend_from_slice(&mss.to_be_bytes());
+        put(&[2, 4]);
+        put(&mss.to_be_bytes());
     }
     if o.sackok {
         // kind 4, len 2.
-        b.extend_from_slice(&[4, 2]);
+        put(&[4, 2]);
     }
     if let Some(ws) = o.wscale {
         // kind 3, len 3.
-        b.extend_from_slice(&[3, 3, ws]);
+        put(&[3, 3, ws]);
     }
     if let Some(ts) = o.tsecho {
         // kind 8, len 10: TSval и нулевой TSecr. Все 4 байта значения (Р9:
         // C затирает `field[2]` на :1111-1112 и теряет `ts >> 8`).
-        b.extend_from_slice(&[8, 10]);
-        b.extend_from_slice(&ts.to_be_bytes());
-        b.extend_from_slice(&[0; 4]);
+        put(&[8, 10]);
+        put(&ts.to_be_bytes());
+        put(&[0; 4]);
     }
-    while b.len() % 4 != 0 {
-        b.push(0);
+    TcpOptionBytes {
+        buf,
+        len: len.next_multiple_of(4),
     }
-    b
+}
+
+/// DATALINK KLUDGE, templ-pkt.c:1342-1360, общий для четырёх шаблонов IPv4: Ethernet остаётся как есть, у `DLT_NULL`
+/// 14 байт Ethernet заменяет 4-байтный `linkproto` (см. [`TcpSynTemplate::new`]), у `DLT_RAW` кадр начинается с IP.
+/// Возвращает пакет и новые смещения IP и L4.
+fn relink(
+    px: Vec<u8>,
+    link: LinkType,
+    offset_ip: usize,
+    offset_l4: usize,
+) -> (Vec<u8>, usize, usize) {
+    match link {
+        LinkType::Ethernet => (px, offset_ip, offset_l4),
+        LinkType::Null => {
+            let mut p = 2u32.to_ne_bytes().to_vec();
+            p.extend_from_slice(&px[offset_ip..]);
+            (p, 4, offset_l4 - (offset_ip - 4))
+        }
+        LinkType::Raw => (px[offset_ip..].to_vec(), 0, offset_l4 - offset_ip),
+    }
+}
+
+/// Заголовок длиной `N` с байта `at`: шаблоны держат заголовки IP и L4 целиком, поэтому паники здесь не бывает.
+fn header<const N: usize>(out: &mut [u8], at: usize) -> &mut [u8; N] {
+    out[at..]
+        .first_chunk_mut::<N>()
+        .expect("the template holds the whole header")
+}
+
+/// Поля IPv4-заголовка, которые `template_set_target_ipv4` пишет в каждый кадр (templ-pkt.c:942-988): полная длина,
+/// ID, адреса и сумма. Сумма идёт приращением от `base` вместо полного пересчёта (:988): `base` это сумма заголовка
+/// шаблона при нулевых ID, сумме и адресах (у UDP вызывающий прибавляет к ней полную длину: она зависит от нагрузки),
+/// к ней прибавляются младшие 16 бит `ip_id` и 16-битные половины адресов. Результат равен полному пересчёту для
+/// любых входов: обе суммы положительны (слово `0x45xx` есть всегда) и равны по модулю 0xFFFF, а свёртка
+/// положительного числа даёт представителя в 1..=0xFFFF.
+fn write_ipv4_header(
+    ip: &mut [u8; 20],
+    base: u64,
+    total_length: u16,
+    ip_id: u32,
+    ip_me: u32,
+    ip_them: u32,
+) {
+    ip[2..4].copy_from_slice(&total_length.to_be_bytes());
+    ip[4..6].copy_from_slice(&(ip_id as u16).to_be_bytes());
+    ip[12..16].copy_from_slice(&ip_me.to_be_bytes());
+    ip[16..20].copy_from_slice(&ip_them.to_be_bytes());
+    let sum = base
+        + u64::from(ip_id & 0xFFFF)
+        + u64::from(ip_me >> 16)
+        + u64::from(ip_me & 0xFFFF)
+        + u64::from(ip_them >> 16)
+        + u64::from(ip_them & 0xFFFF);
+    ip[10..12].copy_from_slice(&(!fold(sum)).to_be_bytes());
 }
 
 /// Заведомо неверная TCP-сумма для `--badsum` (Р9): `csum - 1`. Для 0 нужна
@@ -154,7 +225,7 @@ impl TcpSynTemplate {
     ) -> Self {
         // Базовые 54 байта и опции TCP отдельно.
         let mut px = DEFAULT_TCP_TEMPLATE[..54].to_vec();
-        px.extend_from_slice(&tcp_option_bytes(&mods.tcp));
+        px.extend_from_slice(tcp_option_bytes(&mods.tcp).as_slice());
         let (offset_ip, offset_tcp, offset_app) = (14usize, 34usize, px.len());
         // Длина IP и смещение данных TCP под новые опции.
         let tcp_len = offset_app - offset_tcp;
@@ -182,15 +253,7 @@ impl TcpSynTemplate {
         let checksum_tcp = tcp_ipv4_partial(&px, offset_ip, offset_tcp, offset_app);
 
         // DATALINK KLUDGE, templ-pkt.c:1342-1360.
-        let (packet, offset_ip, offset_tcp) = match link {
-            LinkType::Ethernet => (px, offset_ip, offset_tcp),
-            LinkType::Null => {
-                let mut p = 2u32.to_ne_bytes().to_vec();
-                p.extend_from_slice(&px[offset_ip..]);
-                (p, 4, offset_tcp - (offset_ip - 4))
-            }
-            LinkType::Raw => (px[offset_ip..].to_vec(), 0, offset_tcp - offset_ip),
-        };
+        let (packet, offset_ip, offset_tcp) = relink(px, link, offset_ip, offset_tcp);
         Self {
             packet,
             offset_ip,
@@ -233,19 +296,15 @@ impl TcpSynTemplate {
         out.extend_from_slice(&self.packet);
         let (oi, ot) = (self.offset_ip, self.offset_tcp);
         let ip_id = ip_them ^ u32::from(port_them) ^ seqno; // :942
-
         let total_length = (self.packet.len() - oi) as u16;
-        out[oi + 2..oi + 4].copy_from_slice(&total_length.to_be_bytes());
-        out[oi + 4..oi + 6].copy_from_slice(&(ip_id as u16).to_be_bytes());
-        out[oi + 12..oi + 16].copy_from_slice(&ip_me.to_be_bytes());
-        out[oi + 16..oi + 20].copy_from_slice(&ip_them.to_be_bytes());
-        out[oi + 10..oi + 12].fill(0);
-        let xsum2 = !ip_header_checksum(out, oi, out.len()); // :988
-        out[oi + 10..oi + 12].copy_from_slice(&xsum2.to_be_bytes());
+        // :988 приращением; длина постоянна и уже в `checksum_ip`.
+        let base = u64::from(self.checksum_ip);
+        write_ipv4_header(header(out, oi), base, total_length, ip_id, ip_me, ip_them);
 
-        out[ot..ot + 2].copy_from_slice(&port_me.to_be_bytes());
-        out[ot + 2..ot + 4].copy_from_slice(&port_them.to_be_bytes());
-        out[ot + 4..ot + 8].copy_from_slice(&seqno.to_be_bytes());
+        let tcp = header::<20>(out, ot);
+        tcp[0..2].copy_from_slice(&port_me.to_be_bytes());
+        tcp[2..4].copy_from_slice(&port_them.to_be_bytes());
+        tcp[4..8].copy_from_slice(&seqno.to_be_bytes());
 
         // :1009-1018: сумма в uint64_t, три свёртки, инверсия.
         let xsum = u64::from(self.checksum_tcp)
@@ -259,7 +318,7 @@ impl TcpSynTemplate {
             // Р9: IPv4-сумма остаётся верной, портится только L4.
             csum = corrupt_tcp_checksum(csum);
         }
-        out[ot + 16..ot + 18].copy_from_slice(&csum.to_be_bytes());
+        tcp[16..18].copy_from_slice(&csum.to_be_bytes());
     }
 }
 
@@ -333,7 +392,7 @@ impl Tcp6SynTemplate {
     ) -> Self {
         // TCP-сегмент IPv4-шаблона: базовые 20 байт и опции; порты, seqno и сумма нулевые (:1317-1318).
         let mut tcp = DEFAULT_TCP_TEMPLATE[34..54].to_vec();
-        tcp.extend_from_slice(&tcp_option_bytes(&mods.tcp));
+        tcp.extend_from_slice(tcp_option_bytes(&mods.tcp).as_slice());
         tcp[12] = ((tcp.len() / 4) as u8) << 4;
         tcp[0..8].fill(0);
         tcp[16..18].fill(0);
@@ -431,6 +490,8 @@ pub struct IcmpEchoTemplate {
     packet: Vec<u8>,
     offset_ip: usize,
     offset_icmp: usize,
+    /// Сумма IP-заголовка шаблона при нулевых ID, сумме и адресах (как `checksum_ip` у TCP).
+    ip_base: u16,
     /// Сумма ICMP-сообщения без инверсии при нулевых `[id|seq]`: `icmp_checksum2`, templ-pkt.c:320-336.
     checksum_icmp: u16,
 }
@@ -448,22 +509,16 @@ impl IcmpEchoTemplate {
         px[offset_ip + 4..offset_ip + 6].fill(0);
         px[offset_ip + 10..offset_ip + 12].fill(0);
         px[offset_ip + 12..offset_ip + 20].fill(0);
+        let ip_base = ip_header_checksum(&px, offset_ip, px.len());
         // icmp_checksum2: сумма слов всего сообщения (поле суммы и [id|seq] нулевые), три свёртки.
         let checksum_icmp = fold(word_sum(&px[offset_icmp..]));
         // DATALINK KLUDGE, templ-pkt.c:1342-1360 (как у TCP).
-        let (packet, offset_ip, offset_icmp) = match link {
-            LinkType::Ethernet => (px, offset_ip, offset_icmp),
-            LinkType::Null => {
-                let mut p = 2u32.to_ne_bytes().to_vec();
-                p.extend_from_slice(&px[offset_ip..]);
-                (p, 4, offset_icmp - (offset_ip - 4))
-            }
-            LinkType::Raw => (px[offset_ip..].to_vec(), 0, offset_icmp - offset_ip),
-        };
+        let (packet, offset_ip, offset_icmp) = relink(px, link, offset_ip, offset_icmp);
         Self {
             packet,
             offset_ip,
             offset_icmp,
+            ip_base,
             checksum_icmp,
         }
     }
@@ -485,19 +540,16 @@ impl IcmpEchoTemplate {
         // :942: `port_them` здесь индекс Templ_ICMP_echo (196608), в ip_id берутся младшие 16 бит.
         let ip_id = ip_them ^ TEMPL_ICMP_ECHO ^ seqno;
         let total_length = (self.packet.len() - oi) as u16;
-        out[oi + 2..oi + 4].copy_from_slice(&total_length.to_be_bytes());
-        out[oi + 4..oi + 6].copy_from_slice(&(ip_id as u16).to_be_bytes());
-        out[oi + 12..oi + 16].copy_from_slice(&ip_me.to_be_bytes());
-        out[oi + 16..oi + 20].copy_from_slice(&ip_them.to_be_bytes());
-        out[oi + 10..oi + 12].fill(0);
-        let xsum2 = !ip_header_checksum(out, oi, out.len()); // :988
-        out[oi + 10..oi + 12].copy_from_slice(&xsum2.to_be_bytes());
+        // :988 приращением; длина постоянна и уже в `ip_base`.
+        let base = u64::from(self.ip_base);
+        write_ipv4_header(header(out, oi), base, total_length, ip_id, ip_me, ip_them);
 
         // :1067-1079: cookie в [id|seq], сумма = ~fold(checksum_tcp + cookie) в uint64_t.
         let cookie = icmp_echo_cookie(ip_them, ip_me, entropy);
-        out[oc + 4..oc + 8].copy_from_slice(&cookie.to_be_bytes());
         let csum = !fold(u64::from(self.checksum_icmp) + u64::from(cookie));
-        out[oc + 2..oc + 4].copy_from_slice(&csum.to_be_bytes());
+        let icmp = header::<8>(out, oc);
+        icmp[2..4].copy_from_slice(&csum.to_be_bytes());
+        icmp[4..8].copy_from_slice(&cookie.to_be_bytes());
     }
 }
 
@@ -513,12 +565,14 @@ pub const DEFAULT_UDP_TEMPLATE: &[u8] = &[
 ];
 
 /// Шаблон UDP (`Proto_UDP`). Нагрузка подставляется при сборке кадра (`udp_payload_fixup`, templ-pkt.c:618), поэтому
-/// в шаблоне частичных сумм нет: сумма UDP считается по готовой датаграмме.
+/// частичной суммы UDP в шаблоне нет: она считается по готовой датаграмме.
 #[derive(Clone, Debug)]
 pub struct UdpTemplate {
     packet: Vec<u8>,
     offset_ip: usize,
     offset_udp: usize,
+    /// Сумма IP-заголовка шаблона при нулевых ID, сумме, адресах и полной длине: длина зависит от нагрузки.
+    ip_base: u16,
 }
 
 impl UdpTemplate {
@@ -535,20 +589,18 @@ impl UdpTemplate {
         px[offset_ip + 10..offset_ip + 12].fill(0);
         px[offset_ip + 12..offset_ip + 20].fill(0);
         px[offset_udp + 6..offset_udp + 8].fill(0);
+        // База суммы по копии заголовка с нулевой длиной; в шаблоне длина остаётся 28, кадр её перезаписывает.
+        let mut ip = [0u8; 20];
+        ip.copy_from_slice(&px[offset_ip..offset_ip + 20]);
+        ip[2..4].fill(0);
+        let ip_base = ip_header_checksum(&ip, 0, ip.len());
         // DATALINK KLUDGE, templ-pkt.c:1342-1360 (как у TCP).
-        let (packet, offset_ip, offset_udp) = match link {
-            LinkType::Ethernet => (px, offset_ip, offset_udp),
-            LinkType::Null => {
-                let mut p = 2u32.to_ne_bytes().to_vec();
-                p.extend_from_slice(&px[offset_ip..]);
-                (p, 4, offset_udp - (offset_ip - 4))
-            }
-            LinkType::Raw => (px[offset_ip..].to_vec(), 0, offset_udp - offset_ip),
-        };
+        let (packet, offset_ip, offset_udp) = relink(px, link, offset_ip, offset_udp);
         Self {
             packet,
             offset_ip,
             offset_udp,
+            ip_base,
         }
     }
 
@@ -567,26 +619,23 @@ impl UdpTemplate {
         out.clear();
         out.extend_from_slice(&self.packet);
         if let Some(e) = payload {
-            out.extend_from_slice(&e.with_cookie(seqno));
+            e.append_with_cookie(seqno, out);
         }
         let (oi, ou) = (self.offset_ip, self.offset_udp);
         let ip_id = ip_them ^ u32::from(port_them) ^ seqno; // :942
         let total_length = (out.len() - oi) as u16;
-        out[oi + 2..oi + 4].copy_from_slice(&total_length.to_be_bytes());
-        out[oi + 4..oi + 6].copy_from_slice(&(ip_id as u16).to_be_bytes());
-        out[oi + 12..oi + 16].copy_from_slice(&ip_me.to_be_bytes());
-        out[oi + 16..oi + 20].copy_from_slice(&ip_them.to_be_bytes());
-        out[oi + 10..oi + 12].fill(0);
-        let xsum2 = !ip_header_checksum(out, oi, out.len()); // :988
-        out[oi + 10..oi + 12].copy_from_slice(&xsum2.to_be_bytes());
+        // :988 приращением; длины в `ip_base` нет, она зависит от нагрузки.
+        let base = u64::from(self.ip_base) + u64::from(total_length);
+        write_ipv4_header(header(out, oi), base, total_length, ip_id, ip_me, ip_them);
 
         let udp_length = (out.len() - ou) as u16; // :1030 `length - offset_app + 8`
-        out[ou..ou + 2].copy_from_slice(&port_me.to_be_bytes());
-        out[ou + 2..ou + 4].copy_from_slice(&port_them.to_be_bytes());
-        out[ou + 4..ou + 6].copy_from_slice(&udp_length.to_be_bytes());
-        out[ou + 6..ou + 8].fill(0);
+        let udp = header::<8>(out, ou);
+        udp[0..2].copy_from_slice(&port_me.to_be_bytes());
+        udp[2..4].copy_from_slice(&port_them.to_be_bytes());
+        udp[4..6].copy_from_slice(&udp_length.to_be_bytes());
+        udp[6..8].fill(0);
         let csum = udp_ipv4_checksum(ip_me, ip_them, &out[ou..]);
-        out[ou + 6..ou + 8].copy_from_slice(&csum.to_be_bytes());
+        header::<8>(out, ou)[6..8].copy_from_slice(&csum.to_be_bytes());
     }
 }
 
@@ -606,12 +655,14 @@ pub const DEFAULT_SCTP_INIT_TEMPLATE: &[u8] = &[
     0x46, 0x1a, 0xdf, 0x3d,
 ];
 
-/// Шаблон SCTP INIT (`Proto_SCTP`). Частичных сумм нет: CRC-32C считается по готовому пакету (32 байта).
+/// Шаблон SCTP INIT (`Proto_SCTP`). Частичной суммы SCTP нет: CRC-32C считается по готовому пакету (32 байта).
 #[derive(Clone, Debug)]
 pub struct SctpTemplate {
     packet: Vec<u8>,
     offset_ip: usize,
     offset_sctp: usize,
+    /// Сумма IP-заголовка шаблона при нулевых ID, сумме и адресах (как `checksum_ip` у TCP).
+    ip_base: u16,
 }
 
 impl SctpTemplate {
@@ -627,20 +678,14 @@ impl SctpTemplate {
         px[offset_ip + 4..offset_ip + 6].fill(0);
         px[offset_ip + 10..offset_ip + 12].fill(0);
         px[offset_ip + 12..offset_ip + 20].fill(0);
+        let ip_base = ip_header_checksum(&px, offset_ip, px.len());
         // DATALINK KLUDGE, templ-pkt.c:1342-1360 (как у TCP).
-        let (packet, offset_ip, offset_sctp) = match link {
-            LinkType::Ethernet => (px, offset_ip, offset_sctp),
-            LinkType::Null => {
-                let mut p = 2u32.to_ne_bytes().to_vec();
-                p.extend_from_slice(&px[offset_ip..]);
-                (p, 4, offset_sctp - (offset_ip - 4))
-            }
-            LinkType::Raw => (px[offset_ip..].to_vec(), 0, offset_sctp - offset_ip),
-        };
+        let (packet, offset_ip, offset_sctp) = relink(px, link, offset_ip, offset_sctp);
         Self {
             packet,
             offset_ip,
             offset_sctp,
+            ip_base,
         }
     }
 
@@ -661,19 +706,17 @@ impl SctpTemplate {
         let (oi, os) = (self.offset_ip, self.offset_sctp);
         let ip_id = ip_them ^ u32::from(port_them) ^ seqno; // :942
         let total_length = (self.packet.len() - oi) as u16;
-        out[oi + 2..oi + 4].copy_from_slice(&total_length.to_be_bytes());
-        out[oi + 4..oi + 6].copy_from_slice(&(ip_id as u16).to_be_bytes());
-        out[oi + 12..oi + 16].copy_from_slice(&ip_me.to_be_bytes());
-        out[oi + 16..oi + 20].copy_from_slice(&ip_them.to_be_bytes());
-        out[oi + 10..oi + 12].fill(0);
-        let xsum2 = !ip_header_checksum(out, oi, out.len()); // :988
-        out[oi + 10..oi + 12].copy_from_slice(&xsum2.to_be_bytes());
+        // :988 приращением; длина постоянна и уже в `ip_base`.
+        let base = u64::from(self.ip_base);
+        write_ipv4_header(header(out, oi), base, total_length, ip_id, ip_me, ip_them);
 
-        out[os..os + 2].copy_from_slice(&port_me.to_be_bytes());
-        out[os + 2..os + 4].copy_from_slice(&port_them.to_be_bytes());
-        out[os + 16..os + 20].copy_from_slice(&seqno.to_be_bytes());
+        // Общий заголовок SCTP 12 байт и начало чанка INIT: initiate_tag на 16..20.
+        let sctp = header::<20>(out, os);
+        sctp[0..2].copy_from_slice(&port_me.to_be_bytes());
+        sctp[2..4].copy_from_slice(&port_them.to_be_bytes());
+        sctp[16..20].copy_from_slice(&seqno.to_be_bytes());
         let xsum = sctp_crc32c(&out[os..]);
-        out[os + 8..os + 12].copy_from_slice(&xsum.to_be_bytes());
+        header::<20>(out, os)[8..12].copy_from_slice(&xsum.to_be_bytes());
     }
 }
 
@@ -982,7 +1025,7 @@ mod tests {
         }
         // Пустая заготовка совпадает с константой побайтно (58 байт).
         let mut px = DEFAULT_TCP_TEMPLATE[..54].to_vec();
-        px.extend_from_slice(&tcp_option_bytes(&TcpHeaderOptions::default()));
+        px.extend_from_slice(tcp_option_bytes(&TcpHeaderOptions::default()).as_slice());
         px[14 + 8] = PacketModifiers::default().ttl;
         assert_eq!(px, DEFAULT_TCP_TEMPLATE);
         assert_eq!(syn_with(&PacketModifiers::default()).len(), 58);

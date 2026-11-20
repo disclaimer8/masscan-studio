@@ -1,0 +1,53 @@
+{
+  "clean": false,
+  "corpus": {
+    "golden": 32,
+    "scenario": 28
+  },
+  "crashes": 0,
+  "elapsed_s": 120.00902025,
+  "family": "x509",
+  "family_seeds": 36,
+  "findings": [],
+  "inputs": 222482,
+  "inputs_sha256": "4bbb3edddf7fcda730ab4ae2c7acded243681ac246d30e0988da7db441f96c4f",
+  "invariant_failures": 0,
+  "limit": "120 s",
+  "max_segment_bytes": 1460,
+  "max_stream_bytes": 65536,
+  "memory_measured": false,
+  "rss_kib": {
+    "first": null,
+    "growth": null,
+    "growth_limit": 65536,
+    "last": null,
+    "max": null,
+    "measured": false,
+    "samples": []
+  },
+  "schema": 1,
+  "seed": 20261115,
+  "slow_over_100ms": 0,
+  "slow_threshold_ms": 100,
+  "split_mismatches": 0,
+  "stats": {
+    "connections": 0,
+    "delivered": {
+      "closed": 0,
+      "compared": 0,
+      "incomplete": 0,
+      "stalled_on_own_queue": 0
+    },
+    "inputs_with_actions": 0,
+    "inputs_with_records": 89895,
+    "max_record_bytes": 709,
+    "max_segments": 65536,
+    "max_split_us": 15374,
+    "max_stream_bytes": 65536,
+    "max_us": 5901,
+    "mean_ns": 66149,
+    "records": 89895
+  },
+  "tool": "rmasscan-lab fuzz tcp",
+  "verdict": "MEMORY NOT MEASURED"
+}

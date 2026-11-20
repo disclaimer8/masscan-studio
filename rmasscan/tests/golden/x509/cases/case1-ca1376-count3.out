@@ -1,0 +1,5 @@
+x509-oracle v1 count=3 bytes=1032
+run whole calls=1
+end
+run bytewise calls=1032
+end

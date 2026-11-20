@@ -105,6 +105,12 @@ pub const TARGETS: &str = pv::TARGETS;
 pub const RATE: &str = pv::RATE;
 pub const WAIT: &str = pv::WAIT;
 pub const SOURCE_PORT: u16 = pv::SOURCE_PORT;
+/// The source-port range of a case that expects the stack's second connections (TLS `--cert`, D1) and of the
+/// native stands: `--source-port 40000-40015`. Sixteen ports: the plan's hash picks the first connection's
+/// port in the range, C's `_next_IP_port` the second one's.
+pub const fn source_range() -> (u16, u16) {
+    (SOURCE_PORT, SOURCE_PORT + 15)
+}
 /// The UDP ports of the window: C's eight parser ports (`src/proto-udp.c:76-113`; ZeroAccess by its first port) and
 /// 1900, a port with a built-in probe and no parser (the `default` branch).
 pub const PORTS: [u16; 9] = [53, 123, 137, 161, 500, 1900, 5683, 11211, 16464];
@@ -188,6 +194,9 @@ pub struct BannerExpect {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tcp: Option<TcpExpect>,
 }
+fn stand_source_ports() -> (u16, u16) {
+    (SOURCE_PORT, SOURCE_PORT)
+}
 /// What `expect.json` records of a TCP case beyond its steps.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -196,6 +205,13 @@ pub struct TcpExpect {
     pub neighbour_entry: bool,
     pub banners: bool,
     pub noreset: bool,
+    /// Extra scanner arguments after `--banners` (a vuln mode of 4c).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub extra_args: Vec<String>,
+    /// The `--source-port` range, inclusive; the single stand port by default. A range lets the stack's
+    /// second (TLS) connection take the next port (_next_IP_port, reference §D1).
+    #[serde(default = "stand_source_ports")]
+    pub source_ports: (u16, u16),
     pub connection_timeout: Option<u32>,
     pub wait: u32,
     /// The responder heartbeats the link (every TCP case but the quiet control, [`TcpCase::quiet`]).
@@ -220,6 +236,8 @@ pub fn expect(tag: &str) -> Option<BannerExpect> {
                 neighbour_entry: !c.resolve,
                 banners: c.banners,
                 noreset: c.noreset,
+                extra_args: c.extra_args.iter().map(|x| (*x).to_owned()).collect(),
+                source_ports: c.source_ports,
                 connection_timeout: c.connection_timeout,
                 wait: c.wait,
                 heartbeat: !c.quiet,
@@ -271,7 +289,7 @@ pub const PEER_MAC_ARG: &str = "02-aa-00-00-00-02";
 pub const TCP_PORTS: [u16; 11] = [21, 22, 23, 25, 80, 110, 143, 3389, 5900, 11211, 25565];
 const TCP_PORTS_LIST: &str = "21,22,23,25,80,110,143,3389,5900,11211,25565";
 /// The ports of C's hello table (`banner1_create`, `src/proto-banner1.c:518-610`, B4) the window scans.
-pub const TCP_HELLO_PORTS: [u16; 5] = [23, 80, 3389, 11211, 25565];
+pub const TCP_HELLO_PORTS: [u16; 6] = [23, 80, 443, 3389, 11211, 25565];
 pub const TCP_TARGETS6: &str = "[fd00:198:18::2]-[fd00:198:18::5]";
 /// The responder's mode that answers with [`TCP_SCENARIOS`] (`capture responder --tcp-answer banners`).
 pub const TCP_ANSWER: &str = "banners";
@@ -310,6 +328,11 @@ pub struct TcpCase {
     pub ports: &'static str,
     pub banners: bool,
     pub noreset: bool,
+    /// Extra scanner arguments after `--banners` (a vuln mode of 4c).
+    pub extra_args: &'static [&'static str],
+    /// The `--source-port` range, inclusive; the single stand port by default. A range lets the stack's
+    /// second (TLS) connection take the next port (_next_IP_port, reference §D1).
+    pub source_ports: (u16, u16),
     pub connection_timeout: Option<u32>,
     pub wait: u32,
     pub outs: &'static [Out],
@@ -366,7 +389,7 @@ const V6_SHORT: &[&str] = &[
 ];
 /// The quiet control has no C step: only the condition on the peer's segments.
 const QUIET: &[&str] = &["rx-checksum-verify"];
-pub const TCP_CASES: [TcpCase; 9] = [
+pub const TCP_CASES: [TcpCase; 12] = [
     TcpCase {
         tag: "t01_tcp4",
         v6: false,
@@ -375,6 +398,8 @@ pub const TCP_CASES: [TcpCase; 9] = [
         ports: TCP_PORTS_LIST,
         banners: true,
         noreset: false,
+        extra_args: &[],
+        source_ports: (SOURCE_PORT, SOURCE_PORT),
         connection_timeout: Some(8),
         wait: 14,
         outs: &[Out::Binary, Out::List],
@@ -389,6 +414,8 @@ pub const TCP_CASES: [TcpCase; 9] = [
         ports: TCP_PORTS_LIST,
         banners: true,
         noreset: false,
+        extra_args: &[],
+        source_ports: (SOURCE_PORT, SOURCE_PORT),
         connection_timeout: Some(8),
         wait: 14,
         outs: &[Out::Binary, Out::List],
@@ -403,6 +430,8 @@ pub const TCP_CASES: [TcpCase; 9] = [
         ports: "80,3389",
         banners: true,
         noreset: false,
+        extra_args: &[],
+        source_ports: (SOURCE_PORT, SOURCE_PORT),
         connection_timeout: None,
         wait: 6,
         outs: &[Out::Binary],
@@ -417,6 +446,8 @@ pub const TCP_CASES: [TcpCase; 9] = [
         ports: "80,3389",
         banners: true,
         noreset: true,
+        extra_args: &[],
+        source_ports: (SOURCE_PORT, SOURCE_PORT),
         connection_timeout: Some(8),
         wait: 14,
         outs: &[Out::List],
@@ -431,6 +462,8 @@ pub const TCP_CASES: [TcpCase; 9] = [
         ports: "80,81",
         banners: false,
         noreset: false,
+        extra_args: &[],
+        source_ports: (SOURCE_PORT, SOURCE_PORT),
         connection_timeout: None,
         wait: 3,
         outs: &[Out::List],
@@ -445,6 +478,8 @@ pub const TCP_CASES: [TcpCase; 9] = [
         ports: "80,81",
         banners: false,
         noreset: true,
+        extra_args: &[],
+        source_ports: (SOURCE_PORT, SOURCE_PORT),
         connection_timeout: None,
         wait: 3,
         outs: &[Out::List],
@@ -459,6 +494,8 @@ pub const TCP_CASES: [TcpCase; 9] = [
         ports: "80",
         banners: true,
         noreset: false,
+        extra_args: &[],
+        source_ports: (SOURCE_PORT, SOURCE_PORT),
         connection_timeout: None,
         wait: 8,
         outs: &[Out::List],
@@ -473,6 +510,8 @@ pub const TCP_CASES: [TcpCase; 9] = [
         ports: "80",
         banners: true,
         noreset: false,
+        extra_args: &[],
+        source_ports: (SOURCE_PORT, SOURCE_PORT),
         connection_timeout: None,
         wait: 8,
         outs: &[Out::List],
@@ -489,11 +528,78 @@ pub const TCP_CASES: [TcpCase; 9] = [
         ports: "80,3389",
         banners: true,
         noreset: false,
+        extra_args: &[],
+        source_ports: (SOURCE_PORT, SOURCE_PORT),
         connection_timeout: Some(8),
         wait: 14,
         outs: &[Out::List],
         deviations: QUIET,
         quiet: true,
+    },
+    TcpCase {
+        tag: "t10_tls4",
+        v6: false,
+        resolve: false,
+        targets: TARGETS,
+        ports: "25,443",
+        banners: true,
+        noreset: false,
+        extra_args: &[],
+        source_ports: source_range(),
+        connection_timeout: Some(8),
+        wait: 14,
+        outs: &[Out::Binary, Out::List],
+        deviations: &[
+            "rx-checksum-verify",
+            "ipv4-stack-checksum",
+            "no-frame-from-destroyed-tcb",
+            "memcached-tcp-past-segment",
+            "minecraft-unsplit",
+        ],
+        quiet: false,
+    },
+    TcpCase {
+        tag: "t11_tls6",
+        v6: true,
+        resolve: false,
+        targets: TCP_TARGETS6,
+        ports: "25,443",
+        banners: true,
+        noreset: false,
+        extra_args: &[],
+        source_ports: source_range(),
+        connection_timeout: Some(8),
+        wait: 14,
+        outs: &[Out::Binary, Out::List],
+        deviations: &[
+            "rx-checksum-verify",
+            "ipv6-ttl",
+            "no-frame-from-destroyed-tcb",
+            "memcached-tcp-past-segment",
+            "minecraft-unsplit",
+        ],
+        quiet: false,
+    },
+    TcpCase {
+        tag: "t12_heartbleed",
+        v6: false,
+        resolve: false,
+        targets: "198.18.0.5",
+        ports: "443",
+        banners: true,
+        noreset: false,
+        extra_args: &["--heartbleed"],
+        source_ports: source_range(),
+        connection_timeout: Some(8),
+        wait: 14,
+        outs: &[Out::Binary, Out::List],
+        deviations: &[
+            "rx-checksum-verify",
+            "ipv4-stack-checksum",
+            "no-frame-from-destroyed-tcb",
+            "tls-hello-random",
+        ],
+        quiet: false,
     },
 ];
 pub fn tcp_case(tag: &str) -> Option<TcpCase> {
@@ -523,6 +629,7 @@ pub fn tcp_argv(c: &TcpCase, out: Out) -> Vec<String> {
     if c.noreset {
         a.push("--noreset".into());
     }
+    a.extend(c.extra_args.iter().map(|x| (*x).to_owned()));
     if let Some(t) = c.connection_timeout {
         a.extend(["--connection-timeout".into(), t.to_string()]);
     }
@@ -536,10 +643,54 @@ pub fn tcp_argv(c: &TcpCase, out: Out) -> Vec<String> {
         .into(),
         PEER_MAC_ARG.into(),
     ]);
-    scan_tail(&mut a, out, false, RATE, &c.wait.to_string(), SOURCE_PORT);
+    if c.source_ports == (SOURCE_PORT, SOURCE_PORT) {
+        scan_tail(&mut a, out, false, RATE, &c.wait.to_string(), SOURCE_PORT);
+    } else {
+        if let (Some(flag), Some(file)) = (out.flag(), out.file()) {
+            a.extend([flag.to_owned(), file.to_owned()]);
+        }
+        a.extend(
+            [
+                "--seed",
+                "1",
+                "--rate",
+                RATE,
+                "--wait",
+                &c.wait.to_string(),
+                "--source-port",
+                &format!("{}-{}", c.source_ports.0, c.source_ports.1),
+            ]
+            .map(str::to_owned),
+        );
+    }
     a.extend(["--retries".to_owned(), "0".to_owned()]);
     a
 }
+/// The banner settings of a TCP case: its extra args as modes (the suite's own stack in tests must run what
+/// the case scans with).
+pub fn tcp_case_settings(c: &TcpCase) -> rmasscan_proto::TcpBannerSettings {
+    let mut s = rmasscan_proto::TcpBannerSettings::default();
+    if c.extra_args.contains(&"--heartbleed") {
+        s.tls.heartbleed = true;
+        s.tls.capture_cert = false;
+        s.tls.capture_heartbleed = false;
+    }
+    s
+}
+
+/// The source ranges of a TCP case's table: the case's `--source-port` range and its single source address.
+pub fn tcp_case_source_ranges(c: &TcpCase) -> rmasscan_core::stack::SourceRanges {
+    let (ipv4, ipv6) = match c.source() {
+        IpAddr::V4(a) => (Some((u32::from(a), u32::from(a))), None),
+        IpAddr::V6(a) => (None, Some((u128::from(a), u128::from(a)))),
+    };
+    rmasscan_core::stack::SourceRanges {
+        ports: c.source_ports,
+        ipv4,
+        ipv6,
+    }
+}
+
 /// The SYNs a TCP case must put on the wire, in send order, from the product's own plan (`ReadyPlan::new_cli` on the
 /// stand's binding with the case's source).
 pub fn tcp_plan_stream(c: &TcpCase) -> Result<Vec<Vec<u8>>, String> {
@@ -569,7 +720,7 @@ pub fn tcp_ready_plan(c: &TcpCase) -> Result<rmasscan_core::probe::ReadyPlan, St
         source_ipv4: u32::from(v4),
         source_mac: st.scanner_mac,
         next_hop_mac: st.peer_mac,
-        source_ports: (SOURCE_PORT, SOURCE_PORT),
+        source_ports: c.source_ports,
     });
     if let IpAddr::V6(a) = c.source() {
         nic.source_ipv6 = Some(u128::from(a));
@@ -587,7 +738,7 @@ pub fn tcp_ready_plan(c: &TcpCase) -> Result<rmasscan_core::probe::ReadyPlan, St
         adapter_ip: Some(u32::from(v4)),
         adapter_mac: Some(st.scanner_mac),
         router_mac: Some(st.peer_mac),
-        source_port: Some((SOURCE_PORT, SOURCE_PORT)),
+        source_port: Some(c.source_ports),
         adapter_name: Some(st.iface.into()),
         ..ScanConfig::default()
     };
@@ -659,6 +810,13 @@ impl TcpScenario {
     pub fn server_first(&self) -> bool {
         matches!(self.steps.first(), Some(TcpStep::Write(_)))
     }
+    /// TLS from the connection's first byte: the scanner opens with a ClientHello and its first banner is
+    /// the `ssl` one. Only these connections owe C's second connection (`--cert`, D1); a STARTTLS upgrade
+    /// after a plaintext dialogue (server-first, `smtp` first) never has one, and a TLS stream that yields
+    /// no certificate banners (`ssl`, `vuln`) still does.
+    pub fn direct_tls(&self) -> bool {
+        !self.server_first() && self.apps.first() == Some(&"ssl")
+    }
 }
 const fn ts(
     port: u16,
@@ -678,9 +836,22 @@ const fn ts(
     }
 }
 use TcpStep::{Hold, Peek, Recv, Reset, Write};
+/// Synthetic TLS streams of the stand (ServerHello plus certificate chains of the mini certificates of the
+/// x509 goldens, names under `.test` so evidence carries no host name), and a ServerHello with a heartbeat
+/// answer and a fatal alert after it.
+const TLS_CHAIN2: &[u8] = include_bytes!("../../../tests/golden/tls-records/cases/tls-chain2.bin");
+const TLS_CHAIN2_P1: &[u8] =
+    include_bytes!("../../../tests/golden/tls-records/cases/tls-chain2-part1.bin");
+const TLS_CHAIN2_P2: &[u8] =
+    include_bytes!("../../../tests/golden/tls-records/cases/tls-chain2-part2.bin");
+const TLS_CHAIN2_P3: &[u8] =
+    include_bytes!("../../../tests/golden/tls-records/cases/tls-chain2-part3.bin");
+const TLS_CHAIN3: &[u8] = include_bytes!("../../../tests/golden/tls-records/cases/tls-chain3.bin");
+const TLS_HEARTBLEED: &[u8] =
+    include_bytes!("../../../tests/golden/tls-records/cases/heartbleed-stream.bin");
 const FTP_REFUSAL: &[u8] = b"530 Please login with USER and PASS.\r\n";
 const HTTP_200: &[u8] = b"HTTP/1.0 200 OK\r\nServer: rmasscan-lab\r\nContent-Type: text/html\r\n\r\n<html><title>rmasscan-lab</title></html>";
-pub const TCP_SCENARIOS: [TcpScenario; 20] = [
+pub const TCP_SCENARIOS: [TcpScenario; 25] = [
     ts(
         21,
         2,
@@ -901,6 +1072,59 @@ pub const TCP_SCENARIOS: [TcpScenario; 20] = [
             Write(b"\x72\x00\x70{\"version\":{\"name\":\"1.20\",\"protocol\":763},\"players\":{\"max\":20,\"online\":0},\"description\":{\"text\":\"rmasscan-lab\"}}"),
         ],
         &["minecraft"],
+        false,
+    ),
+    ts(
+        443,
+        2,
+        "TLS: the ClientHello answered with a ServerHello and a two-certificate chain in one write: ssl, the chain and the leaf certificates in banout order (reference B3, B4)",
+        &[Recv, Write(TLS_CHAIN2)],
+        &["ssl", "X509CA", "X509"],
+        false,
+    ),
+    ts(
+        443,
+        3,
+        "the same TLS stream in three segments (the record parser is split-invariant, reference B1)",
+        &[
+            Recv,
+            Write(TLS_CHAIN2_P1),
+            Write(TLS_CHAIN2_P2),
+            Write(TLS_CHAIN2_P3),
+        ],
+        &["ssl", "X509CA", "X509"],
+        true,
+    ),
+    ts(
+        443,
+        4,
+        "TLS: a three-certificate chain gives two X509CA records (banout_end makes a record per chain certificate, reference B4)",
+        &[Recv, Write(TLS_CHAIN3)],
+        &["ssl", "X509CA", "X509CA", "X509"],
+        false,
+    ),
+    ts(
+        443,
+        5,
+        "TLS: a heartbeat answer of declared length 16 and a fatal alert after the ServerHello: vuln on the declaration, the alert in the ssl record (reference B3, B5, B6)",
+        &[Recv, Write(TLS_HEARTBLEED)],
+        &["ssl", "vuln"],
+        false,
+    ),
+    ts(
+        25,
+        4,
+        "SMTP STARTTLS agreed: the ClientHello goes out, then ServerHello and the chain give smtp then ssl and the cert records (reference E2.8')",
+        &[
+            Write(b"220 rmasscan-lab ESMTP\r\n"),
+            Recv,
+            Write(b"250-rmasscan-lab\r\n250 STARTTLS\r\n"),
+            Recv,
+            Write(b"220 2.0.0 Ready\r\n"),
+            Recv,
+            Write(TLS_CHAIN2),
+        ],
+        &["smtp", "X509CA", "X509", "ssl"],
         false,
     ),
 ];
@@ -1758,6 +1982,9 @@ pub struct TcpProbe {
     pub sport: u16,
     pub seq: u32,
     pub frame: Vec<u8>,
+    /// A second SYN to a target an earlier probe already went to, from another source port: the stack's second
+    /// connection (`stream->next`, reference §D1), not a probe of the plan.
+    pub reconnect: bool,
 }
 /// One probe the peer answered: a connection from its SYN-ACK, or a closed port's RST.
 #[derive(Debug, Clone, PartialEq)]
@@ -1766,6 +1993,8 @@ pub struct Conn {
     pub ip: IpAddr,
     pub port: u16,
     pub sport: u16,
+    /// The stack's second connection to the same target (its probe is marked reconnect).
+    pub reconnect: bool,
     pub open: bool,
     pub reply_t: f64,
     pub reply_flags: u8,
@@ -1997,7 +2226,11 @@ pub struct TcpView {
 }
 impl TcpView {
     pub fn probe_frames(&self) -> Vec<Vec<u8>> {
-        self.probes.iter().map(|p| p.frame.clone()).collect()
+        self.probes
+            .iter()
+            .filter(|p| !p.reconnect)
+            .map(|p| p.frame.clone())
+            .collect()
     }
     fn conn_of(&self, ip: IpAddr, port: u16, sport: u16) -> Option<usize> {
         self.conns
@@ -2215,6 +2448,10 @@ pub fn tcp_view(c: &TcpCase, fr: &Frames, st: &Stand) -> TcpView {
                 stray(describe_frame(f), &mut v);
             } else if h.flags & 0x3f == SYN {
                 v.outside_window += usize::from(!inside);
+                let reconnect = v
+                    .probes
+                    .iter()
+                    .any(|p| p.ip == h.dst && p.port == h.dp && p.sport != h.sp);
                 v.probes.push(TcpProbe {
                     t,
                     ip: h.dst,
@@ -2222,6 +2459,7 @@ pub fn tcp_view(c: &TcpCase, fr: &Frames, st: &Stand) -> TcpView {
                     sport: h.sp,
                     seq: h.seq,
                     frame: f.clone(),
+                    reconnect,
                 });
             } else if let Some(i) = v.conn_of(h.dst, h.dp, h.sp) {
                 v.conns[i].scanner.push(seg);
@@ -2258,6 +2496,7 @@ pub fn tcp_view(c: &TcpCase, fr: &Frames, st: &Stand) -> TcpView {
                     ip: p.ip,
                     port: p.port,
                     sport: p.sport,
+                    reconnect: p.reconnect,
                     open,
                     reply_t: t,
                     reply_flags: h.flags,
@@ -2324,9 +2563,9 @@ pub const UDP_APPS: [(u16, &str); 9] = [
     (28, "coap"),
     (35, "isakmp"),
 ];
-/// The application names of the TCP banners of 4b by number (`src/masscan-app.c:8-57`; `src/masscan-app.h:8-49`):
+/// The application names of the TCP banners of 4b and the TLS records of 4c by number (`src/masscan-app.c:8-57`; `src/masscan-app.h:8-49`):
 /// PROTO_HEUR (1) and the TLS hand-off's PROTO_SSL3 (9) included.
-pub const TCP_APPS: [(u16, &str); 18] = [
+pub const TCP_APPS: [(u16, &str); 24] = [
     (1, "unknown"),
     (2, "ssh"),
     (3, "ssh"),
@@ -2337,8 +2576,14 @@ pub const TCP_APPS: [(u16, &str); 18] = [
     (11, "smtp"),
     (12, "pop"),
     (13, "imap"),
+    (15, "X509"),
+    (16, "X509CA"),
     (17, "title"),
     (18, "html"),
+    (20, "vuln"),
+    (21, "heartbleed"),
+    (22, "ticketbleed"),
+    (24, "safe"),
     (29, "telnet"),
     (30, "rdp"),
     (31, "http.server"),
@@ -2733,7 +2978,7 @@ pub fn mask_raw_past_datagram(recs: &[Rec]) -> (Vec<Rec>, usize) {
 // ------------------------------------------------------------------ checks
 
 /// The documented differences from C, by name, and the rule each applies.
-pub const DEVIATIONS: [(&str, &str); 8] = [
+pub const DEVIATIONS: [(&str, &str); 9] = [
     (
         "udp-checksum-ffff",
         "R12: a UDP checksum that computes to 0 goes out as 0xFFFF from rmasscan (RFC 768) and as 0x0000 from C; two probes that differ only there are the same probe",
@@ -2761,6 +3006,10 @@ pub const DEVIATIONS: [(&str, &str); 8] = [
     (
         "no-frame-from-destroyed-tcb",
         "E1.5: C hands every event of a frame to its TCB even after one destroyed it (src/main.c:991-1018), and the scrubbed TCB sends from and to 255.255.255.255:65535; rmasscan stops at the destroying event; C's scrubbed-TCB segments are counted and left out of its connections, any such frame of rmasscan is a FAIL",
+    ),
+    (
+        "tls-hello-random",
+        "A2 of the TLS reference: a vuln-mode ClientHello's random field (bytes 11..43) carries the scan's start time and a SipHash fingerprint of it, so the two scanners' hellos differ there; hellos of the dynamic templates (lengths 74, 225, 361) that differ only in those bytes are the same hello; the static default and TLS 1.3 hellos are never masked, and every first payload on a TLS port of both scanners must be a dynamic ClientHello whose bytes outside the random field equal its template's",
     ),
     (
         "minecraft-unsplit",
@@ -3607,6 +3856,157 @@ fn tcp_scanner(r: &mut Run, c: &TcpCase, s: &Side<BView>, v: &TcpView) {
         );
     }
     if c.banners {
+        // The second connections (TLS `--cert` reconnect, reference D1) are an obligation keyed on the case
+        // and the scenario, never on their own presence: a scanner that opens none must fail, not pass with
+        // nothing to check. Exactly one for each open first connection whose scenario is direct TLS
+        // ([`TcpScenario::direct_tls`]) in a case that scans a source-port range, and no other second
+        // connection.
+        let reconnects: Vec<&Conn> = v.conns.iter().filter(|x| x.reconnect).collect();
+        let ranged = c.source_ports.0 < c.source_ports.1;
+        let mut expected = 0usize;
+        let mut counts = Vec::new();
+        for x in v.conns.iter().filter(|x| x.open && !x.reconnect) {
+            let tls = ranged && tcp_scenario(x.port, x.ip).is_some_and(TcpScenario::direct_tls);
+            expected += usize::from(tls);
+            let n = reconnects
+                .iter()
+                .filter(|y| y.ip == x.ip && y.port == x.port)
+                .count();
+            if n != usize::from(tls) {
+                counts.push(format!(
+                    "{}:{} {n} second connections",
+                    ip_text(x.ip),
+                    x.port
+                ));
+            }
+        }
+        if expected > 0 || !reconnects.is_empty() {
+            cap(
+                r,
+                s,
+                "the scanner opens C's second connection (--cert) once for each open TLS connection, and no other second connection",
+                counts.is_empty(),
+                if counts.is_empty() {
+                    format!("{} second connections", reconnects.len())
+                } else {
+                    some4(&counts, 4).join("; ")
+                },
+            );
+        }
+        // Each second connection there is: from the next source port of its first by C's arithmetic over the
+        // case's range, its SYN sequence number the cookie of its 4-tuple (seed 1 of the window's argv).
+        if !reconnects.is_empty() {
+            let (first_port, last_port) = c.source_ports;
+            let next_port = |sport: u16| -> u16 {
+                let next = u32::from(sport) + 1;
+                if next >= u32::from(last_port) {
+                    first_port
+                } else {
+                    next as u16
+                }
+            };
+            let mut bad = Vec::new();
+            for x in &reconnects {
+                let firsts: Vec<&Conn> = v
+                    .conns
+                    .iter()
+                    .filter(|y| !y.reconnect && y.ip == x.ip && y.port == x.port && y.open)
+                    .collect();
+                if firsts.len() != 1 {
+                    bad.push(format!(
+                        "{}:{} from {}: {} first connections",
+                        ip_text(x.ip),
+                        x.port,
+                        x.sport,
+                        firsts.len()
+                    ));
+                    continue;
+                }
+                if x.sport != next_port(firsts[0].sport) {
+                    bad.push(format!(
+                        "{}:{} reconnect from {}, want {} (next of {})",
+                        ip_text(x.ip),
+                        x.port,
+                        x.sport,
+                        next_port(firsts[0].sport),
+                        firsts[0].sport
+                    ));
+                }
+                let cookie = match (x.ip, c.source()) {
+                    (IpAddr::V4(remote), IpAddr::V4(local)) => {
+                        rmasscan_core::cookie::syn_cookie_ipv4(
+                            u32::from(remote),
+                            u32::from(x.port),
+                            u32::from(local),
+                            u32::from(x.sport),
+                            1,
+                        ) as u32
+                    }
+                    (IpAddr::V6(remote), IpAddr::V6(local)) => {
+                        rmasscan_core::cookie::syn_cookie_ipv6(
+                            u128::from(remote),
+                            u32::from(x.port),
+                            u128::from(local),
+                            u32::from(x.sport),
+                            1,
+                        ) as u32
+                    }
+                    _ => 0,
+                };
+                if x.iss_me != cookie {
+                    bad.push(format!(
+                        "{}:{} reconnect SYN seq {:#x}, cookie {:#x}",
+                        ip_text(x.ip),
+                        x.port,
+                        x.iss_me,
+                        cookie
+                    ));
+                }
+            }
+            cap(
+                r,
+                s,
+                "every second connection opens from the next source port of its first (C's _next_IP_port over the case's range) with the cookie of its 4-tuple as its SYN sequence number",
+                bad.is_empty(),
+                if bad.is_empty() {
+                    format!("{} reconnects", reconnects.len())
+                } else {
+                    some4(&bad, 4).join("; ")
+                },
+            );
+        }
+        if c.extra_args.contains(&"--heartbleed") {
+            let mut bad = Vec::new();
+            for x in v.conns.iter().filter(|x| x.open) {
+                let (mut sent, mut windows) = (false, Vec::new());
+                for g in &x.scanner {
+                    if !g.payload.is_empty() {
+                        sent = true;
+                    }
+                    if sent {
+                        windows.push(
+                            iv::pkt(&g.frame)
+                                .and_then(|pkt| pkt.l4.get(14..16).map(|b| be16(b, 0))),
+                        );
+                    }
+                }
+                if windows.iter().any(|w| *w != Some(600)) {
+                    bad.push(format!(
+                        "{}:{} windows {:?}",
+                        ip_text(x.ip),
+                        x.port,
+                        windows.iter().take(4).collect::<Vec<_>>()
+                    ));
+                }
+            }
+            cap(
+                r,
+                s,
+                "in heartbleed mode every frame from the hello on carries the small window 600 (banner_set_small_window)",
+                bad.is_empty(),
+                some4(&bad, 4).join("; "),
+            );
+        }
         // The lifetime RST: timeout + 2 ± 2 s after the SYN-ACK, on every connection the scenario holds open when the
         // case's lifetime ends inside the scan; none at all otherwise (teardown). R8's RST to a FIN of the peer after
         // the connection's end (Conn::rst_to_fin_without_tcb) is no lifetime RST: after_destroy judges it.
@@ -3797,32 +4197,40 @@ fn without_ipv6_ttl(x: &Rec) -> Rec {
 /// (M1); each connection whose peer sent its whole scenario holds the scenario's applications in flush order; no
 /// banner of a port the stand reset.
 fn tcp_banner_checks(r: &mut Run, s: &Side<BView>, d: &Document) {
-    let mut runs: BTreeMap<(IpAddr, u16), (usize, usize, usize)> = BTreeMap::new();
-    let mut open_at: BTreeMap<(IpAddr, u16), usize> = BTreeMap::new();
-    for (i, x) in d.records.iter().enumerate() {
+    // Per connection key: banner blocks (maximal runs of banner records of the key), each after an open of
+    // the key, at most one block per open. Two connections to one (address, port) — the TLS second
+    // connection — give two opens and two blocks.
+    let mut opens: BTreeMap<(IpAddr, u16), usize> = BTreeMap::new();
+    let mut blocks: BTreeMap<(IpAddr, u16), usize> = BTreeMap::new();
+    let mut bad = Vec::new();
+    let mut prev_banner_key: Option<(IpAddr, u16)> = None;
+    for x in &d.records {
         let k = (x.ip, x.port);
         match &x.body {
             Body::Status { st: St::Open, .. } => {
-                open_at.entry(k).or_insert(i);
+                *opens.entry(k).or_default() += 1;
+                prev_banner_key = None;
             }
-            Body::Status { .. } => {}
             Body::Banner { .. } => {
-                let e = runs.entry(k).or_insert((i, i, 0));
-                e.1 = i;
-                e.2 += 1;
+                if prev_banner_key != Some(k) {
+                    *blocks.entry(k).or_default() += 1;
+                    let opened = opens.get(&k).copied().unwrap_or(0);
+                    if opened < blocks[&k] {
+                        bad.push(format!(
+                            "{}:{}: {}",
+                            ip_text(x.ip),
+                            x.port,
+                            if opened == 0 {
+                                "a banner before its open"
+                            } else {
+                                "its banners are not in one run"
+                            }
+                        ));
+                    }
+                    prev_banner_key = Some(k);
+                }
             }
-        }
-    }
-    let mut bad = Vec::new();
-    for ((ip, port), (first, last, n)) in &runs {
-        if last - first + 1 != *n {
-            bad.push(format!(
-                "{}:{port}: its banners are not in one run",
-                ip_text(*ip)
-            ));
-        }
-        if open_at.get(&(*ip, *port)).is_none_or(|o| o > first) {
-            bad.push(format!("{}:{port}: a banner before its open", ip_text(*ip)));
+            Body::Status { .. } => prev_banner_key = None,
         }
     }
     beh(
@@ -3836,31 +4244,46 @@ fn tcp_banner_checks(r: &mut Run, s: &Side<BView>, d: &Document) {
     let by = banners_by_reply(d);
     let mut wrong = Vec::new();
     let mut judged = 0;
+    let mut groups: BTreeMap<(IpAddr, u16), Vec<&Conn>> = BTreeMap::new();
     for x in &v.conns {
+        groups.entry((x.ip, x.port)).or_default().push(x);
+    }
+    for ((ip, port), conns) in &groups {
         let got: Vec<String> = by
-            .get(&(x.ip, x.port))
+            .get(&(*ip, *port))
             .map(|b| b.iter().filter_map(|y| y.app_name()).collect())
             .unwrap_or_default();
-        let Some(sc) = tcp_scenario(x.port, x.ip).filter(|_| x.open) else {
+        let Some(sc) = tcp_scenario(*port, *ip) else {
             if !got.is_empty() {
                 wrong.push(format!(
-                    "{}:{} reset, banners {got:?}",
-                    ip_text(x.ip),
-                    x.port
+                    "{}:{port} no scenario, banners {got:?}",
+                    ip_text(*ip)
                 ));
             }
             continue;
         };
-        if x.peer_stream() != sc.stream() {
+        let full = conns
+            .iter()
+            .filter(|x| x.open && x.peer_stream() == sc.stream())
+            .count();
+        if full == 0 {
+            if conns.iter().all(|x| !x.open) && !got.is_empty() {
+                wrong.push(format!("{}:{port} reset, banners {got:?}", ip_text(*ip)));
+            }
             continue;
         }
-        judged += 1;
-        if got != sc.apps {
+        judged += full;
+        let want: Vec<&str> = sc
+            .apps
+            .iter()
+            .copied()
+            .cycle()
+            .take(sc.apps.len() * full)
+            .collect();
+        if got.iter().map(String::as_str).collect::<Vec<_>>() != want {
             wrong.push(format!(
-                "{}:{} {:?}, the scenario {:?}",
-                ip_text(x.ip),
-                x.port,
-                got,
+                "{}:{port} {got:?}, the scenario {:?} on {full} connection(s)",
+                ip_text(*ip),
                 sc.apps
             ));
         }
@@ -3876,6 +4299,77 @@ fn tcp_banner_checks(r: &mut Run, s: &Side<BView>, d: &Document) {
             some4(&wrong, 4).join("; ")
         },
     );
+}
+
+/// Every ClientHello template of the product, as a full record, tagged dynamicized or static: the dynamicized
+/// vuln-mode ones (heartbeat, ticketbleed, sslv3+SCSV) carry a random field (bytes 11..43 of the record) the
+/// two scanners cannot share; the static default and TLS 1.3 ones are the same bytes on every run. The bytes
+/// outside the random field are the template's at any moment (`TlsSettings::new(0)`).
+fn hello_templates() -> Vec<(bool, Vec<u8>)> {
+    use rmasscan_proto::TlsHelloKind::*;
+    let kinds = rmasscan_proto::TlsSettings::new(0);
+    [
+        (false, Default),
+        (false, Tls13),
+        (true, Heartbeat),
+        (true, Ticketbleed),
+        (true, Sslv3Poodle),
+    ]
+    .into_iter()
+    .map(|(dynamic, kind)| (dynamic, kinds.hello(kind).to_vec()))
+    .collect()
+}
+/// The template a ClientHello starts with at `s[0]`, by content: every available byte outside the random
+/// field (11..43) is the template's, the 11-byte head (the record header with its length, the handshake
+/// head) in full — the head alone already separates the five templates. Never the TCP payload's length: a
+/// hello may fill one segment, share it after other bytes (STARTTLS), or be split over several, and only
+/// the connection's byte stream shows where a record starts.
+fn hello_template_at<'a>(
+    s: &[u8],
+    templates: &'a [(bool, Vec<u8>)],
+) -> Option<&'a (bool, Vec<u8>)> {
+    if s.len() < 11 || s[0] != 0x16 || s[5] != 0x01 {
+        return None;
+    }
+    templates.iter().find(|(_, t)| {
+        s[..11] == t[..11] && {
+            let n = s.len().min(t.len());
+            n <= 43 || s[43..n] == t[43..n]
+        }
+    })
+}
+
+/// A sequence with every dynamicized ClientHello's random field zeroed ('tls-hello-random'): the static
+/// default and TLS 1.3 hellos always compare byte for byte (reference A2). The hellos are found by content
+/// in the connection's byte stream (the segments' payloads in order, spans kept), so one split over
+/// segments or sharing a segment with what precedes it is masked exactly where its record lies.
+fn masked_sequence(x: &Conn, mask: bool) -> Vec<RelSeg> {
+    let mut seq = x.sequence();
+    if !mask {
+        return seq;
+    }
+    let templates = hello_templates();
+    let mut stream: Vec<u8> = Vec::new();
+    let mut spans: Vec<(usize, usize)> = Vec::with_capacity(seq.len());
+    for seg in &seq {
+        spans.push((stream.len(), seg.1.len()));
+        stream.extend_from_slice(&seg.1);
+    }
+    let mut i = 0;
+    while i + 11 <= stream.len() {
+        match hello_template_at(&stream[i..], &templates) {
+            Some((true, _)) => {
+                let end = (i + 43).min(stream.len());
+                stream[i + 11..end].fill(0);
+                i = end;
+            }
+            _ => i += 1,
+        }
+    }
+    for (seg, &(start, len)) in seq.iter_mut().zip(&spans) {
+        seg.1.copy_from_slice(&stream[start..start + len]);
+    }
+    seq
 }
 
 /// rmasscan's connections against C's of the same document: per connection (address, port, source port) the
@@ -3894,11 +4388,12 @@ fn tcp_vs_c(r: &mut Run, c: &TcpCase, rm: &Side<BView>, or: &Side<BView>) {
         .map(|x| (x.ip, x.port, x.sport))
         .collect();
     for (ip, port, sport) in &keys {
+        let mask = c.deviations.contains(&"tls-hello-random");
         let of = |v: &TcpView| {
             v.conns
                 .iter()
                 .find(|x| x.ip == *ip && x.port == *port && x.sport == *sport)
-                .map(Conn::sequence)
+                .map(|x| masked_sequence(x, mask))
         };
         let (x, y) = (of(a), of(b));
         if x != y {
@@ -4117,6 +4612,46 @@ fn tcp_deviations(
                 ),
             )
         }
+        "tls-hello-random" => {
+            // Every masked hello must be a dynamic ClientHello, and every ClientHello of the case a known
+            // template: the scanner byte stream of each TLS connection, walked record by record (443 is TLS
+            // from its first byte) and each handshake record matched by content against the five templates,
+            // static ones included (they compare byte for byte elsewhere; here they only prove the masking
+            // hid no other hello). Segment lengths are never consulted: a record may be split over segments
+            // or share one.
+            let templates = hello_templates();
+            let mut bad = 0;
+            for (_, v) in &views {
+                for x in v.conns.iter().filter(|x| x.open && x.port == 443) {
+                    let stream: Vec<u8> = x
+                        .scanner
+                        .iter()
+                        .flat_map(|g| g.payload.iter().copied())
+                        .collect();
+                    let mut i = 0;
+                    while i < stream.len() {
+                        if stream[i] == 0x16
+                            && hello_template_at(&stream[i..], &templates).is_none()
+                        {
+                            bad += 1;
+                        }
+                        let rec = stream
+                            .get(i + 3..i + 5)
+                            .map_or(0, |b| 5 + usize::from(be16(b, 0)));
+                        if rec == 0 {
+                            break;
+                        }
+                        i += rec;
+                    }
+                }
+            }
+            (
+                bad == 0,
+                format!(
+                    "{bad} handshake records on TLS connections that are not ClientHellos of a known template"
+                ),
+            )
+        }
         "minecraft-unsplit" => {
             let bad = views
                 .iter()
@@ -4206,7 +4741,7 @@ fn tcp_rmasscan_step(r: &mut Run, c: &TcpCase, s: &Side<BView>, doc: Option<&Doc
             let end = v.probes.last().map(|p| p.t + f64::from(c.wait));
             WireSummary {
                 counts: (
-                    v.probes.len() as u64,
+                    v.probes.iter().filter(|p| !p.reconnect).count() as u64,
                     v.conns.len() as u64,
                     v.conns.iter().filter(|x| x.open).count() as u64,
                 ),

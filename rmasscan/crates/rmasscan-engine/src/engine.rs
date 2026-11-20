@@ -44,7 +44,7 @@ use rmasscan_core::ndp::NDP_FRAME_LEN;
 use rmasscan_core::packet::LinkType;
 use rmasscan_core::probe::{NicBinding, PlanError, ProbeCursor, ReadyPlan};
 use rmasscan_core::receive::{PortStatus, Reply, arp_reply_for, ndp_reply_for, parse_reply};
-use rmasscan_core::stack::{StackOutput, StackStats, TableParams, TcpStack};
+use rmasscan_core::stack::{SourceRanges, StackOutput, StackStats, TableParams, TcpStack};
 use rmasscan_core::tcp_frame::{TcpFrameBuilder, stateless_rst, tcp_segment};
 use rmasscan_core::throttle::{Clock, SystemClock, Throttler};
 
@@ -1888,12 +1888,13 @@ impl Engine {
         // Своя таблица стека у каждого RX-потока (`tcpcon_create_table` в `receive_thread`, `src/main.c:612`): ёмкость
         // и бюджет скана делятся между адаптерами, ёмкость не меньше 1024.
         let tables: Vec<Option<Box<dyn TcpStack>>> = (0..count)
-            .map(|_| {
+            .map(|k| {
                 options.tcp_stack.as_ref().map(|o| {
                     o.factory.new_table(TableParams {
                         seed: plan.effective().seed(),
                         capacity: (o.table_capacity / count).max(1024),
                         banner_byte_budget: o.banner_byte_budget / count,
+                        source: source_ranges(&rx_plans[k]),
                     })
                 })
             })
@@ -1951,6 +1952,18 @@ impl Engine {
 /// План для RX-потока адаптера `k`: `parse_reply` сверяет адрес и порты
 /// источника с `plan.binding()` (то есть с `nic[0]`), поэтому для `k > 0`
 /// адаптер `k` ставится первым.
+/// Диапазоны источника адаптера этого RX-плана для реконнекта таблицы (`stack->src`): порты привязки,
+/// диапазон адресов IPv4 и одиночный адрес IPv6.
+fn source_ranges(plan: &ReadyPlan) -> SourceRanges {
+    let binding = plan.binding();
+    let nic = plan.nics().first();
+    SourceRanges {
+        ports: binding.source_ports,
+        ipv4: nic.map(|n| (binding.source_ipv4, n.source_ipv4_last)),
+        ipv6: nic.and_then(|n| n.source_ipv6).map(|a| (a, a)),
+    }
+}
+
 fn rx_plan(plan: &ReadyPlan, k: usize) -> Result<ReadyPlan, PlanError> {
     if k == 0 {
         return Ok(plan.clone());
@@ -2231,6 +2244,18 @@ mod tests {
             source_ports: (40000, 40015),
         });
         ReadyPlan::new_cli(eff, vec![nic]).unwrap()
+    }
+
+    /// Диапазоны источника таблицы берутся из привязки RX-плана: порты, диапазон IPv4 и одиночный IPv6 (Р10).
+    #[test]
+    fn source_ranges_come_from_the_rx_plan_binding() {
+        let plan = plan12(0, Shard::default(), 0);
+        let ranges = source_ranges(&plan);
+        assert_eq!(ranges.ports, (40000, 40015));
+        assert_eq!(ranges.ipv4, Some((0xc612_0063, 0xc612_0063)));
+        assert_eq!(ranges.ipv6, None);
+        let rotated = rx_plan(&plan, 0).unwrap();
+        assert_eq!(source_ranges(&rotated), ranges);
     }
 
     /// range = 4 адреса x 3 порта = 12.

@@ -1,0 +1,7 @@
+x509-oracle v1 count=1 bytes=144
+run whole calls=1
+record 9 8 ", \x00L\x00a\x00b"
+end
+run bytewise calls=144
+record 9 8 ", \x00L\x00a\x00b"
+end

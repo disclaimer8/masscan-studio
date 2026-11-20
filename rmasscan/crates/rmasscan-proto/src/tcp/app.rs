@@ -4,7 +4,6 @@
 //! hello не шлёт никогда, сервер, заговоривший первым, hello не получает, пустой hello оставляет приложение в
 //! `App_SendNext`, где байты сервера подтверждаются, но не разбираются.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::tcb::{App, AppEvent, TcbCtl};
@@ -42,6 +41,16 @@ impl ByteBudget {
         self.dropped = self.dropped.saturating_add(lost);
     }
 
+    /// Atomic metadata reservation. Loss counters count refused output bytes,
+    /// so a failed reservation leaves both the balance and counters untouched.
+    pub(crate) fn reserve_record(&mut self, bytes: usize) -> bool {
+        if self.left < bytes {
+            return false;
+        }
+        self.left -= bytes;
+        true
+    }
+
     /// Вернуть `n` байт (сброс баннеров).
     pub(crate) fn give(&mut self, n: usize) {
         self.left = self.left.saturating_add(n);
@@ -71,12 +80,42 @@ pub(crate) enum SessionAction {
     Close,
 }
 
+/// Поток порта (`struct ProtocolParserStream`, `src/proto-banner1.h`): hello и его флаги. `hello: None` это
+/// поток NULL (hello не шлётся никогда), `Some` с пустым буфером — поток с пустым hello (`hello_length == 0`,
+/// справка B5). `next` — hello второго соединения (`stream->next`, справка 4c §A1, §D1); исполняет его слой
+/// приложения и таблица в задаче 7, как и `close_after_hello` (`SF__close`) и `small_window` (heartbleed).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct StreamDesc {
+    pub hello: Option<Arc<[u8]>>,
+    pub close_after_hello: bool,
+    pub next: Option<Arc<[u8]>>,
+    pub small_window: bool,
+    pub is_tls: bool,
+    /// Поток и есть `banner_ssl`/`banner_ssl_12`: его отправка ставит `is_sent_sslhello` (кладж по указателю,
+    /// `src/stack-tcp-app.c:157-163`); копия `--hello-string` на TLS-порту этого не делает.
+    pub sets_ssl_hello: bool,
+}
+
+impl StreamDesc {
+    /// Поток только с hello, без флагов TLS.
+    pub(crate) fn plain(hello: Option<Arc<[u8]>>) -> StreamDesc {
+        StreamDesc {
+            hello,
+            ..StreamDesc::default()
+        }
+    }
+}
+
 /// Сессия баннера одного соединения: поток hello порта (`tcb->stream`, `src/stack-tcp-core.c:1043-1048`) и разбор
 /// байтов сервера (`banner_parse`, `src/stack-tcp-app.c:126`).
 pub(crate) trait Session: Send {
-    /// Hello порта: `None` это поток NULL (hello не шлётся никогда), `Some(&[])` поток с пустым hello
-    /// (`hello_length == 0`, справка B5).
-    fn hello(&self) -> Option<&[u8]>;
+    /// Поток порта этой сессии.
+    fn stream(&self) -> &StreamDesc;
+    /// Отправка TLS hello состоялась (`banner_set_sslhello`, `src/stack-tcp-app.c:157-163`): классификатор
+    /// после этого принимает совпадение SSL3. Ставят слой приложения (SendFirst, задача 7) и передача
+    /// STARTTLS (задача 6); до них вызовов нет.
+    #[allow(dead_code)]
+    fn note_tls_hello_sent(&mut self) {}
     /// Байты сервера по порядку; ответы и закрытие в `acts`.
     fn parse(&mut self, px: &[u8], budget: &mut ByteBudget, acts: &mut Vec<SessionAction>);
     /// `banner_flush` (`src/stack-tcp-core.c:800-830`): записи `(app, байты)` в порядке C, буферы освобождаются, их
@@ -87,6 +126,11 @@ pub(crate) trait Session: Send {
 /// Источник сессий таблицы (`banner1->payloads.tcp[port_them]` и классификатор).
 pub(crate) trait Sessions: Send + Sync {
     fn new_session(&self, remote_port: u16) -> Box<dyn Session>;
+    /// Сессия второго соединения (`stream->next`): `None`, если источник вторых сессий не даёт (заглушки тестов
+    /// без реконнекта); таблица тогда соединение не создаёт.
+    fn new_reconnect_session(&self, _remote_port: u16) -> Option<Box<dyn Session>> {
+        None
+    }
 }
 
 /// Состояние приложения, `enum App_*` (`src/stack-tcp-app.c:11-18`) без `App_SendFirst` (переход внутри одного
@@ -100,32 +144,6 @@ pub(crate) enum AppState {
     SendNext,
 }
 
-/// Hello таблицы по портам: один общий буфер на порт, пока сессии отдают те же байты (у C поток один на порт и
-/// `TCP__static` сегмент указывает на его байты, `src/stack-tcp-app.c:187`). Порт с другими байтами получает новый
-/// буфер; записей не больше, чем портов.
-#[derive(Debug, Default)]
-pub(crate) struct Hellos {
-    by_port: HashMap<u16, Arc<[u8]>>,
-}
-
-impl Hellos {
-    fn shared(&mut self, port: u16, bytes: &[u8]) -> Arc<[u8]> {
-        match self.by_port.get(&port) {
-            Some(buf) if **buf == *bytes => Arc::clone(buf),
-            _ => {
-                let buf: Arc<[u8]> = Arc::from(bytes);
-                self.by_port.insert(port, Arc::clone(&buf));
-                buf
-            }
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn get(&self, port: u16) -> Option<&Arc<[u8]>> {
-        self.by_port.get(&port)
-    }
-}
-
 /// `application_event` для одного события одного соединения: состояние приложения и сессия соединения, бюджет и
 /// hello таблицы. Наборы записей `banner_flush` из `APP_CLOSE` дописываются в `flushed` по одному на сброс (пустой
 /// сброс набора не даёт); записи из них делает таблица.
@@ -133,8 +151,6 @@ pub(crate) struct AppLayer<'a> {
     pub(crate) state: &'a mut AppState,
     pub(crate) session: &'a mut dyn Session,
     pub(crate) budget: &'a mut ByteBudget,
-    pub(crate) hellos: &'a mut Hellos,
-    pub(crate) remote_port: u16,
     pub(crate) flushed: &'a mut Vec<Vec<(u16, Vec<u8>)>>,
 }
 
@@ -147,17 +163,32 @@ impl AppLayer<'_> {
         }
     }
 
-    /// `App_SendFirst` (`src/stack-tcp-app.c:154-195`): hello, если он не пустой, и `App_SendNext`. Подмены TLS и
-    /// heartbleed (`:157-171`) и `SF__close` (`:191-192`) это 4c. Поток с `SF__close` у C бывает и в 4b: `--hello-string`
-    /// на порту TLS (или при `--hello ssl`) копирует поток `banner_ssl` с флагом и `next` (`src/stack-tcp-core.c:595-616`),
-    /// и C шлёт FIN за hello и переподключается с TLS 1.2 (`:56-62`); здесь только hello, отличие 4b названо в README и
-    /// справке B6.
+    /// `App_SendFirst` (`src/stack-tcp-app.c:154-195`): кладжи TLS (`banner_set_sslhello` только настоящему
+    /// потоку `banner_ssl`, не копии `--hello-string`; малое окно heartbleed), hello, если он не пустой, FIN за
+    /// ним при `SF__close`, и `App_SendNext`.
     fn send_first(&mut self, ctl: &mut TcbCtl<'_>) {
-        if let Some(hello) = self.session.hello()
+        let (hello, close_after, small, sets_hello) = {
+            let d = self.session.stream();
+            (
+                d.hello.clone(),
+                d.close_after_hello,
+                d.small_window,
+                d.sets_ssl_hello,
+            )
+        };
+        if sets_hello {
+            self.session.note_tls_hello_sent();
+        }
+        if small {
+            ctl.set_small_window();
+        }
+        if let Some(hello) = hello
             && !hello.is_empty()
         {
-            let buf = self.hellos.shared(self.remote_port, hello);
-            ctl.send_shared(&buf);
+            ctl.send_shared(&hello);
+            if close_after {
+                ctl.close();
+            }
         }
         *self.state = AppState::SendNext;
     }
@@ -170,15 +201,19 @@ impl App for AppLayer<'_> {
         // Пары, которых нет в ветке, у C печатают `"TCP.app: unhandled event: state=%s event=%s\n"` и ничего не делают
         // (`_ => {}`); в `App_SendNext` так пропадает и нагрузка сервера (её подтвердил автомат, но не разобрал никто).
         match (*self.state, ev) {
-            // `:56-80`: `stream->next` (переподключение) и `SF__nowait_hello` это 4c, в 4b их нет.
+            // `:56-80`: сначала переподключение по `stream->next`, затем ожидание hello; `SF__nowait_hello` ни у
+            // одного перенесённого потока нет.
             (A::Connect, E::Connected) => {
+                if self.session.stream().next.is_some() {
+                    ctl.reconnect();
+                }
                 ctl.set_timeout(2);
                 ctl.recv();
                 *self.state = A::ReceiveHello;
             }
             // `:90-99`: без потока (NULL) ничего, и так до конца соединения.
             (A::ReceiveHello, E::RecvTimeout) => {
-                if self.session.hello().is_some() {
+                if self.session.stream().hello.is_some() {
                     self.send_first(ctl);
                 }
             }
@@ -239,19 +274,5 @@ mod tests {
         let mut z = ByteBudget::new(0);
         assert_eq!(z.take(usize::MAX), 0);
         assert_eq!(z.dropped(), u64::try_from(usize::MAX).unwrap_or(u64::MAX));
-    }
-
-    #[test]
-    fn hellos_share_one_buffer_per_port_while_bytes_match() {
-        let mut h = Hellos::default();
-        let a = h.shared(80, b"GET / HTTP/1.0\r\n\r\n");
-        let b = h.shared(80, b"GET / HTTP/1.0\r\n\r\n");
-        assert!(Arc::ptr_eq(&a, &b));
-        let c = h.shared(8080, b"GET / HTTP/1.0\r\n\r\n");
-        assert!(!Arc::ptr_eq(&a, &c), "another port, another buffer");
-        let d = h.shared(80, b"other");
-        assert_eq!(&*d, b"other");
-        assert!(!Arc::ptr_eq(&a, &d));
-        assert_eq!(h.by_port.len(), 2);
     }
 }

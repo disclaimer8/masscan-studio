@@ -1,10 +1,15 @@
 //! Офлайн-драйвер каркаса (как [`crate::handle_udp`] подэтапа 4a): одна сессия порта, сегменты сервера по очереди,
 //! затем сброс без бюджета. Для эталонов `tests/tcp_golden.rs` и фаззера `rmasscan-lab fuzz tcp`.
 
+use std::sync::Arc;
+
 use crate::tcp::app::{ByteBudget, Session, SessionAction};
 
+use super::banout::{Banout, Base64Stream};
 use super::hello::TcpBannerSettings;
-use super::session::BannerConfig;
+use super::session::{BannerConfig, ParseCx, Parser};
+use super::tls::{Tls, TlsFlags};
+use super::x509::X509;
 
 /// Действие разбора: `tcpapi_send` (байты) или `tcpapi_close`, в порядке вызова.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -46,6 +51,93 @@ pub fn banner_stream(
     StreamResult {
         app_proto,
         records,
+        actions: acts
+            .into_iter()
+            .map(|a| match a {
+                SessionAction::Send(b) | SessionAction::SendCopy(b) => StreamAction::Send(b),
+                SessionAction::SendShared(b) => StreamAction::Send(b.to_vec()),
+                SessionAction::Close => StreamAction::Close,
+            })
+            .collect(),
+    }
+}
+
+/// Один сертификат DER сегментами `segments` через разбор X.509 (задача 3 подэтапа 4c): `count` как ставит
+/// `parse_server_cert` (1 — лист, 2 и дальше — цепочка), бюджет не ограничен, предел записи 65 536 (Р5)
+/// действует. Возвращает записи сброса в порядке C. Для эталонов `tests/x509_golden.rs` и фаззера `x509`.
+#[doc(hidden)]
+pub fn x509_stream(count: u32, segments: &[&[u8]]) -> Vec<(u16, Vec<u8>)> {
+    let total: usize = segments.iter().map(|s| s.len()).sum();
+    let mut x = X509::default();
+    x.init(total, count);
+    let mut banout = Banout::default();
+    let mut budget = ByteBudget::new(usize::MAX);
+    let mut base64 = Base64Stream::default();
+    let mut acts = Vec::new();
+    for seg in segments {
+        let mut cx = ParseCx {
+            banout: &mut banout,
+            budget: &mut budget,
+            acts: &mut acts,
+            base64: &mut base64,
+            capture_html: false,
+            tls_flags: TlsFlags::default(),
+            starttls_hello: Arc::from(&[][..]),
+            starttls: false,
+            starttls_rest: Vec::new(),
+        };
+        x.feed(&mut cx, seg);
+    }
+    banout.flush(&mut budget)
+}
+
+/// Один поток TLS сегментами `segments` через парсер записей (задача 4 подэтапа 4c) с флагами захвата и
+/// режимов (`src/proto-banner1.h:31-38`): записи сброса и действия в порядке C. Для эталонов
+/// `tests/tls_golden.rs` и семейства фаззера `tls`.
+#[doc(hidden)]
+#[allow(clippy::too_many_arguments)]
+pub fn tls_stream(
+    capture_cert: bool,
+    capture_heartbleed: bool,
+    capture_ticketbleed: bool,
+    heartbleed: bool,
+    ticketbleed: bool,
+    poodle_sslv3: bool,
+    segments: &[&[u8]],
+) -> StreamResult {
+    let flags = TlsFlags {
+        capture_cert,
+        capture_heartbleed,
+        capture_ticketbleed,
+        heartbleed,
+        ticketbleed,
+        poodle_sslv3,
+    };
+    let mut parser = Tls::default();
+    let mut banout = Banout::default();
+    let mut budget = ByteBudget::new(usize::MAX);
+    let mut base64 = Base64Stream::default();
+    let mut acts = Vec::new();
+    {
+        let mut cx = ParseCx {
+            banout: &mut banout,
+            budget: &mut budget,
+            acts: &mut acts,
+            base64: &mut base64,
+            capture_html: false,
+            tls_flags: flags,
+            starttls_hello: Arc::from(&[][..]),
+            starttls: false,
+            starttls_rest: Vec::new(),
+        };
+        for seg in segments {
+            parser.parse(&mut cx, seg);
+        }
+        parser.flush(&mut cx);
+    }
+    StreamResult {
+        app_proto: Some(crate::app::app_id::SSL3),
+        records: banout.flush(&mut budget),
         actions: acts
             .into_iter()
             .map(|a| match a {

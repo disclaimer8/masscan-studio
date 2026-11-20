@@ -10,6 +10,10 @@ use std::net::IpAddr;
 /// 8192, JSON на 65 536 экранированных символах, `-oB` выбрасывает записи от 16 370 байт).
 pub const MAX_BANNER_BYTES: usize = 65_536;
 
+/// Shared reservation for each additional record of a repeatable application in a
+/// connection. It covers the record descriptor and spare vector capacity.
+pub const REPEATED_BANNER_RECORD_COST: usize = 128;
+
 /// Один баннер: поля как у `output_report_banner` (`src/output.c`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BannerRecord {

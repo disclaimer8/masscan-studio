@@ -1,0 +1,469 @@
+{
+ "oracle": {
+  "masscan_git_head": "8e6b3b0c07a81e8ea61d557c06134a21a6881614",
+  "harness": "tcp_oracle.c modes x509/x509-vectors + build.sh (kept off the repository, R14)",
+  "driver_sha256": "936ee66b464d6a6888b7146985e31f8fd8f880963d4248d421cc8501af4a2ce9",
+  "build_script_sha256": "65592e4476d5afeb8aaf4d78acc5198622e04b3eff77cedcd064283e01fc4962",
+  "compiler": "Apple clang version 21.0.0 (clang-2100.4.1.1)",
+  "builds": {
+   "default": "-std=gnu99 -g -O2 (masscan Makefile CFLAGS)",
+   "asan": "-std=gnu99 -g -O1 -fno-omit-frame-pointer -fsanitize=address,undefined -fsanitize-recover=address"
+  },
+  "calls": "x509_init once; per run (forked, 2s alarm): x509_decode_init(der_len), x.count = case count, x509_decode whole or byte by byte, records as banner_flush reports them",
+  "vectors": "google/yahoo DER and the ssl_test_case_1/3 certificate DERs come from oracle mode x509-vectors linked against src/proto-ssl-test.c at the pin; handcrafted and mutated DERs are generated with the cases (see README)"
+ },
+ "host": "Darwin 27.2.0, arm64",
+ "expected": {
+  "cases": 32
+ },
+ "cases": [
+  {
+   "name": "google-leaf",
+   "about": "google_cert from proto-ssl-test.c, leaf position",
+   "count": 1,
+   "bytes": 1146,
+   "input": "cases/google-leaf.in.txt",
+   "input_sha256": "36242acc0aa6a4e50b6f836987fa129933631fd944861be726556677d4ee0831",
+   "output": "cases/google-leaf.out",
+   "output_sha256": "fbaf8ee2c7745c42deb4574799c1aa9ef4800ca07ade1817e3b03cff44796d3b",
+   "asan": {
+    "same_output": true,
+    "reports": 0
+   }
+  },
+  {
+   "name": "google-count2",
+   "about": "same, chain position: CN gate",
+   "count": 2,
+   "bytes": 1146,
+   "input": "cases/google-count2.in.txt",
+   "input_sha256": "b5bb0145e951609233cf4f207a7168cb2f83c84421bc9cd5de14e5d6a17a40ed",
+   "output": "cases/google-count2.out",
+   "output_sha256": "78088b8e9dec4cdbfaf074c4c10377dfaa359cd3a391e3f715f63ead891e212f",
+   "asan": {
+    "same_output": true,
+    "reports": 0
+   }
+  },
+  {
+   "name": "google-count0",
+   "about": "count 0 as in ssl_selftest",
+   "count": 0,
+   "bytes": 1146,
+   "input": "cases/google-count0.in.txt",
+   "input_sha256": "3fe677148dd89b1575cfe6ed93f24965afbf9610bba2a1d46404b5224c2c5fe4",
+   "output": "cases/google-count0.out",
+   "output_sha256": "33072bf88136cb83668d9c29839d378110370d204c877ce3dc4cb8d0c7f6bff9",
+   "asan": {
+    "same_output": true,
+    "reports": 0
+   }
+  },
+  {
+   "name": "yahoo-leaf",
+   "about": "yahoo_cert from proto-ssl-test.c",
+   "count": 1,
+   "bytes": 1981,
+   "input": "cases/yahoo-leaf.in.txt",
+   "input_sha256": "cf90531382a85a9e977c9c051c549de0c043ffe4b03462cbbd440efb85891ad7",
+   "output": "cases/yahoo-leaf.out",
+   "output_sha256": "fcecf16eb926febb68f2580d2a3e63bdea991f303ac46c02b83869d7921a2451",
+   "asan": {
+    "same_output": true,
+    "reports": 0
+   }
+  },
+  {
+   "name": "case3-leaf",
+   "about": "leaf of ssl_test_case_3 (via cert capture)",
+   "count": 1,
+   "bytes": 1435,
+   "input": "cases/case3-leaf.in.txt",
+   "input_sha256": "40f67aa931737296dd98b17710c918c4d08c41619d9f0a5b9232689b7085081d",
+   "output": "cases/case3-leaf.out",
+   "output_sha256": "baa41629cd02cc23b00b00a8a6130769c3ba08f4a612c67fe58f5359772328ab",
+   "asan": {
+    "same_output": true,
+    "reports": 0
+   }
+  },
+  {
+   "name": "case3-ca-second",
+   "about": "CA of ssl_test_case_3 in chain position",
+   "count": 2,
+   "bytes": 1354,
+   "input": "cases/case3-ca-second.in.txt",
+   "input_sha256": "4a87258e1763b5afe5d1a036e71521d65ac7620b89c1b0646dca7a9f1f205115",
+   "output": "cases/case3-ca-second.out",
+   "output_sha256": "f354e4682661c706207cf126245b6fc389286c453e4f55b41b324b82774fed27",
+   "asan": {
+    "same_output": true,
+    "reports": 0
+   }
+  },
+  {
+   "name": "case3-ca-leaf",
+   "about": "same CA in leaf position",
+   "count": 1,
+   "bytes": 1354,
+   "input": "cases/case3-ca-leaf.in.txt",
+   "input_sha256": "a311e60c7cbd435b806826e790aec51bf1d3e31109cf1bb159efd71ab6219911",
+   "output": "cases/case3-ca-leaf.out",
+   "output_sha256": "649332c731cd8bd407fa2aa8f7e2af0affabfd3cad3970f25ee02b26f00a156c",
+   "asan": {
+    "same_output": true,
+    "reports": 0
+   }
+  },
+  {
+   "name": "case1-leaf",
+   "about": "leaf of ssl_test_case_1 (many SANs)",
+   "count": 1,
+   "bytes": 1638,
+   "input": "cases/case1-leaf.in.txt",
+   "input_sha256": "b2d2275ae2cd31a54492bb103da6ddd9bffc89d3b54ae046bdf24f0eac25fa9b",
+   "output": "cases/case1-leaf.out",
+   "output_sha256": "074b8c2a0a7773c8b60140641cc7003cf8990fcd8682bedeb7aee47f22273626",
+   "asan": {
+    "same_output": true,
+    "reports": 0
+   }
+  },
+  {
+   "name": "case1-leaf-count2",
+   "about": "SAN count-gate probe (reference C4)",
+   "count": 2,
+   "bytes": 1638,
+   "input": "cases/case1-leaf-count2.in.txt",
+   "input_sha256": "b1dbf139724f0f7ed26e49fab73d613cb6a333547e4ba9bedab4777a573e2e20",
+   "output": "cases/case1-leaf-count2.out",
+   "output_sha256": "83ec8c93ed81681ad30cb3f53d00a0d145253a48be787411e03087f2e535f94d",
+   "asan": {
+    "same_output": true,
+    "reports": 0
+   }
+  },
+  {
+   "name": "case1-ca1196-count2",
+   "about": "first CA record of case1 (base64 len 1196)",
+   "count": 2,
+   "bytes": 897,
+   "input": "cases/case1-ca1196-count2.in.txt",
+   "input_sha256": "e948bd2a9ad20cee63914a6ee3fcf00180534ac0acc8a747fe6c8aa2047df8c8",
+   "output": "cases/case1-ca1196-count2.out",
+   "output_sha256": "03f5cec59c1f4f32082e0f6624439bf16444bdfd08d8c0db6d6b84ec3e381234",
+   "asan": {
+    "same_output": true,
+    "reports": 0
+   }
+  },
+  {
+   "name": "case1-ca1376-count3",
+   "about": "second CA record of case1 (base64 len 1376)",
+   "count": 3,
+   "bytes": 1032,
+   "input": "cases/case1-ca1376-count3.in.txt",
+   "input_sha256": "efbb94e1cd51b5af1719dbf0176845804c37d4ce12d6b21b74d1f75683973a0b",
+   "output": "cases/case1-ca1376-count3.out",
+   "output_sha256": "4889673caec602f4cf1803b365fea2aca44c915a4c328dbd0b7c25640fba360d",
+   "asan": {
+    "same_output": true,
+    "reports": 0
+   }
+  },
+  {
+   "name": "mini-cn",
+   "about": "handcrafted v3, CN only",
+   "count": 1,
+   "bytes": 147,
+   "input": "cases/mini-cn.in.txt",
+   "input_sha256": "ca79eeba33aed3a5253219b383247f3a98e578d917e5a524369bd3908ca50e60",
+   "output": "cases/mini-cn.out",
+   "output_sha256": "5cce5ced3e99f68b06569e7f9dc0062720ccbfc030b6903b5c2b600d7f3fd2a8",
+   "asan": {
+    "same_output": true,
+    "reports": 0
+   }
+  },
+  {
+   "name": "mini-san",
+   "about": "handcrafted SAN: dns, ip, dns",
+   "count": 1,
+   "bytes": 182,
+   "input": "cases/mini-san.in.txt",
+   "input_sha256": "afc2ee9389af176b61f18d2bba1ba116d59c53c9be246b77df5ce7c3048d1c3d",
+   "output": "cases/mini-san.out",
+   "output_sha256": "4149e7f81b4fb0d9f8eeae0d6e543d86d0488ed4e87aaf40b9d8e5b920569b26",
+   "asan": {
+    "same_output": true,
+    "reports": 0
+   }
+  },
+  {
+   "name": "mini-san-critical",
+   "about": "critical SAN: C skips the whole extension",
+   "count": 1,
+   "bytes": 171,
+   "input": "cases/mini-san-critical.in.txt",
+   "input_sha256": "2454484526eefc27151b29d81eb0bb7a6810be5af0a7dce9b85e7b91a53a30b8",
+   "output": "cases/mini-san-critical.out",
+   "output_sha256": "3100df608c79549d706eac2e76ba95aa1227b5b77a317d931ce1e95276ce5eb2",
+   "asan": {
+    "same_output": true,
+    "reports": 0
+   }
+  },
+  {
+   "name": "mini-san-count2",
+   "about": "SAN in chain position",
+   "count": 2,
+   "bytes": 168,
+   "input": "cases/mini-san-count2.in.txt",
+   "input_sha256": "6a989547b5649d4822b7cf6d6dd492695a3e4c645568b03103d0b0612de32ed7",
+   "output": "cases/mini-san-count2.out",
+   "output_sha256": "021194bcd5fbb5047770aa991aa1dc8858a83d0c80a0919bf3c11de808c81ef5",
+   "asan": {
+    "same_output": true,
+    "reports": 0
+   }
+  },
+  {
+   "name": "mini-v1",
+   "about": "no version [0]: hard tag error",
+   "count": 1,
+   "bytes": 142,
+   "input": "cases/mini-v1.in.txt",
+   "input_sha256": "00a7e770a87eb1616ec1652fad4dffafeea8507a60d4f54cb0b96438e301f7a0",
+   "output": "cases/mini-v1.out",
+   "output_sha256": "938a818e1bd0c335aca157d71ccd92fa9c8db1ac19f5064982a6abe53dfd638e",
+   "asan": {
+    "same_output": true,
+    "reports": 0
+   }
+  },
+  {
+   "name": "mini-uniqueid",
+   "about": "[1] before extensions: extensions unreachable",
+   "count": 1,
+   "bytes": 175,
+   "input": "cases/mini-uniqueid.in.txt",
+   "input_sha256": "82794df088ef21da2d6def57bec66822cc04e126dced61ddfa99a2e9f792953b",
+   "output": "cases/mini-uniqueid.out",
+   "output_sha256": "1d6d52978cf455de134fe614f876e26517d574c5fbc72b8d9251f423cd89c156",
+   "asan": {
+    "same_output": true,
+    "reports": 0
+   }
+  },
+  {
+   "name": "mini-two-cn",
+   "about": "two CN RDNs with O between",
+   "count": 1,
+   "bytes": 184,
+   "input": "cases/mini-two-cn.in.txt",
+   "input_sha256": "aee80d6c01652c641e1dce19896c993dd8f3d73649fd68791f76bc0a56625b7e",
+   "output": "cases/mini-two-cn.out",
+   "output_sha256": "bd69aa4bb6ed88977edce3c33364171e9e5eabceb120021bf5c1eb7768345535",
+   "asan": {
+    "same_output": true,
+    "reports": 0
+   }
+  },
+  {
+   "name": "mini-unknown-oid",
+   "about": "unknown RDN OID then CN",
+   "count": 1,
+   "bytes": 167,
+   "input": "cases/mini-unknown-oid.in.txt",
+   "input_sha256": "f61505a37459fec2c5a900a3dea23a1bf03f44ea33fc8a33afaf4664aae0a01a",
+   "output": "cases/mini-unknown-oid.out",
+   "output_sha256": "e94c9afbe103b4512bd4121ddbe55744bc164646330ceb7ab226dd412eff967d",
+   "asan": {
+    "same_output": true,
+    "reports": 0
+   }
+  },
+  {
+   "name": "mini-cn-bmpstring",
+   "about": "CN with a non-Printable/UTF8 tag (soft)",
+   "count": 1,
+   "bytes": 144,
+   "input": "cases/mini-cn-bmpstring.in.txt",
+   "input_sha256": "306cb28a00bc47ba68c29fd1781b2b6f99b4aaa056635b134e2f9694033f2af1",
+   "output": "cases/mini-cn-bmpstring.out",
+   "output_sha256": "b35887df3a7ba2c41e11f1489845c7e55231da0d615e9700c9074979a5c244e6",
+   "asan": {
+    "same_output": true,
+    "reports": 0
+   }
+  },
+  {
+   "name": "google-trunc-10",
+   "about": "truncated at 10",
+   "count": 1,
+   "bytes": 10,
+   "input": "cases/google-trunc-10.in.txt",
+   "input_sha256": "5d72409696a605fcf5c7dea83ffc0a12840c6cc2634a2461d95beec07e920857",
+   "output": "cases/google-trunc-10.out",
+   "output_sha256": "0aee7a4846a1ef573731d3091c8c19f60f76cb31c62ab4d9fe02a8efdc1e0c3f",
+   "asan": {
+    "same_output": true,
+    "reports": 0
+   }
+  },
+  {
+   "name": "google-trunc-100",
+   "about": "truncated at 100",
+   "count": 1,
+   "bytes": 100,
+   "input": "cases/google-trunc-100.in.txt",
+   "input_sha256": "ee3767421b991dcf5342e36d3d5d131388ef501effcf9a0a24cea86382183bba",
+   "output": "cases/google-trunc-100.out",
+   "output_sha256": "66bce44d40dadc16f704c58d037690573c24f6e8f3a9d992f185b70c9081fca2",
+   "asan": {
+    "same_output": true,
+    "reports": 0
+   }
+  },
+  {
+   "name": "google-trunc-half",
+   "about": "truncated at half",
+   "count": 1,
+   "bytes": 573,
+   "input": "cases/google-trunc-half.in.txt",
+   "input_sha256": "31ed842005f82fac34b3ae7a69597f22689a8ba7d0f4349adff85eba6eee84ce",
+   "output": "cases/google-trunc-half.out",
+   "output_sha256": "83c572f058709b4181bf3fdac09676767baf7c55924849d0f6885172c2f7a87c",
+   "asan": {
+    "same_output": true,
+    "reports": 0
+   }
+  },
+  {
+   "name": "google-trunc-minus1",
+   "about": "truncated at len-1",
+   "count": 1,
+   "bytes": 1145,
+   "input": "cases/google-trunc-minus1.in.txt",
+   "input_sha256": "f65d9e1fd9c85e83ec9f331fcc307f78734a67ff9adb1699e08f6be64528e6bd",
+   "output": "cases/google-trunc-minus1.out",
+   "output_sha256": "0dc18378d9ca5641a2f7a8110bb9701c7412206857111cf5c8634062864d1b25",
+   "asan": {
+    "same_output": true,
+    "reports": 0
+   }
+  },
+  {
+   "name": "google-bad-outer-tag",
+   "about": "outer tag not SEQUENCE",
+   "count": 1,
+   "bytes": 1146,
+   "input": "cases/google-bad-outer-tag.in.txt",
+   "input_sha256": "8cedbb942eda53aeee1902bb6e26a3d164d217ba38d1bd206fcb5b83f9bf2a66",
+   "output": "cases/google-bad-outer-tag.out",
+   "output_sha256": "bebb47e971ea84622b14c787d29b107fc6f74425d654c3c1fff76d1b2a37e712",
+   "asan": {
+    "same_output": true,
+    "reports": 0
+   }
+  },
+  {
+   "name": "google-bad-version-tag",
+   "about": "version [0] tag wrong",
+   "count": 1,
+   "bytes": 1146,
+   "input": "cases/google-bad-version-tag.in.txt",
+   "input_sha256": "1bfd9e63e4d8f078b42cb7212c44930b9e280b77ef9152ee000862f8c3fcf6e1",
+   "output": "cases/google-bad-version-tag.out",
+   "output_sha256": "bebb47e971ea84622b14c787d29b107fc6f74425d654c3c1fff76d1b2a37e712",
+   "asan": {
+    "same_output": true,
+    "reports": 0
+   }
+  },
+  {
+   "name": "google-child-overflow",
+   "about": "TBS length raised to the outer length",
+   "count": 1,
+   "bytes": 1146,
+   "input": "cases/google-child-overflow.in.txt",
+   "input_sha256": "532069dfdad2f1c1b7998c8c802964b44dd494c7022e59a82fa8aee944bd9c56",
+   "output": "cases/google-child-overflow.out",
+   "output_sha256": "bebb47e971ea84622b14c787d29b107fc6f74425d654c3c1fff76d1b2a37e712",
+   "asan": {
+    "same_output": true,
+    "reports": 0
+   }
+  },
+  {
+   "name": "google-len83-short",
+   "about": "outer length in 3-byte form with wrapped value 0x76",
+   "count": 1,
+   "bytes": 1147,
+   "input": "cases/google-len83-short.in.txt",
+   "input_sha256": "a5923b7427d6fcab2920c6681deef17e925c6eb24fbdf0d9a18c3f3e783e3159",
+   "output": "cases/google-len83-short.out",
+   "output_sha256": "31198e3ed1b29bd925a58e1ca0216b536e17b8aa7b349cf227552c54eee0fdd5",
+   "asan": {
+    "same_output": true,
+    "reports": 0
+   }
+  },
+  {
+   "name": "google-len-indefinite",
+   "about": "indefinite length form 0x80 on the outer SEQUENCE",
+   "count": 1,
+   "bytes": 1146,
+   "input": "cases/google-len-indefinite.in.txt",
+   "input_sha256": "a597b646ac2c454508ad0eb2d731cd6c625b85dd222012c0a4f5621e148fcb05",
+   "output": "cases/google-len-indefinite.out",
+   "output_sha256": "bebb47e971ea84622b14c787d29b107fc6f74425d654c3c1fff76d1b2a37e712",
+   "asan": {
+    "same_output": true,
+    "reports": 0
+   }
+  },
+  {
+   "name": "empty",
+   "about": "no bytes",
+   "count": 1,
+   "bytes": 0,
+   "input": "cases/empty.in.txt",
+   "input_sha256": "dfb8c1b34c44f3810979f2c40bc444cd4bae9c81af5cee74ab5915d59b0c6f2f",
+   "output": "cases/empty.out",
+   "output_sha256": "46b3e999a084bf61d45bb83fddf52a17806bf3983e65529ae7a6456b1678d2f2",
+   "asan": {
+    "same_output": true,
+    "reports": 0
+   }
+  },
+  {
+   "name": "tiny-seq",
+   "about": "empty SEQUENCE only",
+   "count": 1,
+   "bytes": 2,
+   "input": "cases/tiny-seq.in.txt",
+   "input_sha256": "4dd178682fe5ac0dba0e9d3c38d3fa0b21845af2cfce5a16026e09863eb45eb5",
+   "output": "cases/tiny-seq.out",
+   "output_sha256": "941a52a3ea0f80790d9055c46cc3b207221dfde8c8b70205dd0b78d482667adf",
+   "asan": {
+    "same_output": true,
+    "reports": 0
+   }
+  },
+  {
+   "name": "big-over-64k",
+   "about": "init length over the 64KiB ceiling",
+   "count": 1,
+   "bytes": 70000,
+   "input": "cases/big-over-64k.in.txt",
+   "input_sha256": "9b6f479d68a9b33015d5987db8595bd316e01396fa5c6dce0e9eb0d2f2396d77",
+   "output": "cases/big-over-64k.out",
+   "output_sha256": "d8a39e849c98ba7be517718076e6236b8b14b5720c48497871c0e2446927f82c",
+   "asan": {
+    "same_output": true,
+    "reports": 0
+   }
+  }
+ ]
+}

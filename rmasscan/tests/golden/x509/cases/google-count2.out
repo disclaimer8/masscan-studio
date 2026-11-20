@@ -1,0 +1,7 @@
+x509-oracle v1 count=2 bytes=1146
+run whole calls=1
+record 9 16 ", www.google.com"
+end
+run bytewise calls=1146
+record 9 16 ", www.google.com"
+end

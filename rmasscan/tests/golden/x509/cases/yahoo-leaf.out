@@ -1,0 +1,7 @@
+x509-oracle v1 count=1 bytes=1981
+run whole calls=1
+record 9 653 ", www.yahoo.com, www.yahoo.com, yahoo.com, hsrd.yahoo.com, us.yahoo.com, fr.yahoo.com, uk.yahoo.com, za.yahoo.com, ie.yahoo.com, it.yahoo.com, es.yahoo.com, de.yahoo.com, ca.yahoo.com, qc.yahoo.com, br.yahoo.com, ro.yahoo.com, se.yahoo.com, be.yahoo.com, fr-be.yahoo.com, ar.yahoo.com, mx.yahoo.com, cl.yahoo.com, co.yahoo.com, ve.yahoo.com, espanol.yahoo.com, pe.yahoo.com, in.yahoo.com, sg.yahoo.com, id.yahoo.com, malaysia.yahoo.com, ph.yahoo.com, vn.yahoo.com, maktoob.yahoo.com, en-maktoob.yahoo.com, ca.my.yahoo.com, gr.yahoo.com, att.yahoo.com, au.yahoo.com, nz.yahoo.com, tw.yahoo.com, hk.yahoo.com, brb.yahoo.com, my.yahoo.com, add.my.yahoo.com"
+end
+run bytewise calls=1981
+record 9 653 ", www.yahoo.com, www.yahoo.com, yahoo.com, hsrd.yahoo.com, us.yahoo.com, fr.yahoo.com, uk.yahoo.com, za.yahoo.com, ie.yahoo.com, it.yahoo.com, es.yahoo.com, de.yahoo.com, ca.yahoo.com, qc.yahoo.com, br.yahoo.com, ro.yahoo.com, se.yahoo.com, be.yahoo.com, fr-be.yahoo.com, ar.yahoo.com, mx.yahoo.com, cl.yahoo.com, co.yahoo.com, ve.yahoo.com, espanol.yahoo.com, pe.yahoo.com, in.yahoo.com, sg.yahoo.com, id.yahoo.com, malaysia.yahoo.com, ph.yahoo.com, vn.yahoo.com, maktoob.yahoo.com, en-maktoob.yahoo.com, ca.my.yahoo.com, gr.yahoo.com, att.yahoo.com, au.yahoo.com, nz.yahoo.com, tw.yahoo.com, hk.yahoo.com, brb.yahoo.com, my.yahoo.com, add.my.yahoo.com"
+end

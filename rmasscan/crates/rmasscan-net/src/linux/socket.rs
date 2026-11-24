@@ -124,6 +124,16 @@ impl PacketFd {
     /// Создаёт сокет БЕЗ протокола (ничего не принимает до bind) и привязывает
     /// его к `ifindex`. `protocol_be == 0` для TX, `ETH_P_ALL_BE` для RX.
     pub(super) fn open(ifindex: u32, protocol_be: u16) -> Result<PacketFd, Errno> {
+        Self::open_with_qdisc_bypass(ifindex, protocol_be, true)
+    }
+
+    /// То же, что [`Self::open`], но позволяет отключить `PACKET_QDISC_BYPASS` на TX-сокете
+    /// (используется лабораторией `rmasscan-lab`, когда `tcpdump` слушает тот же интерфейс).
+    pub(super) fn open_with_qdisc_bypass(
+        ifindex: u32,
+        protocol_be: u16,
+        qdisc_bypass: bool,
+    ) -> Result<PacketFd, Errno> {
         let fd = socket(
             libc::AF_PACKET,
             libc::SOCK_RAW | libc::SOCK_NONBLOCK | libc::SOCK_CLOEXEC,
@@ -174,11 +184,13 @@ impl PacketFd {
                 libc::SO_SNDBUF,
                 TX_SOCKET_BUFFER,
             );
-            // P3 по решению пользователя: кадры идут в драйвер мимо qdisc интерфейса (Linux 3.14+): шейпинг `tc` на
-            // них не действует, буфера qdisc нет (занятую очередь передачи драйвера ядро отдаёт как ENOBUFS, его
-            // повторяет `TxHalf`), и другие AF_PACKET сокеты (tcpdump на интерфейсе скана) их не видят. Отказ
-            // безвреден: кадры идут прежним путём через qdisc.
-            let _ = setsockopt_int(fd.as_fd(), libc::SOL_PACKET, libc::PACKET_QDISC_BYPASS, 1);
+            if qdisc_bypass {
+                // P3 по решению пользователя: кадры идут в драйвер мимо qdisc интерфейса (Linux 3.14+): шейпинг `tc` на
+                // них не действует, буфера qdisc нет (занятую очередь передачи драйвера ядро отдаёт как ENOBUFS, его
+                // повторяет `TxHalf`), и другие AF_PACKET сокеты (tcpdump на интерфейсе скана) их не видят. Отказ
+                // безвреден: кадры идут прежним путём через qdisc.
+                let _ = setsockopt_int(fd.as_fd(), libc::SOL_PACKET, libc::PACKET_QDISC_BYPASS, 1);
+            }
         }
         Ok(PacketFd { fd })
     }

@@ -9,10 +9,30 @@
 //!
 //! Raw frames are NOT sent or received here: the lab uses `open_explicit` like the product, and
 //! captures with the independent `tcpdump`.
+use crate::{NetError, OpenedAdapter};
+use rmasscan_core::probe::AdapterBinding;
 use std::{
     io,
     net::{Ipv4Addr, TcpListener},
 };
+
+/// Open an adapter for laboratory helpers (`rmasscan-lab`) whose outgoing frames must remain
+/// visible to co-located `AF_PACKET` taps such as `tcpdump` on the same interface (e.g.
+/// `WIRELAB-END` markers and peer-side injections on `veth-b`).
+///
+/// On Linux this skips `PACKET_QDISC_BYPASS` on the TX socket because the kernel hides bypassed
+/// outgoing frames from other `AF_PACKET` sockets on the same interface; on other platforms it
+/// delegates directly to [`crate::open_explicit`].
+pub fn open_explicit_visible_to_taps(binding: &AdapterBinding) -> Result<OpenedAdapter, NetError> {
+    #[cfg(target_os = "linux")]
+    {
+        crate::linux::open_with_qdisc_bypass(binding, false)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        crate::open_explicit(binding)
+    }
+}
 
 /// Install a flag-only handler for SIGINT, SIGTERM and SIGHUP (unix) and clear the flag. Off unix there
 /// is nothing to install and [`stop_requested`] stays false.

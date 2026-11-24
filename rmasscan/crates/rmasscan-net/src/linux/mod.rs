@@ -691,10 +691,19 @@ fn map_open_error(op: &str, e: Errno) -> NetError {
 
 #[cfg(target_os = "linux")]
 pub(crate) fn open(binding: &AdapterBinding) -> Result<OpenedAdapter, NetError> {
+    open_with_qdisc_bypass(binding, true)
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn open_with_qdisc_bypass(
+    binding: &AdapterBinding,
+    qdisc_bypass: bool,
+) -> Result<OpenedAdapter, NetError> {
     let ifindex = verify_binding(&socket::OsIface, binding)?;
     // TX не принимает ничего (protocol 0), RX слушает ETH_P_ALL только после
     // bind на ifindex, поэтому кадры других интерфейсов не попадают в очередь.
-    let tx = socket::PacketFd::open(ifindex, 0).map_err(|e| map_open_error("tx socket", e))?;
+    let tx = socket::PacketFd::open_with_qdisc_bypass(ifindex, 0, qdisc_bypass)
+        .map_err(|e| map_open_error("tx socket", e))?;
     let rx = socket::PacketFd::open(ifindex, socket::ETH_P_ALL_BE)
         .map_err(|e| map_open_error("rx socket", e))?;
     let counters = Arc::new(Counters::default());

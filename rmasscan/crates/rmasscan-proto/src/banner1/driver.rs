@@ -7,7 +7,9 @@ use crate::tcp::app::{ByteBudget, Session, SessionAction};
 
 use super::banout::{Banout, Base64Stream};
 use super::hello::TcpBannerSettings;
+use super::ntlmssp::Ntlmssp;
 use super::session::{BannerConfig, ParseCx, Parser};
+use super::spnego::Spnego;
 use super::tls::{Tls, TlsFlags};
 use super::x509::X509;
 
@@ -87,6 +89,60 @@ pub fn x509_stream(count: u32, segments: &[&[u8]]) -> Vec<(u16, Vec<u8>)> {
             starttls_rest: Vec::new(),
         };
         x.feed(&mut cx, seg);
+    }
+    banout.flush(&mut budget)
+}
+
+/// Один SPNEGO-блоб сегментами `segments` через разбор SPNEGO/NTLMSSP (подэтап 4d). Для фаззера `spnego`.
+#[doc(hidden)]
+pub fn spnego_stream(segments: &[&[u8]]) -> Vec<(u16, Vec<u8>)> {
+    let total: usize = segments.iter().map(|s| s.len()).sum();
+    let mut s = Spnego::default();
+    s.init(total);
+    let mut banout = Banout::default();
+    let mut budget = ByteBudget::new(usize::MAX);
+    let mut base64 = Base64Stream::default();
+    let mut acts = Vec::new();
+    for seg in segments {
+        let mut cx = ParseCx {
+            banout: &mut banout,
+            budget: &mut budget,
+            acts: &mut acts,
+            base64: &mut base64,
+            capture_html: false,
+            tls_flags: TlsFlags::default(),
+            starttls_hello: Arc::from(&[][..]),
+            starttls: false,
+            starttls_rest: Vec::new(),
+        };
+        s.feed(&mut cx, seg);
+    }
+    banout.flush(&mut budget)
+}
+
+/// Один NTLMSSP-блоб сегментами `segments` через разбор NTLMSSP Type-2 (подэтап 4d). Для фаззера `ntlmssp`.
+#[doc(hidden)]
+pub fn ntlmssp_stream(segments: &[&[u8]]) -> Vec<(u16, Vec<u8>)> {
+    let total: usize = segments.iter().map(|s| s.len()).sum();
+    let mut n = Ntlmssp::default();
+    n.init(total);
+    let mut banout = Banout::default();
+    let mut budget = ByteBudget::new(usize::MAX);
+    let mut base64 = Base64Stream::default();
+    let mut acts = Vec::new();
+    for seg in segments {
+        let mut cx = ParseCx {
+            banout: &mut banout,
+            budget: &mut budget,
+            acts: &mut acts,
+            base64: &mut base64,
+            capture_html: false,
+            tls_flags: TlsFlags::default(),
+            starttls_hello: Arc::from(&[][..]),
+            starttls: false,
+            starttls_rest: Vec::new(),
+        };
+        n.feed(&mut cx, seg);
     }
     banout.flush(&mut budget)
 }

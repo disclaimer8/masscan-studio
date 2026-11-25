@@ -2,15 +2,16 @@
 //! `src/proto-mc.c:95-104`), опций `--hello` (`src/stack-tcp-core.c:501-524`, порядок smbv1, http, ssl,
 //! `src/main.c:643-648`) и `--hello-string` (`src/stack-tcp-core.c:595-616`, `src/main.c:727-734`), справка B4, C2.
 //!
-//! Шлются строки «sent» таблицы B4 и ClientHello TLS на 23 портах (справка 4c §A1); SMB (139, 445) это 4d: до
-//! него поток NULL, как у порта без hello. Hello NPSL (`src/proto-banner1.c:327-489`: 15 потоков на 66 портах,
-//! `:548-610`) не переносятся никогда (Р3): их байтов здесь нет.
+//! Шлются строки «sent» таблицы B4, ClientHello TLS на 23 портах (справка 4c §A1) и SMB на 139/445 (4d).
+//! Hello NPSL (`src/proto-banner1.c:327-489`: 15 потоков на 66 портах, `:548-610`) не переносятся никогда (Р3):
+//! их байтов здесь нет.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::tcp::app::StreamDesc;
 
+use super::smb::{SMB0_HELLO, SMB1_HELLO, SMB1_HELLO_V1};
 use super::tls::TlsFlags;
 use super::tls_hello::{TlsHelloKind, tls_hello};
 
@@ -172,6 +173,8 @@ pub(crate) struct HelloTable {
     rdp: Arc<[u8]>,
     memcached: Arc<[u8]>,
     mc: Arc<[u8]>,
+    smb0: Arc<[u8]>,
+    smb1: Arc<[u8]>,
     tls_first: Arc<[u8]>,
     tls_next: Arc<[u8]>,
     tls_small_window: bool,
@@ -196,12 +199,19 @@ impl HelloTable {
             rdp: Arc::from(RDP_HELLO),
             memcached: Arc::from(MEMCACHED_HELLO),
             mc: Arc::from(MC_HELLO),
+            smb0: Arc::from(SMB0_HELLO),
+            // `--hello smbv1` вызывает `smb_set_hello_v1(&banner_smb1)` (`src/stack-tcp-core.c:529-532`).
+            smb1: Arc::from(if s.hello.smbv1 {
+                SMB1_HELLO_V1
+            } else {
+                SMB1_HELLO
+            }),
             tls_first: Arc::clone(s.tls.hello(s.tls.hello_kind())),
             tls_next: Arc::clone(s.tls.hello(TlsHelloKind::Tls13)),
             tls_small_window: s.tls.heartbleed,
             all_http: s.hello.http,
             // `--hello ssl` и каждый режим ставят поток TLS после `http` и побеждают его
-            // (`src/main.c:645-654`). `--hello smbv1` меняет только hello SMB, а его до 4d нет.
+            // (`src/main.c:645-654`).
             all_tls: s.hello.ssl || s.tls.any_mode(),
             strings,
         }
@@ -237,6 +247,8 @@ impl HelloTable {
         StreamDesc::plain(match port {
             80 | 8080 | 8530 => Some(Arc::clone(&self.http)),
             23 => Some(Arc::clone(&self.telnet)),
+            139 => Some(Arc::clone(&self.smb0)),
+            445 => Some(Arc::clone(&self.smb1)),
             3389 => Some(Arc::clone(&self.rdp)),
             11211 => Some(Arc::clone(&self.memcached)),
             25565 => Some(Arc::clone(&self.mc)),
@@ -334,11 +346,11 @@ mod tests {
         t.stream(port).hello.map(|h| h.to_vec())
     }
 
-    /// Таблица потоков в 4c: hello потоков B4 байт в байт как у C (`hellos.out`), на 23 TLS-портах — поток
-    /// `banner_ssl` (hello по умолчанию, `SF__close` и `next` как в дампе C, длина как у C); SMB и NPSL у C
-    /// есть, у нас поток NULL; порт без потока у C и у нас NULL.
+    /// Таблица потоков в 4d: hello потоков B4 байт в байт как у C (`hellos.out`), на 23 TLS-портах — поток
+    /// `banner_ssl`, на 139 и 445 — потоки SMB (72 и 73 байта, как в дампе C); NPSL у C есть, у нас поток
+    /// NULL (Р3); порт без потока у C и у нас NULL.
     #[test]
-    fn stream_table_4c() {
+    fn stream_table_4d() {
         let t = table(&TcpBannerSettings::default());
         let c = c_streams();
         assert_eq!(c.len(), 98);
@@ -368,6 +380,20 @@ mod tests {
                 );
                 continue;
             }
+            if matches!(port, 139 | 445) {
+                sent += 1;
+                let (name, flags, next, len, _) = c.get(&port).expect("C SMB stream");
+                assert_eq!(name, "smb");
+                assert_eq!(*flags, 0);
+                assert!(!*next);
+                assert_eq!(
+                    desc.hello.as_ref().map(|h| h.len()),
+                    Some(*len),
+                    "port {port}"
+                );
+                assert!(!desc.is_tls && !desc.close_after_hello && desc.next.is_none());
+                continue;
+            }
             let want = c.get(&port).and_then(|(_, _, _, _, b)| b.clone());
             sent += usize::from(want.is_some());
             assert_eq!(desc.hello.as_deref(), want.as_deref(), "port {port}");
@@ -376,7 +402,7 @@ mod tests {
                 "port {port}"
             );
         }
-        assert_eq!(sent, 7 + 23);
+        assert_eq!(sent, 7 + 23 + 2);
         assert_eq!(get(&t, 80).map(|h| h.len()), Some(99));
         for port in [80, 8080, 8530] {
             assert_eq!(
@@ -386,10 +412,12 @@ mod tests {
             );
         }
         assert_eq!(get(&t, 23).as_deref(), Some(&b"\xff\xf6"[..]));
+        assert_eq!(get(&t, 139).as_deref(), Some(SMB0_HELLO));
+        assert_eq!(get(&t, 445).as_deref(), Some(SMB1_HELLO));
         assert_eq!(get(&t, 3389).map(|h| h.len()), Some(45));
         assert_eq!(get(&t, 11211).as_deref(), Some(&b"stats\r\n"[..]));
         assert_eq!(get(&t, 25565).map(|h| h.len()), Some(19));
-        for port in [139, 445, 53, 88, 1099, 6000, 6019, 27017, 548] {
+        for port in [53, 88, 1099, 6000, 6019, 27017, 548] {
             assert!(c.contains_key(&port), "C has a stream on {port}");
             assert_eq!(get(&t, port), None, "{port}");
         }

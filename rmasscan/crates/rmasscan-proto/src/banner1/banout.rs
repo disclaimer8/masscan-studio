@@ -271,6 +271,35 @@ impl Banout {
         }
     }
 
+    /// `banout_append_unicode` (`src/proto-banout.c:203-231`): кодирует кодовую точку в UTF-8 побайтово через
+    /// `append` (как `banout_append_char` у C, чтобы переезд головы на 200 байтах совпадал).
+    pub(crate) fn append_unicode(&mut self, budget: &mut ByteBudget, app: u16, c: u32) {
+        if c & !0xFFFF != 0 {
+            let b0 = (0xF0 | ((c >> 18) & 0x03)) as u8;
+            let b1 = (0x80 | ((c >> 12) & 0x3F)) as u8;
+            let b2 = (0x80 | ((c >> 6) & 0x3F)) as u8;
+            let b3 = (0x80 | (c & 0x3F)) as u8;
+            for b in [b0, b1, b2, b3] {
+                self.append(budget, app, &[b]);
+            }
+        } else if c & !0x7FF != 0 {
+            let b0 = (0xE0 | ((c >> 12) & 0x0F)) as u8;
+            let b1 = (0x80 | ((c >> 6) & 0x3F)) as u8;
+            let b2 = (0x80 | (c & 0x3F)) as u8;
+            for b in [b0, b1, b2] {
+                self.append(budget, app, &[b]);
+            }
+        } else if c & !0x7F != 0 {
+            let b0 = (0xC0 | ((c >> 6) & 0x1F)) as u8;
+            let b1 = (0x80 | (c & 0x3F)) as u8;
+            for b in [b0, b1] {
+                self.append(budget, app, &[b]);
+            }
+        } else {
+            self.append(budget, app, &[c as u8]);
+        }
+    }
+
     /// `banout_end(banout, app)` (`src/proto-banout.c:163-171`): открытая непустая запись `app` завершается;
     /// следующее дописывание того же приложения откроет новую запись ([`Banout::append`]).
     pub(crate) fn end(&mut self, app: u16) {

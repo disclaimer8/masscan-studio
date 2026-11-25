@@ -355,3 +355,27 @@ Windows — PASS; macOS `feth` — NOT RUN; фаззинг 13 семейств �
   эталонами TLS и X.509. Фаззинг нашёл зависание на списке сертификатов короче сертификата — оно есть и у C
   (справка §F E1.3). Часовые прогоны новых семейств и повтор 13 семейств на стенде — приёмка задачи 14; 24 ч —
   критерий 4d. Итоги прогонов этой сессии — отчёт приёмки 4c, раздел 5.
+
+## 13. Изменения по итогам подэтапа 4d
+
+- **И27 (SMB1/SMB2, SPNEGO, NTLMSSP и `--hello smbv1`).** Реализованы потоковые безопасные парсеры
+  `banner1/{smb,spnego,ntlmssp}.rs` (`#![forbid(unsafe_code)]`, без `libc`): NetBIOS Session Service (`0x00`,
+  `0x81`..`0x85`, ответ `SMB1_HELLO` на `0x82`), SMB1 Negotiate (`0x72`, `time=` UTC из Windows FILETIME, `TZ=`,
+  `domain=`/`name=`, `SMB1_NULL_SESSION_SETUP_EX` или `SMB1_NULL_SESSION_SETUP` с подстановкой `SessionKey`),
+  SMB1 SessionSetup (`0x73`, SPNEGO/NTLMSSP + `os=`/`ver=`/`domain=` + `Close`), SMB2 Negotiate (`opcode 0`, `guid=`,
+  `time=`, `boottime=`, `SMB2_NEGOTIATE_REQUEST` при `seqno == 0`, `SMB2_NULL_SESSION_SETUP` при `seqno == 1`),
+  SMB2 SessionSetup (`opcode 1`, SPNEGO/NTLMSSP + `Close`). В `hello.rs` добавлены hello портов 139 (72 байта) и
+  445 (73 байта, с поддержкой `--hello smbv1`). Все 11 SMB-эталонов `tests/golden/tcp-banners` переведены с
+  `declared-4b: unknown-stream` на `records` и совпадают с C по записям и действиям; оба C selftest-вектора
+  (`os=EPSON`, `domain=S659C27D`) проходят байт-в-байт во всех нарезках.
+- **И28 (безопасность Р2 и независимость от нарезки Р13 в SMB/SPNEGO/NTLMSSP).** Устранены C-ошибки памяти:
+  global-buffer-overflow на команде `0xFF` в `smb_params_parse` (`src/proto-smb.c:241-285`), сдвиг `u8 << 24` на
+  знаковом `int`, переполнение `info_offset = 0xFFFFFFFC` в NTLMSSP (`src/proto-ntlmssp.c:182`), underflow длин
+  сегментов и двойное освобождение буфера в `spnego_decode` (`src/proto-x509.c:1302-1303`). Исправлены зависимости C
+  от нарезки (Р13): `spnego_decode` сохраняет состояние между вызовами и корректно сдвигает курсор по `responseToken`,
+  а выбор `negotiate1`/`negotiate2` и `setup1`/`setup2` фиксируется в конце параметров SMB1 (в C декремент
+  `ChallengeLength` мог переключить парсер между сегментами).
+- **И29 (Р15 в 4d).** Фаззер `rmasscan-lab fuzz tcp` дополнен семейством `smb` (всего 16 семейств TCP) со встроенными
+  сидами SMB1+SPNEGO+NTLMSSP, не-extended SMB1, SMB2 и NBT `0x82`, а также 11 SMB-эталонами из `tests/golden/tcp-banners`.
+  В коротком CI-режиме (`fuzz_short_mode_all_tcp_families`) все 16 семейств проходят без паник, зависаний, нарушений
+  инвариантов и расхождений нарезок (Р13).

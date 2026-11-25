@@ -46,7 +46,7 @@ const DIR: &str = concat!(
 const ORACLE_GIT_HEAD: &str = "8e6b3b0c07a81e8ea61d557c06134a21a6881614";
 
 /// Число кейсов по видам ожидания: `records`, `declared-4b`.
-const COUNTS: (usize, usize) = (208, 21);
+const COUNTS: (usize, usize) = (219, 10);
 
 fn read(path: &Path) -> Vec<u8> {
     fs::read(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))

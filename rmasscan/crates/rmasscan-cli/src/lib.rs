@@ -1472,8 +1472,10 @@ mod tests {
     }
 
     #[test]
-    fn list_scan_with_non_terminating_retries_is_an_error_not_a_hang() {
-        let e = run_args(&[
+    fn list_scan_with_retries_repeats_range_and_terminates() {
+        // Исправление бага B4 (C main-listscan.c:35): `--retries` повторяет полный `range`,
+        // всегда завершается и не зависит от `--rate`.
+        let out = run_args(&[
             "rmasscan",
             "-sL",
             "10.0.0.0/30",
@@ -1483,12 +1485,11 @@ mod tests {
             "--retries",
             "1",
         ])
-        .unwrap_err();
-        assert!(
-            e.contains("never terminate") && e.contains("--retries"),
-            "{e}"
-        );
-        // Golden-backed retries cases keep working (456 lines, see differential.rs).
+        .unwrap();
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(lines.len(), 8);
+        assert_eq!(&lines[..4], &lines[4..]);
+
         let out = run_args(&[
             "rmasscan",
             "-sL",
@@ -1500,7 +1501,7 @@ mod tests {
             "2",
         ])
         .unwrap();
-        assert_eq!(out.lines().count(), 456);
+        assert_eq!(out.lines().count(), 256 * 3);
     }
 
     #[test]

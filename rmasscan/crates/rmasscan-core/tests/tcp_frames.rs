@@ -768,6 +768,13 @@ fn in_c_form(ours: &[u8], c: &CaseSpec, spec: &FrameSpec, i: usize, oi: usize) -
     let ot = oi + if spec.v6 { 40 } else { 20 };
     let what = format!("{} frame {i}", c.name);
     let mut want = ours.to_vec();
+    if spec.v6
+        && let Some(ttl) = c.template.ttl
+    {
+        // Исправление бага B5: `--ttl` доходит до IPv6 hop limit, в C оставалось 0xff.
+        assert_eq!(want[oi + 7], ttl, "{what}: our IPv6 hop limit");
+        want[oi + 7] = 0xff;
+    }
     if let Some(ts) = c.template.tsecho {
         let at = tsval_offset(&want, ot).expect("TSval option");
         assert_eq!(&want[at..at + 4], &ts.to_be_bytes(), "{what}: our TSval");
@@ -1031,9 +1038,9 @@ fn ethernet_frame_padded_to_60() {
     }
 }
 
-/// IPv6 без набивки, hop limit 255 даже при `--ttl` (`template_set_ttl` правит только IPv4, `src/templ-pkt.c:1473-1488`).
+/// IPv6 без набивки; `--ttl` доходит до hop limit (исправление бага B5, по умолчанию 255).
 #[test]
-fn ipv6_frame_unpadded_hop_limit_255() {
+fn ipv6_frame_unpadded_hop_limit_follows_ttl() {
     let ttl64 = Template {
         ttl: Some(64),
         ..DEFAULT_TEMPLATE
@@ -1043,7 +1050,12 @@ fn ipv6_frame_unpadded_hop_limit_255() {
     assert_eq!(f.len(), 14 + 40 + 24);
     assert_eq!(&f[12..14], &[0x86, 0xdd]);
     assert_eq!(&f[18..20], &24u16.to_be_bytes(), "payload length");
-    assert_eq!(f[14 + 7], 255, "hop limit");
+    assert_eq!(f[14 + 7], 64, "hop limit follows --ttl");
+    assert_eq!(
+        builder(LinkType::Ethernet, &DEFAULT_TEMPLATE).build(&seg6(ME6, PEER6, 40000, 80))[14 + 7],
+        255,
+        "default hop limit stays 255"
+    );
     assert_eq!(f[14 + 6], 6, "next header");
     assert!(tcp_ok(&f, 14, true));
     // Тот же построитель, IPv4: TTL 64.
@@ -1060,7 +1072,7 @@ fn ipv6_frame_unpadded_hop_limit_255() {
     let f = b.build(&s);
     assert_eq!(f.len(), 61);
     assert_eq!(&f[4..6], &21u16.to_be_bytes());
-    assert_eq!(f[7], 255);
+    assert_eq!(f[7], 64);
     // План без `source_ipv6`: шаблона IPv6 нет, кадра тоже.
     let b = TcpFrameBuilder::from_plan(&plan(LinkType::Ethernet, &ttl64.modifiers(), None));
     assert!(b.build(&seg6(ME6, PEER6, 40000, 80)).is_empty());
@@ -1477,7 +1489,7 @@ fn tcp_segment_round_trip() {
                         seq: out.seq,
                         ack: out.ack,
                         flags,
-                        ttl: if v6 { 255 } else { 64 },
+                        ttl: 64,
                         payload: &out.payload,
                     },
                     "{link:?} v6={v6} 0x{flags:02x}"

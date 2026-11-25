@@ -1068,9 +1068,18 @@ mod tests {
     #[test]
     fn top_ports_follow_the_c_tables() {
         use crate::top_ports::{TOP_TCP_PORTS, TOP_UDP_PORTS};
-        // main-conf.c:934-1037 и :899-932: размеры и первые значения
-        assert_eq!(TOP_TCP_PORTS.len(), 1008);
+        // main-conf.c:934-1037 и :899-932: размеры и первые значения (B9: 4 дубля удалены из TCP)
+        assert_eq!(TOP_TCP_PORTS.len(), 1004);
         assert_eq!(TOP_UDP_PORTS.len(), 31);
+        assert_eq!(
+            TOP_TCP_PORTS
+                .iter()
+                .copied()
+                .collect::<std::collections::BTreeSet<_>>()
+                .len(),
+            TOP_TCP_PORTS.len(),
+            "TOP_TCP_PORTS has no duplicates (B9)"
+        );
         assert_eq!(&TOP_TCP_PORTS[..5], [80, 443, 8080, 21, 990]);
         assert_eq!(&TOP_UDP_PORTS[..5], [161, 135, 500, 137, 138]);
         let list = |n, tcp, udp| {

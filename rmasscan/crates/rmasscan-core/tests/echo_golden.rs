@@ -86,7 +86,18 @@ fn echo_matches_c_oracle_fixtures_exactly() {
         // main.c:1803-1805: `--echo-all` вызывает `masscan_echo(.., 0)`.
         let mut got = String::new();
         echo(&cfg, false, &mut got);
-        let expected = std::fs::read_to_string(format!("{GOLDEN_DIR}/{file}")).unwrap();
+        let mut expected = std::fs::read_to_string(format!("{GOLDEN_DIR}/{file}")).unwrap();
+        // Исправление бага B2 (massip-rangesv4.c:98-101): заявленное отличие для CIDR от 0.0.0.0.
+        match file {
+            "echo/zero_slash4.conf" => {
+                expected =
+                    expected.replace("range = 0.0.0.0-15.255.255.255\n", "range = 0.0.0.0/4\n");
+            }
+            "echo/zero_slash31.conf" => {
+                expected = expected.replace("range = 0.0.0.0/4294967295\n", "range = 0.0.0.0/31\n");
+            }
+            _ => {}
+        }
         assert_eq!(got, expected, "{file}");
         checked.push(file.to_string());
     }

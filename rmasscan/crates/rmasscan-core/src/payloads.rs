@@ -1022,8 +1022,8 @@ impl NmapLines<'_> {
 }
 
 /// `parse_c_string` (templ-nmap-payloads.c:100): разбирает строку в кавычках, дописывает байты в `buf` (не больше 1500)
-/// и возвращает смещение за закрывающей кавычкой. Цифры 8 и 9 после `\` дают нулевой байт и сами остаются в строке,
-/// как в C.
+/// и возвращает смещение за закрывающей кавычкой. Восьмеричные последовательности принимают только `0`–`7`; `\8` и `\9`
+/// дают символы `'8'` и `'9'` (исправляет баг C в `templ-nmap-payloads.c:100-160`, где они давали NUL и оставляли цифру, баг B8).
 fn parse_c_string(buf: &mut Vec<u8>, line: &[u8]) -> usize {
     let push = |buf: &mut Vec<u8>, c: u8| {
         if buf.len() < NMAP_STRING_MAX {
@@ -1044,7 +1044,7 @@ fn parse_c_string(buf: &mut Vec<u8>, line: &[u8]) -> usize {
         o += 1;
         let c = line.get(o).copied().unwrap_or(0);
         match c {
-            b'0'..=b'9' => {
+            b'0'..=b'7' => {
                 let mut val = 0u32;
                 for _ in 0..3 {
                     if line.get(o).is_some_and(|c| (b'0'..=b'7').contains(c)) {
@@ -1847,6 +1847,15 @@ udp 7-8 \"x\"
         let mut f = eth_ipv4_udp(&[], dport, &[0; 12], 0);
         f[23] = 6;
         f
+    }
+
+    #[test]
+    fn parse_c_string_non_octal_8_and_9_are_literal() {
+        // Исправление бага B8 (templ-nmap-payloads.c:100-160): `\8` и `\9` дают '8' и '9',
+        // а не NUL + цифру; восьмеричные `\0`..`\7` и `\101` ('A') продолжают работать.
+        let mut buf = Vec::new();
+        parse_c_string(&mut buf, br#""\8\9\101\0""#);
+        assert_eq!(buf, b"89A\0");
     }
 
     fn eth_ipv6_udp(dport: u16, payload: &[u8]) -> Vec<u8> {

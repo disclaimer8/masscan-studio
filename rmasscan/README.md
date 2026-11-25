@@ -141,8 +141,9 @@ RDP, memcached и Minecraft (протокол узнаётся по первым
 вместе (`-p80,U:53 --banners`) не рвёт смежность записи `open udp` и её баннеров. Опции (все есть и в файле
 конфигурации; в `--echo` и `paused.conf` они печатаются в порядке C, кроме `--connection-timeout`, а `--hello-file`
 печатается как `hello-string`):
-- `--hello ssl|smbv1|http`: hello на каждый порт TCP, кроме 65535 (`src/stack-tcp-core.c:501-524`); `ssl` шлёт
-  ClientHello (баннеры TLS ниже), `smbv1` до 4d не шлёт ничего;
+- `--hello ssl|smbv1|http`: `ssl` и `http` ставят свой hello на каждый порт TCP, кроме 65535
+  (`src/stack-tcp-core.c:501-524`); `smbv1` переключает hello порта 445 на `smb1_hello_template_v1`
+  (`src/stack-tcp-core.c:529-532`, в C `8e6b3b0` байт-в-байт совпадает с `smb1_hello_template`);
 - `--hello-string[PORT] BASE64` и `--hello-file[PORT] FILE` (синоним `--hello-filename`, файл до 12 285 байт): свой hello
   порта; у одного порта выигрывает первый заданный, как у C (`src/main-conf.c:1281-1284`). Копия потока порта сохраняет
   его флаги: на портах TLS за таким hello тоже уходит FIN и открывается второе соединение с hello TLS 1.3
@@ -234,15 +235,15 @@ MiB)` и `[-] banners: N TLS second connections not attempted (single source por
 (`EngineHandle::stack_stats`). Строка `--infinite` показывает созданные соединения (`N-tcbs`, в NDJSON `"tcb"` и
 `"tcbps"`, `src/main-status.c:54-67`, `:189-191`), как C.
 
-Не перенесено (справка B4): SMB на 139 и 445 (подэтап 4d) и hello из `nmap-service-probes` (Р3,
+Не перенесено (справка B4): hello из `nmap-service-probes` (Р3,
 `src/proto-banner1.c:327-489`): из 16 таких строк C шлёт 15 на 66 портах (`src/proto-banner1.c:548-610`), GenericLines
 не привязан ни к одному. Это JavaRMI на 1098 и 1099; X11Probe на 6000–6019; Kerberos на 88; mongodb на 9001, 27017 и
 49153; dicom на 104, 2345, 2761, 2762, 4242 и 11112; LDAPSearchReq на 256, 257, 389, 390, 1702, 3268, 3892 и 11711;
 SIPOptions на 406, 5060, 8081 и 31337; RTSPRequest на 554 и 8554; RPCCheck на 111 и 2049; DNSVersionBindReqTCP на 53,
 135 и 50000–50002; docker на 2375, 2379 и 2380; redis-server на 6379; NotesRPC на 130, 427, 1352, 1972, 7171, 8728 и
 22001; ms-sql-s на 1433; afp на 548. На всех этих портах rmasscan пишет только то, что сервер прислал сам (если
-`--hello-string` не задал порту свой hello). Поток SMB пишется записью `unknown` до подэтапа 4d. Отличия от C
-перечислены в «Отличиях от masscan» (пункты подэтапов 4b и 4c).
+`--hello-string` не задал порту свой hello). SMB1/SMB2/SPNEGO/NTLMSSP на портах 139 и 445 перенесены в подэтапе 4d.
+Отличия от C перечислены в «Отличиях от masscan» (пункты подэтапов 4b, 4c и 4d).
 
 Управление сканом (спека этапа `../docs/superpowers/specs/2026-11-08-rmasscan-scan-control-design.md`, Р1–Р9).
 Принимаются только перечисленные ниже опции, все они есть и в файле конфигурации (`ключ = значение`):
@@ -382,11 +383,19 @@ Ctrl-C выходит сразу с кодом 1, `paused.conf` к этому м
   больше не пишется, даже когда байты в бюджет вернулись (недостача считается в `banner_bytes_dropped`), так что
   запись всегда начало записи C без дыр; запись HEUR, которой бюджет отказал, в парсер не повторяется, и поток остаётся
   `unknown` (её началом), поэтому при нехватке бюджета итог зависит от нарезки (совпадение в первом сегменте ещё идёт в
-  парсер, в позднем уже нет). Пока протокол не перенесён (SMB, TLS, всё после STARTTLS), его поток пишется как
-  `unknown` (справка B6); совпадение SSL3 отвергается всегда, потому что hello TLS в 4b не шлётся. Hello уходят только
-  на порты 80, 8080, 8530 (запрос HTTP), 23, 3389, 11211 и 25565; на портах TLS (4c), SMB (4d) и NPSL (Р3) rmasscan
-  пишет только то, что сервер прислал сам, если `--hello-string` не задал порту свой hello (тогда отличие от C в пункте
-  этой опции выше).
+  парсер, в позднем уже нет). Hello уходят на порты 80, 8080, 8530 (запрос HTTP), 23, 139, 445, 3389, 11211, 25565 и
+  23 порта TLS (4c); на портах NPSL (Р3) rmasscan пишет только то, что сервер прислал сам, если `--hello-string` не
+  задал порту свой hello (тогда отличие от C в пункте этой опции выше).
+- SMB1/SMB2, SPNEGO и NTLMSSP (подэтап 4d; `crates/rmasscan-proto/src/banner1/{smb,spnego,ntlmssp}.rs`, эталоны
+  `tests/golden/tcp-banners` и оба C selftest-вектора `os=EPSON` / `domain=S659C27D`): порты 139 (`smb0_hello_template`,
+  72 байта; на NBT `0x82` шлётся `smb1_hello_template`) и 445 (`smb1_hello_template`, 73 байта), null-session setup
+  SMB1/SMB2 (включая подстановку `SessionKey`), SPNEGO NegTokenInit/NegTokenResp и NTLMSSP Type-2 Challenge
+  (`domain=`, `version=`, `ntlm-ver=`, AV_PAIR `name=`, `domain=`, `name-dns=`, `domain-dns=`, `forest=`, `target=`).
+  Отличия от C (Р2, Р13): устранены выходы за границы буфера C на команде `0xFF` в `smb_params_parse`
+  (`src/proto-smb.c:241-285`), сдвиг `u8 << 24` на `int`, переполнение `info_offset = 0xFFFFFFFC` в NTLMSSP
+  (`src/proto-ntlmssp.c:182`) и двойное освобождение буфера в `spnego_decode` (`src/proto-x509.c:1302-1303`); состояние
+  SPNEGO сохраняется между сегментами, курсор `responseToken` продвигается корректно, а выбор `negotiate1`/`negotiate2`
+  фиксируется в конце параметров — результат и действия не зависят от нарезки потока на сегменты (Р13).
 - Парсеры баннеров FTP, SMTP, POP3 и IMAP4 (подэтап 4b, справка D2-D5, B6, E3.3, E3.4;
   `crates/rmasscan-proto/src/banner1/{ftp,smtp,pop3,imap4}.rs`, эталоны `tests/golden/tcp-banners`) повторяют C
   побайтно, со странностями C (Р1): `"220-"` почтового сервера на 25 и `"220 "` на 2525 разбираются как FTP и получают
@@ -939,7 +948,7 @@ SCTP и ICMP Echo, ARP, смесь; пиры отвечают сокетами �
 только в бинарнике вне `cfg(test)`), бинарник в тестах запускается только с `--iflist`, `--offline`, `-sL`,
 `--echo` или `--help`. Живые прогоны автоопределения выполняются только на запечатанных лабораторных стендах вне
 CI; raw-сокеты в лабораторных тестах `rmasscan-net` (нужны CAP_NET_RAW и замкнутый стенд) тоже вне CI. Скан
-идёт по IPv4 (TCP SYN, UDP, ICMP Echo, SCTP INIT, ARP) и IPv6 (только TCP SYN), до 8 адаптеров с одним следующим хопом на адаптер и семейство; баннеры UDP (подэтап 4a) и TCP без TLS и SMB (подэтап 4b; TLS в 4c, SMB в 4d), туннели и VLAN не поддержаны.
+идёт по IPv4 (TCP SYN, UDP, ICMP Echo, SCTP INIT, ARP) и IPv6 (только TCP SYN), до 8 адаптеров с одним следующим хопом на адаптер и семейство; баннеры UDP (4a) и TCP (4b, TLS/X.509 4c, SMB/SPNEGO/NTLMSSP 4d), туннели и VLAN не поддержаны.
 
 Живой скан из CLI поддержан и принят только на запечатанных лабораторных стендах (Linux netns и veth, Windows VM с Npcap
 в режиме Admin-only, пара `feth` на Mac); на физических NIC он не проверялся (NOT RUN). Вживую не проверены шлюз маршрута

@@ -124,8 +124,7 @@ fn cat(parts: &[&[u8]]) -> Vec<u8> {
 /// 0xFF, совпадение во втором сегменте, SSL3 первым и затем `{"` или IAC, SMB) и потоки без совпадения, в том числе
 /// 70 000 байт.
 pub fn cases() -> Vec<Case> {
-    use Expect::{Declared, Records};
-    let unk = Declared(UNKNOWN_STREAM);
+    use Expect::Records;
     let mut v = vec![
         // --- без совпадения: весь поток в HEUR (`src/proto-banner1.c:184`) ---
         case(
@@ -475,38 +474,38 @@ pub fn cases() -> Vec<Case> {
         &[b"xx\xff\xfb", b"\x01\xff\xfd\x03"],
     ));
 
-    // --- SMB (справка B6): в 4b весь поток unknown, app_proto 10 как у C ---
+    // --- SMB (4d): сверяется с C по записям и действиям ---
     v.push(case(
         "smb1-negotiate",
-        unk,
+        Records,
         "00 00 * * ff SMB: ответ SMB1 в сессии NetBIOS",
         445,
         &[b"\x00\x00\x00\x27\xffSMBr\x00\x00\x00\x00\x98\x01\xc8\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xff\xfe\x00\x00\x00\x00\x00"],
     ));
     v.push(case(
         "smb2-negotiate",
-        unk,
+        Records,
         "00 00 * * fe SMB: ответ SMB2",
         445,
         &[b"\x00\x00\x00\x48\xfeSMB\x40\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00"],
     ));
     v.push(case(
         "smb-star-literal",
-        unk,
+        Records,
         "00 00 * * ff SMB с байтами 2a 2a",
         445,
         &[b"\x00\x00\x2a\x2a\xffSMBr\x00\x00\x00\x00"],
     ));
     v.push(case(
         "smb-star-letters",
-        unk,
+        Records,
         "00 00 A B fe SMB: * любые байты",
         445,
         &[b"\x00\x00AB\xfeSMB\x40\x00"],
     ));
     v.push(case(
         "smb-82",
-        unk,
+        Records,
         "82 00 00 00: положительный ответ сессии NetBIOS",
         139,
         &[b"\x82\x00\x00\x00"],
@@ -520,7 +519,7 @@ pub fn cases() -> Vec<Case> {
     ] {
         v.push(case(
             name,
-            unk,
+            Records,
             "83 00 00 01 и код отказа сессии NetBIOS",
             139,
             &[&[0x83, 0x00, 0x00, 0x01, last]],
@@ -528,7 +527,7 @@ pub fn cases() -> Vec<Case> {
     }
     v.push(case(
         "smb-split",
-        unk,
+        Records,
         "SMB1, разрезан после 00 00: совпадение во втором сегменте",
         445,
         &[b"\x00\x00", b"\x00\x27\xffSMBr\x00\x00\x00\x00"],

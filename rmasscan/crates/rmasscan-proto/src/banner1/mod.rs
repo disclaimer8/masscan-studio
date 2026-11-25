@@ -15,10 +15,13 @@ mod http;
 mod imap4;
 mod memcached;
 mod minecraft;
+pub(crate) mod ntlmssp;
 mod pop3;
 mod rdp;
 pub(crate) mod session;
+pub(crate) mod smb;
 mod smtp;
+pub(crate) mod spnego;
 mod ssh;
 mod telnet;
 pub(crate) mod tls;
@@ -33,7 +36,10 @@ use rmasscan_core::stack::{TableParams, TcpStack, TcpStackFactory};
 
 use crate::tcp::stack::new_stack;
 
-pub use driver::{StreamAction, StreamResult, banner_stream, tls_stream, x509_stream};
+pub use driver::{
+    StreamAction, StreamResult, banner_stream, ntlmssp_stream, spnego_stream, tls_stream,
+    x509_stream,
+};
 pub use hello::{HelloSet, TcpBannerSettings, TlsSettings};
 pub use tls_hello::TlsHelloKind;
 

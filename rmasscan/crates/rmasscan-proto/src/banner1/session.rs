@@ -30,6 +30,7 @@ use super::memcached::Memcached;
 use super::minecraft::Minecraft;
 use super::pop3::Pop3;
 use super::rdp::Rdp;
+use super::smb::Smb;
 use super::smtp::Smtp;
 use super::ssh::Ssh;
 use super::telnet::Telnet;
@@ -37,7 +38,6 @@ use super::tls::TlsFlags;
 use super::vnc::Vnc;
 
 /// Парсер, который выбрал классификатор (ветки `switch (tcb_state->app_proto)`, `src/proto-banner1.c:187-316`).
-/// SMB это [`AppProto::Unported`] до 4d.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum AppProto {
     Ftp,
@@ -53,6 +53,7 @@ pub(crate) enum AppProto {
     Rdp,
     Minecraft,
     Tls,
+    Smb,
     /// Ещё не перенесённый протокол: каждый байт в `unknown` (app 1).
     Unported,
 }
@@ -103,6 +104,11 @@ impl ParseCx<'_> {
     /// отказали предел Р5 или бюджет, в неё больше ничего не пишется ([`Banout::append`]).
     pub(crate) fn append(&mut self, app: u16, px: &[u8]) {
         self.banout.append(self.budget, app, px);
+    }
+
+    /// `banout_append_unicode(banout, app, c)`.
+    pub(crate) fn append_unicode(&mut self, app: u16, c: u32) {
+        self.banout.append_unicode(self.budget, app, c);
     }
 
     /// `banout_init_base64(&pstate->base64)`.
@@ -180,7 +186,7 @@ impl Parser for Unported {
     }
 }
 
-/// Парсер приложения: перенесённые протоколы; SMB это [`Unported`] до 4d.
+/// Парсер приложения: все перенесённые TCP-протоколы (4b, 4c, 4d).
 pub(crate) fn parser_for(p: AppProto) -> Box<dyn Parser> {
     match p {
         AppProto::Ftp => Box::<Ftp>::default(),
@@ -195,6 +201,7 @@ pub(crate) fn parser_for(p: AppProto) -> Box<dyn Parser> {
         AppProto::Memcached => Box::<Memcached>::default(),
         AppProto::Minecraft => Box::<Minecraft>::default(),
         AppProto::Tls => Box::<super::tls::Tls>::default(),
+        AppProto::Smb => Box::<Smb>::default(),
         AppProto::Unported => Box::new(Unported),
     }
 }
@@ -277,7 +284,7 @@ impl BannerConfig {
 }
 
 /// Номер приложения C (`patterns[x].id` после поправки порта) в парсер: ветки `switch (tcb_state->app_proto)`
-/// (`src/proto-banner1.c:187-316`); SMB (4d) и прочие номера без ветки это [`AppProto::Unported`].
+/// (`src/proto-banner1.c:187-316`); прочие номера без ветки это [`AppProto::Unported`].
 fn app_proto_for(app: u16, extra: u8) -> AppProto {
     match app {
         app_id::FTP => AppProto::Ftp,
@@ -292,6 +299,7 @@ fn app_proto_for(app: u16, extra: u8) -> AppProto {
         app_id::RDP => AppProto::Rdp,
         app_id::MC => AppProto::Minecraft,
         app_id::SSL3 => AppProto::Tls,
+        app_id::SMB => AppProto::Smb,
         _ => AppProto::Unported,
     }
 }
@@ -689,7 +697,7 @@ mod tests {
                 b"Rdp|",
             ),
             (b"{\"x\":1}", 32, b"Minecraft|"),
-            (b"\x82\x00\x00\x00", 10, b"Unported|"),
+            (b"\x82\x00\x00\x00", 10, b"Smb|"),
         ] {
             let (got, recs, _) = feed(&cfg, 9999, None, &[stream]);
             assert_eq!(got, Some(app), "{stream:?}");
@@ -697,10 +705,9 @@ mod tests {
         }
     }
 
-    /// SMB в 4b не перенесён (справка B6): `app_proto` 10 как у C, весь поток одной записью `unknown`, в любой
-    /// нарезке, без действий.
+    /// SMB в 4d: `app_proto` 10 как у C, парсер SMB разбирает поток (SMBv1 и NBT error) в любой нарезке.
     #[test]
-    fn smb_classified_stream_is_unknown_in_4b() {
+    fn smb_classified_stream_parses_in_4d() {
         let s = TcpBannerSettings::default();
         let stream: &[u8] = b"\x00\x00\x00\x27\xffSMBr\x00\x00\x00\x00\x98\x01\xc8";
         for segs in [
@@ -710,14 +717,14 @@ mod tests {
         ] {
             let r = banner_stream(&s, 445, None, &segs);
             assert_eq!(r.app_proto, Some(app_id::SMB));
-            assert_eq!(r.records, [(app_id::HEUR, stream.to_vec())]);
+            assert_eq!(r.records, [(app_id::SMB, b"SMBv1 ".to_vec())]);
             assert!(r.actions.is_empty());
         }
         let r = banner_stream(&s, 139, None, &[b"\x83\x00\x00\x01\x8f"]);
         assert_eq!(r.app_proto, Some(app_id::SMB));
         assert_eq!(
             r.records,
-            [(app_id::HEUR, b"\x83\x00\x00\x01\x8f".to_vec())]
+            [(app_id::SMB, b"ERROR(Unspecified error)".to_vec())]
         );
     }
 
@@ -734,7 +741,7 @@ mod tests {
         assert_eq!(recs, [(42, b"Vnc(0)|x".to_vec())]);
         for (force, tag) in [
             (9u16, &b"Tls|"[..]),
-            (10, b"Unported|"),
+            (10, b"Smb|"),
             (3, b"Ssh|"),
             (2, b"Ssh|"),
         ] {
@@ -1150,8 +1157,8 @@ mod tests {
                 assert_eq!(r.app_proto, whole.app_proto, "round {round}: split");
                 assert_eq!(r.records, whole.records, "round {round}: split");
                 assert_eq!(r.records, recs, "round {round}: driver");
-                // Не перенесённое (нет совпадения, отвергнутый SSL3, SMB) это поток целиком одной записью unknown.
-                if force.is_none() && !stream.is_empty() && matches!(r.app_proto, None | Some(10)) {
+                // Не классифицированное (нет совпадения, отвергнутый SSL3) это поток целиком одной записью unknown.
+                if force.is_none() && !stream.is_empty() && r.app_proto.is_none() {
                     assert_eq!(
                         r.records,
                         [(

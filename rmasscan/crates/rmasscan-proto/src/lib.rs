@@ -19,7 +19,7 @@ pub use banner1::{
     tcp_stack_factory,
 };
 #[doc(hidden)]
-pub use banner1::{banner_stream, tls_stream, x509_stream};
+pub use banner1::{banner_stream, ntlmssp_stream, spnego_stream, tls_stream, x509_stream};
 pub use http_request::{HttpRequestOptions, http_request};
 pub use normalize::{normalize_json_string, normalize_string};
 pub use tcp::TcpBannerStack;

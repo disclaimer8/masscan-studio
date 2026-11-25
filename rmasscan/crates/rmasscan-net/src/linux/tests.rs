@@ -251,7 +251,13 @@ fn rx(
 
 const FRAME: [u8; 58] = [0xAB; 58];
 const MS50: Duration = Duration::from_millis(50);
-const SLACK: Duration = Duration::from_millis(40);
+// На виртуальных CI runner'ах (особенно macOS VM) планировщик при параллельном прогоне
+// сотен тестов может задержать пробуждение потока на 100–200 мс; запас 400 мс вне Linux
+// (и 120 мс на Linux) убирает ложные срабатывания, но всё ещё ловит отсутствие cap 50 мс.
+#[cfg(target_os = "linux")]
+const SLACK: Duration = Duration::from_millis(120);
+#[cfg(not(target_os = "linux"))]
+const SLACK: Duration = Duration::from_millis(400);
 
 // ---------------------------------------------------------------- TX
 

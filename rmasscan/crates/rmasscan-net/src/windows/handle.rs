@@ -15,7 +15,7 @@ use std::sync::Arc;
 use super::ffi::{
     BPF_RET_K, BpfInsn, BpfProgram, DLT_EN10MB, DLT_IEEE802_11_RADIO, DLT_NULL, NEXT_EX_EOF,
     NEXT_EX_OK, NEXT_EX_TIMEOUT, PCAP_ERRBUF_SIZE, PCAP_IF_LOOPBACK, PCAP_NETMASK_UNKNOWN, PcapIf,
-    PcapPkthdr, PcapSendQueue, PcapStat, PcapT, SENDQUEUE_RECORD_HEADER,
+    PcapPkthdr, PcapSendQueue, PcapStat, PcapT,
 };
 use super::loader::NpcapApi;
 use crate::NetError;
@@ -23,13 +23,25 @@ use crate::NetError;
 /// Верхняя граница длины имени устройства (`\Device\NPF_{GUID}` это 49 байт).
 pub(crate) const MAX_DEVICE_NAME: usize = 1024;
 
+/// [`SENDQUEUE_RECORD_HEADER`](super::ffi::SENDQUEUE_RECORD_HEADER) как `u32` размеров записей очереди (их ведут
+/// только тесты).
+#[cfg(test)]
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "a 16-byte header; the assert proves that it fits u32"
+)]
+const RECORD_HEADER_U32: u32 = {
+    assert!(super::ffi::SENDQUEUE_RECORD_HEADER <= 0xFFFF_FFFF);
+    super::ffi::SENDQUEUE_RECORD_HEADER as u32
+};
+
 const PCAP_ERROR_NO_SUCH_DEVICE: c_int = -5;
 const PCAP_ERROR_PERM_DENIED: c_int = -8;
 const PCAP_ERROR_PROMISC_PERM_DENIED: c_int = -11;
 
 pub(crate) fn errbuf_text(buf: &[c_char; PCAP_ERRBUF_SIZE]) -> String {
     // Побайтовая копия без unsafe; длина берётся из самого массива.
-    let bytes: [u8; PCAP_ERRBUF_SIZE] = buf.map(|c| c as u8);
+    let bytes: [u8; PCAP_ERRBUF_SIZE] = buf.map(|c| u8::from_ne_bytes(c.to_ne_bytes()));
     // Ограничено буфером: без NUL (библиотека исписала все 256 байт) читаем
     // весь буфер, а не уходим за его конец.
     match CStr::from_bytes_until_nul(&bytes) {
@@ -78,7 +90,7 @@ impl PcapHandle {
         device: &CStr,
         p: OpenParams,
     ) -> Result<PcapHandle, NetError> {
-        let mut err = [0 as c_char; PCAP_ERRBUF_SIZE];
+        let mut err: [c_char; PCAP_ERRBUF_SIZE] = [0; PCAP_ERRBUF_SIZE];
         // SAFETY: device NUL-терминирован, err имеет размер PCAP_ERRBUF_SIZE.
         let raw = unsafe { (api.fns.create)(device.as_ptr(), err.as_mut_ptr()) };
         let Some(raw) = NonNull::new(raw) else {
@@ -96,13 +108,13 @@ impl PcapHandle {
         h.set(
             "pcap_set_promisc",
             h.api.fns.set_promisc,
-            p.promisc as c_int,
+            c_int::from(p.promisc),
         )?;
         h.set("pcap_set_timeout", h.api.fns.set_timeout, p.timeout_ms)?;
         h.set(
             "pcap_set_immediate_mode",
             h.api.fns.set_immediate_mode,
-            p.immediate as c_int,
+            c_int::from(p.immediate),
         )?;
         h.set(
             "pcap_set_buffer_size",
@@ -196,10 +208,11 @@ enum RawNext {
 impl PcapHandle {
     /// `pcap_setnonblock`; при ошибке возвращает текст errbuf.
     pub(crate) fn set_nonblock(&mut self, on: bool) -> Result<(), NetError> {
-        let mut err = [0 as c_char; PCAP_ERRBUF_SIZE];
+        let mut err: [c_char; PCAP_ERRBUF_SIZE] = [0; PCAP_ERRBUF_SIZE];
         // SAFETY: raw валиден и активирован; err имеет PCAP_ERRBUF_SIZE байт.
-        let rc =
-            unsafe { (self.api.fns.setnonblock)(self.raw.as_ptr(), on as c_int, err.as_mut_ptr()) };
+        let rc = unsafe {
+            (self.api.fns.setnonblock)(self.raw.as_ptr(), c_int::from(on), err.as_mut_ptr())
+        };
         if rc != 0 {
             return Err(NetError::System(format!(
                 "pcap_setnonblock failed (code {rc}): {}",
@@ -209,11 +222,12 @@ impl PcapHandle {
         Ok(())
     }
 
-    /// `pcap_getnonblock`: 0/1, либо отрицательный код ошибки.
-    pub(crate) fn get_nonblock(&mut self) -> c_int {
-        let mut err = [0 as c_char; PCAP_ERRBUF_SIZE];
+    /// `pcap_getnonblock`: неотрицательный код это `Ok(код == 1)`, отрицательный код ошибки это `Err(код)`.
+    pub(crate) fn get_nonblock(&mut self) -> Result<bool, c_int> {
+        let mut err: [c_char; PCAP_ERRBUF_SIZE] = [0; PCAP_ERRBUF_SIZE];
         // SAFETY: raw валиден и активирован; err имеет PCAP_ERRBUF_SIZE байт.
-        unsafe { (self.api.fns.getnonblock)(self.raw.as_ptr(), err.as_mut_ptr()) }
+        let v = unsafe { (self.api.fns.getnonblock)(self.raw.as_ptr(), err.as_mut_ptr()) };
+        if v >= 0 { Ok(v == 1) } else { Err(v) }
     }
 
     /// Один `pcap_next_ex`. Указатель кадра действителен до следующего вызова
@@ -233,7 +247,7 @@ impl PcapHandle {
                 // pcap_pkthdr внутри pcap_t (до следующего вызова); читаем
                 // копию без предположений о выравнивании.
                 let h = unsafe { ptr::read_unaligned(hdr) };
-                if h.caplen as usize > self.snaplen {
+                if usize::try_from(h.caplen).unwrap_or(usize::MAX) > self.snaplen {
                     return RawNext::Malformed("pcap_next_ex returned caplen above the snaplen");
                 }
                 RawNext::Frame { hdr: h, data }
@@ -250,8 +264,8 @@ impl PcapHandle {
     pub(crate) fn poll_into(&mut self, buf: &mut [u8]) -> Polled {
         match self.raw_next() {
             RawNext::Frame { hdr, data } => {
-                let caplen = hdr.caplen as usize;
-                if caplen != hdr.len as usize || caplen > buf.len() {
+                let caplen = usize::try_from(hdr.caplen).unwrap_or(usize::MAX);
+                if caplen != usize::try_from(hdr.len).unwrap_or(usize::MAX) || caplen > buf.len() {
                     return Polled::Truncated;
                 }
                 // SAFETY: data не NULL и по контракту pcap_next_ex указывает
@@ -286,14 +300,15 @@ impl PcapHandle {
         }
     }
 
-    /// Синхронный `pcap_sendpacket`: сырой код (0 успех, иначе ошибка). Кадр
-    /// длиннее `i32::MAX` отвергается без вызова (-1).
-    pub(crate) fn send_raw(&mut self, frame: &[u8]) -> c_int {
+    /// Синхронный `pcap_sendpacket`: `Ok` при коде 0, иначе `Err(код)` как есть. Кадр
+    /// длиннее `i32::MAX` отвергается без вызова (`Err(-1)`).
+    pub(crate) fn send_raw(&mut self, frame: &[u8]) -> Result<(), c_int> {
         let Ok(n) = c_int::try_from(frame.len()) else {
-            return -1;
+            return Err(-1);
         };
         // SAFETY: raw валиден; frame валиден на n байт на время вызова.
-        unsafe { (self.api.fns.sendpacket)(self.raw.as_ptr(), frame.as_ptr(), n) }
+        let rc = unsafe { (self.api.fns.sendpacket)(self.raw.as_ptr(), frame.as_ptr(), n) };
+        if rc == 0 { Ok(()) } else { Err(rc) }
     }
 
     /// `pcap_stats`: структура при rc 0, иначе сырой код ошибки.
@@ -318,7 +333,9 @@ pub(crate) struct SendQueue {
     /// Только для проверок в тестах (`capacity()`).
     #[cfg(test)]
     capacity: u32,
-    /// Размер каждой записи (`16 + caplen`) в порядке постановки.
+    /// Размер каждой записи (`16 + caplen`) в порядке постановки; только для проверок в тестах
+    /// (`record_sizes`, `len`, `is_empty`).
+    #[cfg(test)]
     records: Vec<u32>,
     api: Arc<NpcapApi>,
 }
@@ -341,7 +358,7 @@ impl SendQueue {
     pub(crate) fn alloc(api: &Arc<NpcapApi>, bytes: u32) -> Result<SendQueue, NetError> {
         // SAFETY: функция разрешена из загруженной библиотеки (api её держит);
         // аргумент это простое число.
-        let raw = unsafe { (api.fns.sendqueue_alloc)(bytes as c_uint) };
+        let raw = unsafe { (api.fns.sendqueue_alloc)(bytes) };
         let Some(raw) = NonNull::new(raw) else {
             return Err(NetError::System(format!(
                 "pcap_sendqueue_alloc({bytes}) returned NULL"
@@ -351,6 +368,7 @@ impl SendQueue {
             raw,
             #[cfg(test)]
             capacity: bytes,
+            #[cfg(test)]
             records: Vec::new(),
             api: Arc::clone(api),
         })
@@ -375,8 +393,8 @@ impl SendQueue {
         if rc != 0 {
             return Err(rc);
         }
-        self.records
-            .push(caplen.saturating_add(SENDQUEUE_RECORD_HEADER as u32));
+        #[cfg(test)]
+        self.records.push(caplen.saturating_add(RECORD_HEADER_U32));
         Ok(())
     }
 
@@ -395,7 +413,7 @@ impl SendQueue {
             return Err(rc);
         }
         self.records
-            .push(hdr.caplen.saturating_add(SENDQUEUE_RECORD_HEADER as u32));
+            .push(hdr.caplen.saturating_add(RECORD_HEADER_U32));
         Ok(())
     }
 
@@ -433,6 +451,7 @@ impl SendQueue {
 
     /// Освобождает очередь для повторного использования: `len = 0`.
     pub(crate) fn clear(&mut self) {
+        #[cfg(test)]
         self.records.clear();
         // SAFETY: raw валиден; `len` публичное поле структуры (единственный
         // писатель pcap_sendqueue_queue, читающий только len/maxlen), &mut
@@ -600,7 +619,7 @@ impl Drop for DevList<'_> {
 /// Перечисляет устройства; строки копируются до `pcap_freealldevs`.
 pub(crate) fn list_devices(api: &NpcapApi) -> Result<Vec<DeviceInfo>, NetError> {
     let mut head: *mut PcapIf = ptr::null_mut();
-    let mut err = [0 as c_char; PCAP_ERRBUF_SIZE];
+    let mut err: [c_char; PCAP_ERRBUF_SIZE] = [0; PCAP_ERRBUF_SIZE];
     // SAFETY: head и err это валидные выходные буферы нужных размеров.
     let rc = unsafe { (api.fns.findalldevs)(&mut head, err.as_mut_ptr()) };
     let list = DevList { head, api };

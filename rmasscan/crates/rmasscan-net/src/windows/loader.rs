@@ -155,10 +155,13 @@ pub(crate) fn verify_diagnostics(requested: &str, infos: &[DllInfo]) -> Result<(
 
 /// SHA-256 в нижнем регистре hex.
 pub(crate) fn sha256_hex(data: &[u8]) -> String {
+    use std::fmt::Write as _;
+
     let digest = Sha256::digest(data);
     let mut s = String::with_capacity(64);
     for byte in digest.iter() {
-        s.push_str(&format!("{byte:02x}"));
+        // Запись в `String` не отказывает.
+        let _ = write!(s, "{byte:02x}");
     }
     s
 }
@@ -210,7 +213,7 @@ impl NpcapApi {
                 // экспорт `pcap_init` с сигнатурой `InitFn`, живой, пока жив
                 // module; указатель данных и fn-указатель одного размера.
                 let init = unsafe { std::mem::transmute::<*const c_void, InitFn>(p) };
-                let mut err = [0 as c_char; PCAP_ERRBUF_SIZE];
+                let mut err: [c_char; PCAP_ERRBUF_SIZE] = [0; PCAP_ERRBUF_SIZE];
                 // SAFETY: err имеет PCAP_ERRBUF_SIZE байт (требование API).
                 unsafe { init(PCAP_CHAR_ENC_UTF_8, err.as_mut_ptr()) == 0 }
             }
@@ -235,22 +238,16 @@ impl NpcapApi {
         }))
     }
 
-    // Три аксессора ниже читают живые тесты и отчёты; в продуктовом пути они
-    // пока не нужны (узкое исключение вместо allow(dead_code) на весь модуль).
-
     /// Строка `pcap_lib_version` (например «Npcap version 1.90, based on libpcap 1.10.7»).
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn lib_version(&self) -> &str {
         &self.version
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn diagnostics(&self) -> &[DllInfo] {
         &self.diagnostics
     }
 
     /// Текст библиотеки в UTF-8 (см. поле `utf8_text`).
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn utf8_text(&self) -> bool {
         self.utf8_text
     }

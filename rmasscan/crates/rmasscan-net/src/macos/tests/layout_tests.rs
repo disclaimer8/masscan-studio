@@ -57,6 +57,21 @@ fn struct_layouts_match_lp64() {
 }
 
 #[test]
+fn bpf_program_layout_matches_libc() {
+    assert_eq!(size_of::<BpfProgram>(), size_of::<libc::bpf_program>());
+    assert_eq!(align_of::<BpfProgram>(), align_of::<libc::bpf_program>());
+    assert_eq!(
+        offset_of!(BpfProgram, bf_len),
+        offset_of!(libc::bpf_program, bf_len)
+    );
+    assert_eq!(
+        offset_of!(BpfProgram, bf_insns),
+        offset_of!(libc::bpf_program, bf_insns)
+    );
+    assert_eq!(size_of::<BpfInsn>(), size_of::<libc::bpf_insn>());
+}
+
+#[test]
 fn wordalign_rounds_up_to_four() {
     for (x, y) in [(0, 0), (1, 4), (4, 4), (5, 8), (19, 20), (20, 20), (21, 24)] {
         assert_eq!(bpf_wordalign(x), y, "{x}");

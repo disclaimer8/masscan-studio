@@ -52,7 +52,7 @@ fn task_info() -> Option<libc::proc_taskinfo> {
 }
 
 fn fd_count() -> Option<u64> {
-    let n = std::fs::read_dir("/dev/fd").ok()?.count() as u64;
+    let n = u64::try_from(std::fs::read_dir("/dev/fd").ok()?.count()).ok()?;
     n.checked_sub(1)
 }
 

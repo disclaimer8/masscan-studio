@@ -46,7 +46,6 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering::{Relaxed, Release};
 use std::time::{Duration, Instant};
 
-use rmasscan_core::packet::LinkType;
 use rmasscan_core::probe::AdapterBinding;
 use rmasscan_engine::{
     AdapterPair, IoError, MAX_IO_TIMEOUT, Rx, RxHealth, SendStatus, Tx, TxBatch,
@@ -55,6 +54,7 @@ use rmasscan_engine::{
 use super::ffi::SENDQUEUE_RECORD_HEADER;
 use super::handle::{OpenParams, PcapHandle, Polled, SendQueue, resolve_device};
 use super::loader::NpcapApi;
+use crate::adapter_common::{check_binding as common_check_binding, closed_error, mac_text};
 use crate::drop_counter::DropCounter;
 use crate::{Counters, NetError, NetStatsHandle, OpenedAdapter, TxMode};
 
@@ -74,8 +74,15 @@ pub(crate) const MAX_TX_FRAME: usize = 1518;
 pub(crate) const TX_BATCH_FRAMES: usize = 64;
 /// Байты очереди: `TX_BATCH_FRAMES` записей максимального размера, поэтому
 /// `pcap_sendqueue_queue` не может вернуть -1 на допустимой пачке.
-pub(crate) const TX_QUEUE_BYTES: u32 =
-    (TX_BATCH_FRAMES * (SENDQUEUE_RECORD_HEADER + MAX_TX_FRAME)) as u32;
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "64 records of 16 + 1518 bytes; the assert proves that the total fits u32"
+)]
+pub(crate) const TX_QUEUE_BYTES: u32 = {
+    let bytes = TX_BATCH_FRAMES * (SENDQUEUE_RECORD_HEADER + MAX_TX_FRAME);
+    assert!(bytes <= 0xFFFF_FFFF);
+    bytes as u32
+};
 
 const RX_SNAPLEN: i32 = 2048;
 const RX_BUFFER_BYTES: i32 = 4 << 20;
@@ -84,10 +91,6 @@ const TX_BUFFER_BYTES: i32 = 65_536;
 /// До этого остатка спим по 1 мс, затем отдаём квант (`yield_now`): так
 /// измерен спайк (Hybrid), без активного кручения на всём дедлайне.
 const SPIN_BELOW: Duration = Duration::from_millis(3);
-
-fn closed_error() -> IoError {
-    IoError::new("adapter closed after an earlier fatal error")
-}
 
 fn publish_drops(counters: &Counters, total: u64) {
     counters.kernel_drops.store(total, Relaxed);
@@ -149,31 +152,35 @@ impl TxHalf {
             frame.len()
         )))
     }
+
+    /// Кадр, длина которого уже проверена (`check_len`): ровно один синхронный вызов, без повторов; `timeout` не
+    /// применим: pcap_sendpacket нельзя отменить (граница измерена в спайке).
+    fn send_checked(&mut self, frame: &[u8]) -> SendStatus {
+        let t = Instant::now();
+        let sent = self.handle.send_raw(frame).is_ok();
+        self.note_duration(t.elapsed());
+        if sent {
+            Counters::bump(&self.counters.tx_sent);
+            SendStatus::Sent
+        } else {
+            Counters::bump(&self.counters.tx_uncertain);
+            SendStatus::Uncertain
+        }
+    }
 }
 
 impl Tx for TxHalf {
     fn send(&mut self, frame: &[u8], _timeout: Duration) -> Result<SendStatus, IoError> {
         // Проверка ДО вызова драйвера: кадр не уходит, исход известен.
         self.check_len(frame)?;
-        // Ровно один синхронный вызов, без повторов; `timeout` не применим:
-        // pcap_sendpacket нельзя отменить (граница измерена в спайке).
-        let t = Instant::now();
-        let rc = self.handle.send_raw(frame);
-        self.note_duration(t.elapsed());
-        if rc == 0 {
-            Counters::bump(&self.counters.tx_sent);
-            Ok(SendStatus::Sent)
-        } else {
-            Counters::bump(&self.counters.tx_uncertain);
-            Ok(SendStatus::Uncertain)
-        }
+        Ok(self.send_checked(frame))
     }
 
     fn max_batch(&self) -> usize {
         TX_BATCH_FRAMES
     }
 
-    fn send_batch(&mut self, frames: &[&[u8]], timeout: Duration) -> Result<TxBatch, IoError> {
+    fn send_batch(&mut self, frames: &[&[u8]], _timeout: Duration) -> Result<TxBatch, IoError> {
         if frames.is_empty() {
             return Err(IoError::new(
                 "send_batch called with no frames; nothing was sent",
@@ -190,8 +197,8 @@ impl Tx for TxHalf {
             self.check_len(frame)?;
         }
         if let [one] = frames {
-            // Один кадр: принятый путь `pcap_sendpacket`, очередь не нужна.
-            let rest = self.send(one, timeout)?;
+            // Один кадр: принятый путь `pcap_sendpacket`, очередь не нужна; длина уже проверена выше.
+            let rest = self.send_checked(one);
             return Ok(TxBatch {
                 sent: usize::from(rest == SendStatus::Sent),
                 rest,
@@ -214,15 +221,19 @@ impl Tx for TxHalf {
         let bytes = self.handle.transmit_raw(&mut self.queue, false);
         let dur = t.elapsed();
         Counters::bump(&self.counters.tx_batches);
-        self.counters.tx_batch_max.fetch_max(n as u64, Relaxed);
+        self.counters
+            .tx_batch_max
+            .fetch_max(u64::try_from(n).unwrap_or(u64::MAX), Relaxed);
         self.note_duration(dur);
         let out = batch_outcome(n, queued, bytes);
         // Очередь не переживает вызов, в любом исходе.
         self.queue.clear();
-        self.counters.tx_sent.fetch_add(out.sent as u64, Relaxed);
+        self.counters
+            .tx_sent
+            .fetch_add(u64::try_from(out.sent).unwrap_or(u64::MAX), Relaxed);
         self.counters
             .tx_uncertain
-            .fetch_add((n - out.sent) as u64, Relaxed);
+            .fetch_add(u64::try_from(n - out.sent).unwrap_or(u64::MAX), Relaxed);
         Ok(out)
     }
 }
@@ -348,36 +359,9 @@ impl Drop for RxHalf {
     }
 }
 
-/// Проверка binding без обращения к Npcap.
+/// Проверка binding без обращения к Npcap (общая с macOS, имя адаптера вставляется в текст отказа).
 pub(crate) fn check_binding(binding: &AdapterBinding) -> Result<(), NetError> {
-    if binding.link_type != LinkType::Ethernet {
-        return Err(NetError::UnsupportedLink(format!(
-            "{:?} (Windows Npcap adapter supports Ethernet only)",
-            binding.link_type
-        )));
-    }
-    let mac = binding.source_mac;
-    if mac == [0; 6] || mac[0] & 1 == 1 {
-        return Err(NetError::InterfaceMismatch(format!(
-            "source MAC {} is not a unicast address",
-            mac_text(&mac)
-        )));
-    }
-    if mac == binding.next_hop_mac {
-        return Err(NetError::InterfaceMismatch(
-            "source MAC equals the next-hop MAC: own transmitted frames could not be told \
-             from replies"
-                .into(),
-        ));
-    }
-    Ok(())
-}
-
-pub(crate) fn mac_text(mac: &[u8; 6]) -> String {
-    format!(
-        "{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
-        mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]
-    )
+    common_check_binding(binding, "Windows Npcap adapter")
 }
 
 /// Открывает пару TX/RX на `api`. При любой ошибке уже открытые handle
@@ -417,7 +401,8 @@ pub(crate) fn open_with(
         },
     )?;
     rx.set_nonblock(true)?;
-    if rx.get_nonblock() != 1 {
+    // Один текст на всё, кроме `Ok(true)`: и «всё ещё блокирующий», и ошибка `pcap_getnonblock`.
+    if rx.get_nonblock() != Ok(true) {
         return Err(NetError::System(
             "pcap_setnonblock did not take effect on the RX handle".into(),
         ));

@@ -239,3 +239,34 @@ fn cancelled_or_expired_parser_never_returns_a_partial_observation() {
     });
     assert!(result.unwrap_err().to_string().contains("cancelled"));
 }
+
+/// Structure lengths are read with all 32 bits: a `Length` whose low 16 bits would give the real size, one with the
+/// top bit set, and `u32::MAX` are rejected for the adapter and the unicast node; the fixture's exact sizes are accepted.
+#[test]
+fn structure_lengths_are_read_with_all_32_bits() {
+    assert!(decode_adapters(&fixture(), future(), &|| false).is_ok());
+    let adapter = u32::try_from(size_of::<IP_ADAPTER_ADDRESSES_LH>()).unwrap();
+    for len in [adapter | 0x1_0000, adapter | 0x8000_0000, u32::MAX] {
+        let mut buf = fixture();
+        // SAFETY: fixture starts with a full aligned adapter structure.
+        unsafe {
+            (*buf.as_mut_ptr().cast::<IP_ADAPTER_ADDRESSES_LH>())
+                .Anonymous1
+                .Anonymous
+                .Length = len;
+        }
+        assert!(
+            decode_adapters(&buf, future(), &|| false).is_err(),
+            "adapter Length {len:#x}"
+        );
+    }
+    let unicast = u32::try_from(size_of::<IP_ADAPTER_UNICAST_ADDRESS_LH>()).unwrap();
+    for len in [unicast | 0x1_0000, unicast | 0x8000_0000, u32::MAX] {
+        let mut buf = fixture();
+        change_unicast(&mut buf, |u| u.Anonymous.Anonymous.Length = len);
+        assert!(
+            decode_adapters(&buf, future(), &|| false).is_err(),
+            "unicast Length {len:#x}"
+        );
+    }
+}

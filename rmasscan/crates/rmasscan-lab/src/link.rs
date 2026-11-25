@@ -120,7 +120,9 @@ fn iface_mac_os(iface: &str) -> Result<[u8; 6], String> {
     parse_mac(text.trim())
 }
 
-/// Open TX and RX on `iface` through the product adapter. Needs CAP_NET_RAW, like the product.
+/// Open TX and RX on `iface` through the product adapter, keeping outgoing frames visible to
+/// co-located `AF_PACKET` taps (`tcpdump` witnessing `WIRELAB-END` and peer-side frames on the
+/// same interface). Needs CAP_NET_RAW, like the product.
 pub fn open(iface: &str) -> Result<Link, String> {
     let binding = AdapterBinding {
         interface_id: iface.to_string(),
@@ -130,7 +132,8 @@ pub fn open(iface: &str) -> Result<Link, String> {
         next_hop_mac: [0; 6],
         source_ports: (0, 0),
     };
-    let opened = rmasscan_net::open_explicit(&binding).map_err(|e| e.to_string())?;
+    let opened =
+        rmasscan_net::lab_io::open_explicit_visible_to_taps(&binding).map_err(|e| e.to_string())?;
     Ok(Link {
         tx: opened.io.tx,
         rx: opened.io.rx,

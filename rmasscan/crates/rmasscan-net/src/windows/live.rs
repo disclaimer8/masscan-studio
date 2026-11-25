@@ -187,7 +187,20 @@ fn assert_lab_frame(lab: &Lab, f: &[u8]) {
 
 fn send_checked(lab: &Lab, h: &mut PcapHandle, f: &[u8]) -> i32 {
     assert_lab_frame(lab, f);
-    h.send_raw(f)
+    send_code(h.send_raw(f))
+}
+
+/// Raw `pcap_sendpacket` code for the spike records: 0 for `Ok`, otherwise the code `send_raw` passes through.
+fn send_code(r: Result<(), i32>) -> i32 {
+    r.err().unwrap_or(0)
+}
+
+/// `pcap_getnonblock` code for the spike records: 1/0, or the negative error code.
+fn nonblock_code(r: Result<bool, i32>) -> i32 {
+    match r {
+        Ok(on) => i32::from(on),
+        Err(rc) => rc,
+    }
 }
 
 // ---------- открытие ----------
@@ -211,7 +224,7 @@ fn open(api: &Arc<NpcapApi>, lab: &Lab, p: OpenParams) -> PcapHandle {
 fn open_rx(api: &Arc<NpcapApi>, lab: &Lab, buf: i32) -> PcapHandle {
     let mut h = open(api, lab, rx_params(buf));
     h.set_nonblock(true).expect("setnonblock");
-    assert_eq!(h.get_nonblock(), 1, "nonblocking mode did not stick");
+    assert_eq!(h.get_nonblock(), Ok(true), "nonblocking mode did not stick");
     h
 }
 
@@ -428,8 +441,8 @@ fn live_open_close() {
             "dlt_tx={} dlt_rx={} nonblock_tx={} nonblock_rx={}",
             tx.datalink(),
             rx.datalink(),
-            tx.get_nonblock(),
-            rx.get_nonblock()
+            nonblock_code(tx.get_nonblock()),
+            nonblock_code(rx.get_nonblock())
         ),
     );
     let s = rx.stats_raw().unwrap();
@@ -563,7 +576,7 @@ fn live_io_matrix() {
         syn(&lab, &tpl, i, &mut f);
         let t = now_ms();
         let t0 = Instant::now();
-        let rc = tx.send_raw(&f);
+        let rc = send_code(tx.send_raw(&f));
         s.push(t, t0.elapsed(), i64::from(rc));
         std::thread::sleep(Duration::from_millis(1));
     }
@@ -594,7 +607,7 @@ fn live_io_matrix() {
         syn(&lab, &tpl, 10_000 + i, &mut f);
         let t = now_ms();
         let t0 = Instant::now();
-        let rc = tx.send_raw(&f);
+        let rc = send_code(tx.send_raw(&f));
         s.push(t, t0.elapsed(), i64::from(rc));
     }
     s.report(&lab, "tx_burst_5000");
@@ -618,7 +631,7 @@ fn live_io_matrix() {
                 while !stop.load(Ordering::Acquire) {
                     syn(&lab, &tpl, 100_000 + i, &mut f);
                     let t0 = Instant::now();
-                    let rc = tx.send_raw(&f);
+                    let rc = send_code(tx.send_raw(&f));
                     slowest = slowest.max(t0.elapsed());
                     if rc != 0 {
                         bad_rc.fetch_add(1, Ordering::Relaxed);
@@ -683,7 +696,7 @@ fn live_io_matrix() {
 
     // Ошибочные пути send (наружу ничего не уходит или уходит только пиру)
     let t0 = Instant::now();
-    let rc0 = tx.send_raw(&[]);
+    let rc0 = send_code(tx.send_raw(&[]));
     let d0 = t0.elapsed();
     kv(
         &lab,
@@ -912,7 +925,7 @@ fn live_unplug_phases() {
             i += 1;
             let t = now_ms();
             let t0 = Instant::now();
-            let rc = tx.send_raw(&f);
+            let rc = send_code(tx.send_raw(&f));
             txs.push(t, t0.elapsed(), i64::from(rc));
             next_tx += Duration::from_millis(5);
         }

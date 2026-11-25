@@ -22,6 +22,8 @@ struct FakeModule {
     missing: Vec<&'static str>,
     null_syms: Vec<&'static str>,
     diag: Vec<DllInfo>,
+    /// Where exports come from: the scripted table (`symbol_addr`) or a test's own table.
+    symbols: fn(&str) -> Option<*const c_void>,
 }
 
 fn good_diag() -> Vec<DllInfo> {
@@ -49,7 +51,7 @@ unsafe impl Module for FakeModule {
         if self.null_syms.contains(&n) {
             return Some(std::ptr::null());
         }
-        symbol_addr(n)
+        (self.symbols)(n)
     }
     fn describe(&self) -> Result<Vec<DllInfo>, NetError> {
         Ok(self.diag.clone())
@@ -66,6 +68,7 @@ struct FakeLoader {
     result: Result<Vec<&'static str>, LoadFailure>,
     null_syms: Vec<&'static str>,
     diag: Option<Vec<DllInfo>>,
+    symbols: fn(&str) -> Option<*const c_void>,
 }
 impl FakeLoader {
     fn ok() -> Self {
@@ -74,6 +77,7 @@ impl FakeLoader {
             result: Ok(vec![]),
             null_syms: vec![],
             diag: None,
+            symbols: symbol_addr,
         }
     }
 }
@@ -86,6 +90,7 @@ impl Loader for FakeLoader {
                 missing: missing.clone(),
                 null_syms: self.null_syms.clone(),
                 diag: self.diag.clone().unwrap_or_else(good_diag),
+                symbols: self.symbols,
             })),
             Err(f) => Err(f.clone()),
         }
@@ -775,9 +780,9 @@ fn sendqueue_alloc_null_is_a_system_error() {
     reset(|s| s.sendqueue_alloc_null = true);
     let api = good_api();
     let e = SendQueue::alloc(&api, 4096).err().unwrap();
-    assert!(
-        matches!(e, NetError::System(ref m) if m.contains("pcap_sendqueue_alloc")),
-        "{e:?}"
+    assert_eq!(
+        e,
+        NetError::System("pcap_sendqueue_alloc(4096) returned NULL".into())
     );
     assert_eq!(count("sendqueue_alloc:4096"), 1);
     assert_eq!(count("sendqueue_destroy"), 0);
@@ -1004,4 +1009,74 @@ fn transmit_sync_true_is_passed_as_one() {
     q.push(&[1u8; 60]).unwrap();
     h.transmit_raw(&mut q, true);
     with(|s| assert_eq!(s.sync_seen, [1]));
+}
+
+// ---------- sendpacket и getnonblock ----------
+
+/// `send_raw`: `Ok` only for rc 0, any other rc comes back as is (the adapter turns every `Err` into `Uncertain`).
+#[test]
+fn send_raw_is_ok_on_zero_and_the_raw_code_otherwise() {
+    reset(|s| s.send_rcs.extend([0, -1, 7]));
+    let api = good_api();
+    let mut h = PcapHandle::open(&api, &dev(DEV1), PARAMS).unwrap();
+    let frame = [0u8; 60];
+    assert_eq!(h.send_raw(&frame), Ok(()));
+    assert_eq!(h.send_raw(&frame), Err(-1));
+    assert_eq!(h.send_raw(&frame), Err(7));
+    with(|s| assert_eq!((s.send_calls, s.sent.len()), (3, 1)));
+}
+
+/// `get_nonblock`: a non-negative `pcap_getnonblock` code is `Ok(code == 1)`, a negative one is `Err(code)`.
+#[test]
+fn get_nonblock_is_ok_for_a_non_negative_code_and_err_otherwise() {
+    for (code, want) in [
+        (1, Ok(true)),
+        (0, Ok(false)),
+        (2, Ok(false)),
+        (-1, Err(-1)),
+        (-3, Err(-3)),
+    ] {
+        reset(|s| s.getnonblock_override = Some(code));
+        let api = good_api();
+        let mut h = PcapHandle::open(&api, &dev(DEV1), PARAMS).unwrap();
+        assert_eq!(h.get_nonblock(), want, "pcap_getnonblock {code}");
+    }
+}
+
+/// The IP Helper constants of the portable parser equal the `windows-sys` declarations.
+#[cfg(windows)]
+#[test]
+fn windows_dad_and_iftype_constants_match_windows_sys() {
+    use crate::route_parse::{
+        IF_TYPE_ETHERNET_CSMACD, IF_TYPE_IEEE80211, IF_TYPE_SOFTWARE_LOOPBACK, WIN_DAD_DEPRECATED,
+        WIN_DAD_DUPLICATE, WIN_DAD_PREFERRED, WIN_DAD_TENTATIVE,
+    };
+    use windows_sys::Win32::NetworkManagement::IpHelper as ip;
+    use windows_sys::Win32::Networking::WinSock as ws;
+    assert_eq!(
+        [
+            WIN_DAD_TENTATIVE.0,
+            WIN_DAD_DUPLICATE.0,
+            WIN_DAD_DEPRECATED.0,
+            WIN_DAD_PREFERRED.0
+        ],
+        [
+            ws::IpDadStateTentative,
+            ws::IpDadStateDuplicate,
+            ws::IpDadStateDeprecated,
+            ws::IpDadStatePreferred
+        ]
+    );
+    assert_eq!(
+        [
+            IF_TYPE_ETHERNET_CSMACD,
+            IF_TYPE_SOFTWARE_LOOPBACK,
+            IF_TYPE_IEEE80211
+        ],
+        [
+            ip::IF_TYPE_ETHERNET_CSMACD,
+            ip::IF_TYPE_SOFTWARE_LOOPBACK,
+            ip::IF_TYPE_IEEE80211
+        ]
+    );
 }

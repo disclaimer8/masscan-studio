@@ -6,11 +6,13 @@
 //! * `macos::{sys, ifinfo, process, route}` (BPF ABI и sysctl, getifaddrs, метрики процесса, route socket);
 //! * `windows::{ffi, handle, loader, process, sys}` (Npcap; `process` это телеметрия процесса для harness, в
 //!   продуктовой сборке она тоже есть; `sys` также читает адаптеры и маршруты IP Helper для обнаружения);
+//! * `unix_sys` (общие примитивы Unix для `linux`, `macos`, `interrupt` и `lab_io`: `socket`, `poll` одного fd,
+//!   `setsockopt` целого, `sigaction`, адрес ядра `sockaddr_nl`);
 //! * `localtime` (смещение местного времени: `localtime_r`, `SystemTimeToTzSpecificLocalTime`);
-//! * `interrupt` (счётчик Ctrl-C живого скана: `sigaction`, `SetConsoleCtrlHandler`).
+//! * `interrupt` (счётчик Ctrl-C живого скана: `_exit`, `SetConsoleCtrlHandler`; `sigaction` через `unix_sys`).
 //!
 //! Вне продукта: `lab_io::imp` только с feature `lab` (её включает один rmasscan-lab: sigaction-флаг остановки и
-//! listener с backlog 0) и тестовые модули (`macos::spike`, `windows::{tests, live}`). Остальной код безопасный:
+//! listener с backlog 0) и тестовые модули (`windows::{tests, live}`). Остальной код безопасный:
 //! `discover` и `route_parse` под `forbid(unsafe_code)`, разбор ответов ядра переносим и тестируется на любой ОС;
 //! адаптеры тестируются через синтетические швы (`linux::PacketIo`, `linux::IfaceInfo`; `macos::adapter::BpfIo`;
 //! подставная таблица функций wpcap). Обнаружение читает состояние ОС в процессе, без привилегий и без запуска
@@ -30,6 +32,11 @@
 #![deny(unsafe_code)]
 #![deny(unsafe_op_in_unsafe_fn)]
 #![deny(clippy::undocumented_unsafe_blocks)]
+// Касты с потерей значения (усечение, смена знака) в продуктовом коде запрещены; тесты свободны.
+#![cfg_attr(
+    not(test),
+    deny(clippy::cast_possible_truncation, clippy::cast_possible_wrap)
+)]
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -37,10 +44,16 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use rmasscan_core::probe::AdapterBinding;
 use rmasscan_engine::AdapterPair;
 
-#[cfg(target_os = "linux")]
+// Ширина `usize` на всех целях crate от 32 до 64 бит: переводы `u32` → `usize` и `usize` → `u64`
+// (`try_from(..).unwrap_or(MAX)`) не теряют значения, их запасная ветка недостижима.
+const _: () = assert!(usize::BITS >= u32::BITS && usize::BITS <= u64::BITS);
+
+// Linux: AF_PACKET. `unsafe` только в `linux::{socket, route}`, они и `open` собираются только на Linux; переносимая
+// логика адаптера (номера Linux в `linux::abi`, без `libc`) собирается и в тестах других платформ (seam-тесты).
+#[cfg(any(target_os = "linux", test))]
 mod linux;
 
-// macOS: BPF (`/dev/bpf*`). `unsafe` только в `macos::{sys, ifinfo, process}` (и в тестовом `spike`). Переносимые
+// macOS: BPF (`/dev/bpf*`). `unsafe` только в `macos::{sys, ifinfo, process}`. Переносимые
 // части (`abi`, `adapter`) собираются и в тестах других платформ (seam-тесты).
 #[cfg(any(target_os = "macos", test))]
 mod macos;
@@ -71,8 +84,22 @@ pub mod arp_resolve;
 // NDP-резолвер соседа/шлюза IPv6 с тем же контрактом, что у ARP (Neighbor Solicitation 135 / Advertisement 136).
 pub mod ndp_resolve;
 
+// Помощники трёх адаптеров (Linux AF_PACKET, macOS BPF, Windows Npcap): тексты ошибок и проверки в одном месте.
+#[cfg(any(target_os = "linux", target_os = "macos", windows, test))]
+mod adapter_common;
+
 // Безопасный переносимый разбор ответов ядра о маршрутах (rtnetlink, route socket Darwin, IP Helper).
 mod route_parse;
+
+// Общие примитивы Unix: `socket`, `poll` одного fd, `setsockopt` целого, `sigaction`, адрес netlink ядра.
+#[cfg(unix)]
+#[allow(unsafe_code)]
+mod unix_sys;
+
+// Тестовый помощник: флаги одного fd (`F_GETFL`, `FD_CLOEXEC`) для тестов флагов сокетов.
+#[cfg(all(test, unix))]
+#[allow(unsafe_code)]
+mod unix_fd_tests;
 
 // Смещение местного времени от UTC (`localtime_r`, Win32 `SystemTimeToTzSpecificLocalTime`) для подвала `-oX`.
 #[allow(unsafe_code)]
@@ -247,6 +274,8 @@ pub fn inventory_bpf() -> Result<BpfInventory, NetError> {
 pub struct NetStats {
     pub tx_sent: u64,
     pub tx_would_block: u64,
+    /// Кадры с исходом `Uncertain`. При исходе `Uncertain` пачки Windows прибавляет все неподтверждённые кадры
+    /// (`n − sent`), Linux — единицу, как одиночный путь.
     pub tx_uncertain: u64,
     pub tx_errors: u64,
     pub rx_packets: u64,
@@ -262,16 +291,17 @@ pub struct NetStats {
     pub rx_wrong_interface: u64,
     pub rx_errors: u64,
     pub kernel_drops: Option<u64>,
-    /// Вызовы пакетной передачи (Windows: `pcap_sendqueue_transmit`). Linux и
-    /// macOS: всегда 0, у них пачек нет.
+    /// Вызовы пакетной передачи. Windows: `pcap_sendqueue_transmit`. Linux:
+    /// вызовы `send_batch` с n ≥ 2, дошедшие до ядра (выполнен хотя бы один
+    /// `sendmmsg`). macOS: всегда 0, у него пачек нет.
     pub tx_batches: u64,
     /// Наибольшая пачка (кадров) среди этих вызовов; 0, если пачек не было.
     pub tx_batch_max: u64,
     /// Вызовы драйвера (`pcap_sendpacket`/`pcap_sendqueue_transmit`) дольше
     /// `MAX_IO_TIMEOUT` (50 мс) по `Instant`.
-    /// Измеряет только Windows (там передача синхронна и не отменяема). Linux и
-    /// macOS: всегда 0 и НЕ измерено, а структурно не наблюдается; нуль там не
-    /// свидетельство соблюдения бюджета.
+    /// Измеряет только Windows (там передача синхронна и не отменяема). Linux
+    /// (в том числе пачки `sendmmsg`) и macOS: всегда 0 и НЕ измерено, а
+    /// структурно не наблюдается; нуль там не свидетельство соблюдения бюджета.
     pub tx_over_budget: u64,
 }
 
@@ -351,8 +381,9 @@ impl std::fmt::Debug for NetStatsHandle {
     }
 }
 
-/// Как адаптер передаёт кадры. `SendQueue`: один вызов драйвера на пачку до
-/// `max_batch` кадров (Windows, Npcap sendqueue); `Single`: один кадр на вызов.
+/// Как адаптер передаёт кадры. `SendQueue`: пачка до `max_batch` кадров за
+/// вызов `send_batch` (Windows — Npcap sendqueue, Linux — `sendmmsg`); `Single`:
+/// один кадр на вызов (macOS).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TxMode {
     Single,

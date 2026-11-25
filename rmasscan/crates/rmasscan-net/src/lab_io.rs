@@ -9,10 +9,30 @@
 //!
 //! Raw frames are NOT sent or received here: the lab uses `open_explicit` like the product, and
 //! captures with the independent `tcpdump`.
+use crate::{NetError, OpenedAdapter};
+use rmasscan_core::probe::AdapterBinding;
 use std::{
     io,
     net::{Ipv4Addr, TcpListener},
 };
+
+/// Open an adapter for laboratory helpers (`rmasscan-lab`) whose outgoing frames must remain
+/// visible to co-located `AF_PACKET` taps such as `tcpdump` on the same interface (e.g.
+/// `WIRELAB-END` markers and peer-side injections on `veth-b`).
+///
+/// On Linux this skips `PACKET_QDISC_BYPASS` on the TX socket because the kernel hides bypassed
+/// outgoing frames from other `AF_PACKET` sockets on the same interface; on other platforms it
+/// delegates directly to [`crate::open_explicit`].
+pub fn open_explicit_visible_to_taps(binding: &AdapterBinding) -> Result<OpenedAdapter, NetError> {
+    #[cfg(target_os = "linux")]
+    {
+        crate::linux::open_with_qdisc_bypass(binding, false)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        crate::open_explicit(binding)
+    }
+}
 
 /// Install a flag-only handler for SIGINT, SIGTERM and SIGHUP (unix) and clear the flag. Off unix there
 /// is nothing to install and [`stop_requested`] stays false.
@@ -38,7 +58,7 @@ pub fn silent_listener(ip: Ipv4Addr, port: u16) -> io::Result<TcpListener> {
 #[allow(unsafe_code)]
 mod imp {
     use std::{
-        io, mem,
+        io,
         net::TcpListener,
         os::fd::AsRawFd,
         sync::atomic::{AtomicBool, Ordering},
@@ -54,21 +74,9 @@ mod imp {
     pub fn install() -> io::Result<()> {
         STOP.store(false, Ordering::Relaxed);
         for signal in [libc::SIGINT, libc::SIGTERM, libc::SIGHUP] {
-            // SAFETY: an all-zero `sigaction` is a valid starting value; `sa_mask` is then
-            // initialised by `sigemptyset` on that same live local, `on_signal` is an
-            // `extern "C"` function that only stores to a static atomic, and the pointer
-            // passed to `sigaction` refers to the live, fully initialised local. The old
-            // action pointer is null, which `sigaction` permits.
-            let rc = unsafe {
-                let mut action: libc::sigaction = mem::zeroed();
-                action.sa_sigaction = on_signal as extern "C" fn(libc::c_int) as libc::sighandler_t;
-                action.sa_flags = libc::SA_RESTART;
-                libc::sigemptyset(&mut action.sa_mask);
-                libc::sigaction(signal, &action, std::ptr::null_mut())
-            };
-            if rc != 0 {
-                return Err(io::Error::last_os_error());
-            }
+            // `sigaction` with SA_RESTART and an empty mask; `on_signal` only stores to a static atomic.
+            crate::unix_sys::install_handler(signal, on_signal)
+                .map_err(io::Error::from_raw_os_error)?;
         }
         Ok(())
     }

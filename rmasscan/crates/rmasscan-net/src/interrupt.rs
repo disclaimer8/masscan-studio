@@ -51,25 +51,15 @@ mod imp {
         }
     }
 
+    /// `sigaction(SIGINT)` через `unix_sys::install_handler` (`SA_RESTART`, пустая маска); `on_sigint` трогает только
+    /// статический атомарный счётчик.
     pub(super) fn install() -> Result<(), NetError> {
-        // SAFETY: нулевая `sigaction` допустима как начальное значение; `sa_mask` затем инициализирует
-        // `sigemptyset` на той же живой локальной переменной; `on_sigint` это `extern "C"` функция, которая трогает
-        // только статический атомарный счётчик; указатель на новое действие ссылается на живую, полностью
-        // инициализированную локальную переменную, указатель на старое нулевой, что `sigaction` допускает.
-        let rc = unsafe {
-            let mut action: libc::sigaction = std::mem::zeroed();
-            action.sa_sigaction = on_sigint as extern "C" fn(libc::c_int) as libc::sighandler_t;
-            action.sa_flags = libc::SA_RESTART;
-            libc::sigemptyset(&mut action.sa_mask);
-            libc::sigaction(libc::SIGINT, &action, std::ptr::null_mut())
-        };
-        if rc != 0 {
-            return Err(NetError::System(format!(
+        crate::unix_sys::install_handler(libc::SIGINT, on_sigint).map_err(|e| {
+            NetError::System(format!(
                 "sigaction(SIGINT): {}",
-                std::io::Error::last_os_error()
-            )));
-        }
-        Ok(())
+                std::io::Error::from_raw_os_error(e)
+            ))
+        })
     }
 }
 

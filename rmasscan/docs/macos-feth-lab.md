@@ -69,7 +69,7 @@ sudo "$BIN" macos-lab link       --run-id m1 --down    # and --up
 sudo "$BIN" macos-lab down       --run-id m1
 ```
 
-Order for a session: `up`, then `--grant`, scans and spike, `--revoke` for the `perm_denied` runs,
+Order for a session: `up`, then `--grant`, scans, `--revoke` for the `perm_denied` runs,
 `--grant` again, and finally `down`. `down` is safe to repeat. If `up` or `down` reports a failed
 rollback (exit 10), the manifest is kept with `state: "rollback-incomplete"` and the list of
 objects `up` created; run `down` again, it acts on that record.

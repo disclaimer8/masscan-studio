@@ -188,7 +188,7 @@ pub fn resolve_next_hop_until(
         ))?;
     let mut pending = PendingResolve::new(my_mac, u32::from(my_ip), u32::from(target));
     let frame = pending.request_frame();
-    let max_io_us = MAX_IO_TIMEOUT.as_micros() as u64;
+    let max_io_us = u64::try_from(MAX_IO_TIMEOUT.as_micros()).unwrap_or(u64::MAX);
     let mut next_send = t0;
     let mut requests_sent = 0u32;
     let mut buf = [0u8; 2048];

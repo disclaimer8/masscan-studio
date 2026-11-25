@@ -381,14 +381,15 @@ pub fn probe_targets(massip: &MassIp) -> Option<Targets> {
 /// Фиктивный MAC шлюза для `--offline` (C `main-initadapter.c:163`).
 const OFFLINE_ROUTER_MAC: [u8; 6] = [0x66, 0x55, 0x44, 0x33, 0x22, 0x11];
 
-/// Заполнитель Darwin для скрытого MAC: никогда не становится source MAC.
-const DARWIN_PLACEHOLDER_MAC: [u8; 6] = [0x02, 0, 0, 0, 0, 0];
+/// Заполнитель, который macOS 27 отдаёт непривилегированному процессу вместо MAC Ethernet-интерфейсов (измерено:
+/// `getifaddrs` и `NET_RT_IFLIST`): никогда не становится source MAC.
+pub(crate) const DARWIN_MASKED_MAC: [u8; 6] = [0x02, 0, 0, 0, 0, 0];
 
 /// Годится ли MAC как source MAC кадров: не нулевой, не заполнитель Darwin `02:00:00:00:00:00` (скрытый ОС MAC) и не
 /// групповой/широковещательный (младший бит первого октета). Единое правило для [`detect`]/[`detect_offline`] и для
 /// вызывающих, которые берут явный MAC без обнаружения (герметичный `--offline` CLI).
 pub fn usable_source_mac(m: [u8; 6]) -> bool {
-    m != [0; 6] && m != DARWIN_PLACEHOLDER_MAC && m[0] & 1 == 0
+    m != [0; 6] && m != DARWIN_MASKED_MAC && m[0] & 1 == 0
 }
 
 /// Маршрут к целям-пробам: первая и последняя цель обязаны дать один интерфейс и один шлюз. `with_adapter`: зов с
@@ -889,6 +890,8 @@ fn fmt_mac(m: [u8; 6]) -> String {
 
 /// Одна строка на интерфейс, затем строки `default via G dev NAME` / `default dev NAME`.
 pub fn iflist_text(ifaces: &[Iface], defaults: &[Route]) -> String {
+    use std::fmt::Write as _;
+    // Запись в `String` не может завершиться ошибкой.
     let mut out = String::new();
     for i in ifaces {
         let mac = if i.mac_masked {
@@ -905,7 +908,8 @@ pub fn iflist_text(ifaces: &[Iface], defaults: &[Route]) -> String {
                 .collect::<Vec<_>>()
                 .join(",")
         };
-        out.push_str(&format!(
+        let _ = write!(
+            out,
             "{} index={} mac={} ipv4={} {} {}",
             i.name,
             i.index,
@@ -913,20 +917,20 @@ pub fn iflist_text(ifaces: &[Iface], defaults: &[Route]) -> String {
             addrs,
             if i.up { "up" } else { "down" },
             if i.ethernet { "ethernet" } else { "other" },
-        ));
+        );
         if i.device_id != i.name {
-            out.push_str(&format!(" id={}", i.device_id));
+            let _ = write!(out, " id={}", i.device_id);
         }
         if let Some(d) = &i.description {
-            out.push_str(&format!(" desc={d}"));
+            let _ = write!(out, " desc={d}");
         }
         out.push('\n');
     }
     for r in defaults {
-        match r.gateway {
-            Some(g) => out.push_str(&format!("default via {g} dev {}\n", r.ifname)),
-            None => out.push_str(&format!("default dev {}\n", r.ifname)),
-        }
+        let _ = match r.gateway {
+            Some(g) => writeln!(out, "default via {g} dev {}", r.ifname),
+            None => writeln!(out, "default dev {}", r.ifname),
+        };
     }
     out
 }

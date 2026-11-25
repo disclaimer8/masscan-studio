@@ -1270,7 +1270,9 @@ impl Driver {
         if cp.exists() {
             return Err("refusing stale RX overflow checkpoint".into());
         }
-        let mut a = self.rust_args("10.200.0.0/24", "1-100", 10000, 1, "40000", None);
+        // Only the answering peers (as veth_removal): ~25 000 replies arrive during the 2.5 s RX stall, far more than
+        // the ~7 500 frames of the 8 MiB receive buffer the Linux RX socket asks for (P5).
+        let mut a = self.rust_args("10.200.0.2-10.200.0.5", "1-10000", 10000, 1, "40000", None);
         a.extend(strings(&[
             "--rx-stall-ms",
             "2500",

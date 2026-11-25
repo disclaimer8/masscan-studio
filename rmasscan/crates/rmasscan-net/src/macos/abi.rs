@@ -48,9 +48,12 @@ pub(crate) mod errno {
     pub(crate) const EPERM: i32 = 1;
     pub(crate) const ENOENT: i32 = 2;
     pub(crate) const EINTR: i32 = 4;
+    // ENXIO и ENODEV в коде берёт `adapter_common::errno`; здесь они нужны только тестам (сверка таблиц).
+    #[cfg(test)]
     pub(crate) const ENXIO: i32 = 6;
     pub(crate) const EACCES: i32 = 13;
     pub(crate) const EBUSY: i32 = 16;
+    #[cfg(test)]
     pub(crate) const ENODEV: i32 = 19;
     pub(crate) const EAGAIN: i32 = 35;
     pub(crate) const EMSGSIZE: i32 = 40;

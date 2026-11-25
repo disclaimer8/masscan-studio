@@ -540,11 +540,10 @@ proptest! {
     }
 }
 
-/// Закрепляет причуду C rangelist_exclude (massip-rangesv4.c:766, ranges.rs:262):
-/// порты {1, 3}, исключение 1-3: исключение с begin 1 не применяется ко второй
-/// цели, поэтому порт 3 остаётся (паритет с C, не ошибка).
+/// Исправление бага B1 (`massip-rangesv4.c:766`): порты {1, 3}, исключение 1-3 —
+/// исключение с begin 1 применяется и ко второй цели, поэтому диапазон пуст.
 #[test]
-fn port_exclude_quirk_is_pinned_through_massip() {
+fn port_exclude_starting_at_one_removes_later_ports() {
     let mut t = MassIp::new();
     t.ipv4_mut().add_range(0x0A00_0000, 0x0A00_0000);
     t.ports_mut().add_range(1, 1);
@@ -553,6 +552,5 @@ fn port_exclude_quirk_is_pinned_through_massip() {
     ex.ports_mut().add_range(1, 3);
     t.apply_excludes(&mut ex);
     t.optimize();
-    assert_eq!(t.range(), 1);
-    assert_eq!(t.pick(0), (0x0A00_0000, 3));
+    assert_eq!(t.range(), 0);
 }

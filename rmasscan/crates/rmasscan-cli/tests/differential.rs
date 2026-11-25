@@ -89,6 +89,23 @@ fn list_scan_binary_matches_c_oracle_fixtures() {
         }
         let got = run_bin(args);
         let expected = std::fs::read(format!("{GOLDEN_DIR}/{file}")).unwrap();
+        // Исправление бага B4 (main-listscan.c:35): при `--retries` повторяется полный `range`.
+        if file == "listscan/slash24_p80_seed1_retries2.txt"
+            || file == "listscan/slash24_p80_seed1_retries2_rate1000.txt"
+        {
+            let got_lines: Vec<&str> = std::str::from_utf8(&got).unwrap().lines().collect();
+            let exp_lines: Vec<&str> = std::str::from_utf8(&expected).unwrap().lines().collect();
+            assert_eq!(got_lines.len(), 256 * 3, "{file}: 3 full passes");
+            for pass in 0..3 {
+                assert_eq!(
+                    &got_lines[pass * 256..(pass + 1) * 256],
+                    &exp_lines[..256],
+                    "{file}: pass {pass}"
+                );
+            }
+            checked.push(file.to_string());
+            continue;
+        }
         if case.truncated.unwrap_or(false) {
             let head_len: usize = got
                 .split_inclusive(|&b| b == b'\n')
@@ -133,8 +150,19 @@ fn echo_matches_oracle_as_set() {
     {
         let file = case.file.as_deref().expect("file");
         let got = run_bin(case.args.as_deref().expect("args"));
-        let expected = std::fs::read(format!("{GOLDEN_DIR}/{file}")).unwrap();
-        assert!(got == expected, "{file}: echo bytes differ");
+        let mut expected = std::fs::read_to_string(format!("{GOLDEN_DIR}/{file}")).unwrap();
+        // Исправление бага B2 (massip-rangesv4.c:98-101): заявленное отличие для CIDR от 0.0.0.0.
+        match file {
+            "echo/zero_slash4.conf" => {
+                expected =
+                    expected.replace("range = 0.0.0.0-15.255.255.255\n", "range = 0.0.0.0/4\n");
+            }
+            "echo/zero_slash31.conf" => {
+                expected = expected.replace("range = 0.0.0.0/4294967295\n", "range = 0.0.0.0/31\n");
+            }
+            _ => {}
+        }
+        assert!(got == expected.as_bytes(), "{file}: echo bytes differ");
         checked.push(file.to_string());
     }
     checked.sort();
@@ -272,13 +300,8 @@ fn warm_up_exe() {
 }
 
 #[test]
-fn list_scan_retries_that_cannot_terminate_fails_fast() {
+fn list_scan_retries_terminates_and_repeats_range() {
     use std::time::{Duration, Instant};
-    // First launch of a freshly linked EXE can take 1-15 s on Windows (Defender
-    // real-time scan, serialised under parallel test load); the CLI itself needs
-    // ~15 ms. Warm the file up outside the timed region so the bound below
-    // measures the CLI, not the OS loader. A real hang is still caught: the timed
-    // run is a separate process with the same 5 s limit.
     warm_up_exe();
     let start = Instant::now();
     let out = spawn_readonly(&[
@@ -291,9 +314,10 @@ fn list_scan_retries_that_cannot_terminate_fails_fast() {
         "1",
     ]);
     assert!(start.elapsed() < Duration::from_secs(5));
-    assert_ne!(out.status.code(), Some(0));
-    assert!(out.stdout.is_empty());
-    assert!(String::from_utf8_lossy(&out.stderr).contains("--retries"));
+    assert_eq!(out.status.code(), Some(0));
+    let lines: Vec<&str> = std::str::from_utf8(&out.stdout).unwrap().lines().collect();
+    assert_eq!(lines.len(), 8);
+    assert_eq!(&lines[..4], &lines[4..]);
 }
 
 #[test]

@@ -160,12 +160,11 @@ pub struct IncomingRequest {
 ///   не получает никогда;
 /// - заголовок ARP и `2 × hl + 2 × pl` байт адресов в кадре (`VERIFY_REMAINING`, `src/proto-preprocess.c:599`, `:609`,
 ///   `src/stack-arpv4.c:59`, `:79`);
-/// - opcode 1 (`src/main.c:879-880`), тип протокола 0x0800, тип оборудования 1 или 6 и отказ, только если неверны
-///   обе длины (`protocol_length != 4 && hardware_length != 6`, `src/stack-arpv4.c:70-75`).
+/// - opcode 1 (`src/main.c:879-880`), тип протокола 0x0800, тип оборудования 1 (Ethernet),
+///   длина аппаратного адреса 6 и длина протокольного адреса 4 (исправляет баг C в
+///   `src/stack-arpv4.c:70-75`, где принимались `ht == 6` и кадры с одной неверной длиной, баг B3).
 ///
-/// Отличие от C (Р1 класс а): при длинах 6/0..6/3 адрес назначения C читает за проверенной частью, и в кадре короче
-/// `38 + pl` байт это чтение за краем кадра (`src/proto-preprocess.c:619-621`, `src/stack-arpv4.c:89`); здесь такой
-/// кадр запросом не считается. Тотальна: каждое чтение проверено, ничего не выделяет.
+/// Тотальна: каждое чтение проверено, ничего не выделяет.
 pub fn incoming_request(frame: &[u8]) -> Option<IncomingRequest> {
     if frame.len() > crate::receive::MAX_FRAME_LEN || frame.get(12..14)? != [0x08, 0x06] {
         return None;
@@ -176,18 +175,13 @@ pub fn incoming_request(frame: &[u8]) -> Option<IncomingRequest> {
     let (hl, pl) = (usize::from(a[4]), usize::from(a[5]));
     let op = u16::from_be_bytes([a[6], a[7]]);
     let addrs = ETH_LEN + 8;
-    if frame.len() < addrs + 2 * hl + 2 * pl
-        || op != 1
-        || (pl != 4 && hl != 6)
-        || pt != 0x0800
-        || (ht != 1 && ht != 6)
-    {
+    if frame.len() < addrs + 20 || op != 1 || pl != 4 || hl != 6 || pt != 0x0800 || ht != 1 {
         return None;
     }
     Some(IncomingRequest {
         sender_mac: array_at::<6>(frame, addrs)?,
-        sender_ip: be32_at(frame, addrs + hl)?,
-        target_ip: be32_at(frame, addrs + 2 * hl + pl)?,
+        sender_ip: be32_at(frame, addrs + 6)?,
+        target_ip: be32_at(frame, addrs + 16)?,
     })
 }
 

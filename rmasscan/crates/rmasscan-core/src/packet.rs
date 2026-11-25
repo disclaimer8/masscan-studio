@@ -361,9 +361,9 @@ const AF_INET6: u32 = 10;
 /// Next Header из IPv4-протокола, 6 (:1189) и hop limit `0xFF` (:1199). Ethernet: dst это `router_mac_ipv6`, ethertype
 /// `86 dd` (:1163-1172), src MAC остаётся `source_mac` (:1273).
 ///
-/// Hop limit всегда `0xFF`: `--ttl` не доходит до IPv6, потому что `template_set_ttl` (templ-pkt.c:1473-1488) правит
-/// только `ipv4.packet`; харнесс C с `template_set_ttl(64)` выдал кадр с `ff`. Порт повторяет C, `mods.ttl` тут не
-/// читается. `--badsum` и опции TCP действуют как у IPv4-шаблона ([`TcpSynTemplate`]).
+/// Hop limit берётся из `mods.ttl` (по умолчанию `0xFF`; исправляет баг C в `template_set_ttl`,
+/// `templ-pkt.c:1473-1488`, который правил только `ipv4.packet`, баг B5). `--badsum` и опции TCP
+/// действуют как у IPv4-шаблона ([`TcpSynTemplate`]).
 #[derive(Clone, Debug)]
 pub struct Tcp6SynTemplate {
     packet: Vec<u8>,
@@ -373,7 +373,7 @@ pub struct Tcp6SynTemplate {
 }
 
 impl Tcp6SynTemplate {
-    /// Шаблон с параметрами по умолчанию (MSS 1460, без `--badsum`).
+    /// Шаблон с параметрами по умолчанию (MSS 1460, hop limit 255, без `--badsum`).
     pub fn new(source_mac: [u8; 6], router_mac_ipv6: [u8; 6], link: LinkType) -> Self {
         Self::new_with_options(
             source_mac,
@@ -383,7 +383,7 @@ impl Tcp6SynTemplate {
         )
     }
 
-    /// [`Tcp6SynTemplate::new`] с `--badsum` и опциями TCP; `mods.ttl` игнорируется (см. тип).
+    /// [`Tcp6SynTemplate::new`] с `--ttl` (hop limit), `--badsum` и опциями TCP.
     pub fn new_with_options(
         source_mac: [u8; 6],
         router_mac_ipv6: [u8; 6],
@@ -412,10 +412,10 @@ impl Tcp6SynTemplate {
             LinkType::Raw => 0,
         };
         let mut packet = head;
-        // IPv6: версия 6, класс трафика и метка потока 0, payload_length, next header 6, hop limit 255, адреса 0.
+        // IPv6: версия 6, класс трафика и метка потока 0, payload_length, next header 6, hop limit = mods.ttl, адреса 0.
         packet.extend_from_slice(&[0x60, 0, 0, 0]);
         packet.extend_from_slice(&(tcp.len() as u16).to_be_bytes());
-        packet.extend_from_slice(&[6, 0xff]);
+        packet.extend_from_slice(&[6, mods.ttl]);
         packet.extend_from_slice(&[0u8; 32]);
         let offset_tcp = packet.len();
         packet.extend_from_slice(&tcp);
@@ -1668,8 +1668,9 @@ mod tests {
     /// `--ttl 64` в C не доходит до IPv6: `template_set_ttl` правит только `ipv4.packet` (templ-pkt.c:1478-1486),
     /// hop limit остаётся 0xFF (харнесс вызывал `template_set_ttl(64)` и получил `ff`).
     #[test]
-    fn tcp6_syn_template_options_match_c_and_ttl_does_not_reach_ipv6() {
-        let c = "aabbccddee02 021122334455 86dd 60000000 0020 06 ff fd00000000000000 0000000000000002 \
+    fn tcp6_syn_template_options_match_c_and_ttl_reaches_ipv6() {
+        // Исправление бага B5 (C templ-pkt.c:1473-1488): `--ttl 64` ставит hop limit 0x40 (у C оставался 0xff).
+        let c = "aabbccddee02 021122334455 86dd 60000000 0020 06 40 fd00000000000000 0000000000000002 \
             20010db800000000 0000000000000001 9c40 0050 deadbeef 00000000 8002 0401 0632 0000 \
             020404b0 0402 030303 00 00 00";
         let mods = PacketModifiers {
@@ -1692,7 +1693,7 @@ mod tests {
         t.build_syn(THEM6, 80, ME6, 40000, 0xdead_beef, &mut out);
         assert_eq!(out.len(), 86);
         assert_eq!(out, hexv(c));
-        assert_eq!(out[21], 0xff, "hop limit stays 255 whatever --ttl says");
+        assert_eq!(out[21], 64, "hop limit follows --ttl");
         let (src, dst, next, seg) = ip6_tcp_parts(&out, 14);
         assert_eq!(rfc8200_sum(src, dst, next, seg), 0xFFFF);
     }

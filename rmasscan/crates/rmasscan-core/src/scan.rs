@@ -171,9 +171,10 @@ fn list_bounds(
             end = limit;
         }
     }
-    // :35 `end += (uint64_t)(retries * max_rate)`: умножение в double
-    // (unsigned * double), затем усечение; max_rate, не range.
-    end = end.wrapping_add((f64::from(retries) * max_rate) as u64);
+    // Исправляет баг C (`main-listscan.c:35`, баг B4), где прибавлялось
+    // `retries * max_rate` вместо `retries * range` (как в `transmit_bounds_of`).
+    let _ = max_rate;
+    end = end.wrapping_add(u64::from(retries).wrapping_mul(range));
     Bounds {
         start,
         end,
@@ -518,36 +519,18 @@ pub fn list_scan_v46<F: FnMut(TargetIp, u32)>(
         return Err(ScanError::ZeroShard);
     }
     let blackrock = BlackRock::try_new(range, seed, rounds)?; // :29
-    // Индексы `>= range` бывают только из-за `retries * max_rate` (:35). Их
-    // cycle-walk может не завершиться; проверяем ДО первого вывода.
     let Bounds {
         start,
         end,
         increment: inc,
     } = list_bounds(range, shard, resume_index, resume_count, retries, max_rate);
-    if end > range {
-        let mut i = start;
-        if i < range {
-            // первый индекс шага не меньше `range`
-            i = i.saturating_add((range - i).div_ceil(inc).saturating_mul(inc));
-        }
-        while i < end {
-            if blackrock.shuffle_bounded(i).is_none() {
-                return Err(ScanError::NonTerminating { index: i });
-            }
-            i = i.wrapping_add(inc);
-            if i < inc {
-                break;
-            }
-        }
-    }
     let indices = ListIndices {
         i: start,
         end,
         increment: inc,
     };
-    for (_, x) in Shuffled::new(indices.map(|i| (i, i)), blackrock) {
-        // x = blackrock_shuffle(i), :42
+    for (_, x) in Shuffled::new(indices.map(|i| (i, i % range)), blackrock) {
+        // x = blackrock_shuffle(i % range), повторные проходы по --retries обходят range заново
         let (target, port) = massip.pick_list(x); // :44
         emit(target, port);
     }
@@ -829,24 +812,24 @@ mod tests {
     }
 
     #[test]
-    fn list_scan_indices_retries_use_max_rate_not_range() {
+    fn list_scan_indices_retries_use_range_not_max_rate() {
+        // Исправление бага B4 (C main-listscan.c:35): end = range + retries * range.
         let n = list_scan_indices(10, ONE, 0, None, 2, 5.0).count();
-        assert_eq!(n, 10 + 2 * 5);
+        assert_eq!(n, 10 + 2 * 10);
     }
 
     #[test]
-    fn list_scan_fractional_rate_matches_c_double_cast() {
-        // Counts measured with the real C binary (-sL 10.0.0.0/24 -p80 --seed 1).
+    fn list_scan_retries_independent_of_rate() {
         let n = |retries, rate| list_scan_indices(256, ONE, 0, None, retries, rate).count();
-        assert_eq!(n(2, 100.5), 457);
-        assert_eq!(n(3, 0.5), 257);
-        assert_eq!(n(2, 1000.999), 2257);
+        assert_eq!(n(2, 100.5), 256 * 3);
+        assert_eq!(n(3, 0.5), 256 * 4);
+        assert_eq!(n(2, 1000.999), 256 * 3);
     }
 
     #[test]
     fn list_scan_resume_index_past_range_with_retries() {
-        // C-verified: start 256 >= range, end = 256 + 1*10 -> 10 indices.
-        assert_eq!(list_scan_indices(256, ONE, 256, None, 1, 10.0).count(), 10);
+        // start 256, end = 256 + 1 * 256 -> 256 indices (one full retry pass).
+        assert_eq!(list_scan_indices(256, ONE, 256, None, 1, 10.0).count(), 256);
     }
 
     #[test]
@@ -903,28 +886,39 @@ mod tests {
     }
 
     #[test]
-    fn list_scan_with_retries_that_cannot_terminate_errors_before_any_emit() {
-        // Range 4, retries 1, rate 100: extra indices 4..104 contain one whose
-        // cycle-walk never returns below range (C hangs; the CLI used to hang).
+    fn list_scan_with_retries_repeats_shuffled_range_and_always_terminates() {
+        // Исправление бага B4: повторные проходы приводят индекс по модулю range и
+        // всегда завершаются, даже при rounds == 0 и малом range.
         let t = massip("10.0.0.0/30", "80");
-        let r = list_scan(&t, 1, 14, ONE, 0, None, 1, 100.0, |_, _| panic!("no emit"));
-        assert!(
-            matches!(r, Err(ScanError::NonTerminating { index }) if index >= 4),
-            "{r:?}"
-        );
-        // rounds 0 is the identity: any index >= range is stuck.
-        let r = list_scan(&t, 1, 0, ONE, 0, None, 1, 100.0, |_, _| panic!("no emit"));
-        assert!(matches!(r, Err(ScanError::NonTerminating { .. })), "{r:?}");
+        let mut single = Vec::new();
+        list_scan(&t, 1, 14, ONE, 0, None, 0, 100.0, |ip, p| {
+            single.push((ip, p))
+        })
+        .unwrap();
+        let mut with_retry = Vec::new();
+        list_scan(&t, 1, 14, ONE, 0, None, 1, 100.0, |ip, p| {
+            with_retry.push((ip, p))
+        })
+        .unwrap();
+        assert_eq!(with_retry.len(), single.len() * 2);
+        assert_eq!(&with_retry[..single.len()], single.as_slice());
+        assert_eq!(&with_retry[single.len()..], single.as_slice());
+
+        let mut zero_rounds = Vec::new();
+        list_scan(&t, 1, 0, ONE, 0, None, 1, 100.0, |ip, p| {
+            zero_rounds.push((ip, p))
+        })
+        .unwrap();
+        assert_eq!(zero_rounds.len(), 8);
     }
 
     #[test]
-    fn list_scan_retries_golden_cases_still_terminate() {
-        // listscan/slash24_p80_seed1_retries2*.txt: 456 and 2256 lines.
+    fn list_scan_retries_emit_full_passes() {
         let t = massip("10.0.0.0/24", "80");
-        for (rate, lines) in [(100.0, 456usize), (1000.0, 2256)] {
+        for rate in [100.0, 1000.0] {
             let mut n = 0;
             list_scan(&t, 1, 14, ONE, 0, None, 2, rate, |_, _| n += 1).unwrap();
-            assert_eq!(n, lines);
+            assert_eq!(n, 256 * 3);
         }
     }
 

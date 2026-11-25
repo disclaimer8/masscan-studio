@@ -2071,15 +2071,15 @@ mod tests {
     }
 
     #[test]
-    fn rate_c_semantics_visible_in_list_scan_line_count() {
-        // Оракул C: `-sL --retries 100` -> 285 строк для 0.29 и 288 для 0.33
-        // (корректное округление дало бы 284 и 289).
+    fn rate_does_not_change_list_scan_line_count() {
+        // Исправление бага B4 (C main-listscan.c:35): `--retries` добавляет `retries * range`,
+        // а не `retries * max_rate`.
         let count = |s: &str| {
             let rate = parse_rate(s).unwrap();
-            list_scan_indices(256, Shard::default(), 0, None, 100, rate).count()
+            list_scan_indices(256, Shard::default(), 0, None, 2, rate).count()
         };
-        assert_eq!(count("0.29"), 285);
-        assert_eq!(count("0.33"), 288);
+        assert_eq!(count("0.29"), 256 * 3);
+        assert_eq!(count("0.33"), 256 * 3);
     }
 
     // ---- format_rate ----
@@ -2435,8 +2435,8 @@ mod tests {
         let mut s = String::new();
         echo(&cfg, false, &mut s);
         assert!(s.contains("ports = 1-3,80\n"), "{s}");
-        // begin == 0: поведение gcc x86-64 (оракул), см. ranges::range_is_cidr.
-        assert!(s.contains("range = 0.0.0.0-0.255.255.255\n"));
+        // Исправление бага B2: 0.0.0.0/8 печатается как CIDR.
+        assert!(s.contains("range = 0.0.0.0/8\n"));
         assert!(s.contains("range = 10.0.0.0/24\nrange = 10.0.2.5\nrange = 10.0.3.1-10.0.3.5\n"));
     }
 
@@ -2695,17 +2695,23 @@ mod tests {
     }
 
     #[test]
-    fn echo_zero_based_ranges_like_c_oracle() {
+    fn echo_zero_based_ranges_print_valid_cidr() {
+        // Исправление бага B2: все CIDR от 0.0.0.0 печатаются валидно и читаются обратно.
         let dump = |t: &str| {
             let mut s = String::new();
             echo(&cfg_with(t, "80"), false, &mut s);
             s.lines().last().unwrap().to_string()
         };
-        assert_eq!(dump("0.0.0.0/8"), "range = 0.0.0.0-0.255.255.255");
-        assert_eq!(dump("0.0.0.0/1"), "range = 0.0.0.0-127.255.255.255");
-        assert_eq!(dump("0.0.0.0/31"), "range = 0.0.0.0/4294967295");
+        assert_eq!(dump("0.0.0.0/8"), "range = 0.0.0.0/8");
+        assert_eq!(dump("0.0.0.0/1"), "range = 0.0.0.0/1");
+        assert_eq!(dump("0.0.0.0/31"), "range = 0.0.0.0/31");
         assert_eq!(dump("0.0.0.0/0"), "range = 0.0.0.0/0");
         assert_eq!(dump("0.0.0.0"), "range = 0.0.0.0");
+        // Round-trip: --echo для 0.0.0.0/31 читается обратно без ошибки.
+        let mut s = String::new();
+        echo(&cfg_with("0.0.0.0/31", "80"), false, &mut s);
+        let parsed = read_paused_conf(&s).unwrap();
+        assert_eq!(parsed.targets.ipv4().count(), 2);
     }
 
     #[test]

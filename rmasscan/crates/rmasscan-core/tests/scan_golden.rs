@@ -75,6 +75,40 @@ fn list_scan_matches_c_oracle_fixtures() {
         let single_port = t.count_ports() == 1;
         let truncated = case.truncated.unwrap_or(false);
         let expected = std::fs::read_to_string(format!("{GOLDEN_DIR}/{file}")).unwrap();
+        // Исправление бага B4 (main-listscan.c:35): при `retries > 0` повторяется полный `range`,
+        // а не `retries * max_rate` индексов за пределами `range`.
+        if spec.retries > 0 {
+            let range = t.range() as usize;
+            let base: Vec<&str> = expected.lines().take(range).collect();
+            assert_eq!(base.len(), range, "{file}: C fixture first pass");
+            let mut got = Vec::new();
+            list_scan(
+                &t,
+                spec.seed,
+                spec.rounds,
+                Shard {
+                    one: spec.shard_one,
+                    of: spec.shard_of,
+                },
+                spec.resume_index,
+                spec.resume_count,
+                spec.retries,
+                spec.max_rate,
+                |ip, port| got.push(format_list_line(ip, port, single_port)),
+            )
+            .unwrap_or_else(|e| panic!("{file}: {e}"));
+            let passes = usize::try_from(spec.retries).unwrap() + 1;
+            assert_eq!(got.len(), range * passes, "{file}: full retry passes");
+            for pass in 0..passes {
+                let slice: Vec<&str> = got[pass * range..(pass + 1) * range]
+                    .iter()
+                    .map(String::as_str)
+                    .collect();
+                assert_eq!(slice, base, "{file}: pass {pass}");
+            }
+            checked.push(file.to_string());
+            continue;
+        }
         let mut exp = expected.lines();
         let mut sha = Sha256::new();
         let mut n = 0u64;

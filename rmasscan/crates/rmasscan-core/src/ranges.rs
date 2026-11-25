@@ -274,14 +274,12 @@ impl RangeList {
                     newlist.add_range(range.begin, range.end);
                     range = split;
                 }
-                // QUIRK, kept deliberately for oracle parity (C :766). After
-                // case 2 of apply_exclude the target is INVALID_RANGE {2,1},
-                // so `range.end == 1`. An exclude with begin 0 or 1 that fully
-                // covers this target and extends into the next one does not
-                // satisfy `begin > 1`, so it falls through to `x += 1` and is
-                // never applied to later targets. With begin >= 2 it breaks
-                // here and is retried on the next target.
-                if excludes.list[x].begin > range.end {
+                // Если текущая цель снята целиком (`!range.is_valid()`) или исключение
+                // обрезало хвост (`begin > range.end`), не двигаем `x`: то же исключение
+                // может накрывать и следующие цели. В C (`massip-rangesv4.c:766`) при
+                // `INVALID_RANGE {2, 1}` проверялось только `begin > 1`, из-за чего
+                // исключение с `begin` 0 или 1 пропускалось для следующих целей (баг B1).
+                if !range.is_valid() || excludes.list[x].begin > range.end {
                     break;
                 }
                 x += 1;
@@ -298,34 +296,19 @@ impl RangeList {
     }
 }
 
-/// massip-rangesv4.c:124 `range_is_cidr` (через `range_first_cidr`, :84):
-/// `Some(prefix_bits)` если диапазон ровно один CIDR-блок.
+/// `Some(prefix_bits)` если диапазон ровно один CIDR-блок (`0..=32`).
 ///
-/// Намеренно повторяет gcc x86-64, включая UB при `begin == 0`: цикл
-/// подсчёта нулевых бит (:98-101) не прерывается, `zbits` становится 33, а
-/// сдвиг `0xFFFFFFFF << 33` аппаратно берёт счётчик по модулю 32 (`<< 1`).
-/// Итог: диапазон с `begin == 0` признаётся CIDR только при `end == 1`, и
-/// тогда префикс равен `32 - 33` по модулю 2^32 = 4294967295; остальные
-/// (`0.0.0.0/8`, `0.0.0.0/1`, `0.0.0.0/31`...) печатаются через дефис.
-/// Проверено на оракуле: `0.0.0.0/4` -> `0.0.0.0-15.255.255.255`,
-/// `0.0.0.0/31` -> `0.0.0.0/4294967295`. Особый случай `0.0.0.0/0` (:90)
-/// сохранён.
+/// Исправляет UB в C (`massip-rangesv4.c:98-101`, баг B2), где при `begin == 0`
+/// сдвиг `0xFFFFFFFF << 33` давал `0.0.0.0/4294967295` для `0.0.0.0/31` и
+/// печатал `0.0.0.0/8`, `0.0.0.0/4` через дефис.
 pub fn range_is_cidr(range: Range) -> Option<u32> {
-    if range.begin == 0 && range.end == u32::MAX {
-        return Some(0); // :90
+    let span = range.end.checked_sub(range.begin)?;
+    if span == u32::MAX {
+        return Some(0);
     }
-    let mut z: u32 = if range.begin == 0 {
-        33
-    } else {
-        range.begin.trailing_zeros()
-    };
-    let mask = |z: u32| !(u32::MAX << (z & 31)); // x86: счётчик сдвига mod 32
-    while z > 0 && range.begin.wrapping_add(mask(z)) > range.end {
-        z -= 1;
-    }
-    let out_end = range.begin.wrapping_add(mask(z));
-    if out_end == range.end {
-        Some(32u32.wrapping_sub(z))
+    let len = span + 1;
+    if len.is_power_of_two() && (range.begin & span) == 0 {
+        Some(32 - span.trailing_ones())
     } else {
         None
     }
@@ -350,13 +333,13 @@ mod tests {
         assert_eq!(range_is_cidr(r(0x0A00_0000, 0x0A00_007F)), Some(25));
         // Не выровнен по размеру: 10.0.0.128-10.0.1.127 не CIDR.
         assert_eq!(range_is_cidr(r(0x0A00_0080, 0x0A00_017F)), None);
-        // begin == 0: поведение gcc x86-64 (см. doc), подтверждено оракулом.
-        assert_eq!(range_is_cidr(r(0, 0x00FF_FFFF)), None); // 0.0.0.0/8
-        assert_eq!(range_is_cidr(r(0, 0x0FFF_FFFF)), None); // 0.0.0.0/4
-        assert_eq!(range_is_cidr(r(0, 0x7FFF_FFFF)), None); // 0.0.0.0/1
-        assert_eq!(range_is_cidr(r(0, 1)), Some(u32::MAX)); // 0.0.0.0/31
+        // begin == 0: исправление бага B2 (в C был UB сдвига `0xFFFFFFFF << 33`).
+        assert_eq!(range_is_cidr(r(0, 0x00FF_FFFF)), Some(8)); // 0.0.0.0/8
+        assert_eq!(range_is_cidr(r(0, 0x0FFF_FFFF)), Some(4)); // 0.0.0.0/4
+        assert_eq!(range_is_cidr(r(0, 0x7FFF_FFFF)), Some(1)); // 0.0.0.0/1
+        assert_eq!(range_is_cidr(r(0, 1)), Some(31)); // 0.0.0.0/31
         assert_eq!(range_is_cidr(r(0, 2)), None);
-        assert_eq!(range_is_cidr(r(0, 0)), Some(0));
+        assert_eq!(range_is_cidr(r(0, 0)), Some(32)); // 0.0.0.0/32
     }
 
     const fn r(begin: u32, end: u32) -> Range {
@@ -600,16 +583,16 @@ mod tests {
     }
 
     #[test]
-    fn exclude_quirk_invalid_range_end_is_1() {
-        // C :766 quirk, oracle-confirmed values.
+    fn exclude_starting_at_zero_or_one_applies_to_later_targets() {
+        // Исправление бага B1 (C massip-rangesv4.c:766): исключение с begin 0 или 1,
+        // целиком снимающее первую цель, обязано применяться и к последующим целям.
         let run = |inc: &[(u32, u32)], ex: (u32, u32)| {
             let mut t = list(inc);
             t.exclude(&mut list(&[ex]));
             t.as_slice().to_vec()
         };
-        assert_eq!(run(&[(0, 10), (20, 30)], (0, 25)), [r(20, 30)]);
-        assert_eq!(run(&[(1, 10), (20, 30)], (1, 25)), [r(20, 30)]);
-        // control: begin >= 2 behaves "correctly"
+        assert_eq!(run(&[(0, 10), (20, 30)], (0, 25)), [r(26, 30)]);
+        assert_eq!(run(&[(1, 10), (20, 30)], (1, 25)), [r(26, 30)]);
         assert_eq!(run(&[(2, 10), (20, 30)], (2, 25)), [r(26, 30)]);
     }
 
